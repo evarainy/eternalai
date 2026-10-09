@@ -46,6 +46,7 @@ from app.browser_skill.models import (
     DispatchPermit,
     DispatchReceipt,
     ExecutionContext,
+    LocatorHint,
     ObservationPolicy,
     ObservationRequest,
     PageEvidence,
@@ -76,6 +77,7 @@ from app.infra.browser.playwright_dom_rules import (
     ROW_IDENTITY_MATCH,
     DOMBatchError,
     DOMRead,
+    DOMRepairTarget,
     DOMStep,
     DOMTraversal,
     DOMValue,
@@ -161,6 +163,9 @@ _FINAL_IDENTITY = (
                 if (config.operation === 'fill' && (node.readOnly ||
                     node.getAttribute('aria-readonly') === 'true' ||
                     !(node.isContentEditable || node.matches('input,textarea')))) return false;
+                if (config.operation === 'check' &&
+                    !(node instanceof HTMLInputElement && node.type === 'checkbox'))
+                  return false;
               }
               const option = config.option;
               if (option && (!option.isConnected || option.closest('select') !== node ||
@@ -869,6 +874,40 @@ class PlaywrightWebAdapter:
             self._observe_wait[session.session_ref] = ("candidate_batch_after", time.monotonic())
         return matches
 
+    @_neutral
+    async def repair_target_candidates(
+        self, session: BrowserSessionRef, registered_step: SkillStep,
+        approved_hint: LocatorHint, projection: VisibleProjection,
+        context: ExecutionContext,
+    ) -> tuple[VisibleCandidate, ...]:
+        """Reobserve a reviewed replacement in the original authorized region.
+
+        This is proposal evidence only. It cannot authorize execution or change
+        the frozen Skill, Site effect, row identity, or verifier.
+        """
+        plan, _ = await self._authority(session, context)
+        if (
+            not isinstance(approved_hint, LocatorHint)
+            or not any(rule.step == registered_step for rule in plan.steps)
+        ):
+            raise failure("denied")
+        target = next(
+            (item for item in self._rules[plan.skill_digest].repair_targets
+             if item.step_id == registered_step.step_id and item.hint == approved_hint),
+            None,
+        )
+        if target is None or approved_hint == registered_step.locator:
+            raise failure("denied")
+        async with self._observer._candidate_batch(session, projection, plan.policy) as (
+            region, nodes,
+        ):
+            matches = await self._filter_candidates(
+                session, registered_step, context, plan, region, nodes,
+                repair_target=target,
+            )
+            await self._authority(session, context)
+        return matches
+
     async def _target_candidates_in_round(
         self, session: BrowserSessionRef, step: SkillStep,
         context: ExecutionContext, resolution: ResolutionRound,
@@ -884,13 +923,22 @@ class PlaywrightWebAdapter:
         self, session: BrowserSessionRef, step: SkillStep, context: ExecutionContext,
         plan: RegisteredSitePlan, region: ExactRegion,
         nodes: tuple[tuple[VisibleCandidate, ExactNode], ...],
+        *, repair_target: DOMRepairTarget | None = None,
     ) -> tuple[VisibleCandidate, ...]:
         rule = next((r for r in plan.steps if r.step == step), None)
         if rule is None or region.projection.scope.region_id != rule.observation.region_id:
             raise failure("denied")
-        dom = self._dom_step(plan, step.step_id)
+        original = self._dom_step(plan, step.step_id)
+        dom = (original if repair_target is None else DOMStep(
+            step.step_id, repair_target.selector, original.row_selector, original.key,
+        ))
+        locator = step.locator if repair_target is None else repair_target.hint
         key = None
-        if step.locator.kind == "business_key":
+        # A replacement label/test-id cannot shed an existing business-row
+        # constraint. The reviewed hint changes only how the target is found.
+        if locator.kind == "business_key" or (
+            repair_target is not None and original.key is not None
+        ):
             if dom.key is None:
                 raise failure("unsupported")
             self._observe_wait[session.session_ref] = ("candidate_key_resolution", time.monotonic())
@@ -914,9 +962,25 @@ class PlaywrightWebAdapter:
         counters["adapter_filter_batch_successes"] = min(
             10000, counters.get("adapter_filter_batch_successes", 0) + 1,
         )
-        for (candidate, _node), (selector_match, raw) in zip(nodes, packet, strict=True):
+        for (candidate, node), (selector_match, raw) in zip(nodes, packet, strict=True):
             if not selector_match:
                 continue
+            if repair_target is not None:
+                if locator.kind == "role_name" and (
+                    locator.value not in (
+                        *plan.policy.allowed_names, *plan.policy.allowed_context,
+                        *plan.policy.allowed_row_labels, *plan.policy.allowed_column_labels,
+                    )
+                    or locator.value not in (
+                        candidate.name, *candidate.context,
+                        candidate.row_label, candidate.column_label,
+                    )
+                ):
+                    continue
+                if locator.kind == "test_id" and (
+                    await node.element.get_attribute("data-testid") != locator.value
+                ):
+                    continue
             if key is not None and dom.key is not None:
                 matched = self._consume(
                     key, context, plan.read_rule.key_ref, "business_key", step.step_id,
@@ -1586,6 +1650,22 @@ class PlaywrightWebAdapter:
                         await assert_reserved()
                     permit.begin_send()
                     await node.element.select_option(element=option, timeout=timeout)
+                elif operation == "check":
+                    if command.step.effect == "may_write":
+                        await assert_reserved()
+                    permit.begin_send()
+                    await node.element.check(timeout=timeout)
+                elif operation == "press_enter":
+                    if command.step.effect == "may_write":
+                        await assert_reserved()
+                    permit.begin_send()
+                    await node.element.press("Enter", timeout=timeout)
+                elif operation == "wait":
+                    # The Executor performed bounded observation until the
+                    # registered target appeared. _validate just repeated the
+                    # exact target, scope, authority and actionability checks.
+                    if command.step.effect != "read_only":
+                        raise failure("denied")
                 elif operation == "click":
                     if download_rule is not None:
                         async with node.page.expect_download(
@@ -1615,10 +1695,12 @@ class PlaywrightWebAdapter:
                         await self._adopt_popup(
                             session, context, plan, node.page, opened, popup_rule,
                         )
-                else:
+                elif operation == "read":
                     # _validate just bound this live target to the registered
                     # read row under the dispatch barrier.
                     permit.begin_send()
+                else:
+                    raise failure("unsupported")
                 check_liveness(context)
                 if self._guards[session.session_ref].failed:
                     raise failure("denied")

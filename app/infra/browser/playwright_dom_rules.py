@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.browser_skill.models import ObservationRequest
+from app.browser_skill.models import LocatorHint, ObservationRequest
 
 
 class DOMBatchError(ValueError):
@@ -110,6 +110,24 @@ class DOMStep:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class DOMRepairTarget:
+    """Trusted selector for one reviewed locator hint; row identity stays frozen."""
+
+    step_id: str
+    hint: LocatorHint
+    selector: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.step_id
+            or not isinstance(self.hint, LocatorHint)
+            or not self.selector.strip()
+            or len(self.selector) > 512
+        ):
+            raise ValueError("browser_dom_repair_registration_invalid")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class DOMRead:
     observation: ObservationRequest
     row_selector: str
@@ -187,16 +205,26 @@ class RegisteredDOMRules:
     steps: tuple[DOMStep, ...]
     read: DOMRead
     traversal: DOMTraversal | None = None
+    repair_targets: tuple[DOMRepairTarget, ...] = ()
 
     def __post_init__(self) -> None:
+        steps = {step.step_id: step for step in self.steps}
         if (
             any(
                 len(digest) != 64
                 for digest in (self.skill_digest, self.site_digest, self.verifier_digest)
             )
             or not self.steps
-            or len({step.step_id for step in self.steps}) != len(self.steps)
+            or len(steps) != len(self.steps)
             or (self.traversal is not None and not isinstance(self.traversal, DOMTraversal))
+            or type(self.repair_targets) is not tuple
+            or len(self.repair_targets) > 64
+            or any(not isinstance(target, DOMRepairTarget)
+                   or target.step_id not in steps
+                   or target.selector == steps[target.step_id].selector
+                   for target in self.repair_targets)
+            or len({(target.step_id, target.hint.kind, target.hint.value)
+                    for target in self.repair_targets}) != len(self.repair_targets)
         ):
             raise ValueError("browser_dom_registration_invalid")
 

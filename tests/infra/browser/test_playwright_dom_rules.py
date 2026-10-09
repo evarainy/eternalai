@@ -2,10 +2,12 @@ import asyncio
 
 import pytest
 
+from app.browser_skill.models import LocatorHint
 from app.infra.browser.playwright_dom_rules import (
     _FILTER_BATCH,
     _IDENTITY_BATCH,
     DOMBatchError,
+    DOMRepairTarget,
     DOMStep,
     DOMValue,
     bounded_children,
@@ -42,6 +44,13 @@ def test_key_locator_requires_registered_row_and_mapping() -> None:
 def test_private_row_selector_is_bounded(selector: str) -> None:
     with pytest.raises(ValueError, match="registration_invalid"):
         DOMStep("open", "#control", row_selector=selector, key=DOMValue(".key"))
+
+
+@pytest.mark.parametrize("selector", ["", "x" * 513])
+def test_repair_target_selector_is_bounded(selector: str) -> None:
+    hint = LocatorHint(kind="test_id", value="reviewed_control")
+    with pytest.raises(ValueError, match="browser_dom_repair_registration_invalid"):
+        DOMRepairTarget("open", hint, selector)
 
 
 @pytest.mark.parametrize("result", [42, True, "x" * 17])

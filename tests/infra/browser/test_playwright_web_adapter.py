@@ -19,6 +19,7 @@ from app.browser_skill.models import (
     DecisionCandidate,
     DecisionRequest,
     DispatchPermit,
+    LocatorHint,
     ObservationRequest,
     TargetRef,
     VisibleCandidate,
@@ -31,6 +32,7 @@ from app.infra.browser.playwright_dom_rules import (
     _READ_MANY,
     _ROW_IDENTITY_EVALUATE,
     DOMRead,
+    DOMRepairTarget,
     DOMStep,
     DOMValue,
     RegisteredDOMRules,
@@ -54,11 +56,14 @@ class Node:
     editable: bool = True
     visible: bool = True
     tag: str = "BUTTON"
+    input_type: str | None = None
+    checked: bool = False
     values: dict[str, str] = field(default_factory=dict)
     children: list[Node] = field(default_factory=list)
     parent: Node | None = None
     label: str = "Allowed"
     value: str = field(default="", repr=False)
+    test_id: str | None = None
 
 
 class Handle:
@@ -180,6 +185,10 @@ class Handle:
     async def is_enabled(self) -> bool:
         return self.node.enabled
 
+    async def get_attribute(self, name: str) -> str | None:
+        assert name == "data-testid"
+        return self.node.test_id
+
     async def click(self, **kwargs: Any) -> None:
         await self.world.sent("click")
 
@@ -192,6 +201,15 @@ class Handle:
         self.node.value = element.node.value
         await self.world.sent("select_option")
         return [self.node.value]
+
+    async def check(self, **kwargs: Any) -> None:
+        assert self.node.tag == "INPUT" and self.node.input_type == "checkbox"
+        self.node.checked = True
+        await self.world.sent("check")
+
+    async def press(self, key: str, **kwargs: Any) -> None:
+        assert key == "Enter"
+        await self.world.sent("press_enter")
 
 
 def node_matches(node: Node, selector: str) -> bool:
@@ -263,7 +281,9 @@ class IdentityHandle(Handle):
             if not row_identity(region, node, row, config, self.world, False):
                 return False
         if config["target"] and (not node.visible or not node.enabled
-                                  or (config["operation"] == "fill" and not node.editable)):
+                                  or (config["operation"] == "fill" and not node.editable)
+                                  or (config["operation"] == "check" and
+                                      (node.tag != "INPUT" or node.input_type != "checkbox"))):
             return False
         option = config["option"]
         if option is not None and (not option.node.connected or option.node.parent is not node
@@ -402,8 +422,21 @@ class World(FakeWorld):
         self.live = SimpleNamespace(session=self.session, context=Context())
         self.live.context.pages = [self.page]
         self.view = self.view.model_copy(update={"candidates": self.view.candidates[:1]})
+        if operation == "check":
+            self.view = self.view.model_copy(update={"candidates": tuple(
+                candidate.model_copy(update={"role": "checkbox"})
+                for candidate in self.view.candidates
+            )})
+            self.plan = self.plan.model_copy(update={"policy": self.plan.policy.model_copy(
+                update={"allowed_roles": (*self.plan.policy.allowed_roles, "checkbox")},
+            )})
+            self.site = FrozenSiteAdapter((self.plan,))
         self.controls = {
-            c.ref.target_id: Node(tag="SELECT" if operation == "select_option" else "BUTTON")
+            c.ref.target_id: Node(
+                tag="SELECT" if operation == "select_option" else
+                    "INPUT" if operation == "check" else "BUTTON",
+                input_type="checkbox" if operation == "check" else None,
+            )
             for c in self.view.candidates
         }
         self.control = next(iter(self.controls.values()))
@@ -529,20 +562,56 @@ def test_model_context_uses_only_current_requested_candidate_subset() -> None:
     assert w.adapter.current_decision_targets(w.session, request) == ()
 
 
-@pytest.mark.parametrize("operation", ["click", "fill", "select_option", "navigate", "read"])
+@pytest.mark.parametrize("operation", [
+    "click", "fill", "select_option", "navigate", "read", "check", "press_enter", "wait",
+])
 def test_actual_methods_dispatch_and_independent_dom_read(operation: str) -> None:
     async def run():
         w = World(operation)
         command = await w.command()
         receipt = await w.adapter.execute(w.session, command, w.context)
         assert receipt.state == "acknowledged"
-        assert w.dom_sends == ([] if operation == "read" else [operation])
+        assert w.dom_sends == ([] if operation in {"read", "wait"} else [operation])
+        if operation == "check":
+            assert w.control.checked is True
         verifier = IndependentVerifier(w.adapter, w.site, w.read_spec)
         result = await verifier.verify(w.session, w.confirmed, w.context)
         assert result.status == "verified" and w.observer.calls >= 2
         wire = receipt.model_dump_json() + result.model_dump_json()
         leaked = any(isinstance(value, str) and value in wire for value in w._inputs.values())
         assert leaked is False
+
+    asyncio.run(run())
+
+
+def test_check_rejects_non_native_checkbox_before_send() -> None:
+    async def run() -> None:
+        w = World("check")
+        w.control.tag = "BUTTON"
+        w.control.input_type = None
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, await w.command(), w.context)
+        assert caught.value.failure.code == "stale" and w.dom_sends == []
+
+    asyncio.run(run())
+
+
+def test_wait_rechecks_target_without_entering_send_state() -> None:
+    async def run() -> None:
+        w = World("wait")
+        sends: list[str] = []
+
+        @asynccontextmanager
+        async def barrier(session, command, binding):
+            yield DispatchPermit(w.context.execution_id, command, lambda: sends.append("begin"))
+
+        w.context = replace(w.context, dispatch_barrier=barrier)
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        receipt = await w.adapter.execute(w.session, await w.command(), w.context)
+        assert receipt.state == "acknowledged" and sends == [] and w.dom_sends == []
 
     asyncio.run(run())
 
@@ -668,13 +737,16 @@ def test_direct_execute_cannot_bypass_authority_or_actual_dom(mutation: str) -> 
 
 
 @pytest.mark.parametrize("error", [RuntimeError, asyncio.CancelledError, TimeoutError])
-def test_after_send_failure_is_unknown_and_not_replayed(error: type[BaseException]) -> None:
+@pytest.mark.parametrize("operation", ["click", "check", "press_enter"])
+def test_after_send_failure_is_unknown_and_not_replayed(
+    error: type[BaseException], operation: str,
+) -> None:
     async def run():
-        w = World()
+        w = World(operation)
         w.send_error = error(secrets.token_urlsafe(20))
         receipt = await w.adapter.execute(w.session, await w.command(), w.context)
         assert receipt.state == "possibly_sent" and receipt.failure.code == "effect_unknown"
-        assert receipt.failure.cleanup_required and w.dom_sends == ["click"]
+        assert receipt.failure.cleanup_required and w.dom_sends == [operation]
 
     asyncio.run(run())
 
@@ -781,6 +853,108 @@ def test_discovered_controls_without_distinguishing_allowed_facts_are_rejected()
                 w.session, w.skill.steps[0], w.view, w.context,
             )
         assert caught.value.failure.code == "unsupported"
+        assert w.dom_sends == []
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("kind", ["role_name", "test_id"])
+def test_repair_candidate_uses_fresh_approved_selector_without_dispatch(kind: str) -> None:
+    async def run() -> None:
+        w = World()
+        w.control.selector = "#replacement"
+        w.control.test_id = "replacement_control"
+        hint = LocatorHint(
+            kind=kind, value="Open" if kind == "role_name" else "replacement_control",
+        )
+        rules = replace(w.rules, repair_targets=(
+            DOMRepairTarget("open", hint, "#replacement"),
+        ))
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        assert await w.adapter.target_candidates(
+            w.session, w.skill.steps[0], w.view, w.context,
+        ) == ()
+        matches = await w.adapter.repair_target_candidates(
+            w.session, w.skill.steps[0], hint, w.view, w.context,
+        )
+        assert matches == w.view.candidates and w.dom_sends == []
+        if kind == "test_id":
+            w.control.test_id = "different_control"
+            assert await w.adapter.repair_target_candidates(
+                w.session, w.skill.steps[0], hint, w.view, w.context,
+            ) == ()
+        else:
+            w.view = w.view.model_copy(update={
+                "candidates": (w.view.candidates[0].model_copy(update={"name": "Close"}),),
+            })
+            assert await w.adapter.repair_target_candidates(
+                w.session, w.skill.steps[0], hint, w.view, w.context,
+            ) == ()
+
+    asyncio.run(run())
+
+
+def test_repair_candidate_rejects_unregistered_hint_and_changed_owner() -> None:
+    async def run() -> None:
+        w = World()
+        hint = LocatorHint(kind="role_name", value="Open")
+        with pytest.raises(BrowserOperationError) as missing:
+            await w.adapter.repair_target_candidates(
+                w.session, w.skill.steps[0], hint, w.view, w.context,
+            )
+        assert missing.value.failure.code == "denied"
+        with pytest.raises(ValueError, match="browser_dom_registration_invalid"):
+            replace(w.rules, repair_targets=(DOMRepairTarget("open", hint, "#control"),))
+        rules = replace(w.rules, repair_targets=(DOMRepairTarget("open", hint, "#new"),))
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        w.business = False
+        with pytest.raises(BrowserOperationError) as denied:
+            await w.adapter.repair_target_candidates(
+                w.session, w.skill.steps[0], hint, w.view, w.context,
+            )
+        assert denied.value.failure.code == "denied" and w.dom_sends == []
+
+    asyncio.run(run())
+
+
+def test_repair_label_cannot_drop_original_business_row_key() -> None:
+    async def run() -> None:
+        from app.browser_skill.models import SealedParameter
+
+        w = World()
+        w.control.selector = "#replacement"
+        hint = LocatorHint(kind="role_name", value="Open")
+        rules = replace(
+            w.rules,
+            steps=(DOMStep("open", "#control", ".record", DOMValue(".key")),),
+            repair_targets=(DOMRepairTarget("open", hint, "#replacement"),),
+        )
+
+        async def resolve(ref, purpose, binding, digest, step_id):
+            assert (purpose, step_id, ref.name) == ("business_key", "open", "key")
+            return SealedParameter(
+                w._inputs["key"], ref=ref, purpose=purpose, binding=binding,
+                skill_digest=digest, step_id=step_id,
+            )
+
+        w.context = replace(w.context, resolve_parameter=resolve)
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        assert len(await w.adapter.repair_target_candidates(
+            w.session, w.skill.steps[0], hint, w.view, w.context,
+        )) == 1
+        w.row.values[".key"] = secrets.token_urlsafe(24)
+        assert await w.adapter.repair_target_candidates(
+            w.session, w.skill.steps[0], hint, w.view, w.context,
+        ) == ()
         assert w.dom_sends == []
 
     asyncio.run(run())
@@ -928,7 +1102,9 @@ def test_begin_send_immediately_precedes_real_action() -> None:
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("operation", ["click", "fill", "select_option", "navigate"])
+@pytest.mark.parametrize("operation", [
+    "click", "fill", "select_option", "navigate", "check", "press_enter",
+])
 def test_write_send_requires_final_reservation_before_browser_action(operation: str) -> None:
     async def run() -> None:
         w = World(operation)

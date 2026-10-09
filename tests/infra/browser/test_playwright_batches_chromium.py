@@ -188,6 +188,12 @@ def test_chromium_observer_invalidates_navigation_and_preserves_round_checks() -
             async with observer.resolution_round(session, request, policy) as resolution:
                 first = resolution.region.projection
                 assert len(first.candidates) == 2 and resolution.active
+                # Synthetic text stays in this local comparison; no raw AI
+                # snapshot enters model input, diagnostics, or Run evidence.
+                native = await page.locator(
+                    '[data-browser-region="inbox"]',
+                ).aria_snapshot(mode="ai")
+                assert native.count('button "Open"') == len(first.candidates)
             assert not resolution.active
             counts = observer._batch_counts[session.session_ref]
             assert counts["observer_projection_check_successes"] == 2
@@ -214,6 +220,91 @@ def test_chromium_observer_invalidates_navigation_and_preserves_round_checks() -
                     for handle in (state.element, *(item.element for item in state.candidates))
                 )
             )
+
+    asyncio.run(chromium_case(case))
+
+
+def test_chromium_native_roles_cover_registered_complex_controls() -> None:
+    async def case(page):
+        await page.set_content("""<section id="region">
+          <i data-browser-complete></i>
+          <div role="tree"><div role="treeitem" aria-expanded="false">Departments</div></div>
+          <div role="menu"><div role="menuitem">Reports</div></div>
+          <div role="tablist"><button role="tab" aria-selected="false">Details</button></div>
+          <label><input type="checkbox">Include archived</label>
+          <button role="combobox" aria-expanded="false">Status</button>
+          <div role="listbox" hidden><div role="option">Open</div></div>
+          <div role="dialog" hidden><button>Confirm</button></div>
+        </section>""")
+        session = BrowserSessionRef(session_ref="complex_roles", binding=binding())
+        live = SimpleNamespace(session=session, context=page.context)
+
+        class Registry:
+            async def resolve_live(self, actual):
+                assert actual == session
+                return live
+
+        policy = ObservationPolicy(
+            policy_id="complex_roles", digest=DIGEST,
+            allowed_roles=(
+                "treeitem", "menuitem", "tab", "checkbox", "combobox", "option", "button",
+            ),
+            allowed_names=(
+                "Departments", "Reports", "Details", "Include archived", "Status",
+                "Open", "Confirm",
+            ),
+        )
+        observer = PlaywrightObserver(Registry(), {
+            "controls": RegisteredRegion(
+                region_id="controls", policy_id=policy.policy_id,
+                policy_digest=policy.digest, region_selector="#region",
+                complete_selector="[data-browser-complete]",
+            ),
+            "options": RegisteredRegion(
+                region_id="options", policy_id=policy.policy_id,
+                policy_digest=policy.digest, region_selector='[role="listbox"]',
+            ),
+            "dialog": RegisteredRegion(
+                region_id="dialog", policy_id=policy.policy_id,
+                policy_digest=policy.digest, region_selector='[role="dialog"]',
+            ),
+        })
+        try:
+            first = await observer.observe(
+                session, ObservationRequest(region_id="controls"), policy,
+            )
+            assert {(item.role, item.name) for item in first.candidates} == {
+                ("treeitem", "Departments"), ("menuitem", "Reports"),
+                ("tab", "Details"), ("checkbox", "Include archived"),
+                ("combobox", "Status"),
+            }
+            await page.locator('[role="listbox"]').evaluate("node => node.hidden = false")
+            await page.locator('[role="dialog"]').evaluate("node => node.hidden = false")
+            fresh = await observer.observe(
+                session, ObservationRequest(region_id="controls"), policy,
+            )
+            assert {(item.role, item.name) for item in fresh.candidates} == {
+                *((item.role, item.name) for item in first.candidates),
+                ("option", "Open"), ("button", "Confirm"),
+            }
+            options = await observer.observe(
+                session, ObservationRequest(region_id="options"), policy,
+            )
+            dialog = await observer.observe(
+                session, ObservationRequest(region_id="dialog"), policy,
+            )
+            assert {(item.role, item.name) for item in options.candidates} == {
+                ("option", "Open"),
+            }
+            assert {(item.role, item.name) for item in dialog.candidates} == {
+                ("button", "Confirm"),
+            }
+            assert not first.coverage.trusted_empty and not fresh.coverage.trusted_empty
+        finally:
+            await _dispose_many(tuple(
+                handle for state in observer._observed.values()
+                for handle in (state.element, *(item.element for item in state.candidates))
+            ))
 
     asyncio.run(chromium_case(case))
 
@@ -327,5 +418,34 @@ def test_chromium_final_state_matches_playwright_during_state_changes() -> None:
                 assert await identity.evaluate(_FINAL_IDENTITY, config) is expected, name
         finally:
             await _dispose_many((identity, target, region))
+
+    asyncio.run(chromium_case(case))
+
+
+def test_chromium_check_identity_requires_native_checkbox() -> None:
+    async def case(page):
+        await page.set_content(
+            '<section id="region"><input id="native" type="checkbox">'
+            '<div id="custom" role="checkbox" aria-checked="false">Choice</div></section>'
+        )
+        region = await page.query_selector("#region")
+        native = await page.query_selector("#native")
+        custom = await page.query_selector("#custom")
+        identities = [
+            await item.evaluate_handle(
+                "(node, region) => ({node, region, row: null})", region,
+            ) for item in (native, custom)
+        ]
+        try:
+            for target, identity, expected in (
+                (native, identities[0], True), (custom, identities[1], False),
+            ):
+                assert await identity.evaluate(_FINAL_IDENTITY, {
+                    "element": target, "region_selector": "#region",
+                    "selector": None, "row_selector": None, "target": True,
+                    "operation": "check", "option": None,
+                }) is expected
+        finally:
+            await _dispose_many((region, native, custom, *identities))
 
     asyncio.run(chromium_case(case))
