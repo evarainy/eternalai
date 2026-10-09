@@ -539,6 +539,17 @@ def teaching_grant_scope_digest(
     })
 
 
+def initial_validation_scope_digest(
+    owner: BrowserOwner, publication: BrowserPublicationManifest,
+) -> str:
+    """Value-free identity for one prepared, first-version validation Run."""
+    return canonical_digest("browser.initial_validation_scope.v1", {
+        "owner": [owner.tenant_id, owner.user_id, owner.session_id],
+        "publication": [publication.digest, publication.skill.skill_id,
+                        publication.skill.digest],
+    })
+
+
 def build_registered_teaching_candidate(
     base: BrowserPublicationManifest, *, target_skill_id: str,
     version: str, site_version: str,

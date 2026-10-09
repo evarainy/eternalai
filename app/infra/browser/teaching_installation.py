@@ -124,6 +124,205 @@ class PostgreSQLTeachingPublicationReview(BrowserPublicationReviewPort):
             raise ValueError("browser_teaching_replay_store_required")
         self._sessions, self._load_proof = sessions, load_proof
 
+    async def _initial_run(
+        self, session: AsyncSession, owner: BrowserOwner,
+        manifest: BrowserPublicationManifest, task_id: str, run_id: str,
+    ) -> RowMapping | None:
+        if (manifest.source_kind != "registered_site"
+                or manifest.effect != "read_only"
+                or manifest.rollback_source_digest is not None):
+            return None
+        row = (await session.execute(text(
+            "SELECT br.binding_id,br.binding_revision,br.input_digest,"
+            "br.verification_evidence_digest FROM browser_runs br"
+            " JOIN browser_publications bp ON bp.tenant_id=br.tenant_id"
+            " AND bp.publication_digest=br.publication_digest"
+            " WHERE br.tenant_id=:tenant AND br.ai_user_id=:user"
+            " AND br.session_id=:session AND br.task_id=:task AND br.run_id=:run"
+            " AND br.publication_digest=:publication AND br.target_system=:target"
+            " AND bp.state='prepared' AND bp.skill_id=:skill"
+            " AND br.status='completed' AND br.effect='acknowledged'"
+            " AND br.verification='verified' AND br.error_code IS NULL"
+            " AND br.verification_evidence_digest IS NOT NULL"
+            " AND br.cancel_requested=FALSE AND br.cancel_acknowledged=FALSE"
+            " AND br.auth_expires_at>clock_timestamp()"
+            " AND NOT EXISTS (SELECT 1 FROM auth_session_revocations rv"
+            " WHERE rv.token_fingerprint=br.auth_fingerprint)"
+            " FOR SHARE OF br,bp"
+        ), {
+            "tenant": owner.tenant_id, "user": owner.user_id,
+            "session": owner.session_id, "task": task_id, "run": run_id,
+            "publication": bytes.fromhex(manifest.digest),
+            "target": manifest.capability.target_system,
+            "skill": manifest.skill.skill_id,
+        })).mappings().one_or_none()
+        if row is None:
+            return None
+        binding = (await session.execute(text(
+            "SELECT 1 FROM oa_session_credentials WHERE tenant_id=:tenant"
+            " AND ai_user_id=:user AND target_system=:target"
+            " AND binding_id=:binding AND binding_revision=:revision"
+            " AND binding_state='active' AND revoked_at IS NULL FOR SHARE"
+        ), {
+            "tenant": owner.tenant_id, "user": owner.user_id,
+            "target": manifest.capability.target_system,
+            "binding": row["binding_id"], "revision": row["binding_revision"],
+        })).scalar_one_or_none()
+        return row if binding == 1 else None
+
+    @staticmethod
+    def _initial_action(
+        owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        task_id: str, run_id: str, row: RowMapping,
+    ) -> str:
+        return hashlib.sha256((
+            "browser_initial_review_action.v1\n" + canonical_json({
+                "owner": [owner.tenant_id, owner.user_id, owner.session_id],
+                "publication": [manifest.digest, manifest.skill.skill_id,
+                                manifest.skill.version, manifest.skill.digest],
+                "site": [manifest.site.digest, manifest.verifier.digest],
+                "capability": [manifest.capability_digest,
+                               manifest.capability.target_system],
+                "run": [task_id, run_id, row["binding_id"],
+                        row["binding_revision"],
+                        bytes(row["input_digest"]).hex(),
+                        bytes(row["verification_evidence_digest"]).hex()],
+            })
+        ).encode()).hexdigest()
+
+    async def request_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        task_id: str, run_id: str, request_id: str,
+    ) -> HumanGateRequest:
+        for value in (task_id, run_id, request_id):
+            checked_run_id(value)
+        async with self._sessions() as session, session.begin():
+            run = await self._initial_run(session, owner, manifest, task_id, run_id)
+        if run is None:
+            raise ValueError("browser_initial_validation_unverified")
+        now = datetime.now(UTC)
+        binding = VersionBinding(
+            resource_type="skill", resource_id=manifest.skill.skill_id,
+            version=manifest.skill.version, digest=manifest.skill.digest,
+        )
+        gate = PostgreSQLHumanGate(self._sessions)
+        locked = await gate.get_task_binding(task_id)
+        if locked is None:
+            try:
+                locked = await gate.bind_task(build_task_version_binding_manifest(
+                    task_id=task_id, bindings=(binding,), locked_at=now,
+                ))
+            except HumanGateConflictError:
+                locked = await gate.get_task_binding(task_id)
+                if locked is None:
+                    raise
+        if locked.bindings != (binding,):
+            raise ValueError("browser_initial_review_binding_invalid")
+        action = self._initial_action(owner, manifest, task_id, run_id, run)
+        request_digest = hashlib.sha256((
+            "browser_initial_review_request.v1\n" + canonical_json({
+                "request_id": request_id, "action_digest": action,
+                "binding_manifest_digest": locked.manifest_digest,
+            })
+        ).encode()).hexdigest()
+        existing = await gate.get_request(request_id)
+        if existing is not None:
+            if (existing.task_id != task_id
+                    or existing.requested_tenant_id != owner.tenant_id
+                    or existing.requested_for_ai_user_id != owner.user_id
+                    or existing.requested_session_id != owner.session_id
+                    or existing.action_digest != action
+                    or existing.binding_manifest_digest != locked.manifest_digest
+                    or existing.request_digest != request_digest
+                    or existing.expires_at <= now):
+                raise ValueError("browser_initial_review_request_conflict")
+            return existing
+        return await gate.create_request(HumanGateRequest(
+            request_id=request_id, task_id=task_id,
+            requested_for_ai_user_id=owner.user_id,
+            requested_session_id=owner.session_id,
+            requested_tenant_id=owner.tenant_id,
+            action_digest=action, request_digest=request_digest,
+            binding_manifest_digest=locked.manifest_digest,
+            requested_at=now, expires_at=now + timedelta(minutes=15),
+        ))
+
+    async def decide_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        task_id: str, run_id: str, request_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> HumanGateDecisionRecord:
+        if decision not in {"confirmed", "rejected"}:
+            raise ValueError("browser_initial_review_decision_invalid")
+        async with self._sessions() as session, session.begin():
+            run = await self._initial_run(session, owner, manifest, task_id, run_id)
+        if run is None:
+            raise ValueError("browser_initial_validation_unverified")
+        gate = PostgreSQLHumanGate(self._sessions)
+        request = await gate.get_request(request_id)
+        now = datetime.now(UTC)
+        if (request is None or request.task_id != task_id
+                or request.requested_tenant_id != owner.tenant_id
+                or request.requested_for_ai_user_id != owner.user_id
+                or request.requested_session_id != owner.session_id
+                or request.action_digest
+                != self._initial_action(owner, manifest, task_id, run_id, run)
+                or request.expires_at <= now):
+            raise ValueError("browser_initial_review_request_stale")
+        record = HumanGateDecisionRecord(
+            request_id=request_id, task_id=task_id,
+            decided_by_ai_user_id=owner.user_id,
+            decided_session_id=owner.session_id,
+            decided_tenant_id=owner.tenant_id,
+            decision=decision,
+            request_digest=request.request_digest,
+            binding_manifest_digest=request.binding_manifest_digest,
+            decided_at=now,
+        )
+        existing = await gate.get_decision(request_id)
+        if existing is None:
+            try:
+                existing = await gate.record_decision(record)
+            except HumanGateConflictError:
+                existing = await gate.get_decision(request_id)
+        if (existing is None or existing.model_dump(exclude={"decided_at"})
+                != record.model_dump(exclude={"decided_at"})):
+            raise ValueError("browser_initial_review_decision_conflict")
+        return existing
+
+    async def check_initial_in_session(
+        self, session: object, owner: BrowserOwner,
+        manifest: BrowserPublicationManifest, *, task_id: str,
+        run_id: str, approval_ref: str,
+    ) -> bool:
+        if not isinstance(session, AsyncSession):
+            return False
+        run = await self._initial_run(session, owner, manifest, task_id, run_id)
+        if run is None:
+            return False
+        action = self._initial_action(owner, manifest, task_id, run_id, run)
+        row = (await session.execute(text(
+            "SELECT request_id,task_id,request_digest,binding_manifest_digest"
+            " FROM human_gate_requests WHERE request_id=:approval AND task_id=:task"
+            " AND requested_tenant_id=:tenant AND requested_for_ai_user_id=:user"
+            " AND requested_session_id=:session AND action_digest=:action"
+            " AND decision='confirmed' AND decided_tenant_id=:tenant"
+            " AND decided_by_ai_user_id=:user AND decided_session_id=:session"
+            " AND requested_at<=decided_at AND decided_at<expires_at"
+            " AND expires_at>clock_timestamp() FOR SHARE"
+        ), {"approval": approval_ref, "task": task_id,
+            "tenant": owner.tenant_id, "user": owner.user_id,
+            "session": owner.session_id, "action": action})).mappings().one_or_none()
+        if row is None:
+            return False
+        expected = hashlib.sha256((
+            "browser_initial_review_request.v1\n" + canonical_json({
+                "request_id": approval_ref, "action_digest": action,
+                "binding_manifest_digest": row["binding_manifest_digest"],
+            })
+        ).encode()).hexdigest()
+        return bool(row["request_digest"] == expected)
+
     async def request_review(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
         draft_digest: str, replay_digest: str, request_id: str,

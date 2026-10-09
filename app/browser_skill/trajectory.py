@@ -765,6 +765,8 @@ def capture_authorized_run(
             raise TrajectoryError("teaching_run_publication_mismatch")
         plan = (authority.read_plan(run_id, _binding_copy(binding))
                 if authority.read_plan is not None else None)
+        if plan is not None and plan.purpose == "initial_validation":
+            raise TrajectoryError("teaching_initial_validation_not_source")
         publication = executed
         if plan is not None:
             publication = BrowserPublicationManifest.model_validate_json(

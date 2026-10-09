@@ -16,6 +16,8 @@ from app.browser_skill.executor import BrowserExecutor
 from app.browser_skill.models import (
     ActionCommand,
     BrowserOperationError,
+    DecisionCandidate,
+    DecisionRequest,
     DispatchPermit,
     ObservationRequest,
     TargetRef,
@@ -493,6 +495,38 @@ class World(FakeWorld):
             target=target,
             option=option,
         )
+
+
+def test_model_context_uses_only_current_requested_candidate_subset() -> None:
+    w = World("click")
+    selected = w.view.candidates[0]
+    extra = TargetRef(target_id="extra", candidate_epoch=2, scope=w.view.scope)
+    w.observer._pages = {
+        w.session.session_ref: SimpleNamespace(
+            epoch=w.view.scope.page_epoch,
+            page=SimpleNamespace(is_closed=lambda: False),
+        ),
+    }
+    w.observer._observed = {
+        (w.session.session_ref, w.view.scope.region_id): SimpleNamespace(
+            scope=w.view.scope,
+            candidates=(
+                SimpleNamespace(target_id=selected.ref.target_id,
+                                epoch=selected.ref.candidate_epoch),
+                SimpleNamespace(target_id=extra.target_id,
+                                epoch=extra.candidate_epoch),
+            ),
+        ),
+    }
+    request = DecisionRequest(
+        request_id="request", scope=w.view.scope, criteria=("registered",),
+        candidates=(DecisionCandidate(
+            ref=selected.ref, role=selected.role, name=selected.name,
+        ),),
+    )
+    assert w.adapter.current_decision_targets(w.session, request) == (selected.ref,)
+    w.observer._pages[w.session.session_ref].epoch += 1
+    assert w.adapter.current_decision_targets(w.session, request) == ()
 
 
 @pytest.mark.parametrize("operation", ["click", "fill", "select_option", "navigate", "read"])

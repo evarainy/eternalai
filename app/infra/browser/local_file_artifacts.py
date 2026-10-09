@@ -163,6 +163,9 @@ class LocalFileArtifacts:
             raise LocalFileArtifactError("browser_file_configuration_invalid")
         self._root = root
         self._authority = authority
+        self.last_cleanup: dict[str, int | str] = {
+            "scanned": 0, "removed": 0, "failed": 0, "result": "not_run",
+        }
 
     def _root_path(self) -> Path:
         try:
@@ -266,18 +269,93 @@ class LocalFileArtifacts:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise LocalFileArtifactError("browser_file_cleanup_invalid")
         now = datetime.now(timezone.utc)
-        records = await self._authority.expired(now, limit)
+        try:
+            records = await self._authority.expired(now, limit)
+        except Exception:
+            self.last_cleanup = {
+                "scanned": 0, "removed": 0, "failed": 1, "result": "authority_failed",
+            }
+            raise
+        if len(records) > limit:
+            self.last_cleanup = {
+                "scanned": len(records), "removed": 0, "failed": 1,
+                "result": "authority_failed",
+            }
+            raise LocalFileArtifactError("browser_file_cleanup_invalid")
         removed = 0
+        failed = 0
         for artifact in records:
-            if artifact.expires_at > now:
+            if not isinstance(artifact, StoredFileArtifact) or artifact.expires_at > now:
+                failed += 1
                 continue
             path = self._root_path() / artifact.reference
             try:
+                if path.is_symlink() or (path.exists() and not path.is_file()):
+                    raise LocalFileArtifactError("browser_file_cleanup_invalid")
                 path.unlink(missing_ok=True)
                 await self._authority.confirm_removed(artifact)
-            except OSError:
-                # Keep the PG record on deletion failure for later retry.
+            except Exception:
+                # Keep the durable record on deletion or confirmation failure.
+                failed += 1
                 continue
             removed += 1
             await asyncio.sleep(0)
+        self.last_cleanup = {
+            "scanned": len(records), "removed": removed, "failed": failed,
+            "result": "incomplete" if failed else "ok",
+        }
+        if failed:
+            raise LocalFileArtifactError("browser_file_cleanup_incomplete")
         return removed
+
+
+class FileArtifactCleanupScheduler:
+    """Independent bounded spool sweeps, including the first post-start pass."""
+
+    def __init__(
+        self, artifacts: LocalFileArtifacts, *, interval_seconds: int = 60,
+        batch_limit: int = 100,
+    ) -> None:
+        if (not isinstance(artifacts, LocalFileArtifacts)
+                or type(interval_seconds) is not int or not 10 <= interval_seconds <= 3600
+                or type(batch_limit) is not int or not 1 <= batch_limit <= 1000):
+            raise LocalFileArtifactError("browser_file_cleanup_invalid")
+        self._artifacts = artifacts
+        self._interval = interval_seconds
+        self._limit = batch_limit
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self.last_result = "not_run"
+
+    async def start(self) -> None:
+        if self._task is not None:
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(
+            self._run(), name="browser-file-expiry-cleanup",
+        )
+
+    async def stop(self) -> None:
+        task = self._task
+        if task is None:
+            return
+        self._stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._artifacts.cleanup_expired(limit=self._limit)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # The PG event stays available for retry; never log a path or owner.
+                self.last_result = "failed"
+            else:
+                self.last_result = "ok"
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
+            except TimeoutError:
+                continue

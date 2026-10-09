@@ -46,7 +46,10 @@ from app.infra.browser.fixed_synthetic_seed import (
     build_fixed_synthetic_visible_query_source,
     observe_attempt_id_from_version,
 )
-from app.infra.browser.local_file_artifacts import LocalFileArtifacts
+from app.infra.browser.local_file_artifacts import (
+    FileArtifactCleanupScheduler,
+    LocalFileArtifacts,
+)
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserReadLifecycle,
@@ -56,6 +59,7 @@ from app.infra.browser.local_resource_lifecycle import (
     RegisteredLocalSite,
 )
 from app.infra.browser.read_execution import BrowserReadExecutionFactory
+from app.infra.browser.runtime_exploration import RuntimeLLMExplorationSuggester
 from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPProvider
 from app.infra.browser.teaching_installation import (
     InstalledReplayProofLookup,
@@ -392,6 +396,14 @@ def build_local_browser_vertical(
                 or decision._deployment.registered_sources
                 != (source.manifest.site.source,)):
             raise ValueError("browser_local_decision_installation_invalid")
+        if source.manifest.site.exploration is not None:
+            suggester = source.exploration_suggest
+            if (not isinstance(suggester, RuntimeLLMExplorationSuggester)
+                    or deps.llm_provider is None
+                    or suggester.provider is not deps.llm_provider
+                    or deps.intent_model is None
+                    or suggester.model != deps.intent_model):
+                raise ValueError("browser_runtime_exploration_installation_invalid")
     file_authority: PostgreSQLBrowserFileArtifactAuthority | None = None
     if (registered and isinstance(source, RegisteredLocalSite)
             and source.download_expectations):
@@ -547,6 +559,41 @@ def build_local_browser_vertical(
             owner, manifest, draft_digest, replay_digest, request_id, decision,
         )
 
+    async def request_initial_review(
+        owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        task_id: str, run_id: str, request_id: str,
+    ) -> HumanGateRequest:
+        if (not isinstance(source, RegisteredLocalSite)
+                or not isinstance(review, PostgreSQLTeachingPublicationReview)
+                or deps.teaching_base is not None
+                or owner.tenant_id != deps.binding.tenant_id
+                or manifest != source.manifest
+                or await deps.publication_grants.check(
+                    owner, manifest.skill.skill_id, "activate", manifest.digest,
+                ) is not True):
+            raise ValueError("browser_initial_review_denied")
+        return await review.request_initial(
+            owner, manifest, task_id, run_id, request_id,
+        )
+
+    async def decide_initial_review(
+        owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        task_id: str, run_id: str, request_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> HumanGateDecisionRecord:
+        if (not isinstance(source, RegisteredLocalSite)
+                or not isinstance(review, PostgreSQLTeachingPublicationReview)
+                or deps.teaching_base is not None
+                or owner.tenant_id != deps.binding.tenant_id
+                or manifest != source.manifest
+                or await deps.publication_grants.check(
+                    owner, manifest.skill.skill_id, "activate", manifest.digest,
+                ) is not True):
+            raise ValueError("browser_initial_review_denied")
+        return await review.decide_initial(
+            owner, manifest, task_id, run_id, request_id, decision,
+        )
+
     configured = build_browser_vertical(BrowserVerticalDependencies(
         session_factory=deps.session_factory, capability_registry=deps.capability_registry,
         session_binder=deps.session_binder, policy=deps.policy, tenant_id=deps.binding.tenant_id,
@@ -577,6 +624,10 @@ def build_local_browser_vertical(
         teaching_base=deps.teaching_base if registered else None,
         teaching_review_request=request_teaching_review if registered else None,
         teaching_review_decide=decide_teaching_review if registered else None,
+        initial_review_request=(request_initial_review if registered
+                                and deps.teaching_base is None else None),
+        initial_review_decide=(decide_initial_review if registered
+                               and deps.teaching_base is None else None),
     ))
     if configured is None:
         raise ValueError("browser_local_composition_unavailable")
@@ -602,7 +653,19 @@ def build_local_browser_vertical(
     if registered:
         factory.install_profiles(configured.profiles, configured.cipher)
 
+    file_cleanup = (
+        FileArtifactCleanupScheduler(deps.file_artifacts)
+        if registered and deps.file_artifacts is not None else None
+    )
+
+    async def start_resources() -> None:
+        await resources.start()
+        if file_cleanup is not None:
+            await file_cleanup.start()
+
     async def stop_resources() -> None:
+        if file_cleanup is not None:
+            await file_cleanup.stop()
         # Supervisor cancellation normally settles the claimed Run. Reconcile
         # any still-owned local resource before closing the shared transport.
         if configured._active_owners or configured._cleanup_owners:
@@ -641,6 +704,6 @@ def build_local_browser_vertical(
         else None
     )
     return replace(
-        configured, _start_resources=resources.start, _stop_resources=stop_resources,
+        configured, _start_resources=start_resources, _stop_resources=stop_resources,
         reviewed_publication=reviewed,
     )

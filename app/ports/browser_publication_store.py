@@ -51,6 +51,14 @@ class BrowserPublicationReviewPort(Protocol):
         evidence_digest: str,
     ) -> bool: ...
 
+    async def check_initial_in_session(
+        self, session: object, owner: BrowserOwner,
+        manifest: BrowserPublicationManifest, *, task_id: str,
+        run_id: str, approval_ref: str,
+    ) -> bool:
+        """Require one actual verified prepared Run and its HumanGate decision."""
+        ...
+
 
 class BrowserPublicationStorePort(Protocol):
     async def prepare(
@@ -67,6 +75,11 @@ class BrowserPublicationStorePort(Protocol):
         draft_digest: str, replay_digest: str, approval_ref: str,
         reviewer_ref: str, evidence_digest: str,
         expected_active_digest: str | None = None,
+    ) -> BrowserPublicationRecord: ...
+
+    async def activate_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
+        task_id: str, run_id: str, approval_ref: str,
     ) -> BrowserPublicationRecord: ...
 
     async def deactivate(

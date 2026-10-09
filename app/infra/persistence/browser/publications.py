@@ -421,6 +421,22 @@ class PostgreSQLBrowserPublicationStore:
             expected_active_digest=expected_active_digest,
         )
 
+    async def activate_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
+        task_id: str, run_id: str, approval_ref: str,
+    ) -> BrowserPublicationRecord:
+        """First registered version requires a verified prepared Run and HumanGate."""
+        checked = _manifest(manifest)
+        if (checked.source_kind != "registered_site" or checked.effect != "read_only"
+                or checked.rollback_source_digest is not None or self._review is None):
+            raise BrowserPublicationError("browser_publication_initial_invalid")
+        for identity in (task_id, run_id, approval_ref):
+            TypeAdapter(OpaqueId).validate_python(identity, strict=True)
+        return await self._transition(
+            owner, checked.skill.skill_id, checked.digest, 0, "activate",
+            initial=(checked, task_id, run_id, approval_ref),
+        )
+
     async def deactivate(self, owner: BrowserOwner, skill_id: str, publication_digest: str,
                          *, expected_revision: int) -> BrowserPublicationRecord:
         return await self._transition(owner, skill_id, publication_digest,
@@ -430,6 +446,8 @@ class PostgreSQLBrowserPublicationStore:
                           expected_revision: int,
                           operation: PublicationOperation, *,
                           review: tuple[BrowserPublicationManifest, str, str, str, str, str]
+                          | None = None,
+                          initial: tuple[BrowserPublicationManifest, str, str, str]
                           | None = None,
                           expected_active_digest: str | None = None,
                           ) -> BrowserPublicationRecord:
@@ -452,15 +470,27 @@ class PostgreSQLBrowserPublicationStore:
                     or record.activation_revision != expected_revision):
                 raise BrowserPublicationError("browser_publication_revision_conflict")
             if operation == "activate" and record.manifest.source_kind == "registered_site":
-                if review is None or self._review is None or review[0] != record.manifest:
+                if self._review is None or (review is None) == (initial is None):
                     raise BrowserPublicationError("browser_publication_review_required")
-                checked, draft, replay, approval, reviewer, evidence = review
                 try:
-                    accepted = await self._review.check_in_session(
-                        session, owner, checked, draft_digest=draft,
-                        replay_digest=replay, approval_ref=approval,
-                        reviewer_ref=reviewer, evidence_digest=evidence,
-                    )
+                    if initial is not None:
+                        checked, task_id, run_id, approval = initial
+                        if checked != record.manifest:
+                            raise BrowserPublicationError("browser_publication_review_required")
+                        accepted = await self._review.check_initial_in_session(
+                            session, owner, checked, task_id=task_id,
+                            run_id=run_id, approval_ref=approval,
+                        )
+                    else:
+                        assert review is not None
+                        checked, draft, replay, approval, reviewer, evidence = review
+                        if checked != record.manifest:
+                            raise BrowserPublicationError("browser_publication_review_required")
+                        accepted = await self._review.check_in_session(
+                            session, owner, checked, draft_digest=draft,
+                            replay_digest=replay, approval_ref=approval,
+                            reviewer_ref=reviewer, evidence_digest=evidence,
+                        )
                 except Exception:
                     raise BrowserPublicationError(
                         "browser_publication_review_unavailable"
@@ -483,6 +513,8 @@ class PostgreSQLBrowserPublicationStore:
                         prior is None or bytes(cast(bytes, prior["publication_digest"])).hex()
                         != expected_active_digest
                     ):
+                        raise BrowserPublicationError("browser_publication_head_changed")
+                    if initial is not None and prior is not None:
                         raise BrowserPublicationError("browser_publication_head_changed")
                     if prior is not None:
                         previous = _record(prior)

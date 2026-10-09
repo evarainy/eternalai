@@ -28,6 +28,7 @@ from app.browser_skill.models import (
     ActionCommand,
     BrowserOwner,
     DispatchReceipt,
+    PageEvidence,
     ReadSpec,
     ScopeBinding,
     ScopeStamp,
@@ -43,6 +44,7 @@ from app.browser_skill.trajectory import (
     RunTeachingStep,
     TrajectoryEvent,
 )
+from app.browser_skill.verifier import IndependentVerifier
 from app.browser_skill.write_workflow import (
     BrowserWritePreparation,
     _owner_digest,
@@ -81,6 +83,7 @@ _RUN = _TASK + " AND run_id=:run_id"
 _WRITER_LOCK = 746420212000
 _REQUEST_VERSION = "browser.request.v1"
 _STEP_AUDIT_VERSION = "browser.run_step_audit.v1"
+_TRAVERSAL_TERMINAL_VERSION = "browser.traversal_terminal.v1"
 _WRITE_PREPARED_VERSION = "browser.write_prepared.v1"
 _WRITE_CONSUMED_VERSION = "browser.write_consumed.v1"
 _WRITE_SEND_VERSION = "browser.write_send_reserved.v1"
@@ -1048,6 +1051,7 @@ class PostgreSQLBrowserRunStore:
     def _check_step_route(
         manifest: BrowserPublicationManifest,
         step_ids: tuple[str, ...], *, complete: bool,
+        terminal_after: int | None = None,
     ) -> None:
         """Match the frozen sequence, allowing only its registered page advance to repeat."""
         exploration = manifest.site.exploration
@@ -1062,14 +1066,22 @@ class PostgreSQLBrowserRunStore:
             return
         expected = manifest.skill.steps
         traversal = manifest.site.traversal
+        if terminal_after is not None and (
+            traversal is None or type(terminal_after) is not int
+            or not 0 <= terminal_after <= len(step_ids)
+        ):
+            raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
         advance_id = traversal.advance_step_id if traversal is not None else None
         cursor = 0
         advances = 0
-        for step_id in step_ids:
+        used_terminal = False
+        for index, step_id in enumerate(step_ids):
             if cursor >= len(expected):
                 raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
             if step_id == expected[cursor].step_id:
                 if step_id == advance_id:
+                    if terminal_after is not None and index >= terminal_after:
+                        raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
                     advances += 1
                     if traversal is None or advances >= traversal.max_pages:
                         raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
@@ -1077,18 +1089,24 @@ class PostgreSQLBrowserRunStore:
                     cursor += 1
             elif (
                 expected[cursor].step_id == advance_id
-                and advances > 0 and cursor + 1 < len(expected)
+                and terminal_after == index and cursor + 1 < len(expected)
                 and step_id == expected[cursor + 1].step_id
             ):
+                used_terminal = True
                 cursor += 2
             else:
                 raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
         if complete and not (
             cursor == len(expected)
-            or (cursor == len(expected) - 1 and advances > 0
+            or (cursor == len(expected) - 1 and terminal_after == len(step_ids)
                 and expected[cursor].step_id == advance_id)
         ):
             raise BrowserRunStoreError("browser_step_audit_incomplete")
+        if terminal_after is not None and not used_terminal and not (
+            cursor == len(expected) - 1 and terminal_after == len(step_ids)
+            and expected[cursor].step_id == advance_id
+        ):
+            raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
 
     @staticmethod
     def _primitive_id(manifest: BrowserPublicationManifest, step_id: str) -> str:
@@ -1112,6 +1130,112 @@ class PostgreSQLBrowserRunStore:
                              ensure_ascii=True, allow_nan=False).encode("ascii")
         return hmac.new(key, b"browser-run-step-audit-v1\x00" + encoded,
                         hashlib.sha256).hexdigest()
+
+    def _traversal_mac(self, data: dict[str, object], key_id: str) -> str:
+        key = self._digest_keys.get(key_id)
+        if key is None:
+            raise BrowserRunStoreError("browser_traversal_audit_key_unavailable")
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+        return hmac.new(key, b"browser-traversal-terminal-v1\x00" + encoded,
+                        hashlib.sha256).hexdigest()
+
+    async def _traversal_terminal_in_session(
+        self, session: AsyncSession, run: RunSnapshot,
+        manifest: BrowserPublicationManifest,
+    ) -> int | None:
+        event_id = self._write_event_id("traversal-terminal", run.run_id)
+        row = (await session.execute(text(
+            "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+            " AND event_id=:event"
+        ), {"task": run.task_id, "event": event_id})).mappings().one_or_none()
+        if row is None:
+            return None
+        payload = row["payload"]
+        if row["event_type"] != _TRAVERSAL_TERMINAL_VERSION or not isinstance(payload, dict):
+            raise BrowserRunStoreError("browser_traversal_audit_invalid")
+        unsigned = {key: value for key, value in payload.items() if key != "mac"}
+        key_id, mac = payload.get("key_id"), payload.get("mac")
+        if (
+            payload.get("schema_version") != _TRAVERSAL_TERMINAL_VERSION
+            or type(key_id) is not str or type(mac) is not str
+            or not hmac.compare_digest(mac, self._traversal_mac(unsigned, key_id))
+            or payload.get("run_id") != run.run_id
+            or payload.get("publication_digest") != manifest.digest
+            or payload.get("worker_epoch") != run.worker_epoch
+            or payload.get("lease_epoch") != run.lease_epoch
+            or type(payload.get("sequence")) is not int
+            or not 0 <= payload["sequence"] <= _MAX_STEP_AUDITS
+            or type(payload.get("page_count")) is not int
+            or manifest.site.traversal is None
+            or not 1 <= payload["page_count"] <= manifest.site.traversal.max_pages
+            or type(payload.get("page_chain_digest")) is not str
+            or len(payload["page_chain_digest"]) != 64
+        ):
+            raise BrowserRunStoreError("browser_traversal_audit_invalid")
+        return int(payload["sequence"])
+
+    async def record_traversal_terminal(
+        self, claim: RunSnapshot, *, pages: tuple[PageEvidence, ...],
+        sequence: int,
+    ) -> RunSnapshot:
+        if (type(sequence) is not int or not 0 <= sequence <= _MAX_STEP_AUDITS
+                or type(pages) is not tuple):
+            raise BrowserRunStoreError("browser_traversal_audit_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (current.phase != "running" or current.cancel_requested
+                    or current.verification is not None or current.effect == "unknown"
+                    or current.lease_epoch is None):
+                raise BrowserRunStoreError("browser_traversal_audit_stale")
+            manifest = await self._frozen_publication(session, current)
+            traversal = manifest.site.traversal
+            digest = (
+                IndependentVerifier._page_chain(traversal, pages)
+                if traversal is not None else None
+            )
+            if digest is None or not pages[-1].terminal_seen:
+                raise BrowserRunStoreError("browser_traversal_audit_incomplete")
+            previous = await self._audited_steps(session, current)
+            ids = tuple(item.event.step_id for item in previous)
+            if len(ids) != sequence or traversal is None:
+                raise BrowserRunStoreError("browser_traversal_audit_sequence_conflict")
+            expected = tuple(item.step_id for item in manifest.skill.steps)
+            try:
+                position = expected.index(traversal.advance_step_id)
+            except ValueError:
+                raise BrowserRunStoreError("browser_traversal_audit_sequence_conflict") from None
+            if (ids[:position] != expected[:position]
+                    or any(item != traversal.advance_step_id for item in ids[position:])
+                    or len(ids) - position >= traversal.max_pages):
+                raise BrowserRunStoreError("browser_traversal_audit_sequence_conflict")
+            if await self._traversal_terminal_in_session(session, current, manifest) is not None:
+                raise BrowserRunStoreError("browser_traversal_audit_reused")
+            payload: dict[str, object] = {
+                "schema_version": _TRAVERSAL_TERMINAL_VERSION,
+                "run_id": current.run_id,
+                "publication_digest": manifest.digest,
+                "worker_epoch": current.worker_epoch,
+                "lease_epoch": current.lease_epoch,
+                "sequence": sequence,
+                "page_count": len(pages),
+                "page_chain_digest": digest,
+                "key_id": self._active_digest_key_id,
+            }
+            payload["mac"] = self._traversal_mac(payload, self._active_digest_key_id)
+            await append_owned_event(
+                session, tenant_id=current.owner.tenant_id,
+                ai_user_id=current.owner.user_id,
+                session_id=current.owner.session_id,
+                task_id=current.task_id,
+                event=TaskEventRecord(
+                    event_id=self._write_event_id("traversal-terminal", current.run_id),
+                    task_id=current.task_id,
+                    event_type=_TRAVERSAL_TERMINAL_VERSION,
+                    timestamp=await self._now(session), payload=payload,
+                ),
+            )
+            return current
 
     def _write_mac(self, data: dict[str, object], key_id: str) -> str:
         key = self._digest_keys.get(key_id)
@@ -1251,17 +1375,26 @@ class PostgreSQLBrowserRunStore:
             or plan.policy_digest != manifest.site.policy.digest
             or plan.verifier_digest != manifest.verifier.digest
             or plan.sealed_input_digest != run.admission.input_digest.hex()
-            or not manifest.site.primitive_rules
+            or (plan.purpose == "teaching" and not manifest.site.primitive_rules)
             or tuple(item.step_id for item in plan.steps) != tuple(
                 item.step_id for item in manifest.skill.steps
             )
+            or (plan.purpose == "initial_validation" and (
+                plan.source_publication_digest != manifest.digest
+                or manifest.source_kind != "registered_site"
+                or manifest.effect != "read_only"
+                or manifest.rollback_source_digest is not None
+            ))
         ):
             raise BrowserRunStoreError("browser_teaching_plan_mismatch")
         source_row = (await session.execute(text(
             "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
-            " AND publication_digest=:digest AND state IN ('active','inactive')"
+            " AND publication_digest=:digest"
+            " AND ((:initial AND state='prepared')"
+            " OR (NOT :initial AND state IN ('active','inactive')))"
         ), {"tenant": run.owner.tenant_id,
-            "digest": bytes.fromhex(plan.source_publication_digest)})).mappings().one_or_none()
+            "digest": bytes.fromhex(plan.source_publication_digest),
+            "initial": plan.purpose == "initial_validation"})).mappings().one_or_none()
         if source_row is None:
             raise BrowserRunStoreError("browser_teaching_source_unavailable")
         try:
@@ -1270,12 +1403,16 @@ class PostgreSQLBrowserRunStore:
             raise BrowserRunStoreError("browser_teaching_source_invalid") from None
         if source.digest != plan.source_publication_digest:
             raise BrowserRunStoreError("browser_teaching_source_invalid")
+        if plan.purpose == "initial_validation" and source != manifest:
+            raise BrowserRunStoreError("browser_teaching_source_invalid")
         source_rules = {
             item.step.step_id: item for item in (
                 *source.site.steps, *source.site.primitive_rules,
             )
         }
-        by_id = {item.step.step_id: item for item in manifest.site.primitive_rules}
+        by_id = {item.step.step_id: item for item in (
+            manifest.site.primitive_rules or manifest.site.steps
+        )}
         candidate_rules = {item.step.step_id: item for item in manifest.site.steps}
         for item in plan.steps:
             primitive = by_id.get(item.primitive_id)
@@ -1514,6 +1651,9 @@ class PostgreSQLBrowserRunStore:
             self._check_step_route(
                 manifest, tuple(item.event.step_id for item in previous)
                 + (command.step.step_id,), complete=False,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, current, manifest,
+                ),
             )
             consumed_id = self._write_event_id(
                 "write-consumed", preparation.request_id,
@@ -1606,6 +1746,9 @@ class PostgreSQLBrowserRunStore:
             self._check_step_route(
                 manifest, tuple(item.event.step_id for item in previous)
                 + (command.step.step_id,), complete=False,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, current, manifest,
+                ),
             )
             barrier_id = self._write_event_id(
                 "write-barrier", f"{current.run_id}:{sequence}",
@@ -1853,6 +1996,9 @@ class PostgreSQLBrowserRunStore:
             self._check_step_route(
                 manifest, tuple(item.event.step_id for item in previous)
                 + (command.step.step_id,), complete=False,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, current, manifest,
+                ),
             )
             if command.step.effect == "may_write":
                 send = await self._write_event(
@@ -1956,6 +2102,9 @@ class PostgreSQLBrowserRunStore:
             self._check_step_route(
                 manifest, tuple(step.event.step_id for step in result),
                 complete=True,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, run, manifest,
+                ),
             )
             rules = {rule.step.step_id: rule for rule in manifest.site.steps}
             expected = {step.step_id: step for step in manifest.skill.steps}

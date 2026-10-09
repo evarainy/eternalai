@@ -28,7 +28,9 @@ from app.browser_skill.models import (
     BrowserSessionRef,
     BrowserSkill,
     ConfirmedBusinessKey,
+    DecisionCallContext,
     DecisionError,
+    DecisionRequest,
     DecisionResult,
     DecisionStatus,
     DispatchPermit,
@@ -38,13 +40,19 @@ from app.browser_skill.models import (
     ReadSpec,
     ScopeBinding,
     SealedParameter,
+    TargetRef,
 )
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
     BrowserPublicationRecord,
 )
 from app.browser_skill.runtime import _BrowserReadDeferred
-from app.browser_skill.site_rules import ExpectedDownload, RegisteredQueryReadRule
+from app.browser_skill.site_rules import (
+    ExpectedDownload,
+    RegisteredQueryReadRule,
+    RegisteredSitePlan,
+    SiteStepRule,
+)
 from app.browser_skill.verifier import (
     DownloadVerifier,
     IndependentVerifier,
@@ -487,10 +495,53 @@ class VerifiedBrowserReadExecution:
                 expected_downloads=execution.expected_downloads,
                 verify_downloads=execution.verify_downloads,
             )
+            execution_context = context
+
+            async def reserve_write(
+                session: BrowserSessionRef, context: ExecutionContext,
+                plan: RegisteredSitePlan, spec: ReadSpec, command: ActionCommand,
+                rule: SiteStepRule, sequence: int,
+            ) -> None:
+                if (
+                    session != execution.session or context is not execution_context
+                    or plan != manifest.site_plan()
+                    or spec.binding != execution_context.expected_binding
+                    or command.binding != execution_context.expected_binding
+                    or command.skill_digest != manifest.skill.digest
+                    or command.step != rule.step
+                ):
+                    raise BrowserReadExecutionError("denied")
+                await checkpoint.reserve_write_dispatch(
+                    command, rule, spec, sequence,
+                )
+
+            def decision_contexts(
+                context: ExecutionContext, request: DecisionRequest,
+            ) -> DecisionCallContext:
+                if context is not execution_context or request.scope.region_id not in {
+                    rule.observation.region_id for rule in manifest.site.steps
+                }:
+                    raise BrowserReadExecutionError("denied")
+
+                def current_targets() -> tuple[TargetRef, ...]:
+                    return web.current_decision_targets(execution.session, request)
+
+                if not current_targets():
+                    raise BrowserReadExecutionError("stale")
+                return DecisionCallContext(
+                    context.deadline_monotonic, manifest.site.decision_manifest,
+                    manifest.site.source, current_targets,
+                    manifest.site.decision_budget, context.cancellation,
+                )
+
             executor = BrowserExecutor(
                 web, execution.decision, verifier, execution.site,
-                execution.resolver, execution.decision_contexts,
+                execution.resolver, decision_contexts,
                 step_audit=getattr(checkpoint, "record_step", None),
+                traversal_audit=getattr(
+                    checkpoint, "record_traversal_terminal", None,
+                ),
+                write_gate=reserve_write if manifest.effect == "controlled_write" else None,
                 exploration_publication=(
                     execution.registered_popup_source.manifest
                     if execution.registered_popup_source is not None else None

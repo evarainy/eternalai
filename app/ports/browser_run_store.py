@@ -16,6 +16,7 @@ from app.browser_skill.models import (
     ActionCommand,
     BrowserOwner,
     DispatchReceipt,
+    PageEvidence,
     ReadSpec,
     ScopeStamp,
     TeachingPlan,
@@ -367,6 +368,13 @@ class BrowserRunStorePort(Protocol):
         policy_digest: str, sequence: int,
     ) -> tuple[RunSnapshot, RunTeachingStep]:
         """Commit one acknowledged registered step under the Run worker CAS."""
+        ...
+
+    async def record_traversal_terminal(
+        self, claim: RunSnapshot, *, pages: tuple[PageEvidence, ...],
+        sequence: int,
+    ) -> RunSnapshot:
+        """Store a MAC bound terminal page chain for the exact worker and route."""
         ...
 
     async def record_teaching_plan(

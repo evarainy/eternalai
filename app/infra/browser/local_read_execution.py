@@ -47,7 +47,11 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.runtime import _BrowserReadDeferred
-from app.browser_skill.site_rules import ExpectedDownload, RegisteredQueryReadRule
+from app.browser_skill.site_rules import (
+    ExpectedDownload,
+    RegisteredQueryReadRule,
+    RegisteredReadRule,
+)
 from app.browser_skill.verifier import ReadSpecResolver, check_liveness, failure
 from app.infra.browser.local_file_artifacts import (
     FileArtifactOwner,
@@ -89,6 +93,7 @@ class _Execution:
     checkpoint: BrowserWorkerCheckpoint
     auth: BrowserAuthFact
     key: str
+    arguments: dict[str, object] = field(default_factory=dict, repr=False)
     cancellation: asyncio.Event = field(default_factory=asyncio.Event)
     dispatch_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     lease_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -475,6 +480,7 @@ class LocalBrowserReadExecutionFactory:
                         private_input.get("arguments"),
                     )
                     business_key = arguments.business_key
+                    arguments = arguments.model_dump()
             except (ValidationError, ValueError, TypeError, OverflowError, UnicodeError):
                 raise BrowserReadExecutionError("denied") from None
             if (
@@ -505,7 +511,10 @@ class LocalBrowserReadExecutionFactory:
                 run.run_id,
                 "verified-session-v1",
             )
-            state = _Execution(run, checkpoint, auth, business_key, principal=principal)
+            state = _Execution(
+                run, checkpoint, auth, business_key,
+                arguments=dict(arguments), principal=principal,
+            )
             self._states[run.run_id] = state
             # Register cleanup ownership before worker-driver startup. Invalid
             # private input above never starts or allocates anything.
@@ -979,17 +988,52 @@ class LocalBrowserReadExecutionFactory:
             skill_digest: str,
             step_id: str,
         ) -> SealedParameter:
-            await self._fence(state, renew=True)
-            if (
-                purpose != "business_key"
-                or ref != manifest.site.read_rule.key_ref
-                or binding != scope
-                or skill_digest != manifest.skill.digest
-                or step_id != manifest.verifier.verifier_id
-            ):
+            if state.session is None:
                 raise failure("denied")
+            await self.resolve_live(state.session)
+            if binding != scope or skill_digest != manifest.skill.digest:
+                raise failure("denied")
+            step = next(
+                (item for item in manifest.skill.steps if item.step_id == step_id), None,
+            )
+            if purpose == "business_key":
+                permitted = (
+                    ref == manifest.site.read_rule.key_ref
+                    and (step_id == manifest.verifier.verifier_id or (
+                        step is not None and step.locator.kind == "business_key"
+                    ))
+                )
+            elif purpose == "expected_field":
+                permitted = (
+                    step_id == manifest.verifier.verifier_id
+                    and isinstance(manifest.site.read_rule, RegisteredReadRule)
+                    and any(field.value_ref == ref
+                            for field in manifest.site.read_rule.fields)
+                )
+            else:
+                permitted = step is not None and {
+                    "fill_value": step.value_ref,
+                    "option_values": step.option_ref,
+                    "navigation_url": step.url_ref,
+                }.get(purpose) == ref
+            if not permitted or ref.name not in manifest.skill.parameters:
+                raise failure("denied")
+            value = state.arguments.get(ref.name)
+            if purpose == "option_values":
+                if (
+                    type(value) is not list or not 1 <= len(value) <= 255
+                    or any(type(item) is not str or not item or len(item.encode("utf-8")) > 512
+                           for item in value)
+                    or len(set(value)) != len(value)
+                ):
+                    raise failure("denied")
+                sealed_value: str | tuple[str, ...] = tuple(value)
+            else:
+                if type(value) is not str or not value or len(value.encode("utf-8")) > 2048:
+                    raise failure("denied")
+                sealed_value = value
             return SealedParameter(
-                state.key,
+                sealed_value,
                 ref=ref,
                 purpose=purpose,
                 binding=binding,
@@ -1078,12 +1122,16 @@ class LocalBrowserReadExecutionFactory:
                     or page.page.is_closed()
                 ):
                     return ()
-                return tuple(
+                registered = tuple(
                     TargetRef(
                         target_id=item.target_id, candidate_epoch=item.epoch, scope=observed.scope
                     )
                     for item in observed.candidates
                 )
+                requested = tuple(item.ref for item in request.candidates)
+                if not requested or any(ref not in registered for ref in requested):
+                    return ()
+                return requested
 
             if context.skill != self.source.manifest.skill or not targets():
                 raise failure("stale")

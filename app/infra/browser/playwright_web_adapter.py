@@ -41,6 +41,7 @@ from app.browser_skill.models import (
     BrowserOperationError,
     BrowserSessionRef,
     ConfirmedBusinessKey,
+    DecisionRequest,
     DecisionSource,
     DispatchPermit,
     DispatchReceipt,
@@ -387,6 +388,46 @@ class PlaywrightWebAdapter:
         ):
             raise failure("denied")
         return item
+
+    def current_decision_targets(
+        self, session: BrowserSessionRef, request: DecisionRequest,
+    ) -> tuple[TargetRef, ...]:
+        """Synchronous cache freshness for the exact projected model candidates.
+
+        A later asynchronous re-observation still checks the complete filtered
+        subset before an action. Options belong to one current parent, rather
+        than the region's ordinary candidate collection.
+        """
+        self._registration(session)
+        page = self._observer._pages.get(session.session_ref)
+        observed = self._observer._observed.get(
+            (session.session_ref, request.scope.region_id),
+        )
+        if (
+            page is None or page.epoch != request.scope.page_epoch
+            or page.page.is_closed() or observed is None
+            or observed.scope != request.scope
+        ):
+            return ()
+        requested = tuple(item.ref for item in request.candidates)
+        if not requested or len(set(requested)) != len(requested):
+            return ()
+        region_targets = tuple(
+            TargetRef(target_id=item.target_id, candidate_epoch=item.epoch,
+                      scope=observed.scope)
+            for item in observed.candidates
+        )
+        if all(item.ref in region_targets for item in request.candidates):
+            return requested
+        if not all(item.role == "option" for item in request.candidates):
+            return ()
+        for (session_ref, _step_id), option_set in self._options.items():
+            if session_ref != session.session_ref or option_set.parent not in region_targets:
+                continue
+            option_targets = tuple(item.candidate.ref for item in option_set.options)
+            if option_targets == requested:
+                return requested
+        return ()
 
     def _dom_step(self, plan: RegisteredSitePlan, step_id: str) -> DOMStep:
         primitive_id = plan.primitive_for_step(step_id)

@@ -18,22 +18,30 @@ def _manifest(*, max_pages: int = 3) -> BrowserPublicationManifest:
             SimpleNamespace(step_id=step_id)
             for step_id in ("open", "next", "write")
         )),
-        site=SimpleNamespace(traversal=SimpleNamespace(
+        site=SimpleNamespace(exploration=None, traversal=SimpleNamespace(
             advance_step_id="next", max_pages=max_pages,
         )),
     ))
 
 
 def test_repeated_page_advance_can_precede_a_write() -> None:
-    PostgreSQLBrowserRunStore._check_step_route(
+    assert PostgreSQLBrowserRunStore._check_step_route(
         _manifest(), ("open", "next", "next", "write"), complete=True,
-    )
+        terminal_after=3,
+    ) is None
+
+
+def test_terminal_first_page_can_precede_a_write() -> None:
+    assert PostgreSQLBrowserRunStore._check_step_route(
+        _manifest(), ("open", "write"), complete=True, terminal_after=1,
+    ) is None
 
 
 @pytest.mark.parametrize("steps", [
     ("open", "write"),
     ("open", "next", "next", "next", "write"),
     ("open", "next", "write", "next"),
+    ("open", "next", "write"),
 ])
 def test_step_route_rejects_skips_overflow_and_reordering(
     steps: tuple[str, ...],
@@ -42,6 +50,15 @@ def test_step_route_rejects_skips_overflow_and_reordering(
         PostgreSQLBrowserRunStore._check_step_route(
             _manifest(), steps, complete=True,
         )
+
+
+def test_terminal_proof_cannot_be_reused_after_an_advance() -> None:
+    with pytest.raises(BrowserRunStoreError) as error:
+        PostgreSQLBrowserRunStore._check_step_route(
+            _manifest(), ("open", "next", "write"),
+            complete=True, terminal_after=1,
+        )
+    assert error.value.code == "browser_step_audit_sequence_conflict"
 
 
 def test_step_route_cannot_complete_before_following_write() -> None:

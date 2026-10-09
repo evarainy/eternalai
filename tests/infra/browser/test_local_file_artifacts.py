@@ -143,3 +143,28 @@ async def test_expired_file_is_unreadable_then_removed(tmp_path: Path) -> None:
     assert await files.cleanup_expired() == 1
     assert not (tmp_path / "private" / artifact.reference).exists()
     assert not authority.records
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reports_confirmation_failure_and_keeps_record(tmp_path: Path) -> None:
+    class FailingConfirmation(_Authority):
+        async def confirm_removed(self, artifact: StoredFileArtifact) -> None:
+            raise RuntimeError("database unavailable")
+
+    source = tmp_path / "source"
+    source.write_bytes(b"synthetic text")
+    authority = FailingConfirmation()
+    authority.allowed = _owner()
+    files = LocalFileArtifacts(tmp_path / "private", authority)
+    artifact = await files.seal_download(
+        source, authority.allowed, media_type="text/plain", ttl_seconds=60,
+    )
+    authority.records[artifact.reference] = replace(
+        artifact, expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    with pytest.raises(LocalFileArtifactError, match="browser_file_cleanup_incomplete"):
+        await files.cleanup_expired()
+    assert files.last_cleanup == {
+        "scanned": 1, "removed": 0, "failed": 1, "result": "incomplete",
+    }
+    assert artifact.reference in authority.records

@@ -21,7 +21,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.chat import BrowserChatService
-from app.browser_skill.compiler import teaching_grant_scope_digest
+from app.browser_skill.compiler import (
+    initial_validation_scope_digest,
+    teaching_grant_scope_digest,
+)
 from app.browser_skill.models import (
     BrowserOwner,
     OpaqueId,
@@ -273,6 +276,15 @@ class BrowserVerticalDependencies:
          Literal["confirmed", "rejected"]],
         Awaitable[HumanGateDecisionRecord],
     ] | None = None
+    initial_review_request: Callable[
+        [BrowserOwner, BrowserPublicationManifest, str, str, str],
+        Awaitable[HumanGateRequest],
+    ] | None = None
+    initial_review_decide: Callable[
+        [BrowserOwner, BrowserPublicationManifest, str, str, str,
+         Literal["confirmed", "rejected"]],
+        Awaitable[HumanGateDecisionRecord],
+    ] | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -335,6 +347,17 @@ class BrowserVerticalComponents:
         """Explicit fixed-digest activation after trusted operator authorization."""
         return await self.publications.activate(
             owner, self._seed.skill.skill_id, self._seed.digest, expected_revision=0,
+        )
+
+    async def activate_initial(
+        self, owner: BrowserOwner, *, task_id: str, run_id: str,
+        approval_ref: str,
+    ) -> BrowserPublicationRecord:
+        if self._seed.source_kind != "registered_site":
+            raise BrowserPublicationError("browser_publication_initial_invalid")
+        return await self.publications.activate_initial(
+            owner, self._seed, task_id=task_id, run_id=run_id,
+            approval_ref=approval_ref,
         )
 
     async def publish_teaching_candidate(
@@ -797,6 +820,12 @@ def build_browser_vertical(
         plan: TeachingPlan, require_execution: bool,
     ) -> CapabilitySpec:
         owner = admission.owner
+        initial = plan.purpose == "initial_validation"
+        bindings = tuple(
+            (item.step_id, item.primitive_id) for item in seed.site.step_primitives
+        ) if not initial else tuple(
+            (item.step.step_id, item.step.step_id) for item in seed.site.steps
+        )
         if (
             seed.source_kind != "registered_site"
             or seed.effect != "read_only"
@@ -813,13 +842,17 @@ def build_browser_vertical(
             or plan.site_digest != seed.site.digest
             or plan.policy_digest != seed.site.policy.digest
             or plan.verifier_digest != seed.verifier.digest
-            or not seed.site.primitive_rules
+            or (not initial and not seed.site.primitive_rules)
             or len(plan.steps) != len(seed.skill.steps)
             or tuple(item.step_id for item in plan.steps)
             != tuple(item.step_id for item in seed.skill.steps)
             or tuple((item.step_id, item.primitive_id) for item in plan.steps)
-            != tuple((item.step_id, item.primitive_id)
-                     for item in seed.site.step_primitives)
+            != bindings
+            or (initial and (
+                deps.teaching_base is not None
+                or seed.rollback_source_digest is not None
+                or plan.source_publication_digest != seed.digest
+            ))
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
         rows = (await session.execute(text(
@@ -838,9 +871,12 @@ def build_browser_vertical(
             candidate_row is None or base_row is None
             or candidate_row["state"] not in {"prepared", "active", "inactive"}
             or (require_execution and candidate_row["state"] == "inactive")
-            or (candidate_row["state"] == "prepared"
+            or (initial and candidate_row["state"] != "prepared")
+            or (not initial and candidate_row["state"] == "prepared"
                 and base_row["state"] != "active")
-            or base_row["state"] not in {"active", "inactive"}
+            or base_row["state"] not in (
+                {"prepared"} if initial else {"active", "inactive"}
+            )
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
         try:
@@ -852,14 +888,27 @@ def build_browser_vertical(
             candidate != seed or base.digest != plan.source_publication_digest
             or base.source_kind != "registered_site"
             or base.effect != "read_only"
-            or (deps.teaching_base is not None and base != deps.teaching_base)
+            or (initial and base != seed)
+            or (not initial and deps.teaching_base is not None
+                and base != deps.teaching_base)
             or seed.site.primitive_rules != base.site.primitive_rules
             or base.site.read_rule != seed.site.read_rule
             or seed.site.source != base.site.source
-            or plan.grant_digest != teaching_grant_scope_digest(owner, base, seed)
+            or plan.grant_digest != (
+                initial_validation_scope_digest(owner, seed) if initial
+                else teaching_grant_scope_digest(owner, base, seed)
+            )
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
-        catalog = {rule.step.step_id: rule for rule in base.site.primitive_rules}
+        if initial and (await session.execute(text(
+            "SELECT 1 FROM browser_publications WHERE tenant_id=:tenant"
+            " AND skill_id=:skill AND state='active' FOR SHARE"
+        ), {"tenant": owner.tenant_id,
+            "skill": seed.skill.skill_id})).scalar_one_or_none() is not None:
+            raise BrowserPublicationError("browser_initial_publication_exists")
+        catalog = {rule.step.step_id: rule for rule in (
+            base.site.primitive_rules if not initial else base.site.steps
+        )}
         for index, item in enumerate(plan.steps):
             primitive = catalog.get(item.primitive_id)
             if (
@@ -875,7 +924,8 @@ def build_browser_vertical(
             ):
                 raise BrowserPublicationError("browser_teaching_primitive_denied")
         if not await authority.authorize_in_session(
-            session, owner, seed.skill.skill_id, "teach",
+            session, owner, seed.skill.skill_id,
+            "execute" if initial else "teach",
         ):
             raise BrowserPublicationError("browser_teaching_grant_denied")
         check_in_session = getattr(deps.publication_grants, "check_in_session", None)
@@ -979,7 +1029,10 @@ def build_browser_vertical(
     async def prepared_teaching_publication(
         owner: BrowserOwner, skill_id: str, skill_version: str,
     ) -> BrowserPublicationRecord | None:
-        if (deps.teaching_base is None or owner.tenant_id != deps.tenant_id
+        if ((deps.teaching_base is None and (
+                seed.source_kind != "registered_site" or seed.effect != "read_only"
+                or seed.rollback_source_digest is not None))
+                or owner.tenant_id != deps.tenant_id
                 or skill_id != seed.skill.skill_id
                 or skill_version != seed.skill.version):
             return None
@@ -1032,6 +1085,42 @@ def build_browser_vertical(
             await teaching_publication_check(session, admission, plan, True)
         return plan
 
+    async def build_initial_validation_plan(
+        admission: RunAdmission, manifest: BrowserPublicationManifest,
+    ) -> TeachingPlan:
+        if (deps.teaching_base is not None or manifest != seed
+                or seed.source_kind != "registered_site"
+                or seed.effect != "read_only"
+                or seed.rollback_source_digest is not None
+                or admission.publication_digest.hex() != seed.digest):
+            raise BrowserPublicationError("browser_initial_validation_unavailable")
+        plan = TeachingPlan(
+            purpose="initial_validation",
+            task_id=admission.task_id, run_id=admission.run_id,
+            owner_digest=_owner_digest(admission.owner),
+            binding_id=admission.binding_id,
+            binding_revision=admission.binding_revision,
+            source_publication_digest=seed.digest,
+            publication_digest=seed.digest,
+            skill_digest=seed.skill.digest,
+            site_digest=seed.site.digest,
+            policy_digest=seed.site.policy.digest,
+            verifier_digest=seed.verifier.digest,
+            grant_digest=initial_validation_scope_digest(admission.owner, seed),
+            sealed_input_digest=admission.input_digest.hex(),
+            parameter_set_ref=admission.input_digest.hex(),
+            steps=tuple(TeachingPlanStep(
+                step_id=rule.step.step_id,
+                primitive_id=rule.step.step_id,
+                rule_digest=canonical_digest(
+                    "browser_site_step.v1", rule.model_dump(mode="json"),
+                ),
+            ) for rule in seed.site.steps),
+        )
+        async with deps.session_factory() as session, session.begin():
+            await teaching_publication_check(session, admission, plan, True)
+        return plan
+
     async def teaching_capture_grant(owner: BrowserOwner, digest: str) -> bool:
         base = deps.teaching_base
         if (base is None or digest != seed.digest or owner.tenant_id != deps.tenant_id):
@@ -1077,20 +1166,26 @@ def build_browser_vertical(
         read_artifact=read_file if deps.file_artifacts is not None else None,
         teaching_base_digest=(deps.teaching_base.digest
                               if deps.teaching_base is not None else None),
-        teaching_candidate_digest=(seed.digest
-                                   if deps.teaching_base is not None else None),
+        teaching_candidate_digest=(seed.digest if seed.source_kind == "registered_site"
+                                   and seed.effect == "read_only" else None),
         teaching_candidate_version=(seed.skill.version
-                                    if deps.teaching_base is not None else None),
+                                    if seed.source_kind == "registered_site"
+                                    and seed.effect == "read_only" else None),
         teaching_publication=(prepared_teaching_publication
-                              if deps.teaching_base is not None else None),
-        teaching_plan=(build_teaching_plan
-                       if deps.teaching_base is not None else None),
+                              if seed.source_kind == "registered_site"
+                              and seed.effect == "read_only" else None),
+        teaching_plan=(build_teaching_plan if deps.teaching_base is not None
+                       else build_initial_validation_plan
+                       if seed.source_kind == "registered_site"
+                       and seed.effect == "read_only" else None),
         teaching_capture_grant=(teaching_capture_grant
                                 if deps.teaching_base is not None else None),
         teaching_published_routes=(teaching_published_routes
                                    if deps.teaching_base is not None else None),
         teaching_review_request=deps.teaching_review_request,
         teaching_review_decide=deps.teaching_review_decide,
+        initial_review_request=deps.initial_review_request,
+        initial_review_decide=deps.initial_review_decide,
     )
     chat = (
         BrowserChatService(submission, deps.chat_parser)

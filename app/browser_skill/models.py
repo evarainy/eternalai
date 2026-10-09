@@ -98,6 +98,7 @@ class TeachingPlan(Contract):
     """
 
     schema_version: Literal["browser_teaching_plan.v1"] = "browser_teaching_plan.v1"
+    purpose: Literal["teaching", "initial_validation"] = "teaching"
     task_id: OpaqueId
     run_id: OpaqueId
     owner_digest: Digest

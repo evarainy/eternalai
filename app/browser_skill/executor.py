@@ -83,6 +83,12 @@ class StepAudit(Protocol):
     ) -> RunTeachingStep: ...
 
 
+class TraversalAudit(Protocol):
+    async def __call__(
+        self, pages: tuple[PageEvidence, ...], sequence: int,
+    ) -> None: ...
+
+
 class ExplorationSuggester(Protocol):
     async def __call__(
         self, run_id: str, prior_primitive_ids: tuple[str, ...],
@@ -189,6 +195,7 @@ class BrowserExecutor:
         "_last_decision_diagnostic",
         "_last_stage_diagnostic",
         "_step_audit",
+        "_traversal_audit",
         "_write_gate",
         "_exploration_publication",
         "_exploration_suggest",
@@ -203,6 +210,7 @@ class BrowserExecutor:
         resolver: ReadSpecResolver,
         decision_contexts: DecisionContextFactory,
         step_audit: StepAudit | None = None,
+        traversal_audit: TraversalAudit | None = None,
         write_gate: WriteGate | None = None,
         exploration_publication: BrowserPublicationManifest | None = None,
         exploration_suggest: ExplorationSuggester | None = None,
@@ -214,6 +222,7 @@ class BrowserExecutor:
         self._resolve = resolver
         self._contexts = decision_contexts
         self._step_audit = step_audit
+        self._traversal_audit = traversal_audit
         self._write_gate = write_gate
         self._exploration_publication = exploration_publication
         self._exploration_suggest = exploration_suggest
@@ -777,6 +786,12 @@ class BrowserExecutor:
                         plan.traversal, tuple(progress.pages),
                     ) is None:
                         raise failure("invalid_response")
+                    if self._traversal_audit is not None:
+                        progress.audit_inflight = True
+                        await self._traversal_audit(
+                            tuple(progress.pages), len(progress.receipts),
+                        )
+                        progress.audit_inflight = False
                     continue
                 if (
                     rule.effect.actual_effect == "unknown"

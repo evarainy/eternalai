@@ -10,7 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from app.browser_skill.models import ActionCommand, DispatchReceipt, ScopeStamp
+from app.browser_skill.models import (
+    ActionCommand,
+    DispatchReceipt,
+    PageEvidence,
+    ReadSpec,
+    ScopeStamp,
+)
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
@@ -47,6 +53,19 @@ class BrowserWorkerCheckpoint(Protocol):
         receipt: DispatchReceipt, policy_digest: str, sequence: int,
     ) -> RunTeachingStep:
         """Persist one acknowledged, registered step before the next browser send."""
+        ...
+
+    async def reserve_write_dispatch(
+        self, command: ActionCommand, rule: SiteStepRule,
+        spec: ReadSpec, sequence: int,
+    ) -> None:
+        """Consume the exact persisted confirmation and reserve this send."""
+        ...
+
+    async def record_traversal_terminal(
+        self, pages: tuple[PageEvidence, ...], sequence: int,
+    ) -> None:
+        """Persist verified terminal collection coverage before a later send."""
         ...
 
     async def assert_write_reservation(

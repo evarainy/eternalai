@@ -11,6 +11,7 @@ from app.browser_skill.models import (
     ActionCommand,
     BrowserOwner,
     DispatchReceipt,
+    PageEvidence,
     ReadSpec,
     ScopeStamp,
 )
@@ -115,6 +116,14 @@ class _Checkpoint:
             sequence=sequence,
         )
         self._write_reservation = (command, sequence)
+
+    async def record_traversal_terminal(
+        self, pages: tuple[PageEvidence, ...], sequence: int,
+    ) -> None:
+        await self.refresh()
+        self.run = await self.store.record_traversal_terminal(
+            self.run, pages=pages, sequence=sequence,
+        )
 
     async def assert_write_reservation(
         self, command: ActionCommand,
