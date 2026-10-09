@@ -46,3 +46,22 @@ def test_enabled_browser_has_explicit_transport_and_model_pin() -> None:
     ):
         with pytest.raises(RuntimeError):
             BrowserSettings.from_env({**env, field: value})
+
+
+def test_browser_config_allows_absent_model_triple_but_rejects_partial() -> None:
+    env = {
+        "BROWSER_ENABLED": "true",
+        "BROWSER_TRANSPORT": "playwright",
+    }
+    settings = BrowserSettings.from_env(env)
+    assert (settings.decision_origin, settings.request_model,
+            settings.deployment_model) == (None, None, None)
+    assert ProductionSettings.from_environment({**_environment(), **env}).browser == settings
+    for name in (
+        "BROWSER_DECISION_ORIGIN", "BROWSER_DECISION_REQUEST_MODEL",
+        "BROWSER_DECISION_DEPLOYMENT_MODEL",
+    ):
+        with pytest.raises(RuntimeError, match="configuration must be complete"):
+            BrowserSettings.from_env({**env, name: "placeholder"})
+    # Missing configuration is not a grant: signed Site budget and install
+    # authority are checked separately by production composition.

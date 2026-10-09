@@ -1,0 +1,40 @@
+ARG PLAYWRIGHT_BASE_IMAGE
+FROM ${PLAYWRIGHT_BASE_IMAGE}
+
+WORKDIR /opt/eternalai
+
+# The approved build supplies an immutable Playwright 1.63.0 base-image digest.
+# Dependency resolution happens only in the controlled image build, never at start.
+ARG PLAYWRIGHT_BASE_IMAGE
+ARG SOURCE_COMMIT
+ARG UV_LOCK_SHA256
+RUN printf '%s' "$PLAYWRIGHT_BASE_IMAGE" | grep -Eq \
+    '^mcr\.microsoft\.com/playwright/python:v1\.63\.0-noble@sha256:[0-9a-f]{64}$' \
+    && printf '%s' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+    && printf '%s' "$UV_LOCK_SHA256" | grep -Eq '^[0-9a-f]{64}$'
+RUN python -m pip install --no-cache-dir uv==0.12.13
+COPY pyproject.toml uv.lock ./
+RUN test -n "$SOURCE_COMMIT" && test -n "$UV_LOCK_SHA256" \
+    && test "$(sha256sum uv.lock | cut -d' ' -f1)" = "$UV_LOCK_SHA256"
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY app/ ./app/
+COPY scripts/run_browser_registered_server.py ./scripts/run_browser_registered_server.py
+COPY scripts/run_browser_production.py ./scripts/run_browser_production.py
+
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.eternalai.browser.uv-lock-sha256="${UV_LOCK_SHA256}"
+
+ENV PATH="/opt/eternalai/.venv/bin:${PATH}" \
+    PYTHONPATH="/opt/eternalai" \
+    PLAYWRIGHT_BROWSERS_PATH="/ms-playwright" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_INDEX=1 \
+    UV_OFFLINE=true \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+USER pwuser
+ENTRYPOINT ["python", "-m", "scripts.run_browser_production"]

@@ -1,0 +1,8 @@
+# Optional overlay only for an actually installed and pinned local Decision model.
+# The signed Site and installation checks still decide which path is authorized.
+services:
+  browser-runtime:
+    environment:
+      BROWSER_DECISION_ORIGIN: ${BROWSER_DECISION_ORIGIN:?Set the approved local Decision origin}
+      BROWSER_DECISION_REQUEST_MODEL: ${BROWSER_DECISION_REQUEST_MODEL:?Set the request model ID}
+      BROWSER_DECISION_DEPLOYMENT_MODEL: ${BROWSER_DECISION_DEPLOYMENT_MODEL:?Set the pinned deployment model ID}

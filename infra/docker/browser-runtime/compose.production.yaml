@@ -1,0 +1,95 @@
+# Formal local Browser Runtime. The operator supplies every external path and
+# network; this file does not create a public-egress bridge or publish a port.
+name: eternalai-browser-runtime
+
+services:
+  browser-runtime:
+    image: ${BROWSER_RUNTIME_IMAGE:?Set an imported, reviewed browser image reference}
+    pull_policy: never
+    init: true
+    user: pwuser
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:${BROWSER_SECCOMP_PROFILE:?Set the reviewed local Chromium seccomp profile}
+    pids_limit: ${BROWSER_PIDS_LIMIT:?Set a measured process limit}
+    mem_limit: ${BROWSER_MEMORY_LIMIT:?Set a measured memory limit}
+    cpus: ${BROWSER_CPU_LIMIT:?Set a measured CPU limit}
+    shm_size: ${BROWSER_SHM_SIZE:?Set a measured Chromium shared-memory size}
+    stop_grace_period: ${BROWSER_STOP_GRACE_PERIOD:-120s}
+    restart: "no"
+    tmpfs:
+      - /tmp:rw,size=${BROWSER_TMPFS_SIZE:?Set a measured temporary-file limit},mode=1777
+    networks:
+      - operator-intranet
+    dns:
+      - ${BROWSER_INTERNAL_DNS:?Set the approved internal DNS resolver}
+    expose: ["8000"]
+    command:
+      - --enable
+      - --factory
+      - ${BROWSER_OPERATOR_FACTORY:?Set the reviewed local module:function factory}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      PYTHONPATH: /opt/eternalai:/run/browser-operator
+      ENV: production
+      PHASE0_MOCK_MODE: "false"
+      OA_READ_ADAPTER_MODE: live
+      OA_SOURCE_PROFILE_ID: ${OA_SOURCE_PROFILE_ID:?Set the approved profile ID}
+      OA_TENANT_ID: ${OA_TENANT_ID:?Set the approved tenant ID}
+      OA_BASE_URL: ${OA_BASE_URL:?Set the internal OA origin}
+      OA_CREDENTIAL_TTL_S: ${OA_CREDENTIAL_TTL_S:?Set the credential TTL}
+      OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR: /run/browser-operator/oa/pending-workflows
+      OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR: /run/browser-operator/oa/system-messages
+      SESSION_COOKIE_TTL_S: ${SESSION_COOKIE_TTL_S:?Set the session TTL}
+      SESSION_COOKIE_SECURE: "true"
+      CSRF_ALLOWED_ORIGINS: ${CSRF_ALLOWED_ORIGINS:?Set the approved HTTPS origins}
+      LLM_BASE_URL: ${LLM_BASE_URL:?Set the internal vLLM origin}
+      LLM_MODEL: ${LLM_MODEL:?Set the approved local main model}
+      BROWSER_ENABLED: "true"
+      BROWSER_TRANSPORT: playwright
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - type: bind
+        source: ${BROWSER_OPERATOR_BUNDLE_ROOT:?Set the reviewed operator bundle directory}
+        target: /run/browser-operator
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BROWSER_ARTIFACT_ROOT:?Set the authorized file-artifact directory}
+        target: /var/lib/eternalai/browser-artifacts
+        bind:
+          create_host_path: false
+    secrets:
+      - database-url
+      - redis-url
+      - credential-encryption-key-b64
+      - identity-hmac-key-b64
+      - session-signing-key-b64
+      - session-binding-key-b64
+
+networks:
+  operator-intranet:
+    external: true
+    name: ${BROWSER_INTRANET_NETWORK:?Set the operator-controlled internal network}
+
+secrets:
+  database-url:
+    file: ${BROWSER_DATABASE_URL_SECRET_FILE:?Set the operator-owned database URL secret file}
+  redis-url:
+    file: ${BROWSER_REDIS_URL_SECRET_FILE:?Set the operator-owned Redis URL secret file}
+  credential-encryption-key-b64:
+    file: ${BROWSER_CREDENTIAL_ENCRYPTION_SECRET_FILE:?Set the operator-owned encryption key file}
+  identity-hmac-key-b64:
+    file: ${BROWSER_IDENTITY_HMAC_SECRET_FILE:?Set the operator-owned identity key file}
+  session-signing-key-b64:
+    file: ${BROWSER_SESSION_SIGNING_SECRET_FILE:?Set the operator-owned signing key file}
+  session-binding-key-b64:
+    file: ${BROWSER_SESSION_BINDING_SECRET_FILE:?Set the operator-owned binding key file}

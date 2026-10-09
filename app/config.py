@@ -158,6 +158,19 @@ class BrowserSettings:
         transport = _required(source, "BROWSER_TRANSPORT")
         if transport not in {"playwright", "cdp"}:
             raise RuntimeError("BROWSER_TRANSPORT must be playwright or cdp")
+        decision_keys = (
+            "BROWSER_DECISION_ORIGIN", "BROWSER_DECISION_REQUEST_MODEL",
+            "BROWSER_DECISION_DEPLOYMENT_MODEL",
+        )
+        configured = tuple(name in source for name in decision_keys)
+        if not any(configured):
+            # Absence is only configuration data. The signed Site budget and
+            # installation authority decide whether a model-free path is legal.
+            return cls(
+                enabled=True, transport=cast(Literal["playwright", "cdp"], transport),
+            )
+        if not all(configured):
+            raise RuntimeError("BROWSER_DECISION configuration must be complete")
         deployment = _required(source, "BROWSER_DECISION_DEPLOYMENT_MODEL")
         if "latest" in deployment.casefold():
             raise RuntimeError("BROWSER_DECISION_DEPLOYMENT_MODEL must be pinned")
