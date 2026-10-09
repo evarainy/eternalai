@@ -699,7 +699,7 @@ def propose_formal_locator(
         failure = FormalFailedStep(
             failure.binding, failure.run_id, failure.publication_digest,
             failure.step_id, failure.reason, failure.dispatch_state,
-            failure.evidence_digest,
+            failure.evidence_digest, failure.observations,
         )
         if (
             failure.binding.owner != binding.owner

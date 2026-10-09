@@ -188,7 +188,7 @@ def test_uncertain_dispatch_never_creates_locator_repair_evidence() -> None:
 
 def test_option_candidate_failure_does_not_implicate_the_parent_locator() -> None:
     world = FakeWorld("select_option")
-    world._inputs["options"] = ()
+    world.options = ()
     recorded: list[str] = []
 
     async def audit(_rule, _scope, _policy, _sequence, reason, _observations) -> None:

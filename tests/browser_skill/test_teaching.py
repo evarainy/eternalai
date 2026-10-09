@@ -30,6 +30,8 @@ from app.browser_skill.models import (
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
     BrowserPublicationRecord,
+    canonical_json,
+    publication_digest,
     rollback_version_manifest,
 )
 from app.browser_skill.registry import (
@@ -120,8 +122,8 @@ def _run(publication_digest: str, *, task_id: str = "task_source",
 class SyntheticRunTeaching:
     """Fake authoritative callbacks. This is not real PG/Executor evidence."""
 
-    def __init__(self) -> None:
-        self.base = _base()
+    def __init__(self, *, base: BrowserPublicationManifest | None = None) -> None:
+        self.base = _base() if base is None else base
         first = self.base.site.steps[0]
         second = SiteStepRule(
             step=SkillStep(
@@ -137,6 +139,18 @@ class SyntheticRunTeaching:
             ),
         )
         self.rules = {first.step.step_id: first, second.step.step_id: second}
+        if self.base.source_kind == "registered_site":
+            data = self.base.model_dump(mode="json")
+            data["site"]["primitive_rules"] = [
+                rule.model_dump(mode="json") for rule in self.rules.values()
+            ]
+            data["site"]["digest"] = publication_digest(
+                "browser_site.publication.v1", data["site"],
+            )
+            data["skill"]["site_digest"] = data["site"]["digest"]
+            data["skill"]["digest"] = publication_digest("browser_skill.v1", data["skill"])
+            data["digest"] = publication_digest("browser_publication.durable.v1", data)
+            self.base = BrowserPublicationManifest.model_validate_json(canonical_json(data))
         self.source_run = _run(self.base.digest)
         stamp = scope().model_copy(update={"region_id": "fixture_messages"})
         target = TargetRef(target_id="synthetic_target", candidate_epoch=1, scope=stamp)
@@ -528,8 +542,9 @@ def test_teaching_route_accepts_terminal_first_page_and_repeated_advance() -> No
 
 
 def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> None:
-    sample = SyntheticRunTeaching()
+    sample = SyntheticRunTeaching(base=registered_site().manifest)
     draft = sample.draft()
+    assert draft.publication.source_kind == "registered_site"
     step = draft.publication.skill.steps[0]
     failed_binding = ScopeBinding(
         owner=binding().owner, binding_id=binding().binding_id,
@@ -554,13 +569,14 @@ def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> 
         compiler=sample.compiler_authority(), current_binding=binding,
         failed_step=lambda _run, _step, _binding: holder["failure"],
         approved_hints=lambda _manifest, _step, _binding: (alternative,),
-        authorize=lambda _draft, _binding: True,
+        authorize=lambda candidate, who: candidate == draft and who == binding(),
     )
     proposal = propose_formal_locator(
         draft, binding=binding(), failed_run_id="run_failed",
         step_id=step.step_id, replacement=alternative, authority=authority,
     )
     assert proposal.replacement == alternative
+    assert proposal.failure_evidence_digest == failure.evidence_digest
     assert proposal.observation_evidence_digest == observed.digest
     assert proposal.primitive_id == "read_collection"
     assert draft.publication.skill.steps[0] == step
@@ -578,6 +594,25 @@ def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> 
         propose_formal_locator(
             draft, binding=binding(), failed_run_id="run_failed",
             step_id=step.step_id, replacement=alternative, authority=authority,
+        )
+
+
+def test_formal_repair_rejects_a_synthetic_teaching_draft() -> None:
+    sample = SyntheticRunTeaching()
+    draft = sample.draft()
+    assert draft.publication.source_kind == "registered_synthetic_fixture"
+    alternative = LocatorHint(kind="test_id", value="fixture_row_alternate")
+    authority = FormalRepairAuthority(
+        compiler=sample.compiler_authority(), current_binding=binding,
+        failed_step=lambda _run, _step, _binding: None,
+        approved_hints=lambda _manifest, _step, _binding: (alternative,),
+        authorize=lambda candidate, who: candidate == draft and who == binding(),
+    )
+    with pytest.raises(RepairError, match="repair_denied"):
+        propose_formal_locator(
+            draft, binding=binding(), failed_run_id="run_failed",
+            step_id=draft.publication.skill.steps[0].step_id,
+            replacement=alternative, authority=authority,
         )
 
 
@@ -616,6 +651,8 @@ def test_published_registered_run_uses_the_same_review_only_repair_contract() ->
     )
     assert proposal.source_kind == "published_skill"
     assert proposal.publication_digest == publication.digest
+    assert proposal.failure_evidence_digest == failure.evidence_digest
+    assert proposal.observation_evidence_digest == failure.observations[0].digest
     assert proposal.original_step_digest == canonical_digest(
         "browser_skill_step.v1", step.model_dump(mode="json"),
     )

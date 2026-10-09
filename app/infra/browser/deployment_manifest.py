@@ -238,7 +238,7 @@ def select_local_offline_manifest(
     if selected is None:
         raise ValueError("browser_local_manifest_selection_invalid")
     selected = LocalOfflineManifest.model_validate(
-        selected.model_dump(mode="json", exclude_unset=True),
+        selected.model_dump(mode="python", exclude_unset=True),
     )
     selected.require_registered_site_lock()
     return selected

@@ -28,7 +28,7 @@
       {"path": "config.json", "size_bytes": 2630, "sha256_from_public_bytes": "5f2dc280e9107ab24e9dddb7471e126d36946cc9873f284284a4af8fd025e4b8"},
       {"path": "rl_agent_config.json", "size_bytes": 561, "sha256_from_public_bytes": "b78796b604532688de6749c61912503cc89b2f998a07b06ef27c280989a34eea"},
       {"path": "encoder/config.json", "size_bytes": 1968, "sha256_from_public_bytes": "252795756225d703e1913d5647eb542ded520cfd6684f232cc8f4a5ccb6faf9d"},
-      {"path": "tokenizer/tokenizer_config.json", "size_bytes": 624, "sha256_from_public_bytes": "f2ff584a8f78ac9f3b6fd0afcf9ab4b0d594e992b7a"},
+      {"path": "tokenizer/tokenizer_config.json", "size_bytes": 624, "sha256_from_public_bytes": "f2ff584a8f78ac9f3b6fd0afcf9ab310e41c2d445ef628f9ab4b0d594e992b7a"},
       {"path": "modeling_laya_browser.py", "size_bytes": 16903, "sha256_from_public_bytes": "d084f8720ee4a738efc3cee6e0cef78ab983af8cf17939957af2c2265fdd99d1"}
     ],
     "license_card_claim": "apache-2.0",

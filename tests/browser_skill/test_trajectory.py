@@ -215,11 +215,13 @@ def test_private_owner_and_callbacks_are_not_wire_or_representations() -> None:
             vars(value)
     wire = snapshot.manifest.model_dump_json()
     decoded = json.loads(wire)
-    assert set(decoded["binding"]) == {
-        "binding_id",
-        "binding_revision",
-        "authorization_revision",
-        "lease_epoch",
+    assert decoded["binding"] == {
+        "binding_id": capture.expected.binding_id,
+        "binding_revision": capture.expected.binding_revision,
+        "authorization_revision": capture.expected.authorization_revision,
+        "authorization_run_id": capture.expected.authorization_run_id,
+        "evidence_version": capture.expected.evidence_version,
+        "lease_epoch": capture.expected.lease_epoch,
     }
     assert not {"owner", "tenant_id", "user_id", "session_id"}.intersection(decoded["binding"])
     assert "https://" not in wire
