@@ -22,8 +22,11 @@ Verifier；推荐 Linux Engine/Moby + Compose。实际 OS、CPU、容器权限�
 不下载浏览器/依赖、不自动转接云服务。若要求**内网从源码构建**，须另取得获准镜像
 来源和依赖镜像/离线缓存；仓库依赖政策没有证明这种构建目前可行。
 
-正式 `compose.production.yaml` 用独立镜像与真实主应用入口，引用 operator
-外部受控网络、只读 factory/资产配置目录、六个精确 secret 文件、资源限额，
+正式 `compose.production.yaml` 将 API 与执行 Worker 分为两个容器，以同一
+镜像、factory 和既有 PG Run/租约/身份权威运行，显式传 `--role api|worker`。
+API 不启动 worker 或 TTL scheduler，worker 不监听 HTTP；共享同一持久
+spool，API 只读、worker 可写，首次空卷先由 worker 初始化私有位置 marker。
+引用 operator 外部受控网络、只读 factory/资产配置目录、六个精确 secret 文件、资源限额，
 不含试验库/Jev/公网桥或容器内拉取。目标网络策略、工厂代码、Site/Skill 绑定与
 真实物料仍须现场提供并验证；文件定义不等于生产就绪。凭据由既有密钥/身份权威
 提供，报告只记挂载与访问边界的脱敏核验结果。
@@ -39,6 +42,7 @@ Verifier；推荐 Linux Engine/Moby + Compose。实际 OS、CPU、容器权限�
 | 字体、信任证书、时区和系统依赖 | 当前仓库未给出目标站点所需的完整发行物料 | 按实际站点与目标镜像列出所需字体、证书信任配置、时区数据和系统库，核对来源、版本/摘要及适用许可；不把未知项写成已满足 |
 | PostgreSQL、授权与 Profile | 既有技术 Run 和授权/凭据权威需复用；试验 Compose 仅指向固定测试环境 | 正式服务的受控连接、现有 schema 兼容性、身份/Profile 归属与安全挂载的非敏感证明；不得用试验库或试验密钥路径替代 |
 | 主 Runtime 与模型 | 项目合同为 vLLM raw JSON；首条确定性浏览器读取不要求目标选择模型 | 主 Runtime 的内网服务/模型物料、版本、许可证和可用算力；目标选择模型只在该路径启用前记录通过验收的版本、权重、Tokenizer、推理代码及许可 |
+| API/执行与文件存储 | 正式 Compose 已定义分离角色、同源持久 spool 与读写挂载；定义尚未启动 | 实际角色进程/监听、PG 跨进程接纳和取消、权限与首次 marker 顺序、TTL 存储归属及总资源预算 |
 | DNS、日志与文件链 | r1 要求全链断网验收 | 实际服务解析、日志落点、文件处理与更新通道的断外网观察；不能只凭单个浏览器进程启动证明 |
 
 许可证逐项对应实际发行物料。Playwright 的许可证不能替代 Chromium、系统包、

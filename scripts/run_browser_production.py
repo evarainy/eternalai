@@ -1,4 +1,4 @@
-"""Read six operator-mounted secrets, then run the registered local app."""
+"""Read six mounted secrets, then forward the explicit API or worker role."""
 
 from __future__ import annotations
 

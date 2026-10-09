@@ -19,6 +19,9 @@ RUN test -n "$SOURCE_COMMIT" && test -n "$UV_LOCK_SHA256" \
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app/ ./app/
+# local_installation imports this contract even for a deterministic Site.
+# Keep the serving/backend/model modules outside the browser application image.
+COPY services/decision/__init__.py services/decision/manifest.py ./services/decision/
 COPY scripts/run_browser_registered_server.py ./scripts/run_browser_registered_server.py
 COPY scripts/run_browser_production.py ./scripts/run_browser_production.py
 

@@ -3,8 +3,9 @@
 本页定义**代码侧可复现的路径**；镜像、Site、模型、许可及目标机器尚无实物验收。
 `Dockerfile.production`、`Dockerfile.production.dockerignore` 和
 `compose.production.yaml` 独立于本目录既有的 synthetic/Jev 试验文件。
-正式入口是主应用 `scripts.run_browser_registered_server`，同一应用 lifespan
-管理 API 与 BrowserWorkerSupervisor，不创建第二套 Task/授权/Run 服务。
+正式镜像通过 `scripts.run_browser_production` 读取既有六项配置 secret，
+原样转交 `scripts.run_browser_registered_server --role api|worker`。API 和执行
+Worker 是两个容器，复用同一 PostgreSQL Run/租约、身份、授权与核验权威。
 
 ## 1. 构建与来源绑定
 
@@ -29,6 +30,30 @@ docker save --output "$BROWSER_IMAGE_ARCHIVE" "$BROWSER_RUNTIME_IMAGE"
 交付前另核对镜像检查结果、`docker save` 文件摘要、包内 Playwright/Node/
 Chromium 与字体/证书/时区/系统库的实际版本、第三方许可证和源代码对应关系。
 标签只是构建声明，不能替代受控构建记录和镜像层审计。
+
+### 正式入口源码与依赖清单
+
+`Dockerfile.production.dockerignore` 是逐文件精确的构建上下文清单；`**`
+默认排除；每个 `!目录/` 后紧接 `目录/*`，重新排除其子树，再逐个
+放行所列文件，避免目录例外连带放行 synthetic/凭据或新文件。Dockerfile
+只复制该清单中的 `app/`、两个启动脚本及下列 Decision 合同文件：
+
+| 必需源码 | 入口和传递依赖 |
+|---|---|
+| `scripts/run_browser_production.py` | secret wrapper，延迟导入 registered 启动脚本，原样转交角色参数 |
+| `scripts/run_browser_registered_server.py` | 仓内 ProductionComponents、local_installation；API 角色另使用主应用入口，worker 使用同一 registered 装配和 supervisor |
+| `services/decision/__init__.py`、`manifest.py` | `local_installation.py` 无条件导入 `PinnedCheckpoint`；manifest 只使用 Python 标准库、锁定的 Pydantic 和已列入镜像的 `app.browser_skill.models` |
+| `pyproject.toml`、`uv.lock` | `uv sync --frozen --no-dev --no-install-project` 安装依赖，故仓内模块必须另由 COPY 纳入，不能依赖项目安装隐式补源码 |
+
+`services/` 是 Python namespace，没有仓内根 `__init__.py`；镜像的
+`PYTHONPATH=/opt/eternalai` 提供该 namespace。只包含两个 Decision 合同文件，
+不包含 `api.py`、`service.py`、`laya_backend.py`、模型权重或 wheelhouse；
+独立本地 Decision 服务的实物仍按下文模型分支交付。operator bundle 只供应
+受审 Site/工厂输入，不补平台源码。源码闭包测试以两个启动脚本和 API 角色延迟加载的 `app.main` 为入口，
+按 AST 检查 import-time 的仓内传递导入及对应 COPY 目的路径；惰性的历史 synthetic 方法与受审 operator
+工厂另按实际路径验收。已有共用类型所需 `fixed_synthetic_seed.py` 仍在精确
+清单内，正式入口不选择试验安装或 Jev；没有新增放行 synthetic/Jev 文件。
+这份清单和 AST 证据不能代替构建后在实际镜像内的导入检查。
 
 ## 2. 离线转运包
 
@@ -67,11 +92,21 @@ python -m scripts.verify_browser_production_bundle --bundle-root "$BROWSER_BUNDL
 
 ## 3. 已导入镜像的正式 Compose 入口
 
-`compose.production.yaml` 只有一个 `browser-runtime` 服务；使用镜像引用、
-`pull_policy: never`、无 `build`、无公网端口，显式运行 `--enable --factory
-<operator module:function> --host 0.0.0.0 --port 8000`。入口默认为 loopback；
-只有这份容器配置主动启用网络监听。API 仍走主应用现有鉴权与 CSRF。
-Compose 不创建数据库、Redis、主 Runtime、Decision 服务或业务站点；
+`compose.production.yaml` 定义两个服务，共用同一已导入镜像、受审 factory
+引用和六个 secret 来源，均使用 `pull_policy: never`、无 `build`、无宿主
+公开端口：
+
+| 服务 | registered 参数 | 执行与挂载边界 |
+|---|---|---|
+| `browser-api` | `--enable --factory <module:function> --role api --host 0.0.0.0 --port 8000` | 现有 HTTP/鉴权/CSRF；不启动 BrowserWorkerSupervisor、浏览器资源或 TTL scheduler；spool 只读 |
+| `browser-worker` | `--enable --factory <同一 module:function> --role worker` | 不运行 uvicorn/HTTP；在同一权威校验的安装 context 内运行既有 supervisor、PG 扫描/租约/Executor/Verifier 与 cleanup；spool 可写 |
+
+`--role` 缺省为 `api`，Compose 始终显式指定角色。worker 不依赖 API 进程
+内存；接纳、取消和执行协调使用现有 PG Run 与租约权威，不新增服务身份、
+业务 API 或执行队列。相同镜像与同一工厂只共享定义和持久权威，各容器
+具有独立进程和生命周期。API 监听只在上述容器参数明确启用，现有鉴权与
+CSRF 保持适用；`expose` 不发布宿主端口。
+Compose 不创建数据库、Redis、主 Runtime、Decision 服务或业务站点，
 它们必须是已批准且可达的内网依赖。
 
 operator 在**仓库外**提供：已审计的本地 Python factory 与 Site/Skill/
@@ -82,10 +117,10 @@ deployment、provider pool、proof/grants/cleanup authority、keyrings，以及�
 启用时需要的 Decision provider/checkpoint、文件/审查等 Site 专属组件。
 `scripts.run_browser_registered_server` 调用仓内
 `build_registered_production_installation`，从现有主应用组件绑定 session、
-registry、binder、policy、trace、worker，并只在 chat 模式接入现有 Runtime
+registry、binder、policy、trace 和 worker 所需权威，并只在 chat 模式接入现有 Runtime
 LLM；structured 模式不装配它。不要求 operator
 重写这些通用接线。operator 另提供独立的
-`BROWSER_ARTIFACT_ROOT`（仅受授权文件链写入）；六个 Docker Compose secret
+`BROWSER_ARTIFACT_ROOT`（同一持久 spool，仅 worker 的受授权文件链写入）；六个 Docker Compose secret
 源文件；内部 DNS、已存在的受控网络、Chromium seccomp profile 与经测量的
 CPU/RAM/PID/shm/tmpfs 限额。`scripts.run_browser_production` 只从固定
 `/run/secrets` 文件名读六项已有配置 secret 到进程内的现有环境配置接口，
@@ -107,6 +142,36 @@ request model 与 pinned deployment model，且按 Decision 离线清单验收�
 业务注册，也不存在通用 JSON 代替 login/verifier/身份权威。Operator 网络须通过
 防火墙与 DNS 策略禁止外网，仅放行审批站点和必要内网依赖；Compose
 只指定外部网络，不证明此策略，也不把 Playwright route 当防火墙。
+
+### 持久文件卷与首次启动
+
+两角色必须将**同一个** `BROWSER_ARTIFACT_ROOT` 绑定到
+`/var/lib/eternalai/browser-artifacts`；API 为只读，worker 为读写。
+此目录须在启动前由现场批准的运维流程建立，属于镜像实际 `pwuser` UID，
+权限 `0700`，已有制品与私有 spool marker 按实现要求保持 `0600`。
+Compose 的 `create_host_path: false` 不自动建宿主目录，也不执行 chown。
+`/run/browser-operator` 两侧只读；`/tmp` 是各容器独立限额 tmpfs，不能
+用于持久 spool。root 文件系统只读、非 root、无 Docker socket 与宿主通用
+目录挂载；worker 单独配置受限 shm，API 与 worker 分别配置实测资源预算，
+目标机总预算须覆盖二者并发。
+
+持久 spool 的 storage_scope 由已有文件实现的私有 marker 绑定物理位置，
+PG/MAC 事件仍是元数据与授权权威；不由 Compose/env 新造范围或标识。
+工厂向 `RegisteredProductionInputs.file_artifact_root` 传入
+`Path("/var/lib/eternalai/browser-artifacts")`，与 `file_artifacts` 对象互斥；
+仓内 builder 按启动角色初始化/读取 `.browser-file-storage-scope-v1` 并绑定
+现有 PG 文件权威，operator 无须补写存储或范围接线。
+两个工厂实例必须使用相同 spool 根、已有 marker、签名密钥上下文与相同
+注册 Site/Skill/版本，API 只读校验已存在 marker。首次空卷须先启动 worker，
+待其完成 marker/装配初始化后再启动 API；提前启动 API 应 fail closed，
+不能降级创建另一位置标识。仅容器 `started` 不证明初始化完成。后续重启
+应复用同一目录与 marker；不同 spool 根不可共用该位置标识，也不能扫描
+或确认删除另一存储范围的事件。现有文件 scheduler 只在 worker 角色启动。
+
+获准运行时，先执行 `docker compose ... up -d --no-build --pull never
+browser-worker`，确认 worker 初始化与上述权限后，再执行同形命令启动
+`browser-api`。此处命令仅定义顺序，本窗口没有执行。实际转移、启动与
+权限调整均须使用现场获准流程；私有 marker 内容不进入日志或报告。
 
 目标环境完成文件、导入镜像、凭据、网络、配置与受控业务批准后，按
 `compose.production.yaml` 显式启动；正式部署仍须另获授权。离线验收
