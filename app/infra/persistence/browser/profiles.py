@@ -15,18 +15,20 @@ from typing import AsyncIterator, Mapping, cast
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.infra.browser.local_profile_cleanup import ProfileCleanupCandidatePage, retention_ready
+from app.infra.browser.local_profile_cleanup import retention_ready
 from app.infra.persistence.task_store.transactional import lock_owned_task
 from app.ports.browser_profile_store import (
     BrowserProfileCaptureFact,
     BrowserProfileCaptureProofPort,
     BrowserProfileCleanupAuthorityPort,
+    BrowserProfileCleanupFact,
     BrowserProfileCleanupProofPort,
     BrowserProfileContext,
     BrowserProfileError,
     BrowserProfileGeneration,
     BrowserProfileHead,
     BrowserProfileSessionBinder,
+    ProfileCleanupCandidatePage,
 )
 from app.ports.browser_store import MAX_BROWSER_REVISION
 from app.ports.credential_vault import (
@@ -40,6 +42,11 @@ _BINDING = (
     " AND target_system=:target_system AND binding_id=:binding_id"
 )
 _OWNER = _BINDING + " AND session_id=:session_id"
+_GEN_OWNER = (
+    "g.tenant_id=:tenant_id AND g.ai_user_id=:ai_user_id"
+    " AND g.session_id=:session_id AND g.target_system=:target_system"
+    " AND g.binding_id=:binding_id"
+)
 Row = Mapping[str, object]
 
 
@@ -281,8 +288,15 @@ class PostgreSQLBrowserProfileStore:
             (
                 await session.execute(
                     text(
-                        f"SELECT * FROM browser_profile_generations WHERE {_OWNER}"
-                        " AND generation_id=:generation_id FOR UPDATE"
+                        "SELECT g.*,p.cipher_version,p.key_id,p.nonce,p.ciphertext"
+                        " FROM browser_profile_generations AS g"
+                        " JOIN browser_profile_payloads AS p ON"
+                        " p.tenant_id=g.tenant_id AND p.ai_user_id=g.ai_user_id"
+                        " AND p.session_id=g.session_id"
+                        " AND p.target_system=g.target_system AND p.binding_id=g.binding_id"
+                        " AND p.generation_id=g.generation_id"
+                        f" WHERE {_GEN_OWNER} AND g.generation_id=:generation_id"
+                        " FOR UPDATE OF g"
                     ),
                     {**_params(context), "generation_id": generation_id},
                 )
@@ -300,7 +314,8 @@ class PostgreSQLBrowserProfileStore:
     ) -> Row:
         # Candidate checks have no reason to read the immutable ciphertext.
         row = (await session.execute(text(
-            "SELECT generation_id,disposition,created_at,lease_epoch"
+            "SELECT generation_id,disposition,disposition_changed_at,created_at,lease_epoch,"
+            "provider_key,capture_operation_id,generation_ref_digest"
             f" FROM browser_profile_generations WHERE {_OWNER}"
             " AND generation_id=:generation_id FOR UPDATE"
         ), {**_params(context), "generation_id": generation_id})).mappings().one_or_none()
@@ -393,19 +408,12 @@ class PostgreSQLBrowserProfileStore:
             ):
                 raise BrowserProfileError("browser_profile_capture_stale")
             await self._ensure_head(session, context)
-            values = {
-                **_params(context),
-                **asdict(fact),
-                "key_id": generation.key_id,
-                "nonce": generation.nonce,
-                "ciphertext": generation.ciphertext,
-                "cipher_version": generation.cipher_version,
-            }
+            values = {**_params(context), **asdict(fact)}
             columns = (
                 "generation_id,tenant_id,ai_user_id,session_id,target_system,binding_id,"
                 "binding_revision,profile_revision,lease_epoch,provider_key,capture_operation_id,"
                 "manifest_digest,generation_ref_digest,subject_digest,origin_digest,"
-                "projection_digest,captured_bytes,cipher_version,key_id,nonce,ciphertext"
+                "projection_digest,captured_bytes"
             )
             placeholders = ",".join(":" + column for column in columns.split(","))
             await session.execute(
@@ -414,6 +422,21 @@ class PostgreSQLBrowserProfileStore:
                     f" VALUES({placeholders},'validated')"
                 ),
                 values,
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO browser_profile_payloads(tenant_id,ai_user_id,session_id,"
+                    "target_system,binding_id,generation_id,cipher_version,key_id,nonce,"
+                    "ciphertext) VALUES(:tenant_id,:ai_user_id,:session_id,:target_system,"
+                    ":binding_id,:generation_id,:cipher_version,:key_id,:nonce,:ciphertext)"
+                ),
+                {
+                    **values,
+                    "cipher_version": generation.cipher_version,
+                    "key_id": generation.key_id,
+                    "nonce": generation.nonce,
+                    "ciphertext": generation.ciphertext,
+                },
             )
             await session.execute(
                 text(
@@ -541,7 +564,7 @@ class PostgreSQLBrowserProfileStore:
         generation_id: str,
         head: Row | None,
         lease: Row | None,
-    ) -> None:
+    ) -> Row:
         row = await self._get_cleanup_row(session, context, generation_id)
         if row["disposition"] not in {"retired", "orphan"} or (
             head is not None and head["active_generation_id"] == generation_id
@@ -551,6 +574,7 @@ class PostgreSQLBrowserProfileStore:
         if not retention_ready(
             disposition=row["disposition"],
             created_at=cast(datetime, row["created_at"]),
+            disposition_changed_at=cast(datetime | None, row["disposition_changed_at"]),
             head_updated_at=(cast(datetime, head["updated_at"]) if head is not None else None),
             now=now, retention_seconds=self._retention_seconds,
         ):
@@ -559,10 +583,10 @@ class PostgreSQLBrowserProfileStore:
             await session.execute(
                 text(
                     f"SELECT run_id FROM browser_runs WHERE {_OWNER}"
-                    " AND (profile_generation_id=:generation_id OR"
-                    " ((status IN ('running','waiting_user') OR cleanup IN"
+                    " AND (status IN ('running','waiting_user') OR cleanup IN"
                     " ('pending','quarantined','failed'))"
-                    " AND lease_epoch=:generation_epoch))"
+                    " AND (profile_generation_id=:generation_id OR"
+                    " lease_epoch=:generation_epoch)"
                     " ORDER BY run_id FOR UPDATE"
                 ),
                 {
@@ -576,7 +600,7 @@ class PostgreSQLBrowserProfileStore:
             # Lease stores no generation reference. Conservatively protect every
             # generation while this binding has any outstanding provider resource.
             raise BrowserProfileError("browser_profile_cleanup_referenced")
-        return None
+        return row
 
     async def discover_cleanup_candidates(
         self, context: BrowserProfileContext, *, limit: int = 100,
@@ -615,21 +639,151 @@ class PostgreSQLBrowserProfileStore:
                         deferred.append((generation_id, error.code))
                         continue
                     raise
+                receipt = (
+                    await session.execute(
+                        text(
+                            f"SELECT 1 FROM browser_profile_cleanup_receipts WHERE {_OWNER}"
+                            " AND generation_id=:generation_id"
+                        ),
+                        {**_params(context), "generation_id": generation_id},
+                    )
+                ).scalar_one_or_none()
+                if receipt is None:
+                    deferred.append((generation_id, "browser_profile_cleanup_proof_missing"))
+                    continue
                 found.append(generation_id)
             return ProfileCleanupCandidatePage(
                 tuple(found), tuple(deferred),
                 cast(str, rows[-1]["generation_id"]) if len(rows) == limit else None,
             )
 
-    async def cleanup(
+    async def record_provider_cleanup_fact(
         self,
         context: BrowserProfileContext,
         generation_id: str,
         evidence: bytes,
     ) -> None:
-        # Current schema preserves immutable NOT NULL ciphertext and forbids
-        # DELETE. A provider receipt could at most prove provider-side release;
-        # it cannot prove destruction of this retained database generation.
-        # Discovery/readiness remains available, but no state is marked as
-        # cleaned until an approved destructive contract is actually possible.
-        raise BrowserProfileError("browser_profile_ciphertext_retained")
+        # Capture and Run membership must be durable before accepting a native
+        # termination receipt. The provider check happens outside the PG lock.
+        async with self._locked(context, cleanup=True) as (session, run, _head, _lease):
+            generation = _generation(await self._get_generation(session, context, generation_id))
+            if (
+                run["profile_generation_id"] != generation_id
+                or run["capture_operation_id"] != generation.fact.capture_operation_id
+                or run["provider_key"] != generation.fact.provider_key
+            ):
+                raise BrowserProfileError("browser_profile_cleanup_run_mismatch")
+        if self._cleanup is None:
+            raise BrowserProfileError("browser_profile_cleanup_proof_unavailable")
+        fact = await self._cleanup.verify_cleanup(context, generation, evidence)
+        if (
+            not isinstance(fact, BrowserProfileCleanupFact)
+            or fact.provider_key != generation.fact.provider_key
+            or fact.capture_operation_id != generation.fact.capture_operation_id
+            or fact.generation_id != generation.fact.generation_id
+            or fact.generation_ref_digest != generation.fact.generation_ref_digest
+            or type(fact.proof_digest) is not bytes
+            or len(fact.proof_digest) != 32
+        ):
+            raise BrowserProfileError("browser_profile_cleanup_mismatch")
+        params = {
+            **_params(context), "generation_id": generation_id,
+            "provider_key": fact.provider_key,
+            "capture_operation_id": fact.capture_operation_id,
+            "generation_ref_digest": fact.generation_ref_digest,
+            "proof_digest": fact.proof_digest,
+        }
+        async with self._locked(context, cleanup=True) as (session, run, _head, _lease):
+            current = _generation(await self._get_generation(session, context, generation_id))
+            if (
+                current != generation
+                or run["profile_generation_id"] != generation_id
+                or run["capture_operation_id"] != generation.fact.capture_operation_id
+                or run["provider_key"] != generation.fact.provider_key
+            ):
+                raise BrowserProfileError("browser_profile_cleanup_stale")
+            await session.execute(
+                text(
+                    "INSERT INTO browser_profile_cleanup_receipts(tenant_id,ai_user_id,"
+                    "session_id,target_system,binding_id,generation_id,provider_key,"
+                    "capture_operation_id,generation_ref_digest,proof_digest)"
+                    " VALUES(:tenant_id,:ai_user_id,:session_id,:target_system,:binding_id,"
+                    ":generation_id,:provider_key,:capture_operation_id,"
+                    ":generation_ref_digest,:proof_digest) ON CONFLICT DO NOTHING"
+                ), params,
+            )
+            stored = (
+                (await session.execute(
+                    text(
+                        f"SELECT * FROM browser_profile_cleanup_receipts WHERE {_OWNER}"
+                        " AND generation_id=:generation_id FOR UPDATE"
+                    ), params,
+                )).mappings().one_or_none()
+            )
+            if (
+                stored is None
+                or any(stored[key] != params[key] for key in (
+                    "provider_key", "capture_operation_id",
+                    "generation_ref_digest", "proof_digest",
+                ))
+            ):
+                raise BrowserProfileError("browser_profile_cleanup_receipt_conflict")
+
+    async def cleanup(self, context: BrowserProfileContext, generation_id: str) -> None:
+        # A durable, verified release receipt is the provider proof after the
+        # live resource token expires. The transaction rechecks all local gates.
+        async with self._locked(context, cleanup=True) as (session, _run, head, lease):
+            row = await self._cleanup_candidate(session, context, generation_id, head, lease)
+            params = {**_params(context), "generation_id": generation_id}
+            receipt = (
+                (await session.execute(
+                    text(
+                        f"SELECT * FROM browser_profile_cleanup_receipts WHERE {_OWNER}"
+                        " AND generation_id=:generation_id FOR UPDATE"
+                    ), params,
+                )).mappings().one_or_none()
+            )
+            if receipt is None:
+                raise BrowserProfileError("browser_profile_cleanup_proof_missing")
+            if (
+                any(receipt[key] != row[key] for key in (
+                    "provider_key", "capture_operation_id", "generation_ref_digest",
+                ))
+                or type(receipt["proof_digest"]) is not bytes
+                or len(receipt["proof_digest"]) != 32
+            ):
+                raise BrowserProfileError("browser_profile_cleanup_receipt_conflict")
+            params["proof_digest"] = receipt["proof_digest"]
+            confirmed = (
+                await session.execute(
+                    text(
+                        "UPDATE browser_profile_generations SET disposition='cleanup_confirmed',"
+                        " cleanup_proof_digest=:proof_digest"
+                        f" WHERE {_OWNER} AND generation_id=:generation_id"
+                        " AND disposition IN ('retired','orphan')"
+                        " RETURNING generation_id"
+                    ), params,
+                )
+            ).scalar_one_or_none()
+            if confirmed != generation_id:
+                raise BrowserProfileError("browser_profile_cleanup_stale")
+            removed = (
+                await session.execute(
+                    text(
+                        f"DELETE FROM browser_profile_payloads WHERE {_OWNER}"
+                        " AND generation_id=:generation_id RETURNING generation_id"
+                    ), params,
+                )
+            ).scalar_one_or_none()
+            if removed != generation_id:
+                raise BrowserProfileError("browser_profile_payload_missing")
+            remaining = (
+                await session.execute(
+                    text(
+                        f"SELECT 1 FROM browser_profile_payloads WHERE {_OWNER}"
+                        " AND generation_id=:generation_id"
+                    ), params,
+                )
+            ).scalar_one_or_none()
+            if remaining is not None:
+                raise BrowserProfileError("browser_profile_payload_retained")
