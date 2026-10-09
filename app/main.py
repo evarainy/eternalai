@@ -49,7 +49,12 @@ from app.ports.auth import (
     SessionRevocationStorePort,
     SessionTokenPort,
 )
-from app.ports.browser_chat import BrowserChatError, BrowserChatPort, BrowserRunAccessPort
+from app.ports.browser_chat import (
+    BrowserChatError,
+    BrowserChatPort,
+    BrowserRunAccessPort,
+    BrowserSubmissionPort,
+)
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
 
@@ -80,6 +85,7 @@ def create_app(
     browser_chat: BrowserChatPort | None = None,
     browser_run_access: BrowserRunAccessPort | None = None,
     browser_worker_supervisor: BrowserWorkerSupervisor | None = None,
+    browser_submission: BrowserSubmissionPort | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -167,6 +173,7 @@ def create_app(
         make_browser_runs_router(
             browser_run_access if browser_run_access is not None else browser_chat,
             csrf_protected_principal, session_binder,
+            submission=browser_submission,
         ),
         prefix="/api/v1",
     )
@@ -301,6 +308,9 @@ def create_production_app(
         mcp_service=components.mcp_service,
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
         browser_run_access=(
+            browser_vertical.submission if browser_vertical is not None else None
+        ),
+        browser_submission=(
             browser_vertical.submission if browser_vertical is not None else None
         ),
         browser_worker_supervisor=(

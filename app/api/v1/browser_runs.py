@@ -1,20 +1,29 @@
-"""Authenticated no-store browser Run reads and cancellation requests."""
+"""Authenticated no-store browser submission, reads and cancellation requests."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from app.api.v1.auth import PrincipalDependency
+from app.browser_skill.models import OpaqueId
 from app.ports.auth import Principal, SessionBindingError
-from app.ports.browser_chat import BrowserChatError, BrowserRunAccessPort, BrowserRunResponse
+from app.ports.browser_chat import (
+    BrowserChatError,
+    BrowserRunAccessPort,
+    BrowserRunResponse,
+    BrowserSubmissionPort,
+)
+from app.ports.response_envelope import ResponseEnvelope
 
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_MAX_ARGUMENT_BYTES = 16_384
 RunIdentifier = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]{1,96}$")]
 
 
@@ -52,23 +61,70 @@ class BrowserDecisionRequest(BrowserCancelRequest):
     decision: Literal["confirmed", "rejected"]
 
 
+class BrowserSubmitRequest(BrowserCancelRequest):
+    skill_id: OpaqueId
+    skill_version: OpaqueId
+    arguments: dict[str, JsonValue] = Field(repr=False)
+    client_request_id: OpaqueId
+
+    @field_validator("arguments")
+    @classmethod
+    def bounded_arguments(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        # Match the unified submission service's canonical JSON byte budget.
+        try:
+            encoded = json.dumps(
+                value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":"),
+            ).encode("ascii")
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("browser_request_input_invalid") from None
+        if len(encoded) > _MAX_ARGUMENT_BYTES:
+            raise ValueError("browser_request_input_invalid")
+        return value
+
+
 def make_router(
     service: BrowserRunAccessPort | None, require_principal: PrincipalDependency,
     session_binder: Callable[[Principal, str], str] | None,
+    *, submission: BrowserSubmissionPort | None = None,
 ) -> APIRouter:
     """The injected verified Principal dependency must also enforce POST CSRF."""
     router = APIRouter(route_class=_PrivateRunRoute)
 
-    def bind(principal: Principal, requested: str) -> tuple[BrowserRunAccessPort, str]:
+    def bind_session(principal: Principal, requested: str) -> str:
         if session_binder is None:
             raise HTTPException(401, {"code": "authentication_required"}, headers=_HEADERS)
         try:
-            bound = session_binder(principal, requested)
+            return session_binder(principal, requested)
         except SessionBindingError:
             raise HTTPException(404, {"code": "session_not_found"}, headers=_HEADERS) from None
+
+    def bind(principal: Principal, requested: str) -> tuple[BrowserRunAccessPort, str]:
+        bound = bind_session(principal, requested)
         if service is None:
             raise HTTPException(503, {"code": "browser_chat_unavailable"}, headers=_HEADERS)
         return service, bound
+
+    @router.post("/browser-runs", response_model=ResponseEnvelope)
+    async def submit_run(
+        body: BrowserSubmitRequest, response: Response,
+        principal: Principal = Depends(require_principal),
+    ) -> ResponseEnvelope:
+        response.headers.update(_HEADERS)
+        session = bind_session(principal, body.session_id)
+        if submission is None:
+            raise HTTPException(503, {"code": "browser_chat_unavailable"}, headers=_HEADERS)
+        try:
+            return await submission.submit(
+                principal=principal, bound_session=session, skill_id=body.skill_id,
+                skill_version=body.skill_version, arguments=body.arguments,
+                client_request_id=body.client_request_id,
+            )
+        except BrowserChatError as error:
+            raise HTTPException(
+                error.http_status,
+                {"code": error.code, "message": "Browser request was not accepted."},
+                headers=_HEADERS,
+            ) from None
 
     @router.get("/browser-runs/{task_id}/{run_id}", response_model=BrowserRunResponse)
     async def get_run(
