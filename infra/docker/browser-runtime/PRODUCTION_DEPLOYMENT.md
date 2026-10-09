@@ -75,14 +75,23 @@ Compose 不创建数据库、Redis、主 Runtime、Decision 服务或业务站�
 它们必须是已批准且可达的内网依赖。
 
 operator 在**仓库外**提供：已审计的本地 Python factory 与 Site/Skill/
-浏览器资产配置目录 `BROWSER_OPERATOR_BUNDLE_ROOT`（只读挂载）；独立的
+浏览器资产配置目录 `BROWSER_OPERATOR_BUNDLE_ROOT`（只读挂载）。该 factory
+是接收仓内 `ProductionComponents` 的 async context manager，yield 单个
+`RegisteredProductionInputs` 或其 tuple；它只供应真实的已签 Site、binding、
+deployment、provider pool、proof/grants/cleanup authority、keyrings，以及路径
+启用时需要的 Decision provider/checkpoint、文件/审查等 Site 专属组件。
+`scripts.run_browser_registered_server` 调用仓内
+`build_registered_production_installation`，从现有主应用组件绑定 session、
+registry、binder、policy、trace、worker，并只在 chat 模式接入现有 Runtime
+LLM；structured 模式不装配它。不要求 operator
+重写这些通用接线。operator 另提供独立的
 `BROWSER_ARTIFACT_ROOT`（仅受授权文件链写入）；六个 Docker Compose secret
 源文件；内部 DNS、已存在的受控网络、Chromium seccomp profile 与经测量的
 CPU/RAM/PID/shm/tmpfs 限额。`scripts.run_browser_production` 只从固定
 `/run/secrets` 文件名读六项已有配置 secret 到进程内的现有环境配置接口，
 拒绝预置的同名环境变量、非普通文件、空值、超长和多行值，不回显内容。
-业务/账号/Profile
-凭据继续由可信 factory 和现有密钥/授权权威提供；不写进镜像、仓库、
+业务/账号/Profile 凭据继续由现有密钥/授权权威提供；factory 只持有所需
+受控引用和生命周期，不写进镜像、仓库、
 Compose、命令参数或报告。容器进程内环境仍含配置 secret，需按现有部署
 进程隔离控制；不得通过 `docker compose config` 输出其解析值。
 
@@ -93,8 +102,9 @@ Compose、命令参数或报告。容器进程内环境仍含配置 secret，需
 Decision provider/checkpoint。启用后一分支时叠加
 `compose.production-decision.yaml`，由 operator 提供真实、完整的 origin、
 request model 与 pinned deployment model，且按 Decision 离线清单验收。
-可信 factory 和正式入口须完成实际 Site/Skill/资产注册接线后才能启动。
-挂载一个 Python 文件或 JSON 并不自动完成注册。Operator 网络须通过
+可信 factory 必须提供实际 Site/Skill/资产、身份与授权输入；缺失时仓内
+装配和最终运行门禁 fail closed。挂载一个 Python 文件或 JSON 并不自动完成
+业务注册，也不存在通用 JSON 代替 login/verifier/身份权威。Operator 网络须通过
 防火墙与 DNS 策略禁止外网，仅放行审批站点和必要内网依赖；Compose
 只指定外部网络，不证明此策略，也不把 Playwright route 当防火墙。
 

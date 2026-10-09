@@ -137,6 +137,7 @@
 !app/infra/browser/local_read_execution.py
 !app/infra/browser/local_resource_lifecycle.py
 !app/infra/browser/managed_chromium.js
+!app/infra/browser/multi_installation.py
 !app/infra/browser/playwright_actions.py
 !app/infra/browser/playwright_dom_rules.py
 !app/infra/browser/playwright_observer.py
