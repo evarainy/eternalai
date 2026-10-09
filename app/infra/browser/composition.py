@@ -53,7 +53,11 @@ from app.browser_skill.teaching import (
 from app.browser_skill.trajectory import ParameterApproval
 from app.browser_skill.write_workflow import _owner_digest
 from app.infra.auth.crypto import PrincipalSessionBinder
-from app.infra.browser.local_file_artifacts import FileArtifactOwner, LocalFileArtifacts
+from app.infra.browser.local_file_artifacts import (
+    FileArtifactOwner,
+    LocalFileArtifactError,
+    LocalFileArtifacts,
+)
 from app.infra.browser.read_execution import (
     BrowserReadExecutionFactory,
     BrowserReadLifecycle,
@@ -79,6 +83,7 @@ from app.infra.persistence.capability_registry.repository import PostgreSQLCapab
 from app.ports.auth import Principal
 from app.ports.browser_chat import (
     BrowserChatBindingResolverPort,
+    BrowserChatError,
     BrowserChatInputIdentity,
     BrowserChatParserPort,
 )
@@ -258,6 +263,7 @@ class BrowserVerticalDependencies:
     worker_id: str
     enabled: bool = False
     worker_ttl_seconds: int = 60
+    profile_retention_seconds: int | None = None
     business_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None
     business_ready_in_session: Callable[
         [AsyncSession, RunSnapshot], Awaitable[bool]
@@ -762,6 +768,7 @@ def build_browser_vertical(
         current_auth=current_auth, binding_reader=binding_reader,
         capture_proof=deps.profile_capture_proof, cleanup_proof=deps.profile_cleanup_proof,
         cleanup_authority=deps.profile_cleanup_authority,
+        retention_seconds=deps.profile_retention_seconds,
     )
     async def record_read_diagnostic(run: RunSnapshot, attributes: dict[str, str | int]) -> None:
         # Use the already persisted task trace, without decoding protected input
@@ -1022,8 +1029,16 @@ def build_browser_vertical(
         if artifacts is None:
             raise BrowserPublicationError("browser_file_unavailable")
         owner = file_owner(run)
-        metadata = await artifacts._authority.authorize_read(reference, owner)
-        payload = await artifacts.read(reference, owner)
+        try:
+            metadata = await artifacts._authority.authorize_read(reference, owner)
+            payload = await artifacts.read(reference, owner)
+        except LocalFileArtifactError as error:
+            if error.code in {
+                "browser_file_reference_invalid", "browser_file_access_denied",
+                "browser_file_source_invalid",
+            }:
+                raise BrowserChatError("browser_file_unavailable", http_status=404) from None
+            raise
         return metadata.media_type, payload
 
     async def prepared_teaching_publication(

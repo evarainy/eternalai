@@ -10,7 +10,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field
 
-from app.browser_skill.models import BrowserOwner, Contract
+from app.browser_skill.models import BrowserOwner, Contract, Digest, OpaqueId
 from app.browser_skill.run_contracts import BrowserRunView
 from app.ports.auth import Principal
 from app.ports.browser_run_store import ProtectedRunEnvelope, RunSnapshot
@@ -68,13 +68,32 @@ class BrowserChatBindingResolverPort(Protocol):
         ...
 
 
+class BrowserWritePreview(Contract):
+    """Allowlisted digests for a current queued HumanGate request, never values."""
+
+    request_id: OpaqueId
+    action_digest: Digest
+    request_digest: Digest
+    skill_id: OpaqueId
+    skill_version: OpaqueId
+    publication_digest: Digest
+    site_id: OpaqueId
+    object_type: OpaqueId
+    business_key_digest: Digest
+    parameter_set_digest: Digest
+    binding_revision: int
+    write_steps_digest: Digest
+    expires_at: datetime
+
+
 class BrowserRunResponse(Contract):
     run: BrowserRunView
     value: dict[str, Any] | None = Field(default=None, repr=False)
+    write_preview: BrowserWritePreview | None = None
 
 
 class BrowserRunAccessPort(Protocol):
-    """Current-authority Run reads and cancellation for authenticated adapters."""
+    """Current-authority Run reads, decisions and artifacts for authenticated adapters."""
 
     async def get(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
@@ -83,6 +102,16 @@ class BrowserRunAccessPort(Protocol):
     async def cancel(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
     ) -> BrowserRunResponse: ...
+
+    async def decide_write(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> BrowserRunResponse: ...
+
+    async def read_artifact(
+        self, principal: Principal, bound_session: str, task_id: str,
+        run_id: str, reference: str,
+    ) -> tuple[str, bytes]: ...
 
 
 class BrowserSubmissionPort(BrowserRunAccessPort, Protocol):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -46,6 +46,10 @@ class _PrivateRunRoute(APIRoute):
 class BrowserCancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     session_id: str = Field(min_length=1, max_length=192)
+
+
+class BrowserDecisionRequest(BrowserCancelRequest):
+    decision: Literal["confirmed", "rejected"]
 
 
 def make_router(
@@ -100,5 +104,55 @@ def make_router(
                 {"code": error.code, "message": "Cancellation was not accepted."},
                 headers=_HEADERS,
             ) from None
+
+    @router.post(
+        "/browser-runs/{task_id}/{run_id}/decision",
+        response_model=BrowserRunResponse,
+    )
+    async def decide_write(
+        task_id: RunIdentifier, run_id: RunIdentifier, body: BrowserDecisionRequest,
+        response: Response, principal: Principal = Depends(require_principal),
+    ) -> BrowserRunResponse:
+        response.headers.update(_HEADERS)
+        bound_service, session = bind(principal, body.session_id)
+        try:
+            return await bound_service.decide_write(
+                principal, session, task_id, run_id, body.decision,
+            )
+        except BrowserChatError as error:
+            raise HTTPException(
+                error.http_status,
+                {"code": error.code, "message": "Browser decision was not accepted."},
+                headers=_HEADERS,
+            ) from None
+
+    @router.get("/browser-runs/{task_id}/{run_id}/artifacts/{opaque_ref}")
+    async def read_artifact(
+        task_id: RunIdentifier, run_id: RunIdentifier, opaque_ref: RunIdentifier,
+        session_id: Annotated[str, Query(min_length=1, max_length=192)],
+        principal: Principal = Depends(require_principal),
+    ) -> Response:
+        bound_service, session = bind(principal, session_id)
+        try:
+            media_type, payload = await bound_service.read_artifact(
+                principal, session, task_id, run_id, opaque_ref,
+            )
+        except BrowserChatError as error:
+            raise HTTPException(
+                error.http_status,
+                {"code": error.code, "message": "Browser artifact is unavailable."},
+                headers=_HEADERS,
+            ) from None
+        if media_type not in {
+            "application/json", "application/pdf", "text/plain", "text/csv", "image/png",
+        } or type(payload) is not bytes:
+            raise HTTPException(
+                503, {"code": "browser_file_unavailable"}, headers=_HEADERS,
+            )
+        return Response(
+            content=payload, media_type=media_type,
+            headers={**_HEADERS, "X-Content-Type-Options": "nosniff",
+                     "Content-Disposition": 'attachment; filename="browser-artifact"'},
+        )
 
     return router

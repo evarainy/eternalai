@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from app.browser_skill.submission import (
     BrowserSubmissionService,
+)
+from app.browser_skill.submission import (
     _validate_schema as _validate_schema,
 )
 from app.ports.auth import Principal
@@ -52,3 +54,19 @@ class BrowserChatService:
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
     ) -> BrowserRunResponse:
         return await self.submission.cancel(principal, bound_session, task_id, run_id)
+
+    async def decide_write(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> BrowserRunResponse:
+        return await self.submission.decide_write(
+            principal, bound_session, task_id, run_id, decision,
+        )
+
+    async def read_artifact(
+        self, principal: Principal, bound_session: str, task_id: str,
+        run_id: str, reference: str,
+    ) -> tuple[str, bytes]:
+        return await self.submission.read_artifact(
+            principal, bound_session, task_id, run_id, reference,
+        )

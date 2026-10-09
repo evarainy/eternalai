@@ -48,7 +48,7 @@ from app.ports.auth import (
     SessionRevocationStorePort,
     SessionTokenPort,
 )
-from app.ports.browser_chat import BrowserChatError, BrowserChatPort
+from app.ports.browser_chat import BrowserChatError, BrowserChatPort, BrowserRunAccessPort
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
 
@@ -77,6 +77,7 @@ def create_app(
     validate_workflows: Callable[[], Awaitable[None]] | None = None,
     mcp_service: McpApiService | None = None,
     browser_chat: BrowserChatPort | None = None,
+    browser_run_access: BrowserRunAccessPort | None = None,
     browser_worker_supervisor: BrowserWorkerSupervisor | None = None,
 ) -> FastAPI:
     @asynccontextmanager
@@ -162,7 +163,10 @@ def create_app(
         prefix="/api/v1/runtime",
     )
     application.include_router(
-        make_browser_runs_router(browser_chat, csrf_protected_principal, session_binder),
+        make_browser_runs_router(
+            browser_run_access if browser_run_access is not None else browser_chat,
+            csrf_protected_principal, session_binder,
+        ),
         prefix="/api/v1",
     )
     application.include_router(
@@ -267,6 +271,9 @@ def create_production_app(
         validate_workflows=components.validate_workflows,
         mcp_service=components.mcp_service,
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
+        browser_run_access=(
+            browser_vertical.submission if browser_vertical is not None else None
+        ),
         browser_worker_supervisor=(
             BrowserWorkerSupervisor(
                 browser_vertical.run_business_ready, cleanup_ready=browser_vertical.cleanup_ready,

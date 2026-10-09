@@ -389,6 +389,12 @@ class BrowserRunStorePort(Protocol):
         """Read a MAC checked candidate plan for this exact owner and Run."""
         ...
 
+    async def load_traversal_terminal(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> int | None:
+        """Read the MAC checked terminal step position for this Run."""
+        ...
+
     async def load_teaching_plan_in_session(
         self, transaction: object, admission: RunAdmission,
     ) -> TeachingPlan | None:

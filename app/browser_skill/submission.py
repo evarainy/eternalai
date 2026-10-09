@@ -57,6 +57,7 @@ from app.ports.browser_chat import (
     BrowserChatError,
     BrowserChatInputIdentity,
     BrowserRunResponse,
+    BrowserWritePreview,
 )
 from app.ports.browser_publication_store import BrowserPublicationStorePort
 from app.ports.browser_run_store import (
@@ -609,22 +610,22 @@ class BrowserSubmissionService:
         return self._envelope(request, "running", accepted.model_dump(), diagnostic=diagnostic)
 
     @staticmethod
-    def _write_confirmation_view(preparation: BrowserWritePreparation) -> dict[str, object]:
-        return {
-            "request_id": preparation.request_id,
-            "action_digest": preparation.action_digest,
-            "request_digest": preparation.request_digest,
-            "skill_id": preparation.skill_id,
-            "skill_version": preparation.skill_version,
-            "publication_digest": preparation.publication_digest,
-            "site_id": preparation.site_id,
-            "object_type": preparation.object_type,
-            "business_key_digest": preparation.business_key_digest,
-            "parameter_set_digest": preparation.parameter_set_digest,
-            "binding_revision": preparation.binding_revision,
-            "write_steps_digest": preparation.write_steps_digest,
-            "expires_at": preparation.expires_at.isoformat(),
-        }
+    def _write_confirmation_view(preparation: BrowserWritePreparation) -> BrowserWritePreview:
+        return BrowserWritePreview(
+            request_id=preparation.request_id,
+            action_digest=preparation.action_digest,
+            request_digest=preparation.request_digest,
+            skill_id=preparation.skill_id,
+            skill_version=preparation.skill_version,
+            publication_digest=preparation.publication_digest,
+            site_id=preparation.site_id,
+            object_type=preparation.object_type,
+            business_key_digest=preparation.business_key_digest,
+            parameter_set_digest=preparation.parameter_set_digest,
+            binding_revision=preparation.binding_revision,
+            write_steps_digest=preparation.write_steps_digest,
+            expires_at=preparation.expires_at,
+        )
 
     async def _ensure_write_preparation(
         self, owner: BrowserOwner, task_id: str, run_id: str,
@@ -751,8 +752,17 @@ class BrowserSubmissionService:
                         or fresh.result_digest != run.result_digest):
                     raise BrowserChatError("browser_target_stale", http_status=409)
                 run = fresh
+            preview = await self._current_write_preview(run)
+            if preview is not None:
+                fresh = await self._store.get(owner, task_id, run_id)
+                if fresh != run:
+                    raise BrowserChatError("browser_target_stale", http_status=409)
+                run = fresh
             self._recheck(invocation)
-            return BrowserRunResponse(run=self._view(run, artifacts=artifacts), value=value)
+            return BrowserRunResponse(
+                run=self._view(run, artifacts=artifacts), value=value,
+                write_preview=preview,
+            )
         except BrowserRunStoreError as error:
             raise self._store_error(error) from None
         except BrowserChatError:
@@ -833,6 +843,9 @@ class BrowserSubmissionService:
                     or await grant(owner, candidate_digest) is not True):
                 raise BrowserChatError("browser_teaching_capture_denied", http_status=403)
             steps = await self._store.read_teaching_steps(owner, task_id, run_id)
+            terminal_after = await self._store.load_traversal_terminal(
+                owner, task_id, run_id,
+            )
             candidate = await self._prepared_teaching_candidate(
                 owner, candidate_digest,
             )
@@ -880,6 +893,9 @@ class BrowserSubmissionService:
                 authorize_capture=lambda requested, scope: requested == run_id and scope == binding,
                 read_plan=lambda requested, scope: plan
                 if requested == run_id and scope == binding else None,
+                read_traversal_terminal=lambda requested, scope: terminal_after
+                if requested == run_id and scope == binding
+                else (_raise_teaching_source_unavailable()),
             )
             source = capture_authorized_run(run_id, binding=binding, authority=authority)
             fresh = await self._store.get(owner, task_id, run_id)
@@ -1116,26 +1132,40 @@ class BrowserSubmissionService:
         except Exception:
             raise BrowserChatError("browser_write_confirmation_unavailable") from None
 
+    async def _current_write_preview(self, run: RunSnapshot) -> BrowserWritePreview | None:
+        gate = self._write_gate
+        if run.phase != "queued" or run.cancel_requested or gate is None:
+            return None
+        preparation = await self._store.load_write_preparation(
+            run.owner, run.task_id, run.run_id,
+        )
+        if preparation is None:
+            return None
+        if (preparation.task_id != run.task_id or preparation.run_id != run.run_id
+                or preparation.publication_digest
+                != run.admission.publication_digest.hex()):
+            raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
+        request = await gate.get_request(preparation.request_id)
+        if (preparation.expires_at <= datetime.now(UTC)
+                or request != preparation.gate_request(run.owner)
+                or request.expires_at <= datetime.now(UTC)):
+            return None
+        return self._write_confirmation_view(preparation)
+
     async def write_preview(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
-    ) -> dict[str, object]:
+    ) -> BrowserWritePreview:
         """Internal value-free preview for the same authenticated Run owner."""
         invocation = self._invocation(principal, bound_session)
-        gate = self._write_gate
-        if gate is None:
-            raise BrowserChatError("browser_write_confirmation_unavailable")
         try:
             run = await self._store.get(invocation.owner, task_id, run_id)
-            preparation = await self._store.load_write_preparation(
-                invocation.owner, task_id, run_id,
-            )
-            if (run.phase != "queued" or run.cancel_requested or preparation is None
-                    or preparation.expires_at <= datetime.now(UTC)
-                    or await gate.get_request(preparation.request_id)
-                    != preparation.gate_request(invocation.owner)):
+            preview = await self._current_write_preview(run)
+            if preview is None:
                 raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
+            if await self._store.get(invocation.owner, task_id, run_id) != run:
+                raise BrowserChatError("browser_target_stale", http_status=409)
             self._recheck(invocation)
-            return self._write_confirmation_view(preparation)
+            return preview
         except BrowserChatError:
             raise
         except BrowserRunStoreError as error:

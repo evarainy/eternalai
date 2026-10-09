@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from app.browser_skill.repair import RepairError
+from app.browser_skill.models import Coverage
+from app.browser_skill.repair import (
+    ExplorationFeedback,
+    ExplorationRegionFeedback,
+    RepairError,
+)
 from app.browser_skill.site_rules import RegisteredExploration
 from app.infra.browser.runtime_exploration import RuntimeLLMExplorationSuggester
 from app.ports.llm_provider import LLMCompletionResponse, LLMMessage
@@ -41,6 +46,21 @@ def _publication():
     })
 
 
+def _feedback(publication, primitive_id: str | None = None) -> ExplorationFeedback:
+    return ExplorationFeedback(
+        regions=(ExplorationRegionFeedback(
+            region_id=publication.site.exploration.allowed_regions[0],
+            coverage=Coverage(state="complete", reason="complete"),
+            candidate_count=2, actionable_count=1,
+            roles=("button",), approved_names=("Synthetic messages",),
+        ),),
+        last_primitive_id=primitive_id,
+        last_region_id=(publication.site.exploration.allowed_regions[0]
+                        if primitive_id else None),
+        last_dispatch_state="acknowledged" if primitive_id else None,
+    )
+
+
 def test_runtime_exploration_uses_bounded_registered_catalog() -> None:
     async def run() -> None:
         publication = _publication()
@@ -49,14 +69,16 @@ def test_runtime_exploration_uses_bounded_registered_catalog() -> None:
             '{"status":"next","primitive_id":"' + primitive + '"}',
         )
         suggest = RuntimeLLMExplorationSuggester(publication, provider, "runtime-model")
-        assert await suggest("run", ()) == primitive
+        assert await suggest("run", (), _feedback(publication)) == primitive
         assert provider.model == "runtime-model"
         assert primitive in provider.messages[1].content
         assert "prior_primitive_ids" in provider.messages[1].content
+        assert "observed_regions" in provider.messages[1].content
+        assert "Synthetic messages" in provider.messages[1].content
         provider.content = '{"status":"stop","primitive_id":null}'
-        assert await suggest("run", (primitive,)) is None
+        assert await suggest("run", (primitive,), _feedback(publication, primitive)) is None
         with pytest.raises(RepairError):
-            await suggest("run", (primitive, primitive))
+            await suggest("run", (primitive, primitive), _feedback(publication, primitive))
 
     asyncio.run(run())
 
@@ -67,9 +89,9 @@ def test_runtime_exploration_rejects_unregistered_or_duplicate_proposal() -> Non
         provider = ProposalProvider('{"status":"next","primitive_id":"unregistered"}')
         suggest = RuntimeLLMExplorationSuggester(publication, provider, "runtime-model")
         with pytest.raises(RepairError):
-            await suggest("run", ())
+            await suggest("run", (), _feedback(publication))
         provider.content = '{"status":"stop","primitive_id":null,"status":"next"}'
         with pytest.raises(RepairError):
-            await suggest("run", ())
+            await suggest("run", (), _feedback(publication))
 
     asyncio.run(run())

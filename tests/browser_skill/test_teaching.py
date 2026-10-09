@@ -18,6 +18,7 @@ from app.browser_skill.compiler import (
 )
 from app.browser_skill.models import (
     BrowserOwner,
+    Coverage,
     LocatorHint,
     ModelManifest,
     ObservationRequest,
@@ -39,6 +40,8 @@ from app.browser_skill.registry import (
     rollback_reviewed_publication,
 )
 from app.browser_skill.repair import (
+    ExplorationFeedback,
+    ExplorationRegionFeedback,
     FormalFailedStep,
     FormalRepairAuthority,
     ReadOnlyExplorationAuthority,
@@ -60,6 +63,7 @@ from app.browser_skill.trajectory import (
     RunTeachingStep,
     TrajectoryError,
     TrajectoryEvent,
+    _route_teaching_plan,
     capture_authorized_run,
 )
 from app.infra.browser.fixed_synthetic_seed import build_fixed_synthetic_query_source
@@ -441,8 +445,28 @@ def test_exploration_suggestions_are_registered_read_only_and_bounded() -> None:
     async def yes(*_args: object) -> bool:
         return True
 
-    async def suggest(_run: str, prior: tuple[str, ...]) -> str | None:
+    async def suggest(
+        _run: str, prior: tuple[str, ...], feedback: ExplorationFeedback,
+    ) -> str | None:
+        assert feedback.regions[0].region_id == "fixture_messages"
         return "inspect_collection" if not prior else None
+
+    async def observe(
+        _run: str, _binding: ScopeBinding, _base: BrowserPublicationManifest,
+        prior: tuple[RunTeachingStep, ...],
+    ) -> ExplorationFeedback:
+        last = prior[-1] if prior else None
+        return ExplorationFeedback(
+            regions=(ExplorationRegionFeedback(
+                region_id="fixture_messages",
+                coverage=Coverage(state="complete", reason="complete"),
+                candidate_count=1, actionable_count=1,
+                roles=("button",), approved_names=("Synthetic messages",),
+            ),),
+            last_primitive_id=last.primitive_id if last else None,
+            last_region_id=last.event.scope.region_id if last else None,
+            last_dispatch_state=last.dispatch_state if last else None,
+        )
 
     async def dispatch(
         _run: str, primitive: str, _binding: ScopeBinding,
@@ -454,7 +478,7 @@ def test_exploration_suggestions_are_registered_read_only_and_bounded() -> None:
     authority = ReadOnlyExplorationAuthority(
         current_binding=binding, authorize=yes,
         registered_rule=lambda primitive, _base: sample.rules.get(primitive),
-        suggest_next=suggest, execute_step=dispatch,
+        suggest_next=suggest, observe_current=observe, execute_step=dispatch,
         clock=lambda: 0, deadline_monotonic=10,
         maximum_steps=2, allowed_regions=("fixture_messages",),
     )
@@ -475,6 +499,28 @@ def test_exploration_suggestions_are_registered_read_only_and_bounded() -> None:
             "run_source", binding=binding(), publication=sample.base,
             authority=authority,
         ))
+
+
+def test_teaching_route_accepts_terminal_first_page_and_repeated_advance() -> None:
+    expected = ("open", "advance", "read")
+    assert _route_teaching_plan(
+        expected, ("open", "read"), advance_id="advance",
+        max_pages=3, terminal_after=1,
+    ) == (0, 2)
+    assert _route_teaching_plan(
+        expected, ("open", "advance", "advance", "read"),
+        advance_id="advance", max_pages=3, terminal_after=3,
+    ) == (0, 1, 1, 2)
+    with pytest.raises(TrajectoryError, match="teaching_plan_sequence_mismatch"):
+        _route_teaching_plan(
+            expected, ("open", "read"), advance_id="advance",
+            max_pages=3, terminal_after=None,
+        )
+    with pytest.raises(TrajectoryError, match="teaching_plan_sequence_mismatch"):
+        _route_teaching_plan(
+            expected, ("open", "advance", "read"),
+            advance_id="advance", max_pages=3, terminal_after=1,
+        )
 
 
 def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> None:

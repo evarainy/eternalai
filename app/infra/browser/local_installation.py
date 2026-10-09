@@ -7,7 +7,7 @@ capacity or start browsers. Explicit publication operations remain separate.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -50,6 +50,7 @@ from app.infra.browser.local_file_artifacts import (
     FileArtifactCleanupScheduler,
     LocalFileArtifacts,
 )
+from app.infra.browser.local_profile_cleanup import ProfileCleanupScheduler
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserReadLifecycle,
@@ -234,6 +235,32 @@ class UnsupportedLocalProfiles:
         raise BrowserProfileError("browser_local_profile_unsupported")
 
 
+class RegisteredLocalProfileCleanupAuthority:
+    """The installed operator grant and exact local binding remain current."""
+
+    def __init__(
+        self, grant: BrowserCleanupAuthorityPort, binding: BrowserBindingFact,
+        source: RegisteredLocalSite,
+    ) -> None:
+        self._grant, self._binding, self._source = grant, binding, source
+
+    async def check_cleanup(self, context: BrowserProfileContext) -> None:
+        if not isinstance(context, BrowserProfileContext):
+            raise BrowserProfileError("browser_local_profile_cleanup_denied")
+        binding = context.claim.binding
+        if (not isinstance(binding, BrowserBindingFact)
+                or (binding.tenant_id, binding.ai_user_id, binding.target_system,
+                    binding.binding_id) != (
+                        self._binding.tenant_id, self._binding.ai_user_id,
+                        self._binding.target_system, self._binding.binding_id,
+                    )
+                or context.claim.auth.owner.tenant_id != self._binding.tenant_id
+                or context.claim.auth.owner.user_id != self._binding.ai_user_id
+                or self._source.manifest.source_kind != "registered_site"):
+            raise BrowserProfileError("browser_local_profile_cleanup_denied")
+        await self._grant.check_cleanup(context.claim)
+
+
 class RegisteredLocalSiteVerifier:
     """Only the installed source object may certify its exact publication."""
 
@@ -299,6 +326,10 @@ class LocalBrowserInstallationDependencies:
     file_artifacts: LocalFileArtifacts | None = None
     teaching_base: BrowserPublicationManifest | None = None
     approved_checkpoint: PinnedCheckpoint | None = None
+    profile_retention_seconds: int | None = None
+    profile_cleanup_contexts: (
+        Callable[[], Awaitable[tuple[BrowserProfileContext, ...]]] | None
+    ) = None
 
 
 @asynccontextmanager
@@ -349,9 +380,13 @@ def build_local_browser_vertical(
         return None
     deps = dependencies
     source = deps.source
+    if ((deps.profile_retention_seconds is None)
+            != (deps.profile_cleanup_contexts is None)):
+        raise ValueError("browser_profile_cleanup_schedule_invalid")
     synthetic = type(source) is FixedSyntheticSource
     registered = type(source) is RegisteredLocalSite
-    if (not (synthetic or registered)
+    if ((not registered and deps.profile_retention_seconds is not None)
+            or not (synthetic or registered)
             or type(deps.deployment) is not LocalChromiumDeployment
             or deps.deployment.enabled is not True
             or type(deps.provider_pools) is not BrowserProviderPoolRegistry
@@ -606,8 +641,12 @@ def build_local_browser_vertical(
         input_digest_key=deps.input_digest_key, result_digest_key=deps.result_digest_key,
         execution_factory=wrapped, lifecycle=lifecycle,
         profile_capture_proof=resources if registered else unsupported,
-        profile_cleanup_proof=unsupported,
-        profile_cleanup_authority=unsupported, cancel_check=lifecycle.check_cancel,
+        profile_cleanup_proof=resources if registered else unsupported,
+        profile_cleanup_authority=(
+            RegisteredLocalProfileCleanupAuthority(
+                deps.cleanup_authority, deps.binding, source,
+            ) if isinstance(source, RegisteredLocalSite) else unsupported
+        ), cancel_check=lifecycle.check_cancel,
         cancel_check_in_session=lifecycle.check_cancel_in_session,
         cleanup_authorize=deps.cleanup_authorize, cleanup_check=lifecycle.check_cleanup,
         chat_parser=chat_parser,
@@ -628,6 +667,7 @@ def build_local_browser_vertical(
                                 and deps.teaching_base is None else None),
         initial_review_decide=(decide_initial_review if registered
                                and deps.teaching_base is None else None),
+        profile_retention_seconds=deps.profile_retention_seconds,
     ))
     if configured is None:
         raise ValueError("browser_local_composition_unavailable")
@@ -657,13 +697,29 @@ def build_local_browser_vertical(
         FileArtifactCleanupScheduler(deps.file_artifacts)
         if registered and deps.file_artifacts is not None else None
     )
+    profile_cleanup = (
+        ProfileCleanupScheduler(configured.profiles, deps.profile_cleanup_contexts)
+        if registered and deps.profile_cleanup_contexts is not None else None
+    )
 
     async def start_resources() -> None:
         await resources.start()
-        if file_cleanup is not None:
-            await file_cleanup.start()
+        try:
+            if file_cleanup is not None:
+                await file_cleanup.start()
+            if profile_cleanup is not None:
+                await profile_cleanup.start()
+        except Exception:
+            if profile_cleanup is not None:
+                await profile_cleanup.stop()
+            if file_cleanup is not None:
+                await file_cleanup.stop()
+            await resources.stop()
+            raise
 
     async def stop_resources() -> None:
+        if profile_cleanup is not None:
+            await profile_cleanup.stop()
         if file_cleanup is not None:
             await file_cleanup.stop()
         # Supervisor cancellation normally settles the claimed Run. Reconcile

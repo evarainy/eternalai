@@ -1479,6 +1479,15 @@ class PostgreSQLBrowserRunStore:
             manifest = await self._frozen_publication(session, run)
             return await self._teaching_plan_in_session(session, run, manifest)
 
+    async def load_traversal_terminal(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> int | None:
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            manifest = await self._frozen_publication(session, run)
+            return await self._traversal_terminal_in_session(session, run, manifest)
+
     async def load_teaching_plan_in_session(
         self, transaction: object, admission: RunAdmission,
     ) -> TeachingPlan | None:

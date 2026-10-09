@@ -717,16 +717,65 @@ class RunTeachingAuthority(_Private):
     primitive_rule: Callable[[str, BrowserPublicationManifest], SiteStepRule | None]
     authorize_capture: Callable[[str, ScopeBinding], bool]
     read_plan: Callable[[str, ScopeBinding], TeachingPlan | None] | None = None
+    read_traversal_terminal: Callable[[str, ScopeBinding], int | None] | None = None
     __getstate__ = _Private.__getstate__
 
     def __post_init__(self) -> None:
-        if (self.read_plan is not None and not callable(self.read_plan)) or not all(
+        if ((self.read_plan is not None and not callable(self.read_plan))
+                or (self.read_traversal_terminal is not None
+                    and not callable(self.read_traversal_terminal))) or not all(
             callable(value) for value in (
             self.current_binding, self.read_run, self.read_steps,
             self.read_parameter_set_ref, self.frozen_publication,
             self.primitive_rule, self.authorize_capture,
         )):
             raise TrajectoryError("teaching_run_authority_required")
+
+
+def _route_teaching_plan(
+    expected: tuple[str, ...], observed: tuple[str, ...], *,
+    advance_id: str | None, max_pages: int | None, terminal_after: int | None,
+) -> tuple[int, ...]:
+    """Map audited steps to the same terminal-aware route as the Run store."""
+    if terminal_after is not None and (
+        advance_id is None or type(terminal_after) is not int
+        or not 0 <= terminal_after <= len(observed)
+    ):
+        raise TrajectoryError("teaching_plan_sequence_mismatch")
+    routed: list[int] = []
+    cursor = 0
+    advances = 0
+    used_terminal = False
+    for index, step_id in enumerate(observed):
+        if cursor >= len(expected):
+            raise TrajectoryError("teaching_plan_sequence_mismatch")
+        if step_id == expected[cursor]:
+            routed.append(cursor)
+            if step_id == advance_id:
+                if terminal_after is not None and index >= terminal_after:
+                    raise TrajectoryError("teaching_plan_sequence_mismatch")
+                advances += 1
+                if max_pages is None or advances >= max_pages:
+                    raise TrajectoryError("teaching_plan_sequence_mismatch")
+            else:
+                cursor += 1
+        elif (expected[cursor] == advance_id
+              and terminal_after == index and cursor + 1 < len(expected)
+              and step_id == expected[cursor + 1]):
+            used_terminal = True
+            routed.append(cursor + 1)
+            cursor += 2
+        else:
+            raise TrajectoryError("teaching_plan_sequence_mismatch")
+    if not (cursor == len(expected) or (
+        cursor == len(expected) - 1 and terminal_after == len(observed)
+        and expected[cursor] == advance_id
+    )) or (terminal_after is not None and not used_terminal and not (
+        cursor == len(expected) - 1 and terminal_after == len(observed)
+        and expected[cursor] == advance_id
+    )):
+        raise TrajectoryError("teaching_plan_sequence_mismatch")
+    return tuple(routed)
 
 
 def capture_authorized_run(
@@ -803,28 +852,18 @@ def capture_authorized_run(
             raise TrajectoryError("teaching_run_steps_unavailable")
         steps = tuple(RunTeachingStep.model_validate_json(item.model_dump_json())
                       for item in raw_steps)
-        routed: list[int] = []
+        routed: tuple[int, ...] = ()
         if plan is not None:
-            cursor = 0
-            repeat_count = 0
             traversal = executed.site.traversal
-            for item in steps:
-                if (cursor < len(plan.steps)
-                        and item.event.step_id == plan.steps[cursor].step_id):
-                    routed.append(cursor)
-                    cursor += 1
-                elif (
-                    traversal is not None and cursor > 0
-                    and plan.steps[cursor - 1].step_id == traversal.advance_step_id
-                    and item.event.step_id == traversal.advance_step_id
-                    and repeat_count < traversal.max_pages - 2
-                ):
-                    routed.append(cursor - 1)
-                    repeat_count += 1
-                else:
-                    raise TrajectoryError("teaching_plan_sequence_mismatch")
-            if cursor != len(plan.steps):
-                raise TrajectoryError("teaching_plan_sequence_mismatch")
+            terminal_after = (authority.read_traversal_terminal(run_id, binding)
+                              if authority.read_traversal_terminal is not None else None)
+            routed = _route_teaching_plan(
+                tuple(item.step_id for item in plan.steps),
+                tuple(item.event.step_id for item in steps),
+                advance_id=(traversal.advance_step_id if traversal is not None else None),
+                max_pages=(traversal.max_pages if traversal is not None else None),
+                terminal_after=terminal_after,
+            )
         for index, step in enumerate(steps):
             rule = authority.primitive_rule(step.primitive_id, publication)
             if rule is None:

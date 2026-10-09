@@ -129,6 +129,25 @@ class BrowserProfileCleanupFact:
     generation_ref_digest: bytes = field(repr=False)
     proof_digest: bytes = field(repr=False)
 
+    def __post_init__(self) -> None:
+        if (any(not _id(value) for value in (
+                self.provider_key, self.capture_operation_id, self.generation_id,
+            ))
+                or type(self.generation_ref_digest) is not bytes
+                or len(self.generation_ref_digest) != 32
+                or type(self.proof_digest) is not bytes
+                or len(self.proof_digest) != 32):
+            raise ValueError("browser_profile_cleanup_fact_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileCleanupCandidatePage:
+    """Bounded owner-authorized metadata page; IDs are not cleanup authority."""
+
+    generation_ids: tuple[str, ...]
+    deferred: tuple[tuple[str, str], ...]
+    next_cursor: str | None
+
 
 class BrowserProfileSessionBinder(Protocol):
     def bind(self, principal: Principal, client_session_id: str) -> str:
@@ -206,9 +225,19 @@ class BrowserProfileStorePort(Protocol):
 
     async def mark_orphan(self, context: BrowserProfileContext, generation_id: str) -> None: ...
 
+    async def record_provider_cleanup_fact(
+        self, context: BrowserProfileContext, generation_id: str, evidence: bytes,
+    ) -> None:
+        """Persist an exact provider termination fact while its proof remains live."""
+        ...
+
+    async def discover_cleanup_candidates(
+        self, context: BrowserProfileContext, *, limit: int = 100,
+        after_generation_id: str | None = None,
+    ) -> ProfileCleanupCandidatePage:
+        """Read a bounded current-authorized metadata page for a supplied context."""
+        ...
+
     async def cleanup(
-        self,
-        context: BrowserProfileContext,
-        generation_id: str,
-        evidence: bytes,
+        self, context: BrowserProfileContext, generation_id: str,
     ) -> None: ...

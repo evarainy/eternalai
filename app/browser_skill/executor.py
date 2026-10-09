@@ -38,6 +38,8 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.repair import (
+    ExplorationFeedback,
+    ExplorationRegionFeedback,
     ReadOnlyExplorationAuthority,
     RepairError,
     explore_registered_reads,
@@ -92,6 +94,7 @@ class TraversalAudit(Protocol):
 class ExplorationSuggester(Protocol):
     async def __call__(
         self, run_id: str, prior_primitive_ids: tuple[str, ...],
+        feedback: ExplorationFeedback,
     ) -> str | None: ...
 
 
@@ -691,6 +694,7 @@ class BrowserExecutor:
             or publication.site_plan() != plan
         ):
             raise failure("denied")
+        assert exploration is not None
         run_id = context.expected_binding.authorization_run_id
         if run_id is None:
             raise failure("denied")
@@ -723,6 +727,47 @@ class BrowserExecutor:
                 session, context, plan, spec, rule, progress,
             )
 
+        async def observe_current(
+            requested_run: str, binding: ScopeBinding,
+            requested_publication: BrowserPublicationManifest,
+            prior: tuple[RunTeachingStep, ...],
+        ) -> ExplorationFeedback:
+            if (requested_run != run_id or binding != context.expected_binding
+                    or requested_publication != publication):
+                raise failure("denied")
+            regions: list[ExplorationRegionFeedback] = []
+            for region_id in exploration.allowed_regions:
+                check_liveness(context)
+                await authorize_current(session, context, spec)
+                projection = await self._web.observe(
+                    session, ObservationRequest(region_id=region_id), plan.policy,
+                )
+                if (projection.binding != binding or projection.policy_id != plan.policy.policy_id
+                        or projection.policy_digest != plan.policy.digest
+                        or projection.scope.region_id != region_id):
+                    raise failure("stale")
+                names = tuple(sorted({
+                    item.name for item in projection.candidates
+                    if item.name is not None and item.name in plan.policy.allowed_names
+                }))[:16]
+                regions.append(ExplorationRegionFeedback(
+                    region_id=region_id, coverage=projection.coverage,
+                    candidate_count=len(projection.candidates),
+                    actionable_count=sum(
+                        item.visible and item.enabled for item in projection.candidates
+                    ),
+                    roles=tuple(sorted({item.role for item in projection.candidates})),
+                    approved_names=names,
+                ))
+                await authorize_current(session, context, spec)
+            last = prior[-1] if prior else None
+            return ExplorationFeedback(
+                regions=tuple(regions),
+                last_primitive_id=last.primitive_id if last is not None else None,
+                last_region_id=last.event.scope.region_id if last is not None else None,
+                last_dispatch_state=last.dispatch_state if last is not None else None,
+            )
+
         deadline = min(
             context.deadline_monotonic,
             time.monotonic() + exploration.max_seconds,
@@ -735,6 +780,7 @@ class BrowserExecutor:
                 if item.step.step_id == primitive_id
             ), None),
             suggest_next=suggest,
+            observe_current=observe_current,
             execute_step=execute_step,
             clock=time.monotonic,
             deadline_monotonic=deadline,

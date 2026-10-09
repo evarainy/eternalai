@@ -29,10 +29,13 @@ from app.browser_skill.compiler import (
 from app.browser_skill.models import (
     BrowserOperationError,
     Contract,
+    Coverage,
     Digest,
     Epoch,
     LocatorHint,
     OpaqueId,
+    Role,
+    SafeText,
     ScopeBinding,
     ScopeStamp,
 )
@@ -667,6 +670,40 @@ def propose_formal_locator(
         raise RepairError("repair_formal_unavailable") from None
 
 
+class ExplorationRegionFeedback(Contract):
+    """Policy-projected region summary; no DOM, values, refs or URLs."""
+
+    region_id: OpaqueId
+    coverage: Coverage
+    candidate_count: Annotated[int, Field(ge=0, le=255)]
+    actionable_count: Annotated[int, Field(ge=0, le=255)]
+    roles: Annotated[tuple[Role, ...], Field(max_length=16)] = ()
+    approved_names: Annotated[tuple[SafeText, ...], Field(max_length=16)] = ()
+
+    @model_validator(mode="after")
+    def bounded(self) -> Self:
+        if (self.actionable_count > self.candidate_count
+                or len(set(self.roles)) != len(self.roles)
+                or len(set(self.approved_names)) != len(self.approved_names)):
+            raise ValueError("exploration_feedback_invalid")
+        return self
+
+
+class ExplorationFeedback(Contract):
+    regions: Annotated[tuple[ExplorationRegionFeedback, ...], Field(min_length=1, max_length=32)]
+    last_primitive_id: OpaqueId | None = None
+    last_region_id: OpaqueId | None = None
+    last_dispatch_state: Literal["acknowledged"] | None = None
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if (len({item.region_id for item in self.regions}) != len(self.regions)
+                or (self.last_primitive_id is None) != (self.last_region_id is None)
+                or (self.last_primitive_id is None) != (self.last_dispatch_state is None)):
+            raise ValueError("exploration_feedback_invalid")
+        return self
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class ReadOnlyExplorationAuthority:
     """Only a bounded next-primitive proposal; execution stays in the sole Run."""
@@ -674,7 +711,13 @@ class ReadOnlyExplorationAuthority:
     current_binding: Callable[[], ScopeBinding]
     authorize: Callable[[str, ScopeBinding, BrowserPublicationManifest], Awaitable[bool]]
     registered_rule: Callable[[str, BrowserPublicationManifest], SiteStepRule | None]
-    suggest_next: Callable[[str, tuple[str, ...]], Awaitable[str | None]]
+    suggest_next: Callable[
+        [str, tuple[str, ...], ExplorationFeedback], Awaitable[str | None]
+    ]
+    observe_current: Callable[
+        [str, ScopeBinding, BrowserPublicationManifest, tuple[RunTeachingStep, ...]],
+        Awaitable[ExplorationFeedback],
+    ]
     execute_step: Callable[[str, str, ScopeBinding], Awaitable[RunTeachingStep]]
     clock: Callable[[], float]
     deadline_monotonic: float
@@ -685,7 +728,7 @@ class ReadOnlyExplorationAuthority:
         if (
             not all(callable(value) for value in (
                 self.current_binding, self.authorize, self.registered_rule,
-                self.suggest_next, self.execute_step, self.clock,
+                self.suggest_next, self.observe_current, self.execute_step, self.clock,
             ))
             or type(self.maximum_steps) is not int
             or not 1 <= self.maximum_steps <= 32
@@ -738,8 +781,23 @@ async def explore_registered_reads(
                 run_id, binding, publication,
             ) is not True:
                 raise RepairError("exploration_denied")
+            feedback = ExplorationFeedback.model_validate(await authority.observe_current(
+                run_id, binding, publication, tuple(emitted),
+            ))
+            if (tuple(item.region_id for item in feedback.regions)
+                    != authority.allowed_regions
+                    or feedback.last_primitive_id
+                    != (emitted[-1].primitive_id if emitted else None)
+                    or feedback.last_region_id != (
+                        emitted[-1].event.scope.region_id if emitted else None
+                    )):
+                raise RepairError("exploration_feedback_invalid")
+            if authority.current_binding() != binding or await authority.authorize(
+                run_id, binding, publication,
+            ) is not True:
+                raise RepairError("exploration_denied")
             primitive_id = await authority.suggest_next(
-                run_id, tuple(item.primitive_id for item in emitted),
+                run_id, tuple(item.primitive_id for item in emitted), feedback,
             )
             if primitive_id is None:
                 return tuple(emitted)

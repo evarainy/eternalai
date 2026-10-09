@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.browser_skill.models import BrowserOperationError, BrowserSessionRef
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
+from app.browser_skill.repair import ExplorationFeedback
 from app.browser_skill.site_rules import (
     ExpectedDownload,
     ExpectedPopup,
@@ -47,6 +48,7 @@ from app.infra.persistence.browser.crypto import BrowserClaimProofContext, resou
 from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.browser_profile_store import (
     BrowserProfileCaptureFact,
+    BrowserProfileCleanupFact,
     BrowserProfileContext,
     BrowserProfileError,
     BrowserProfileGeneration,
@@ -88,6 +90,7 @@ class RegisteredExplorationSuggester(Protocol):
 
     async def __call__(
         self, run_id: str, prior_primitive_ids: tuple[str, ...],
+        feedback: ExplorationFeedback,
     ) -> str | None: ...
 
 
@@ -765,6 +768,7 @@ class _Resource:
     capture_receipt: tuple[
         BrowserProfileContext, BrowserProfileGeneration, bytes, int,
     ] | None = field(default=None, repr=False)
+    profile_cleanup_fact_recorded: bool = False
 
 
 class LocalBrowserResources:
@@ -871,6 +875,8 @@ class LocalBrowserResources:
         for identity, item in tuple(self._resources.items()):
             if (item.terminal_at is not None
                     and item.native.process.returncode is not None
+                    and (item.capture_receipt is None
+                         or item.profile_cleanup_fact_recorded)
                     and time.monotonic() - item.terminal_at > 120):
                 del self._resources[identity]
 
@@ -1355,6 +1361,62 @@ class LocalBrowserResources:
                 return
         raise BrowserProfileError("browser_local_subject_proof_invalid")
 
+    async def verify_cleanup(
+        self,
+        context: BrowserProfileContext,
+        generation: BrowserProfileGeneration,
+        evidence: bytes,
+    ) -> BrowserProfileCleanupFact:
+        """Witness this generation's captured context after native termination."""
+        if type(evidence) is not bytes or len(evidence) != 32:
+            raise BrowserProfileError("browser_local_profile_cleanup_proof_invalid")
+        await self.cleanup_authority.check_cleanup(context.claim)
+        fact = generation.fact
+        for item in self._resources.values():
+            receipt = item.capture_receipt
+            if (receipt is None or receipt[0] != context
+                    or receipt[1] != generation
+                    or resource_identity(item.claim) != resource_identity(context.claim)
+                    or item.exit_token is None
+                    or not hmac.compare_digest(item.exit_token, evidence)
+                    or not item.native.exited or item.native.process.returncode is None
+                    or item.terminal_at is None or item.live is not None
+                    or item.context is not None or item.page is not None
+                    or fact.provider_key != context.claim.provider_key
+                    or fact.lease_epoch != context.claim.lease_epoch
+                    or fact.manifest_digest != self.deployment.manifest_digest):
+                continue
+            expected_ref = self._proof.digest(
+                "browser-local-profile-ref.v1",
+                item.reference + fact.generation_id.encode()
+                + fact.capture_operation_id.encode(),
+            )
+            if not hmac.compare_digest(fact.generation_ref_digest, expected_ref):
+                break
+            proof_digest = self._proof.digest(
+                "browser-local-profile-cleanup.v1",
+                _json({
+                    "owner": [context.claim.auth.owner.tenant_id,
+                              context.claim.auth.owner.user_id,
+                              context.claim.auth.owner.session_id],
+                    "run_id": context.run_id,
+                    "provider_key": fact.provider_key,
+                    "capture_operation_id": fact.capture_operation_id,
+                    "generation_id": fact.generation_id,
+                    "generation_ref_digest": fact.generation_ref_digest.hex(),
+                    "native_exit_token": evidence.hex(),
+                }),
+            )
+            await self.cleanup_authority.check_cleanup(context.claim)
+            return BrowserProfileCleanupFact(
+                provider_key=fact.provider_key,
+                capture_operation_id=fact.capture_operation_id,
+                generation_id=fact.generation_id,
+                generation_ref_digest=fact.generation_ref_digest,
+                proof_digest=proof_digest,
+            )
+        raise BrowserProfileError("browser_local_profile_cleanup_proof_invalid")
+
     async def terminate(self, item: _Resource) -> bytes:
         teardown_started_at = time.monotonic()
         await self.cleanup_authority.check_cleanup(item.claim)
@@ -1504,6 +1566,33 @@ class LocalBrowserReadLifecycle:
                         await leases.cleanup(claim)
                         self._remember_cleanup(run, "quarantined")
                         return "quarantined"
+                    receipt = state.resource.capture_receipt
+                    if receipt is not None and not state.resource.profile_cleanup_fact_recorded:
+                        context, generation, _capture_evidence, _revision = receipt
+                        profiles = self._factory._profiles
+                        if (profiles is None or state.profile_context != context
+                                or context.run_id != run.run_id):
+                            raise BrowserReadExecutionError("unavailable")
+                        # The native exit token is still independently verifiable.
+                        # Persist this generation's durable receipt before release;
+                        # failure retains the lease and the local proof for retry.
+                        try:
+                            await profiles.record_provider_cleanup_fact(
+                                context, generation.fact.generation_id, evidence,
+                            )
+                        except BrowserProfileError as error:
+                            # A sent provider capture can precede the atomic
+                            # validated generation/Run write. If no generation
+                            # was ever durably linked, there is no DB payload
+                            # to retain or later delete. Other proof failures
+                            # keep the lease and local evidence for recovery.
+                            if (error.code not in {
+                                    "browser_profile_generation_missing",
+                                    "browser_profile_cleanup_run_mismatch",
+                                }
+                                    or run.profile_generation_id is not None):
+                                raise
+                        state.resource.profile_cleanup_fact_recorded = True
                     await self._authority.check_cleanup(claim)
                     if await leases.cleanup(claim, evidence):
                         state.released = True
