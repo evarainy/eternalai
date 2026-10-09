@@ -300,8 +300,12 @@ class BrowserRunAuthorityPort(Protocol):
 class BrowserRunStorePort(Protocol):
     async def lookup_request(
         self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
+        *, settle_expired: bool = False,
     ) -> CanonicalRequest | None:
-        """Read only; verify current owner/Run authority and the exact canonical input."""
+        """Verify canonical input/current access; optionally fail an expired pre-Run claim.
+
+        Default is read only. Settlement never creates, steals or reparses a claim.
+        """
         ...
 
     async def get_or_create_request(

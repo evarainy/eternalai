@@ -158,6 +158,7 @@ class BrowserVerticalCollection:
             raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
         existing = await self._canonical(
             principal, bound_session, client_request_id, semantic,
+            structured=True,
         )
         if existing is not None:
             return existing
@@ -172,7 +173,7 @@ class BrowserVerticalCollection:
 
     async def _canonical(
         self, principal: Principal, bound_session: str, client_request_id: str,
-        semantic: bytes,
+        semantic: bytes, *, structured: bool = False,
     ) -> ResponseEnvelope | None:
         """Select the pinned lane, then verify its MAC and live read authority."""
         tenant, user, session_id = self._owner(principal, bound_session)
@@ -197,12 +198,14 @@ class BrowserVerticalCollection:
                 raise BrowserChatError("browser_publication_unavailable")
             invocation = lane.submission._invocation(principal, bound_session)
             request = await lane.runs.lookup_request(
-                invocation.owner, client_request_id, semantic,
+                invocation.owner, client_request_id, semantic, settle_expired=True,
             )
             if request is None:
                 raise BrowserChatError("browser_canonical_request_unavailable")
             lane.submission._recheck(invocation)
-            return lane.submission._duplicate(request)
+            return await lane.submission._replay_canonical(
+                invocation, request, semantic, structured=structured,
+            )
         except BrowserRunStoreError as error:
             raise self._default.submission._store_error(error) from None
         except BrowserAuthorizationError as error:

@@ -383,16 +383,21 @@ class PostgreSQLBrowserRunStore:
 
     async def lookup_request(
         self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
+        *, settle_expired: bool = False,
     ) -> CanonicalRequest | None:
         checked_run_id(client_request_id)
         if type(semantic_input) is not bytes or not 1 <= len(semantic_input) <= 1_048_576:
             raise BrowserRunStoreError("browser_request_input_invalid")
         async with self._transaction() as session:
             await self._authority.check_owner(session, owner)
-            row = (await session.execute(text(
-                f"SELECT * FROM tasks WHERE {_OWNER} AND client_request_id=:client_request_id"
-                " FOR SHARE",
-            ), {**_owner(owner), "client_request_id": client_request_id})).mappings().one_or_none()
+            if settle_expired:
+                row = await self._request_row(session, owner, client_request_id)
+            else:
+                result = await session.execute(text(
+                    f"SELECT * FROM tasks WHERE {_OWNER} AND client_request_id=:client_request_id"
+                    " FOR SHARE",
+                ), {**_owner(owner), "client_request_id": client_request_id})
+                row = result.mappings().one_or_none()
             if row is None:
                 return None
             digest = self._digest(
@@ -404,6 +409,17 @@ class PostgreSQLBrowserRunStore:
             run = await self._task_run(session, owner, cast(str, row["task_id"]))
             if run is not None:
                 await self._authority.check_run(session, run, "read")
+            elif (settle_expired and row["status"] == "created" and (
+                row["processing_deadline"] is None
+                or cast(datetime, row["processing_deadline"]) <= await self._now(session)
+            )):
+                # Close only this locked, MAC-matched original claim. No new
+                # processing owner, parsing or Run allocation is permitted.
+                row = (await session.execute(text(
+                    "UPDATE tasks SET status='failed',error_code='browser_request_abandoned',"
+                    "processing_owner=NULL,processing_deadline=NULL"
+                    f" WHERE {_TASK} AND status='created' RETURNING *",
+                ), _identity(owner, cast(str, row["task_id"])))).mappings().one()
             return self._request(owner, row, parse_winner=False, run=run)
 
     async def get_or_create_request(

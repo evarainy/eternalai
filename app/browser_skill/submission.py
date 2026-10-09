@@ -448,36 +448,9 @@ class BrowserSubmissionService:
         except Exception:
             raise BrowserChatError("browser_chat_unavailable") from None
         if not request.parse_winner:
-            self._recheck(invocation)
-            if request.run is not None:
-                try:
-                    # Current Run authority, not a cached request key, permits
-                    # exposing accepted Run identifiers on replay.
-                    await self._store.get(owner, request.task_id, request.run.run_id)
-                except BrowserRunStoreError as error:
-                    raise self._store_error(error) from None
-                except BrowserAuthorizationError as error:
-                    raise BrowserChatError(error.code, http_status=403) from None
-                self._recheck(invocation)
-            if (not teaching and request.run is not None
-                    and entrypoint == "structured_internal"):
-                publication = await self._publications.get_active(owner, skill_id)
-                if (publication is not None
-                        and publication.manifest.digest
-                        == request.run.admission.publication_digest.hex()
-                        and publication.manifest.effect == "controlled_write"):
-                    arguments = await arguments_for(publication.manifest.capability)
-                    _validate_schema(arguments, publication.manifest.capability.input_schema)
-                    current = await self._store.get(owner, request.task_id, request.run.run_id)
-                    if current.phase == "queued":
-                        await self._ensure_write_preparation(
-                            owner, request.task_id, request.run.run_id,
-                            publication.manifest, arguments,
-                        )
-                    current = await self._store.get(owner, request.task_id, request.run.run_id)
-                    self._recheck(invocation)
-                    return self._duplicate(request, run=current)
-            return self._duplicate(request)
+            return await self._replay_canonical(
+                invocation, request, semantic, structured=entrypoint == "structured_internal",
+            )
         try:
             publication = (
                 await self._teaching_publication(owner, skill_id, skill_version)
@@ -667,6 +640,8 @@ class BrowserSubmissionService:
         run = await self._store.get(owner, task_id, run_id)
         if run.admission.publication_digest.hex() != manifest.digest:
             raise BrowserChatError("browser_publication_unavailable")
+        if not self._awaiting_write_preparation(run):
+            raise BrowserRunStoreError("browser_write_preparation_stale")
         key_name = manifest.site.read_rule.key_ref.name
         value = arguments.get(key_name)
         if (type(value) is not str or not 1 <= len(value) <= 256
@@ -701,10 +676,113 @@ class BrowserSubmissionService:
         )
         if existing is not None and existing != preparation:
             raise BrowserChatError("browser_write_preparation_mismatch")
-        await gate.create_request(preparation.gate_request(owner))
+        gate_request = await gate.get_request(preparation.request_id)
+        if gate_request is not None and existing is None:
+            # The gate may have committed before the preparation event failed.
+            # Preserve its original timestamp/TTL and require every bound field.
+            preparation = prepare_browser_write(
+                run, manifest, confirmed, binding, now=gate_request.requested_at,
+            )
+        if gate_request is not None and gate_request != preparation.gate_request(owner):
+            raise BrowserChatError("browser_write_preparation_mismatch")
+        if gate_request is None:
+            try:
+                await gate.create_request(preparation.gate_request(owner))
+            except HumanGateConflictError:
+                gate_request = await gate.get_request(preparation.request_id)
+                if gate_request is None:
+                    raise
+                if existing is None:
+                    preparation = prepare_browser_write(
+                        run, manifest, confirmed, binding, now=gate_request.requested_at,
+                    )
+                if gate_request != preparation.gate_request(owner):
+                    raise BrowserChatError("browser_write_preparation_mismatch") from None
         if existing is None:
-            await self._store.record_write_preparation(run, preparation)
+            try:
+                await self._store.record_write_preparation(run, preparation)
+            except BrowserRunStoreError as error:
+                if error.code != "browser_run_stale":
+                    raise
+                recorded = await self._store.load_write_preparation(owner, task_id, run_id)
+                if recorded != preparation:
+                    raise
         return preparation
+
+    @staticmethod
+    def _awaiting_write_preparation(run: RunSnapshot) -> bool:
+        return (run.status == "running" and run.phase == "queued"
+                and run.worker_id is None and run.lease_epoch is None
+                and not run.cancel_requested and run.effect == "not_sent"
+                and run.verification is None)
+
+    async def _replay_canonical(
+        self, invocation: _Invocation, request: CanonicalRequest, semantic: bytes,
+        *, structured: bool,
+    ) -> ResponseEnvelope:
+        """Read the same Run; recover only its still-unconsumed write preparation."""
+        self._recheck(invocation)
+        owner = invocation.owner
+        if request.owner != owner:
+            raise BrowserChatError("browser_run_projection_invalid")
+        if request.run is None:
+            return self._duplicate(request)
+        try:
+            run = await self._store.get(owner, request.task_id, request.run.run_id)
+            if structured and self._awaiting_write_preparation(run):
+                payload = json.loads(semantic)
+                publication = await self._publications.get_frozen(
+                    owner, run.admission.publication_digest.hex(),
+                )
+                plan = None
+                if (publication is None and run.admission.publication_digest.hex()
+                        == self._teaching_candidate_digest):
+                    plan = await self._store.load_teaching_plan(owner, run.task_id, run.run_id)
+                    if (plan is None or plan.task_id != run.task_id or plan.run_id != run.run_id
+                            or plan.publication_digest != self._teaching_candidate_digest):
+                        raise BrowserChatError("browser_teaching_candidate_unavailable")
+                    publication = await self._prepared_teaching_candidate(
+                        owner, plan.publication_digest,
+                    )
+                if (publication is None or publication.manifest.digest
+                        != run.admission.publication_digest.hex()
+                        or payload.get("skill_id") != publication.manifest.skill.skill_id
+                        or payload.get("skill_version") != publication.manifest.skill.version):
+                    raise BrowserChatError("browser_publication_unavailable")
+                manifest = publication.manifest
+                if (manifest.effect == "controlled_write"
+                        and publication.state in {"active", "prepared"}):
+                    if publication.state == "prepared" and (
+                        plan is None or plan.purpose != "initial_validation"
+                        or self._teaching_base_digest is not None
+                    ):
+                        raise BrowserChatError("browser_write_preparation_unavailable")
+                    if publication.state == "active":
+                        await self._publications.assert_current(owner, manifest)
+                    arguments = payload.get("arguments")
+                    if type(arguments) is not dict:
+                        raise BrowserChatError("browser_request_input_invalid", http_status=422)
+                    _validate_schema(arguments, manifest.capability.input_schema)
+                    self._recheck(invocation)
+                    try:
+                        await self._ensure_write_preparation(
+                            owner, run.task_id, run.run_id, manifest, arguments,
+                        )
+                    except BrowserRunStoreError as error:
+                        if error.code != "browser_write_preparation_stale":
+                            raise
+                        fresh = await self._store.get(owner, run.task_id, run.run_id)
+                        if self._awaiting_write_preparation(fresh):
+                            raise
+                    run = await self._store.get(owner, run.task_id, run.run_id)
+            self._recheck(invocation)
+            return self._duplicate(request, run=run)
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except BrowserAuthorizationError as error:
+            raise BrowserChatError(error.code, http_status=403) from None
+        except SchemaValidationError:
+            raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
 
     def _duplicate(
         self, request: CanonicalRequest, *, run: RunSnapshot | None = None,

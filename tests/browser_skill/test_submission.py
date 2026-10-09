@@ -29,7 +29,12 @@ from app.ports.browser_run_store import (
     RunAdmission,
     RunSnapshot,
 )
-from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
+from app.ports.human_gate import (
+    HumanGateDecisionRecord,
+    HumanGateRequest,
+    VersionBinding,
+    build_task_version_binding_manifest,
+)
 
 
 class _Store:
@@ -72,10 +77,9 @@ class _Store:
             owner=request.owner, task_id=request.task_id,
             run_id=admission.run_id, state_revision=1,
         )
-        run = SimpleNamespace(
-            owner=request.owner, task_id=request.task_id,
-            run_id=admission.run_id, state_revision=1,
-            admission=admission, phase="queued",
+        run = replace(
+            _write_run(request.owner), admission=admission, state_revision=1, phase="queued",
+            worker_id=None, worker_epoch=None, lease_epoch=None, effect="not_sent",
         )
         semantic, _ = self.requests[request.client_request_id]
         self.requests[request.client_request_id] = (
@@ -140,7 +144,11 @@ def _service(
 
     class Publications:
         async def get_active(self, _owner: BrowserOwner, _skill: str) -> object:
-            return SimpleNamespace(manifest=manifest)
+            return SimpleNamespace(manifest=manifest, state="active")
+
+        async def get_frozen(self, _owner: BrowserOwner, digest: str) -> object:
+            return (SimpleNamespace(manifest=manifest, state="active")
+                    if digest == manifest.digest else None)
 
         async def assert_current(self, _owner: BrowserOwner, _manifest: object) -> None:
             return None
@@ -341,6 +349,191 @@ def test_prepared_write_validation_uses_sealed_admission_and_existing_write_gate
             assert second.status == "failed"
             assert second.data["error_code"] == "browser_capability_unavailable"
             assert len(store.accepted) == 1
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.parametrize("gap", ["request", "preparation"])
+def test_committed_write_retry_recovers_same_gate_and_preparation_without_readmission(initial, gap):
+    async def scenario() -> None:
+        from tests.infra.browser.test_initial_write_publication import write_manifest
+
+        service, store, _, principal = _service(source_kind="registered_site")
+        token = _authentication(principal)
+        try:
+            manifest = write_manifest()
+            record = SimpleNamespace(manifest=manifest, state="prepared" if initial else "active")
+            service._skill_id = manifest.skill.skill_id
+            service._publications = Mock(
+                get_active=AsyncMock(return_value=record),
+                get_frozen=AsyncMock(return_value=None if initial else record),
+                assert_current=AsyncMock(),
+            )
+            service._confirmed_key_digest = lambda _digest, _key: "b" * 64
+            if initial:
+                service._teaching_candidate_digest = manifest.digest
+                service._teaching_candidate_version = manifest.skill.version
+                service._teaching_publication = AsyncMock(return_value=record)
+                service._teaching_plan = AsyncMock(return_value=object())
+
+                async def accept_teaching(request, admission, _plan):
+                    return await store.accept(request, admission)
+
+                store.accept_teaching = AsyncMock(side_effect=accept_teaching)
+
+            def plan_for(_owner, task, run):
+                return SimpleNamespace(task_id=task, run_id=run, purpose="initial_validation",
+                                       publication_digest=manifest.digest)
+
+            store.load_teaching_plan = AsyncMock(side_effect=plan_for)
+            binding = build_task_version_binding_manifest(
+                task_id="task_1", bindings=(VersionBinding(
+                    resource_type="skill", resource_id=manifest.skill.skill_id,
+                    version=manifest.skill.version, digest=manifest.skill.digest,
+                ),), locked_at=datetime.now(UTC),
+            )
+            gate_requests, preparations = [], []
+            failed = False
+
+            async def create_request(request):
+                nonlocal failed
+                if gap == "request" and not failed:
+                    failed = True
+                    raise RuntimeError("synthetic post-commit gate failure")
+                gate_requests.append(request)
+                return request
+
+            async def record_preparation(run, preparation):
+                nonlocal failed
+                if gap == "preparation" and not failed:
+                    failed = True
+                    raise RuntimeError("synthetic post-gate preparation failure")
+                preparations.append(preparation)
+                return run
+
+            gate = Mock(
+                get_task_binding=AsyncMock(return_value=binding), bind_task=AsyncMock(),
+                get_request=AsyncMock(side_effect=lambda _id: gate_requests[0]
+                                     if gate_requests else None),
+                create_request=AsyncMock(side_effect=create_request),
+            )
+            service._write_gate = gate
+            store.load_write_preparation = AsyncMock(side_effect=lambda *_args:
+                                                    preparations[0] if preparations else None)
+            store.record_write_preparation = AsyncMock(side_effect=record_preparation)
+            submit = service.submit_initial_validation if initial else service.submit
+            params = dict(principal=principal, bound_session="session_1",
+                          skill_id=manifest.skill.skill_id, skill_version=manifest.skill.version,
+                          arguments={"business_key": "CASE_1"}, client_request_id="retry_write")
+            with pytest.raises(BrowserChatError) as interrupted:
+                await submit(**params)
+            assert interrupted.value.code == "browser_write_preparation_unavailable"
+            assert len(store.accepted) == 1 and store.rejected == []
+            committed = store.requests["retry_write"][1].run
+            assert committed.phase == "queued" and committed.effect == "not_sent"
+            assert preparations == []
+            original_gate = gate_requests[0] if gate_requests else None
+
+            # Canonical semantic MAC and current Run authority precede recovery.
+            calls = gate.create_request.await_count
+            for changed in ({"arguments": {"business_key": "CASE_2"}}, {"skill_version": "v2"}):
+                with pytest.raises(BrowserChatError) as conflict:
+                    await submit(**{**params, **changed})
+                assert conflict.value.code == "request_key_conflict"
+            store.deny_read = True
+            with pytest.raises(BrowserChatError) as denied:
+                await submit(**params)
+            assert denied.value.code == "browser_run_not_found"
+            assert gate.create_request.await_count == calls
+            store.deny_read = False
+
+            recovered = await submit(**params)
+            assert recovered.data["run_id"] == committed.run_id
+            assert len(store.accepted) == 1 and len(preparations) == 1 and len(gate_requests) == 1
+            assert preparations[0].gate_request(committed.owner) == gate_requests[0]
+            if original_gate is not None:
+                assert gate_requests[0] == original_gate
+                assert preparations[0].requested_at == original_gate.requested_at
+                assert preparations[0].expires_at == original_gate.expires_at
+            counts = (gate.create_request.await_count, store.record_write_preparation.await_count)
+            repeated = await submit(**params)
+            assert repeated.data["run_id"] == committed.run_id
+            assert counts == (gate.create_request.await_count,
+                              store.record_write_preparation.await_count)
+
+            # Dispatch/consumption advances the same Run atomically. Retries
+            # after acquisition, sending or completion perform no preparation IO.
+            for phase in ("acquiring", "running", None):
+                advanced = replace(committed, phase=phase, worker_id="worker", worker_epoch=1,
+                                   lease_epoch=1, effect="acknowledged",
+                                   status="completed" if phase is None else "running")
+                semantic, canonical = store.requests["retry_write"]
+                store.requests["retry_write"] = (semantic, replace(canonical, run=advanced))
+                actual = await submit(**params)
+                assert actual.data["run_id"] == committed.run_id
+                assert counts == (gate.create_request.await_count,
+                                  store.record_write_preparation.await_count)
+            assert len(store.accepted) == 1 and store.rejected == []
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("case", ["matching", "missing", "storage_error"])
+def test_preparation_cas_requires_exact_record_and_propagates_storage_failure(case):
+    async def scenario() -> None:
+        from tests.infra.browser.test_initial_write_publication import write_manifest
+
+        service, _, _, principal = _service(source_kind="registered_site")
+        token = _authentication(principal)
+        try:
+            manifest = write_manifest()
+            owner = service._owner(principal, "session_1")
+            run = _write_run(owner)
+            run = replace(run, admission=replace(
+                run.admission, publication_digest=bytes.fromhex(manifest.digest),
+            ), phase="queued", worker_id=None, lease_epoch=None, effect="not_sent")
+            binding = build_task_version_binding_manifest(
+                task_id=run.task_id, bindings=(VersionBinding(
+                    resource_type="skill", resource_id=manifest.skill.skill_id,
+                    version=manifest.skill.version, digest=manifest.skill.digest,
+                ),), locked_at=datetime.now(UTC),
+            )
+            persisted = []
+
+            async def record(_run, preparation):
+                if case == "matching":
+                    persisted.append(preparation)
+                raise BrowserRunStoreError("browser_preparation_storage_unavailable"
+                                           if case == "storage_error" else "browser_run_stale")
+
+            store = Mock(
+                get=AsyncMock(return_value=run),
+                load_write_preparation=AsyncMock(side_effect=lambda *_args:
+                                                persisted[0] if persisted else None),
+                record_write_preparation=AsyncMock(side_effect=record),
+            )
+            gate = Mock(get_task_binding=AsyncMock(return_value=binding),
+                        get_request=AsyncMock(return_value=None), create_request=AsyncMock())
+            service._store, service._write_gate = store, gate
+            service._confirmed_key_digest = lambda _digest, _key: "b" * 64
+            params = (owner, run.task_id, run.run_id, manifest, {"business_key": "CASE_1"})
+            if case == "matching":
+                recovered = await service._ensure_write_preparation(*params)
+                assert recovered == persisted[0]
+                assert store.load_write_preparation.await_count == 2
+            else:
+                with pytest.raises(BrowserRunStoreError) as caught:
+                    await service._ensure_write_preparation(*params)
+                assert caught.value.code == ("browser_preparation_storage_unavailable"
+                                             if case == "storage_error" else "browser_run_stale")
+                assert store.load_write_preparation.await_count == (
+                    1 if case == "storage_error" else 2
+                )
+            store.record_write_preparation.assert_awaited_once()
+            gate.create_request.assert_awaited_once()
         finally:
             authenticated_session.reset(token)
     asyncio.run(scenario())
