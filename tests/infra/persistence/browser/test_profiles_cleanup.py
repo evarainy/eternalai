@@ -16,6 +16,11 @@ from app.ports.browser_profile_store import (
 )
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 def _context() -> SimpleNamespace:
     owner = SimpleNamespace(tenant_id="tenant", user_id="user", session_id="session")
     auth = SimpleNamespace(owner=owner)
@@ -26,7 +31,7 @@ def _context() -> SimpleNamespace:
                            task_id="task", run_id="run")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_candidate_refuses_recent_head_and_live_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -70,7 +75,7 @@ async def test_cleanup_candidate_refuses_recent_head_and_live_run(
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_candidate_never_accepts_orphan_without_transition_time() -> None:
     now = datetime.now(timezone.utc)
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
@@ -91,7 +96,7 @@ async def test_cleanup_candidate_never_accepts_orphan_without_transition_time() 
     assert pending.value.code == "browser_profile_retention_pending"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_retired_unreferenced_candidate_is_prepared_only() -> None:
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=3)
@@ -115,7 +120,7 @@ async def test_retired_unreferenced_candidate_is_prepared_only() -> None:
     assert session.execute.await_count == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_orphan_with_database_transition_time_can_be_candidate() -> None:
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=3)
@@ -137,7 +142,7 @@ async def test_orphan_with_database_transition_time_can_be_candidate() -> None:
     assert session.execute.await_count == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_record_provider_release_fails_closed_without_proof_verifier() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup = None
@@ -201,7 +206,7 @@ def _cleanup_receipt() -> dict[str, object]:
     return {**_cleanup_row(), "proof_digest": b"d" * 32}
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_record_validated_keeps_metadata_and_ciphertext_in_separate_rows() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     generation = module._generation(_generation_row())
@@ -229,7 +234,7 @@ async def test_record_validated_keeps_metadata_and_ciphertext_in_separate_rows()
     assert payload.args[1]["key_id"] == generation.key_id
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_load_active_reconstructs_exact_owner_generation() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     row = {**_generation_row(), "disposition": "promoted"}
@@ -246,7 +251,7 @@ async def test_load_active_reconstructs_exact_owner_generation() -> None:
     assert store._get_generation.await_args.args[2] == "generation"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_discovery_defers_retained_generation_without_release_receipt() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(return_value=_cleanup_row())
@@ -260,7 +265,7 @@ async def test_discovery_defers_retained_generation_without_release_receipt() ->
     assert page.deferred == (("generation", "browser_profile_cleanup_proof_missing"),)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_proof_mismatch_makes_no_database_change() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._get_generation = AsyncMock(return_value=_generation_row())
@@ -277,7 +282,7 @@ async def test_cleanup_proof_mismatch_makes_no_database_change() -> None:
     session.execute.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_record_provider_release_is_idempotent_for_exact_receipt() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     row = _generation_row()
@@ -298,7 +303,7 @@ async def test_record_provider_release_is_idempotent_for_exact_receipt() -> None
     assert "browser_profile_cleanup_receipts" in str(session.execute.await_args_list[1].args[0])
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_record_provider_release_rejects_conflicting_existing_receipt() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._get_generation = AsyncMock(return_value=_generation_row())
@@ -316,7 +321,7 @@ async def test_record_provider_release_rejects_conflicting_existing_receipt() ->
     assert refused.value.code == "browser_profile_cleanup_receipt_conflict"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_requires_durable_receipt_before_any_state_change() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(return_value=_cleanup_row())
@@ -329,7 +334,7 @@ async def test_cleanup_requires_durable_receipt_before_any_state_change() -> Non
     assert session.execute.await_count == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_rejects_receipt_for_different_capture() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(return_value=_cleanup_row())
@@ -344,7 +349,7 @@ async def test_cleanup_rejects_receipt_for_different_capture() -> None:
     assert session.execute.await_count == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_uses_exact_receipt_and_removes_payload_in_one_transaction() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(return_value=_cleanup_row())
@@ -366,7 +371,7 @@ async def test_cleanup_uses_exact_receipt_and_removes_payload_in_one_transaction
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_rejects_live_reference_before_receipt_lookup() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(
@@ -381,7 +386,7 @@ async def test_cleanup_rejects_live_reference_before_receipt_lookup() -> None:
     session.execute.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_refuses_missing_payload_after_state_update() -> None:
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._cleanup_candidate = AsyncMock(return_value=_cleanup_row())

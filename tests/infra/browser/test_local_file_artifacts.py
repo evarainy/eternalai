@@ -15,6 +15,11 @@ from app.infra.browser.local_file_artifacts import (
 )
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 class _Authority:
     def __init__(self, root: Path) -> None:
         self.storage_scope = initialize_file_artifact_storage_scope(root)
@@ -75,7 +80,7 @@ def _owner(user: str = "user") -> FileArtifactOwner:
                              "task", "run")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_sealed_file_requires_exact_owner_and_keeps_digest(tmp_path: Path) -> None:
     source = tmp_path / "source"
     payload = b"%PDF-1.7\nsynthetic\nstartxref\n0\n%%EOF"
@@ -114,7 +119,7 @@ async def test_sealed_file_requires_exact_owner_and_keeps_digest(tmp_path: Path)
     assert error.value.code == "browser_file_integrity_invalid"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_login_html_cannot_be_sealed_as_download(tmp_path: Path) -> None:
     source = tmp_path / "login"
     source.write_bytes(b"  <!DOCTYPE html><html><body>login</body></html>")
@@ -132,7 +137,7 @@ async def test_login_html_cannot_be_sealed_as_download(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_expired_file_is_unreadable_then_removed(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.write_bytes(b"synthetic text")
@@ -154,7 +159,7 @@ async def test_expired_file_is_unreadable_then_removed(tmp_path: Path) -> None:
     assert not authority.records
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cleanup_reports_confirmation_failure_and_keeps_record(tmp_path: Path) -> None:
     class FailingConfirmation(_Authority):
         async def confirm_removed(self, artifact: StoredFileArtifact) -> None:
@@ -210,7 +215,7 @@ def test_unmarked_legacy_spool_cannot_be_claimed(tmp_path: Path) -> None:
     assert (root / "existing-file").read_bytes() == b"synthetic legacy file"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_foreign_root_record_cannot_be_read_listed_or_acknowledged(tmp_path: Path) -> None:
     class GlobalScan(_PermissiveAuthority):
         async def expired(self, before: datetime, limit: int) -> tuple[StoredFileArtifact, ...]:
@@ -247,7 +252,7 @@ async def test_foreign_root_record_cannot_be_read_listed_or_acknowledged(tmp_pat
     assert not (tmp_path / "a" / artifact.reference).exists()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_already_absent_file_is_acknowledged_only_for_verified_same_root(
     tmp_path: Path,
 ) -> None:
@@ -267,7 +272,7 @@ async def test_already_absent_file_is_acknowledged_only_for_verified_same_root(
     }
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_marker_changed_during_scan_preserves_cleanup_record(tmp_path: Path) -> None:
     class ChangedMarker(_Authority):
         async def expired(self, before: datetime, limit: int) -> tuple[StoredFileArtifact, ...]:

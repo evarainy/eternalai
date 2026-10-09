@@ -15,6 +15,11 @@ from app.infra.persistence.browser import file_artifacts as module
 from app.infra.persistence.browser.file_artifacts import PostgreSQLBrowserFileArtifactAuthority
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 class _Result:
     def __init__(self, rows):
         self.rows = rows
@@ -84,7 +89,7 @@ def _payload(authority, artifact):
     }, module._EVENT)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_expiration_query_is_bound_to_storage_scope_and_unknown_records_are_visible() -> None:
     authority, session = _authority()
     artifact = _artifact()
@@ -101,7 +106,7 @@ async def test_expiration_query_is_bound_to_storage_scope_and_unknown_records_ar
     assert "removed.payload->>'storage_scope'=:scope" in sql
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("scope", [None, "", "unknown", 7])
 async def test_signed_legacy_or_unknown_scope_fails_scan_without_deletion(scope) -> None:
     authority, session = _authority()
@@ -116,7 +121,7 @@ async def test_signed_legacy_or_unknown_scope_fails_scan_without_deletion(scope)
     assert len(session.rows) == 1 and len(session.calls) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_foreign_scope_cannot_be_scanned_or_confirmed_even_if_returned_by_database() -> None:
     authority, session = _authority()
     foreign = _artifact("b" * 64)
@@ -131,7 +136,7 @@ async def test_foreign_scope_cannot_be_scanned_or_confirmed_even_if_returned_by_
     assert len(session.calls) == calls and len(session.rows) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_same_scope_expired_ack_is_mac_bound_to_exact_stored_artifact(monkeypatch) -> None:
     authority, session = _authority()
     artifact = _artifact()
@@ -156,7 +161,7 @@ async def test_same_scope_expired_ack_is_mac_bound_to_exact_stored_artifact(monk
     }
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("field", ["tenant_id", "ai_user_id", "session_id", "binding_id", "run_id"])
 async def test_cleanup_ack_retains_exact_owner_binding(field, monkeypatch) -> None:
     authority, session = _authority()
@@ -175,7 +180,7 @@ async def test_cleanup_ack_retains_exact_owner_binding(field, monkeypatch) -> No
     assert events == [] and len(session.rows) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_unexpired_metadata_cannot_be_acknowledged() -> None:
     authority, session = _authority()
     unexpired = replace(_artifact(), expires_at=datetime.now(UTC) + timedelta(seconds=60))
@@ -185,7 +190,7 @@ async def test_unexpired_metadata_cannot_be_acknowledged() -> None:
     assert session.calls == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_same_scope_listing_surfaces_unknown_ownership(monkeypatch) -> None:
     authority, session = _authority()
     artifact = _artifact()

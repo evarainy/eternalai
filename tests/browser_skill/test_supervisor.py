@@ -7,7 +7,12 @@ import pytest
 from app.browser_skill.supervisor import BrowserWorkerSupervisor
 
 
-@pytest.mark.asyncio
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.mark.anyio
 async def test_completed_business_pass_scans_again_without_fixed_delay() -> None:
     scanned_twice = asyncio.Event()
     calls = 0
