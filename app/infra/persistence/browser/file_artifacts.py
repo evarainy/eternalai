@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -33,15 +34,27 @@ class PostgreSQLBrowserFileArtifactAuthority:
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession],
         digest_keys: dict[str, bytes], active_key_id: str,
+        *, storage_scope: str,
     ) -> None:
         if (not digest_keys or active_key_id not in digest_keys
                 or any(type(key) is not bytes or len(key) != 32
                        for key in digest_keys.values())):
             raise ValueError("browser_file_authority_key_invalid")
+        if type(storage_scope) is not str or re.fullmatch(r"[0-9a-f]{64}", storage_scope) is None:
+            raise LocalFileArtifactError("browser_file_storage_scope_invalid")
         self._sessions = sessions
         self._keys = dict(digest_keys)
         self._active_key_id = active_key_id
         self._runs: PostgreSQLBrowserRunStore | None = None
+        self._storage_scope = storage_scope
+
+    @property
+    def storage_scope(self) -> str:
+        return self._storage_scope
+
+    def _assert_storage(self, artifact: StoredFileArtifact) -> None:
+        if artifact.storage_scope != self._storage_scope:
+            raise LocalFileArtifactError("browser_file_storage_scope_mismatch")
 
     def install_runs(self, runs: PostgreSQLBrowserRunStore) -> None:
         if self._runs is not None or not isinstance(runs, PostgreSQLBrowserRunStore):
@@ -91,6 +104,9 @@ class PostgreSQLBrowserFileArtifactAuthority:
 
     def _artifact(self, payload: object) -> StoredFileArtifact:
         data = self._decode(payload, _EVENT)
+        if (type(data.get("storage_scope")) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", data["storage_scope"]) is None):
+            raise LocalFileArtifactError("browser_file_storage_scope_unknown")
         try:
             owner = FileArtifactOwner(**data["owner"])
             return StoredFileArtifact(
@@ -98,6 +114,7 @@ class PostgreSQLBrowserFileArtifactAuthority:
                 media_type=data["media_type"], size_bytes=data["size_bytes"],
                 sha256=bytes.fromhex(data["sha256"]),
                 expires_at=datetime.fromisoformat(data["expires_at"]),
+                storage_scope=data["storage_scope"],
             )
         except (KeyError, TypeError, ValueError):
             raise LocalFileArtifactError("browser_file_metadata_invalid") from None
@@ -131,12 +148,14 @@ class PostgreSQLBrowserFileArtifactAuthority:
             raise LocalFileArtifactError("browser_file_access_denied")
 
     async def record(self, artifact: StoredFileArtifact) -> None:
+        self._assert_storage(artifact)
         owner = artifact.owner
         payload = self._seal({
             "reference": artifact.reference, "owner": self._owner_data(owner),
             "media_type": artifact.media_type, "size_bytes": artifact.size_bytes,
             "sha256": artifact.sha256.hex(),
             "expires_at": artifact.expires_at.astimezone(UTC).isoformat(),
+            "storage_scope": artifact.storage_scope,
         }, _EVENT)
         async with self._sessions() as session, session.begin():
             run = await self._current_run_in_session(session, owner)
@@ -166,6 +185,7 @@ class PostgreSQLBrowserFileArtifactAuthority:
         if row is None or row["event_type"] != _EVENT:
             raise LocalFileArtifactError("browser_file_access_denied")
         artifact = self._artifact(row["payload"])
+        self._assert_storage(artifact)
         if artifact.reference != reference or artifact.owner != owner:
             raise LocalFileArtifactError("browser_file_access_denied")
         removed = (await session.execute(text(
@@ -173,7 +193,11 @@ class PostgreSQLBrowserFileArtifactAuthority:
         ), {"task": owner.task_id,
             "event": self._event_id(_REMOVED, reference)})).scalar_one_or_none()
         if removed is not None:
-            self._decode(removed, _REMOVED)
+            data = self._decode(removed, _REMOVED)
+            if (data.get("storage_scope") != artifact.storage_scope
+                    or data.get("reference") != reference
+                    or data.get("owner") != self._owner_data(owner)):
+                raise LocalFileArtifactError("browser_file_metadata_invalid")
             raise LocalFileArtifactError("browser_file_access_denied")
         return artifact
 
@@ -197,11 +221,17 @@ class PostgreSQLBrowserFileArtifactAuthority:
             rows = (await session.execute(text(
                 "SELECT e.payload FROM task_events e JOIN tasks t ON t.task_id=e.task_id"
                 " WHERE e.task_id=:task AND e.event_type=:kind"
+                " AND (e.payload->>'storage_scope'=:scope"
+                " OR e.payload->>'storage_scope' IS NULL"
+                " OR jsonb_typeof(e.payload->'storage_scope')<>'string'"
+                " OR e.payload->>'storage_scope' !~ :scope_pattern)"
                 " AND t.tenant_id=:tenant AND t.ai_user_id=:user AND t.session_id=:session"
                 " ORDER BY e.timestamp DESC LIMIT :limit"
             ), {"task": owner.task_id, "kind": _EVENT,
                 "tenant": owner.tenant_id, "user": owner.ai_user_id,
-                "session": owner.session_id, "limit": limit})).mappings().all()
+                "session": owner.session_id, "limit": limit,
+                "scope": self._storage_scope,
+                "scope_pattern": "^[0-9a-f]{64}$"})).mappings().all()
             result: list[StoredFileArtifact] = []
             for row in rows:
                 artifact = self._artifact(row["payload"])
@@ -224,16 +254,29 @@ class PostgreSQLBrowserFileArtifactAuthority:
             rows = (await session.execute(text(
                 "SELECT e.payload FROM task_events e WHERE e.event_type=:kind"
                 " AND (e.payload->>'expires_at')::timestamptz<=:before"
+                " AND (e.payload->>'storage_scope'=:scope"
+                " OR e.payload->>'storage_scope' IS NULL"
+                " OR jsonb_typeof(e.payload->'storage_scope')<>'string'"
+                " OR e.payload->>'storage_scope' !~ :scope_pattern)"
                 " AND NOT EXISTS (SELECT 1 FROM task_events removed"
                 " WHERE removed.task_id=e.task_id AND removed.event_type=:removed"
+                " AND removed.payload->>'storage_scope'=:scope"
+                " AND removed.payload->>'storage_scope'=e.payload->>'storage_scope'"
                 " AND removed.payload->>'reference'=e.payload->>'reference')"
                 " ORDER BY e.timestamp ASC LIMIT :limit"
             ), {"kind": _EVENT, "removed": _REMOVED, "before": before,
-                "limit": limit})).mappings().all()
-        return tuple(artifact for row in rows
-                     if (artifact := self._artifact(row["payload"])).expires_at <= before)
+                "limit": limit, "scope": self._storage_scope,
+                "scope_pattern": "^[0-9a-f]{64}$"})).mappings().all()
+        artifacts: list[StoredFileArtifact] = []
+        for row in rows:
+            artifact = self._artifact(row["payload"])
+            self._assert_storage(artifact)
+            if artifact.expires_at <= before:
+                artifacts.append(artifact)
+        return tuple(artifacts)
 
     async def confirm_removed(self, artifact: StoredFileArtifact) -> None:
+        self._assert_storage(artifact)
         if artifact.expires_at > datetime.now(UTC):
             raise LocalFileArtifactError("browser_file_cleanup_invalid")
         owner = artifact.owner
@@ -248,6 +291,7 @@ class PostgreSQLBrowserFileArtifactAuthority:
                     task_id=owner.task_id, event_type=_REMOVED,
                     timestamp=datetime.now(UTC),
                     payload=self._seal({"reference": artifact.reference,
-                                        "owner": self._owner_data(owner)}, _REMOVED),
+                                        "owner": self._owner_data(owner),
+                                        "storage_scope": artifact.storage_scope}, _REMOVED),
                 ),
             )

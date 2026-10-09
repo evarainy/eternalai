@@ -21,6 +21,7 @@ from app.browser_skill.models import (
     DispatchPermit,
     LocatorHint,
     ObservationRequest,
+    SealedParameter,
     TargetRef,
     VisibleCandidate,
 )
@@ -267,6 +268,7 @@ class IdentityHandle(Handle):
 
     async def evaluate(self, script: str, config: Any = None) -> bool:
         assert script == _FINAL_IDENTITY and not self.disposed
+        self.world.final_identity_hook()
         node, region = self.node, self.region
         if (node is not config["element"].node or not node.connected or not region.connected
                 or not contains(region, node) or self.world.region is not region
@@ -416,6 +418,7 @@ class World(FakeWorld):
         self.authority_calls = 0
         self.authority_hook = lambda: None
         self.after_round_hook = lambda: None
+        self.final_identity_hook = lambda: None
         self.private_selectors: list[str] = []
         self.page = SimpleNamespace(goto=self.goto)
         self.frame = SimpleNamespace(url=self.context.source.origin, parent_frame=None)
@@ -1126,6 +1129,8 @@ def test_write_send_requires_final_reservation_before_browser_action(operation: 
 
         async def sent(actual: str) -> None:
             sequence.append(actual)
+            if w.send_error is not None:
+                raise w.send_error
 
         async def reserved(session, context, command) -> None:
             assert session == w.session and context is w.context
@@ -1133,6 +1138,7 @@ def test_write_send_requires_final_reservation_before_browser_action(operation: 
             sequence.append("reserved")
 
         w.sent = sent
+        w.final_identity_hook = lambda: sequence.append("final_identity")
         w.context = replace(w.context, skill=w.skill, dispatch_barrier=barrier)
         w.adapter = PlaywrightWebAdapter(
             registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
@@ -1143,7 +1149,15 @@ def test_write_send_requires_final_reservation_before_browser_action(operation: 
         )
         receipt = await w.adapter.execute(w.session, await w.command(), w.context)
         assert receipt.state == "acknowledged"
-        assert sequence == ["reserved", "begin", operation]
+        assert sequence == ["reserved", "final_identity", "begin", operation]
+
+        sequence.clear()
+        w.send_error = RuntimeError("synthetic transport failure")
+        receipt = await w.adapter.execute(w.session, await w.command(), w.context)
+        assert receipt.state == "possibly_sent" and receipt.failure is not None
+        assert receipt.failure.code == "effect_unknown"
+        assert sequence == ["reserved", "final_identity", "begin", operation]
+        w.send_error = None
 
         sequence.clear()
         w.adapter = PlaywrightWebAdapter(
@@ -1169,6 +1183,110 @@ def test_write_send_requires_final_reservation_before_browser_action(operation: 
             await w.adapter.execute(w.session, await w.command(), w.context)
         assert caught.value.failure.code == "stale"
         assert sequence == ["reservation_refused"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["click", "fill", "select_option", "check", "press_enter"])
+@pytest.mark.parametrize("mutation", [
+    "key", "owner", "row", "node", "region", "disabled", "page_epoch", "origin",
+])
+def test_reservation_wait_cannot_send_reused_or_changed_original_node(
+    operation: str, mutation: str,
+) -> None:
+    async def run() -> None:
+        w = World(operation)
+        step = w.skill.steps[0].model_copy(update={
+            "effect": "may_write",
+            "locator": LocatorHint(kind="business_key", value="approved_key"),
+        })
+        rule = w.plan.steps[0].model_copy(update={
+            "step": step,
+            "effect": w.plan.steps[0].effect.model_copy(update={"actual_effect": "may_write"}),
+        })
+        w.skill = w.skill.model_copy(update={"steps": (step,)})
+        w.plan = w.plan.model_copy(update={"steps": (rule,)})
+        w.site = FrozenSiteAdapter((w.plan,))
+        w.rules = replace(w.rules, steps=(
+            DOMStep(step.step_id, "#control", ".record", DOMValue(".key")),
+        ))
+        original_resolver = w.context.resolve_parameter
+
+        async def resolve(ref, purpose, binding, digest, step_id):
+            if purpose == "business_key":
+                return SealedParameter(
+                    w._inputs["key"], ref=ref, purpose=purpose,
+                    binding=binding, skill_digest=digest, step_id=step_id,
+                )
+            return await original_resolver(ref, purpose, binding, digest, step_id)
+
+        began: list[str] = []
+        started, release = asyncio.Event(), asyncio.Event()
+
+        @asynccontextmanager
+        async def barrier(session, command, binding):
+            yield DispatchPermit(w.context.execution_id, command, lambda: began.append("send"))
+
+        async def reserved(session, context, command) -> None:
+            assert session == w.session and context is w.context and command.step == step
+            started.set()
+            await release.wait()
+
+        w.context = replace(
+            w.context, skill=w.skill, resolve_parameter=resolve, dispatch_barrier=barrier,
+        )
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(
+                w.session, w.context, w.confirmed.business_key,
+                write_reservation_authority=reserved,
+            ),),
+        )
+        command = await w.command()
+        original = w.control
+        task = asyncio.create_task(w.adapter.execute(w.session, command, w.context))
+        ready = asyncio.create_task(started.wait())
+        try:
+            done, _ = await asyncio.wait({ready, task}, timeout=1,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            assert ready in done and started.is_set() and not task.done()
+            if mutation == "key":
+                w.row.values[".key"] = "different-record"
+            elif mutation == "owner":
+                w.row.values[".user"] = "different-owner"
+            elif mutation == "row":
+                replacement = replace(w.row, children=[original])
+                w.region.children = [replacement]
+                original.parent = replacement
+            elif mutation == "node":
+                original.connected = False
+                replacement = replace(original, connected=True)
+                w.row.children = [replacement]
+                assert command.target is not None
+                w.controls[command.target.target_id] = replacement
+            elif mutation == "region":
+                w.region = replace(w.region)
+                w.row.parent = w.region
+            elif mutation == "disabled":
+                original.enabled = False
+            elif mutation == "page_epoch":
+                w.view = w.view.model_copy(update={"scope": w.view.scope.model_copy(
+                    update={"page_epoch": w.view.scope.page_epoch + 1},
+                )})
+            else:
+                w.frame.url = "https://unregistered.invalid"
+            release.set()
+            with pytest.raises(BrowserOperationError) as caught:
+                await asyncio.wait_for(task, timeout=1)
+            assert caught.value.failure.code == ("denied" if mutation == "origin" else "stale")
+            assert caught.value.failure.dispatch_state == "not_sent"
+            assert began == [] and w.dom_sends == []
+        finally:
+            release.set()
+            for pending in (ready, task):
+                if not pending.done():
+                    pending.cancel()
+            await asyncio.gather(ready, task, return_exceptions=True)
 
     asyncio.run(run())
 

@@ -1307,6 +1307,7 @@ class PlaywrightWebAdapter:
         self, session: BrowserSessionRef, command: ActionCommand,
         context: ExecutionContext,
         *, scope: Literal["pre_dispatch", "dispatch_barrier"] = "pre_dispatch",
+        before_final_identity: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[Any, SealedParameter | None, Any | None]:
         progress = self._validation_progress.setdefault(session.session_ref, _ValidationProgress())
         progress.calls = min(10000, progress.calls + 1)
@@ -1339,9 +1340,12 @@ class PlaywrightWebAdapter:
                     await _dispose(element, suppress_cancel=True)
                     raise
                 owned = _ValidatedNode(node.page, node.frame, element, identity)
-            # resolution_round has now completed its last current-authority
-            # await. Only live DOM identity/state is read here, with no helper
-            # that can renew authority or re-resolve a different target.
+                # Finish the durable reservation while the resolution is still
+                # active. Its exit rechecks scope/frame/epoch after this wait.
+                if before_final_identity is not None:
+                    await before_final_identity()
+            # All authority waits and borrowed-handle cleanup are complete.
+            # Check the same owned Node's live business identity and state last.
             config.update(element=owned.element, option=option)
             self._validation_mark(session, "target_identity")
             matched = await owned.identity.evaluate(_FINAL_IDENTITY, config)
@@ -1571,23 +1575,6 @@ class PlaywrightWebAdapter:
                     or permit.command != command
                 ):
                     raise failure("denied")
-                node, sealed, option = await self._validate(
-                    session, command, context, scope="dispatch_barrier",
-                )
-                check_liveness(context)
-                timeout = max(1, (context.deadline_monotonic - time.monotonic()) * 1000)
-                operation = command.step.operation
-                popup_rule = self._expected_popup(session, command, plan)
-                download_rule = self._expected_download(session, command, plan)
-                if popup_rule is not None and download_rule is not None:
-                    raise failure("denied")
-                if popup_rule is not None:
-                    popup_guard = self._guards[session.session_ref]
-                    if popup_guard.popup_rule is not None:
-                        raise failure("denied")
-                    popup_guard.popup_rule = popup_rule
-                    popup_guard.popup_started = time.monotonic()
-                    popup_guard.popup_pages.clear()
                 write_authority = registration.write_reservation_authority
                 if command.step.effect == "may_write" and (
                     next(item for item in plan.steps if item.step == command.step)
@@ -1603,6 +1590,26 @@ class PlaywrightWebAdapter:
                     if self._guards[session.session_ref].failed:
                         raise failure("denied")
 
+                node, sealed, option = await self._validate(
+                    session, command, context, scope="dispatch_barrier",
+                    before_final_identity=(
+                        assert_reserved if command.step.effect == "may_write" else None
+                    ),
+                )
+                check_liveness(context)
+                timeout = max(1, (context.deadline_monotonic - time.monotonic()) * 1000)
+                operation = command.step.operation
+                popup_rule = self._expected_popup(session, command, plan)
+                download_rule = self._expected_download(session, command, plan)
+                if popup_rule is not None and download_rule is not None:
+                    raise failure("denied")
+                if popup_rule is not None:
+                    popup_guard = self._guards[session.session_ref]
+                    if popup_guard.popup_rule is not None:
+                        raise failure("denied")
+                    popup_guard.popup_rule = popup_rule
+                    popup_guard.popup_started = time.monotonic()
+                    popup_guard.popup_pages.clear()
                 # No await between begin_send and the actual Playwright action.
                 if operation == "fill":
                     assert sealed is not None and command.step.value_ref is not None
@@ -1611,8 +1618,6 @@ class PlaywrightWebAdapter:
                         if type(value) is not str or len(value.encode()) > 16384:
                             raise failure("unsupported")
                         assert permit is not None
-                        if command.step.effect == "may_write":
-                            await assert_reserved()
                         permit.begin_send()
                         await node.element.fill(value, timeout=timeout)
 
@@ -1632,8 +1637,6 @@ class PlaywrightWebAdapter:
                         if (type(url) is not str or len(url) > 2048
                                 or not navigation_allowed(url, context.navigation_origins)):
                             raise failure("denied")
-                        if command.step.effect == "may_write":
-                            await assert_reserved()
                         permit.begin_send()
                         await node.page.goto(url, timeout=timeout, wait_until="domcontentloaded")
 
@@ -1646,18 +1649,12 @@ class PlaywrightWebAdapter:
                         navigate,
                     )
                 elif operation == "select_option":
-                    if command.step.effect == "may_write":
-                        await assert_reserved()
                     permit.begin_send()
                     await node.element.select_option(element=option, timeout=timeout)
                 elif operation == "check":
-                    if command.step.effect == "may_write":
-                        await assert_reserved()
                     permit.begin_send()
                     await node.element.check(timeout=timeout)
                 elif operation == "press_enter":
-                    if command.step.effect == "may_write":
-                        await assert_reserved()
                     permit.begin_send()
                     await node.element.press("Enter", timeout=timeout)
                 elif operation == "wait":
@@ -1680,8 +1677,6 @@ class PlaywrightWebAdapter:
                             download_rule,
                         )
                     elif popup_rule is None:
-                        if command.step.effect == "may_write":
-                            await assert_reserved()
                         permit.begin_send()
                         await node.element.click(timeout=timeout)
                     else:

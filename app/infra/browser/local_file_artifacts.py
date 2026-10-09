@@ -27,6 +27,8 @@ FileMediaType = Literal[
 _MAX_FILE_BYTES = 16 * 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
 _REFERENCE = re.compile(r"[A-Za-z0-9_-]{40,64}\Z")
+_STORAGE_SCOPE = re.compile(r"[0-9a-f]{64}\Z")
+_STORAGE_MARKER = ".browser-file-storage-scope-v1"
 
 
 class LocalFileArtifactError(RuntimeError):
@@ -64,6 +66,7 @@ class StoredFileArtifact:
     size_bytes: int
     sha256: bytes = field(repr=False)
     expires_at: datetime
+    storage_scope: str = field(repr=False)
 
     def __post_init__(self) -> None:
         if (type(self.reference) is not str or _REFERENCE.fullmatch(self.reference) is None
@@ -73,12 +76,17 @@ class StoredFileArtifact:
                 or type(self.sha256) is not bytes or len(self.sha256) != 32
                 or not isinstance(self.expires_at, datetime)
                 or self.expires_at.tzinfo is None
-                or self.expires_at.utcoffset() is None):
+                or self.expires_at.utcoffset() is None
+                or type(self.storage_scope) is not str
+                or _STORAGE_SCOPE.fullmatch(self.storage_scope) is None):
             raise LocalFileArtifactError("browser_file_metadata_invalid")
 
 
 class FileArtifactAuthority(Protocol):
     """Implemented by the PG service, including fresh caller/binding checks."""
+
+    @property
+    def storage_scope(self) -> str: ...
 
     async def check_create(self, owner: FileArtifactOwner) -> None: ...
     async def record(self, artifact: StoredFileArtifact) -> None: ...
@@ -103,6 +111,72 @@ def _open_regular(path: Path) -> int:
         return fd
     except OSError:
         raise LocalFileArtifactError("browser_file_source_invalid") from None
+
+
+def _private_root(path: Path, *, create: bool) -> Path:
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise LocalFileArtifactError("browser_file_root_invalid")
+    try:
+        if create:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = path.resolve(strict=True)
+        metadata = root.stat()
+        if (path.is_symlink() or not root.is_dir()
+                or (os.name == "posix" and (
+                    metadata.st_mode & 0o077
+                    or metadata.st_uid != getattr(os, "getuid")()
+                ))):
+            raise LocalFileArtifactError("browser_file_root_invalid")
+        return root
+    except OSError:
+        raise LocalFileArtifactError("browser_file_root_invalid") from None
+
+
+def _read_storage_scope(root: Path) -> str:
+    """Read the physical spool's private identity; never synthesize a replacement."""
+    try:
+        fd = _open_regular(root / _STORAGE_MARKER)
+        with os.fdopen(fd, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if os.name == "posix" and (
+                metadata.st_mode & 0o077
+                or metadata.st_uid != getattr(os, "getuid")()
+            ):
+                raise LocalFileArtifactError("browser_file_storage_scope_invalid")
+            value = stream.read(65).decode("ascii")
+        if _STORAGE_SCOPE.fullmatch(value) is None:
+            raise LocalFileArtifactError("browser_file_storage_scope_invalid")
+        return value
+    except (OSError, UnicodeError, LocalFileArtifactError):
+        raise LocalFileArtifactError("browser_file_storage_scope_invalid") from None
+
+
+def initialize_file_artifact_storage_scope(root: Path, *, create: bool = True) -> str:
+    """Initialize only an empty worker spool; API mounts read an existing marker."""
+    if type(create) is not bool:
+        raise LocalFileArtifactError("browser_file_configuration_invalid")
+    location = _private_root(root, create=create)
+    marker = location / _STORAGE_MARKER
+    if marker.exists() or marker.is_symlink() or not create:
+        return _read_storage_scope(location)
+    # A pre-existing unmarked spool has unknown ownership. Do not take it over.
+    if any(location.iterdir()):
+        raise LocalFileArtifactError("browser_file_storage_scope_unknown")
+    try:
+        fd = os.open(
+            marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(secrets.token_hex(32).encode("ascii"))
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError:
+        # Another worker owns initialization; an incomplete marker fails closed.
+        pass
+    except OSError:
+        raise LocalFileArtifactError("browser_file_storage_scope_invalid") from None
+    return _read_storage_scope(location)
 
 
 def _type_matches(payload: bytes, media_type: FileMediaType) -> bool:
@@ -163,23 +237,25 @@ class LocalFileArtifacts:
             raise LocalFileArtifactError("browser_file_configuration_invalid")
         self._root = root
         self._authority = authority
+        self._storage_scope = authority.storage_scope
+        if (type(self._storage_scope) is not str
+                or _STORAGE_SCOPE.fullmatch(self._storage_scope) is None):
+            raise LocalFileArtifactError("browser_file_storage_scope_invalid")
+        self._root_path()
         self.last_cleanup: dict[str, int | str] = {
             "scanned": 0, "removed": 0, "failed": 0, "result": "not_run",
         }
 
     def _root_path(self) -> Path:
-        try:
-            self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            root = self._root.resolve(strict=True)
-            mode = root.stat().st_mode
-            if (self._root.is_symlink() or not root.is_dir()
-                    or (os.name == "posix" and (
-                        mode & 0o077 or root.stat().st_uid != getattr(os, "getuid")()
-                    ))):
-                raise LocalFileArtifactError("browser_file_root_invalid")
-            return root
-        except OSError:
-            raise LocalFileArtifactError("browser_file_root_invalid") from None
+        root = _private_root(self._root, create=False)
+        if not secrets.compare_digest(_read_storage_scope(root), self._storage_scope):
+            raise LocalFileArtifactError("browser_file_storage_scope_mismatch")
+        return root
+
+    def _assert_storage(self, artifact: StoredFileArtifact) -> None:
+        if (not isinstance(artifact, StoredFileArtifact)
+                or artifact.storage_scope != self._storage_scope):
+            raise LocalFileArtifactError("browser_file_storage_scope_mismatch")
 
     async def seal_download(
         self, source: Path, owner: FileArtifactOwner, *,
@@ -221,6 +297,7 @@ class LocalFileArtifacts:
             artifact = StoredFileArtifact(
                 reference, owner, media_type, size, digest.digest(),
                 datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+                self._storage_scope,
             )
             await self._authority.record(artifact)
             return artifact
@@ -236,6 +313,7 @@ class LocalFileArtifacts:
         if type(reference) is not str or _REFERENCE.fullmatch(reference) is None:
             raise LocalFileArtifactError("browser_file_reference_invalid")
         artifact = await self._authority.authorize_read(reference, owner)
+        self._assert_storage(artifact)
         if (artifact.reference != reference or artifact.owner != owner
                 or artifact.expires_at <= datetime.now(timezone.utc)):
             raise LocalFileArtifactError("browser_file_access_denied")
@@ -257,6 +335,9 @@ class LocalFileArtifacts:
                 or type(limit) is not int or not 1 <= limit <= 1000):
             raise LocalFileArtifactError("browser_file_request_invalid")
         records = await self._authority.list_authorized(owner, limit)
+        self._root_path()
+        for record in records:
+            self._assert_storage(record)
         now = datetime.now(timezone.utc)
         if (len(records) > limit or any(
             not isinstance(record, StoredFileArtifact) or record.owner != owner
@@ -270,6 +351,7 @@ class LocalFileArtifacts:
             raise LocalFileArtifactError("browser_file_cleanup_invalid")
         now = datetime.now(timezone.utc)
         try:
+            root = self._root_path()
             records = await self._authority.expired(now, limit)
         except Exception:
             self.last_cleanup = {
@@ -288,8 +370,13 @@ class LocalFileArtifacts:
             if not isinstance(artifact, StoredFileArtifact) or artifact.expires_at > now:
                 failed += 1
                 continue
-            path = self._root_path() / artifact.reference
             try:
+                self._assert_storage(artifact)
+                # Prove the marker still belongs to this authority after the
+                # awaited scan, before treating an absent path as removed.
+                if self._root_path() != root:
+                    raise LocalFileArtifactError("browser_file_storage_scope_mismatch")
+                path = root / artifact.reference
                 if path.is_symlink() or (path.exists() and not path.is_file()):
                     raise LocalFileArtifactError("browser_file_cleanup_invalid")
                 path.unlink(missing_ok=True)
