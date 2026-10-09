@@ -25,6 +25,7 @@ from app.browser_skill.models import (
     TargetRef,
     VisibleCandidate,
 )
+from app.browser_skill.scoping import scope_snapshot
 from app.browser_skill.site_rules import FrozenSiteAdapter, StepPrimitiveBinding
 from app.browser_skill.verifier import IndependentVerifier, failure
 from app.infra.browser.playwright_dom_rules import (
@@ -366,7 +367,9 @@ class Observer:
         w = self.world
         assert self._round is not None
         await w.assert_business_authority(session, w.context.source)
-        if projection != w.view or not w.region.connected:
+        if (scope_snapshot(projection, session.binding, policy)
+                != scope_snapshot(w.view, session.binding, policy)
+                or not w.region.connected):
             raise failure("stale")
         for candidate, node in self._round.nodes:
             if (w.controls.get(candidate.ref.target_id) is not node.element.node

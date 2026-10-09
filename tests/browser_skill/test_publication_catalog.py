@@ -6,6 +6,7 @@ import pytest
 
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
+    canonical_json,
     publication_digest,
     rollback_version_manifest,
 )
@@ -28,7 +29,7 @@ def another_skill(source: BrowserPublicationManifest, skill_id: str) -> BrowserP
     data["skill"]["verifier_digest"] = data["verifier"]["digest"]
     data["skill"]["digest"] = publication_digest("browser_skill.v1", data["skill"])
     data["digest"] = publication_digest("browser_publication.durable.v1", data)
-    return BrowserPublicationManifest.model_validate(data)
+    return BrowserPublicationManifest.model_validate_json(canonical_json(data))
 
 
 def assert_code(code: str, action: Callable[[], object]) -> None:

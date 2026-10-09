@@ -17,7 +17,7 @@ def test_production_connector_uses_only_selected_protocol(monkeypatch, transport
     async def run():
         calls = []
 
-        class Context:
+        class Context(Closable):
             async def route(self, pattern, handler):
                 calls.append(("route", pattern))
                 self.handler = handler

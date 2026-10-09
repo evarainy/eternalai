@@ -23,6 +23,7 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
+    canonical_json,
     publication_digest,
 )
 from app.browser_skill.site_rules import FrozenSiteAdapter
@@ -134,7 +135,7 @@ def registered_site(decision_manifest: ModelManifest | None = None) -> Registere
         "browser_skill.v1", data["skill"],
     )
     data["digest"] = publication_digest("browser_publication.durable.v1", data)
-    manifest = BrowserPublicationManifest.model_validate(data)
+    manifest = BrowserPublicationManifest.model_validate_json(canonical_json(data))
     rules = replace(
         base.rules, site_digest=manifest.site.digest, skill_digest=manifest.skill.digest,
     )

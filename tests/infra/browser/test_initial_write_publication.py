@@ -42,7 +42,7 @@ def write_manifest() -> BrowserPublicationManifest:
     data["skill"]["site_digest"] = data["site"]["digest"]
     data["skill"]["digest"] = publication_digest("browser_skill.v1", data["skill"])
     data["digest"] = publication_digest("browser_publication.durable.v1", data)
-    return BrowserPublicationManifest.model_validate(data)
+    return BrowserPublicationManifest.model_validate_json(canonical_json(data))
 
 
 def test_initial_write_activation_requires_the_existing_review_transition() -> None:

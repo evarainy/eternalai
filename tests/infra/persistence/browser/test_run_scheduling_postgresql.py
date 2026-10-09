@@ -241,6 +241,8 @@ def test_supervisor_owner_cycle_excludes_new_arrivals_until_wrap(
                 _sessions=h.sessions, _tenant_id=h.tenant,
                 _seed=SimpleNamespace(digest=h.publication_digest.hex()),
                 _owner_scan=_OwnerScan(), worker=worker, runs=h.store,
+                _active_owners=set(), _cleanup_owners=set(),
+                cleanup_ready=AsyncMock(),
             ))
             assert await BrowserVerticalComponents.run_ready(components, maximum_owners=2) == ()
             first = set(worker.seen)

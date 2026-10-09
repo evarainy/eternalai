@@ -27,17 +27,29 @@ def test_snapshot_failure_releases_every_native_locator_handle_and_preserves_err
     second.is_visible = AsyncMock(side_effect=(
         asyncio.CancelledError() if cancel else ValueError("synthetic malformed node")
     ))
-    element = SimpleNamespace(evaluate=AsyncMock(return_value={
-        "state": "complete", "reason": "complete", "trusted_empty": False,
-        "overflow": False,
-    }), dispose=AsyncMock())
-    candidate_locator = SimpleNamespace(element_handles=AsyncMock(return_value=[first, second]))
+    located = SimpleNamespace(dispose=AsyncMock())
+
+    async def evaluate(expression, arg):
+        if expression == "(old, fresh) => old === fresh && old.isConnected":
+            return arg is located
+        assert arg["kind"] == "coverage"
+        return {
+            "state": "complete", "reason": "complete", "trusted_empty": False,
+            "overflow": False,
+        }
+
+    element = SimpleNamespace(evaluate=AsyncMock(side_effect=evaluate), dispose=AsyncMock())
+    candidate_locator = SimpleNamespace(
+        count=AsyncMock(return_value=2),
+        element_handles=AsyncMock(return_value=[first, second]),
+    )
     locator = SimpleNamespace(
-        element_handle=AsyncMock(return_value=element),
+        element_handle=AsyncMock(return_value=located),
         get_by_role=Mock(return_value=candidate_locator),
     )
     frame = SimpleNamespace(locator=Mock(return_value=locator))
-    site = SimpleNamespace(complete_selector=None, empty_selector=None,
+    site = SimpleNamespace(region_selector="[data-browser-region=inbox]",
+                           discover_role_members=False, complete_selector=None, empty_selector=None,
                            pagination_selector=None, virtualized_selector=None)
     if cancel:
         with pytest.raises(asyncio.CancelledError):
