@@ -12,6 +12,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from threading import Lock
+from types import MappingProxyType
 from typing import Annotated, Literal, Never, Self, SupportsIndex
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
@@ -27,6 +28,77 @@ from app.ports.browser_publication_store import BrowserPublicationStorePort
 Operation = Literal["prepare", "activate", "rollback", "read"]
 OwnerKey = tuple[str, str, str]
 Authorize = Callable[[BrowserOwner, str, Operation], bool]
+
+
+class PublicationCatalogError(ValueError):
+    """Fixed diagnostic code without manifest or owner data."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class BrowserPublicationCatalog:
+    """Immutable installed manifest lookup, not publication or run authority.
+
+    The PG publication head still decides which Skill version a new Run may
+    enter. An admitted Run resolves its pinned digest here, even after a later
+    head switch. The installer separately verifies each registered source and
+    binds its executable Site and Verifier to this exact manifest.
+    """
+
+    __slots__ = ("_by_identity", "_by_digest")
+
+    def __init__(self, manifests: tuple[BrowserPublicationManifest, ...]) -> None:
+        if not isinstance(manifests, tuple) or not manifests:
+            raise PublicationCatalogError("browser_publication_catalog_empty")
+        by_identity: dict[tuple[str, str, str], bytes] = {}
+        by_digest: dict[str, bytes] = {}
+        versions: set[tuple[str, str]] = set()
+        for manifest in manifests:
+            if not isinstance(manifest, BrowserPublicationManifest):
+                raise PublicationCatalogError("browser_publication_catalog_manifest_invalid")
+            try:
+                frozen = BrowserPublicationManifest.model_validate_json(
+                    manifest.model_dump_json()
+                )
+            except (ValueError, TypeError):
+                raise PublicationCatalogError(
+                    "browser_publication_catalog_manifest_invalid"
+                ) from None
+            version_key = (frozen.skill.skill_id, frozen.skill.version)
+            if version_key in versions:
+                raise PublicationCatalogError("browser_publication_catalog_version_conflict")
+            if frozen.digest in by_digest:
+                raise PublicationCatalogError("browser_publication_catalog_digest_conflict")
+            encoded = frozen.model_dump_json().encode("utf-8")
+            by_identity[(*version_key, frozen.digest)] = encoded
+            by_digest[frozen.digest] = encoded
+            versions.add(version_key)
+        self._by_identity = MappingProxyType(by_identity)
+        self._by_digest = MappingProxyType(by_digest)
+
+    def resolve_exact(
+        self, skill_id: str, version: str, digest: str
+    ) -> BrowserPublicationManifest:
+        if not all(type(value) is str for value in (skill_id, version, digest)):
+            raise PublicationCatalogError("browser_publication_catalog_reference_invalid")
+        encoded = self._by_identity.get((skill_id, version, digest))
+        if encoded is None:
+            raise PublicationCatalogError("browser_publication_catalog_not_found")
+        return BrowserPublicationManifest.model_validate_json(encoded)
+
+    def by_digest(self, digest: str) -> BrowserPublicationManifest:
+        if type(digest) is not str:
+            raise PublicationCatalogError("browser_publication_catalog_reference_invalid")
+        encoded = self._by_digest.get(digest)
+        if encoded is None:
+            raise PublicationCatalogError("browser_publication_catalog_not_found")
+        return BrowserPublicationManifest.model_validate_json(encoded)
+
+    def digests(self) -> tuple[str, ...]:
+        """Installed candidates for trusted worker dispatch; not active heads."""
+        return tuple(self._by_digest)
 
 
 def canonical_digest(domain: str, payload: Mapping[str, object]) -> str:
