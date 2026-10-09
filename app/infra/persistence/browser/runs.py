@@ -256,9 +256,28 @@ class PostgreSQLBrowserRunStore:
         self._active_digest_key_id = active_digest_key_id
         self._claim_ready = claim_ready
         self._claim_ready_session = claim_ready_in_session
+        self._replay_source_reader: (
+            Callable[[AsyncSession, RunSnapshot], Awaitable[None]] | None
+        ) = None
         # Retain progress for outstanding owners; discard entries once no due
         # work remains. A fixed cycle upper prevents new arrivals delaying wrap.
         self._claim_scans: dict[tuple[str, str, str], _ClaimScan] = {}
+
+    def install_replay_source_reader(
+        self, reader: Callable[[AsyncSession, RunSnapshot], Awaitable[None]],
+    ) -> None:
+        """One exact installed source's read authority; never an execution fallback."""
+        if self._replay_source_reader is not None or not callable(reader):
+            raise BrowserRunStoreError("browser_teaching_source_installation_invalid")
+        self._replay_source_reader = reader
+
+    async def _check_replay_source(self, session: AsyncSession, source: RunSnapshot) -> None:
+        reader = self._replay_source_reader
+        if reader is None:
+            await self._authority.check_run(session, source, "read")
+        else:
+            await self._authority.check_owner(session, source.owner)
+            await reader(session, source)
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[AsyncSession]:
@@ -361,6 +380,31 @@ class PostgreSQLBrowserRunStore:
             error_code=cast(str | None, row["error_code"]),
             run=run,
         )
+
+    async def lookup_request(
+        self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
+    ) -> CanonicalRequest | None:
+        checked_run_id(client_request_id)
+        if type(semantic_input) is not bytes or not 1 <= len(semantic_input) <= 1_048_576:
+            raise BrowserRunStoreError("browser_request_input_invalid")
+        async with self._transaction() as session:
+            await self._authority.check_owner(session, owner)
+            row = (await session.execute(text(
+                f"SELECT * FROM tasks WHERE {_OWNER} AND client_request_id=:client_request_id"
+                " FOR SHARE",
+            ), {**_owner(owner), "client_request_id": client_request_id})).mappings().one_or_none()
+            if row is None:
+                return None
+            digest = self._digest(
+                owner, client_request_id, semantic_input, cast(str, row["request_digest_key_id"]),
+            )
+            if (row["request_schema_version"] != _REQUEST_VERSION
+                    or not hmac.compare_digest(digest, cast(bytes, row["request_digest"]))):
+                raise BrowserRunStoreError("request_key_conflict")
+            run = await self._task_run(session, owner, cast(str, row["task_id"]))
+            if run is not None:
+                await self._authority.check_run(session, run, "read")
+            return self._request(owner, row, parse_winner=False, run=run)
 
     async def get_or_create_request(
         self,
@@ -1400,7 +1444,7 @@ class PostgreSQLBrowserRunStore:
             or (plan.purpose == "initial_validation" and (
                 plan.source_publication_digest != manifest.digest
                 or manifest.source_kind != "registered_site"
-                or manifest.effect != "read_only"
+                or manifest.effect not in {"read_only", "controlled_write"}
                 or manifest.rollback_source_digest is not None
             ))
         ):
@@ -1408,7 +1452,7 @@ class PostgreSQLBrowserRunStore:
         source_row = (await session.execute(text(
             "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
             " AND publication_digest=:digest"
-            " AND ((:initial AND state='prepared')"
+            " AND ((:initial AND state IN ('prepared','active','inactive'))"
             " OR (NOT :initial AND state IN ('active','inactive')))"
         ), {"tenant": run.owner.tenant_id,
             "digest": bytes.fromhex(plan.source_publication_digest),
@@ -1429,7 +1473,8 @@ class PostgreSQLBrowserRunStore:
             )
         }
         by_id = {item.step.step_id: item for item in (
-            manifest.site.primitive_rules or manifest.site.steps
+            manifest.site.steps if plan.purpose == "initial_validation"
+            else manifest.site.primitive_rules or manifest.site.steps
         )}
         candidate_rules = {item.step.step_id: item for item in manifest.site.steps}
         for item in plan.steps:
@@ -1438,12 +1483,17 @@ class PostgreSQLBrowserRunStore:
             if (
                 primitive is None or candidate is None
                 or source_rules.get(item.primitive_id) != primitive
-                or self._primitive_id(manifest, item.step_id) != item.primitive_id
+                or (plan.purpose != "initial_validation"
+                    and self._primitive_id(manifest, item.step_id) != item.primitive_id)
                 or candidate != primitive.model_copy(update={
                     "step": primitive.step.model_copy(update={"step_id": item.step_id}),
                 })
-                or primitive.step.effect != "read_only"
-                or primitive.effect.actual_effect != "read_only"
+                or primitive.step.effect != primitive.effect.actual_effect
+                or (primitive.step.effect != "read_only" and not (
+                    plan.purpose == "initial_validation"
+                    and manifest.effect == "controlled_write"
+                    and primitive.step.effect == "may_write"
+                ))
                 or item.rule_digest != canonical_digest(
                     "browser_site_step.v1", primitive.model_dump(mode="json"),
                 )
@@ -1814,7 +1864,7 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_replay_source_unavailable")
             source = _snapshot(source_row)
             await self._authority.check_run(session, replay, "read")
-            await self._authority.check_run(session, source, "read")
+            await self._check_replay_source(session, source)
             if (
                 replay.status != "completed" or source.status != "completed"
                 or replay.verification != "verified"
@@ -1926,7 +1976,7 @@ class PostgreSQLBrowserRunStore:
             raise BrowserRunStoreError("browser_replay_source_unavailable")
         source = _snapshot(source_row)
         await self._authority.check_run(session, replay, "read")
-        await self._authority.check_run(session, source, "read")
+        await self._check_replay_source(session, source)
         if (
             proof.digest != replay_digest
             or replay.status != "completed" or source.status != "completed"

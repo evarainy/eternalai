@@ -129,9 +129,30 @@ class PostgreSQLTeachingPublicationReview(BrowserPublicationReviewPort):
         manifest: BrowserPublicationManifest, task_id: str, run_id: str,
     ) -> RowMapping | None:
         if (manifest.source_kind != "registered_site"
-                or manifest.effect != "read_only"
+                or manifest.effect not in {"read_only", "controlled_write"}
                 or manifest.rollback_source_digest is not None):
             return None
+        lookup = self._load_proof
+        runs = lookup._runs if type(lookup) is InstalledReplayProofLookup else None
+        if runs is None:
+            return None
+        snapshot = await runs._read_run(session, owner, task_id, run_id)
+        await runs._authority.check_run(session, snapshot, "read")
+        plan = await runs.load_teaching_plan_in_session(session, snapshot.admission)
+        if (plan is None or plan.purpose != "initial_validation"
+                or plan.publication_digest != manifest.digest):
+            return None
+        if manifest.effect == "controlled_write":
+            preparation = await runs._prepared_write(session, snapshot)
+            consumed = await runs._write_event(
+                session, snapshot, "browser.write_consumed.v1",
+                runs._write_event_id("write-consumed", preparation.request_id),
+            )
+            if (consumed is None or consumed.get("request_id") != preparation.request_id
+                    or consumed.get("action_digest") != preparation.action_digest
+                    or consumed.get("worker_epoch") != snapshot.worker_epoch
+                    or consumed.get("lease_epoch") != snapshot.lease_epoch):
+                return None
         row = (await session.execute(text(
             "SELECT br.binding_id,br.binding_revision,br.input_digest,"
             "br.verification_evidence_digest FROM browser_runs br"

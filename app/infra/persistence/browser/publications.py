@@ -427,7 +427,8 @@ class PostgreSQLBrowserPublicationStore:
     ) -> BrowserPublicationRecord:
         """First registered version requires a verified prepared Run and HumanGate."""
         checked = _manifest(manifest)
-        if (checked.source_kind != "registered_site" or checked.effect != "read_only"
+        if (checked.source_kind != "registered_site"
+                or checked.effect not in {"read_only", "controlled_write"}
                 or checked.rollback_source_digest is not None or self._review is None):
             raise BrowserPublicationError("browser_publication_initial_invalid")
         for identity in (task_id, run_id, approval_ref):

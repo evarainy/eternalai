@@ -244,6 +244,7 @@ def test_expected_download_seals_only_registered_click_and_exact_owner(
             secrets.token_urlsafe(32), owner, "text/plain", 3,
             hashlib.sha256(b"abc").digest(),
             datetime.now(timezone.utc) + timedelta(seconds=30),
+            storage_scope="a" * 64,
         )
         sealed: list[Path] = []
 

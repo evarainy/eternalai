@@ -508,9 +508,10 @@ class PostgreSQLBrowserRunAuthority:
         try:
             await self._auth.validate(
                 session, run.admission,
-                require_active=not (
-                    action == "read" and run.status in {"completed", "failed", "cancelled"}
-                ),
+                # Reading an admitted Run is independent of version activation.
+                # Roles, Policy, session, binding and exact digest remain current;
+                # every execution action still requires active publication authority.
+                require_active=action != "read",
             )
         except BrowserAuthorizationError as exc:
             # Only explicit, candidate-local negative facts can be skipped.

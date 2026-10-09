@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -25,7 +26,10 @@ from app.ports.browser_run_store import (
     BrowserRunStoreError,
     CanonicalRequest,
     ProtectedRunEnvelope,
+    RunAdmission,
+    RunSnapshot,
 )
+from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
 
 
 class _Store:
@@ -71,6 +75,7 @@ class _Store:
         run = SimpleNamespace(
             owner=request.owner, task_id=request.task_id,
             run_id=admission.run_id, state_revision=1,
+            admission=admission, phase="queued",
         )
         semantic, _ = self.requests[request.client_request_id]
         self.requests[request.client_request_id] = (
@@ -168,6 +173,287 @@ def _service(
 def _authentication(principal: Principal, *, expired: bool = False) -> object:
     expiry = datetime.now(UTC) + timedelta(minutes=-1 if expired else 5)
     return authenticated_session.set(AuthenticatedSessionContext(principal, b"f" * 32, expiry))
+
+
+def _write_run(owner: BrowserOwner, *, completed: bool = False) -> RunSnapshot:
+    admission = RunAdmission(
+        owner=owner, task_id="task_1", run_id="run_1", target_system="oa",
+        binding_id="binding_1", binding_revision=1, auth_fingerprint=b"f" * 32,
+        auth_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        publication_digest=b"a" * 32, input_revision=1, input_digest=b"i" * 32,
+        protected_input=ProtectedRunEnvelope(
+            "aes256gcm-browser-input-v1", "fixture", b"n" * 12, b"c" * 16,
+        ),
+    )
+    return RunSnapshot(
+        admission=admission, state_revision=9,
+        status="completed" if completed else "running", phase=None if completed else "running",
+        worker_id="fixture_worker", worker_epoch=1, worker_deadline=None,
+        provider_key=None, provider_manifest_digest=None, lease_epoch=1,
+        profile_generation_id=None, capture_operation_id=None, capture_status="not_requested",
+        cancel_requested=False, cancel_acknowledged=False, effect="acknowledged",
+        verification="verified" if completed else None,
+        verification_evidence_digest=b"v" * 32 if completed else None,
+        cleanup="released" if completed else "pending", error_code=None,
+        dispatch_failure_code=None, terminal_revision=9 if completed else None,
+        terminal_event_id="event_1" if completed else None,
+        result_digest=None, protected_result=None,
+    )
+
+
+def _recorded_write(service: BrowserSubmissionService, principal: Principal, *, completed: bool):
+    owner = service._owner(principal, "session_1")
+    run = _write_run(owner, completed=completed)
+    now = datetime.now(UTC)
+    request = HumanGateRequest(
+        request_id="confirmation_1", task_id=run.task_id,
+        requested_for_ai_user_id=owner.user_id, requested_session_id=owner.session_id,
+        requested_tenant_id=owner.tenant_id, action_digest="a" * 64,
+        request_digest="b" * 64, binding_manifest_digest="c" * 64,
+        requested_at=now - timedelta(minutes=20), expires_at=now - timedelta(minutes=5),
+    )
+    record = HumanGateDecisionRecord(
+        request_id=request.request_id, task_id=run.task_id,
+        decided_by_ai_user_id=owner.user_id, decided_session_id=owner.session_id,
+        decided_tenant_id=owner.tenant_id, decision="confirmed",
+        request_digest=request.request_digest,
+        binding_manifest_digest=request.binding_manifest_digest,
+        decided_at=request.requested_at + timedelta(minutes=1),
+    )
+    preparation = Mock(
+        task_id=run.task_id, run_id=run.run_id,
+        publication_digest=run.admission.publication_digest.hex(), request_id=request.request_id,
+    )
+    preparation.gate_request.return_value = request
+    store = Mock(get=AsyncMock(return_value=run),
+                 load_write_preparation=AsyncMock(return_value=preparation))
+    gate = Mock(get_request=AsyncMock(return_value=request),
+                get_decision=AsyncMock(return_value=record), record_decision=AsyncMock())
+    service._store, service._write_gate = store, gate
+    return run, request, record, store, gate
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_recorded_confirmation_retry_is_read_only_after_dispatch_and_expiry(completed) -> None:
+    async def scenario() -> None:
+        service, _, _, principal = _service()
+        token = _authentication(principal)
+        try:
+            run, _, _, store, gate = _recorded_write(service, principal, completed=completed)
+            response = await service.decide_write(
+                principal, "session_1", run.task_id, run.run_id, "confirmed",
+            )
+            assert response.run.run_id == run.run_id
+            assert response.run.status == run.status
+            gate.record_decision.assert_not_awaited()
+            assert store.get.await_count == 2
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("bad", ["opposite", "forged_request", "forged_subject", "late_decision"])
+def test_recorded_confirmation_does_not_hide_conflicting_or_forged_decisions(bad) -> None:
+    async def scenario() -> None:
+        service, _, _, principal = _service()
+        token = _authentication(principal)
+        try:
+            run, request, record, _, gate = _recorded_write(service, principal, completed=True)
+            decision = "rejected" if bad == "opposite" else "confirmed"
+            changes = {
+                "forged_request": {"request_digest": "d" * 64},
+                "forged_subject": {"decided_by_ai_user_id": "another_user"},
+                "late_decision": {"decided_at": request.expires_at},
+            }
+            if bad in changes:
+                gate.get_decision.return_value = record.model_copy(update=changes[bad])
+            with pytest.raises(BrowserChatError) as caught:
+                await service.decide_write(
+                    principal, "session_1", run.task_id, run.run_id, decision,
+                )
+            assert caught.value.code == "browser_write_confirmation_conflict"
+            gate.record_decision.assert_not_awaited()
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+def test_confirmation_retry_rechecks_current_run_access_before_exposing_state() -> None:
+    async def scenario() -> None:
+        service, _, _, principal = _service()
+        token = _authentication(principal)
+        try:
+            run, _, _, store, gate = _recorded_write(service, principal, completed=True)
+            store.get.side_effect = BrowserRunStoreError("browser_run_not_found")
+            with pytest.raises(BrowserChatError) as caught:
+                await service.decide_write(
+                    principal, "session_1", run.task_id, run.run_id, "confirmed",
+                )
+            assert caught.value.code == "browser_run_not_found"
+            gate.get_decision.assert_not_awaited()
+            gate.record_decision.assert_not_awaited()
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+def test_prepared_write_validation_uses_sealed_admission_and_existing_write_gate() -> None:
+    async def scenario() -> None:
+        service, store, _, principal = _service(source_kind="registered_site")
+        token = _authentication(principal)
+        try:
+            publication = await service._publications.get_active(
+                service._owner(principal, "session_1"), "skill_1",
+            )
+            manifest = publication.manifest
+            manifest.effect, manifest.capability.type = "controlled_write", "action"
+            service._write_gate = Mock()
+            service._confirmed_key_digest = lambda _digest, _key: "b" * 64
+            service._teaching_candidate_digest = manifest.digest
+            service._teaching_publication = AsyncMock(return_value=publication)
+            plan = Mock()
+            service._teaching_plan = AsyncMock(return_value=plan)
+            service._ensure_write_preparation = AsyncMock()
+
+            async def accept_teaching(request, admission, actual_plan):
+                assert actual_plan is plan
+                return await store.accept(request, admission)
+
+            store.accept_teaching = AsyncMock(side_effect=accept_teaching)
+            response = await service.submit_initial_validation(
+                principal=principal, bound_session="session_1", skill_id="skill_1",
+                skill_version="v1", arguments={"business_key": "CASE_1"},
+                client_request_id="initial_write_1",
+            )
+            assert response.data["kind"] == "accepted"
+            assert len(store.accepted) == 1
+            store.accept_teaching.assert_awaited_once()
+            service._ensure_write_preparation.assert_awaited_once()
+            assert store.rejected == []
+            # Teaching new combinations remains read-only: it cannot borrow the
+            # first-version write validation exception.
+            service._teaching_base_digest = "c" * 64
+            second = await service.submit_teaching(
+                principal=principal, bound_session="session_1", skill_id="skill_1",
+                skill_version="v1", arguments={"business_key": "CASE_1"},
+                client_request_id="write_teaching_1",
+            )
+            assert second.status == "failed"
+            assert second.data["error_code"] == "browser_capability_unavailable"
+            assert len(store.accepted) == 1
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("denied", [None, "source", "candidate"])
+def test_exploration_capture_uses_source_read_authority_and_candidate_capture_grant(
+    monkeypatch, denied,
+) -> None:
+    async def scenario() -> None:
+        service, _, _, principal = _service()
+        token = _authentication(principal)
+        try:
+            owner = service._owner(principal, "session_1")
+            run = _write_run(owner, completed=True)
+            digest = run.admission.publication_digest.hex()
+            base = SimpleNamespace(
+                digest=digest, site=SimpleNamespace(exploration=object(), primitive_rules=()),
+                source_kind="registered_site", effect="read_only",
+            )
+            candidate = SimpleNamespace(digest="b" * 64)
+            source = Mock(
+                get=AsyncMock(return_value=run), load_teaching_plan=AsyncMock(return_value=None),
+                read_teaching_steps=AsyncMock(return_value=()),
+                load_traversal_terminal=AsyncMock(return_value=0),
+            )
+            if denied == "source":
+                source.get.side_effect = BrowserRunStoreError("browser_run_not_found")
+            source_publications = Mock(get_frozen=AsyncMock(return_value=SimpleNamespace(
+                state="active", manifest=base,
+            )))
+            service._store = Mock(get=AsyncMock(side_effect=AssertionError("candidate Run read")))
+            service._teaching_base_digest = digest
+            service._teaching_candidate_digest = candidate.digest
+            service._teaching_candidate_version = "v2"
+            service._teaching_publication = AsyncMock(return_value=SimpleNamespace(
+                state="prepared", manifest=candidate,
+            ))
+            service._teaching_capture_stores = AsyncMock(return_value=(source, source_publications))
+            service._teaching_capture_grant = AsyncMock(return_value=denied != "candidate")
+            captured = object()
+            capture = Mock(return_value=captured)
+            monkeypatch.setattr("app.browser_skill.submission.capture_authorized_run", capture)
+            if denied is None:
+                actual = await service.capture_teaching(principal, "session_1", "task_1", "run_1")
+                assert actual is captured
+                assert source.get.await_count == 2
+                source_publications.get_frozen.assert_awaited_once_with(owner, digest)
+                assert service._teaching_capture_grant.await_count == 2
+                capture.assert_called_once()
+            else:
+                with pytest.raises(BrowserChatError) as caught:
+                    await service.capture_teaching(principal, "session_1", "task_1", "run_1")
+                assert caught.value.code == (
+                    "browser_teaching_capture_denied" if denied == "candidate"
+                    else "browser_teaching_capture_unavailable"
+                )
+                capture.assert_not_called()
+            service._store.get.assert_not_awaited()
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("case", ["prepared", "missing_plan", "wrong_plan", "revoked"])
+def test_verified_prepared_validation_result_requires_exact_plan_and_current_read(case) -> None:
+    async def scenario() -> None:
+        service, _, _, principal = _service(source_kind="registered_site")
+        token = _authentication(principal)
+        try:
+            owner = service._owner(principal, "session_1")
+            run = _write_run(owner, completed=True)
+            digest = run.admission.publication_digest.hex()
+            plan = SimpleNamespace(task_id=run.task_id, run_id=run.run_id,
+                                   publication_digest=digest)
+            if case == "wrong_plan":
+                plan.publication_digest = "c" * 64
+            schema = ('{"type":"object","properties":{"business_key":{"type":"string"}},'
+                      '"required":["business_key"],"additionalProperties":false}')
+            manifest = SimpleNamespace(digest=digest, output=SimpleNamespace(
+                output_schema_json=schema, maximum_bytes=4096,
+            ))
+            service._teaching_candidate_digest = digest
+            service._teaching_candidate_version = "v1"
+            service._teaching_publication = AsyncMock(return_value=SimpleNamespace(
+                state="prepared", manifest=manifest,
+            ))
+            store = Mock(get=AsyncMock(return_value=run), load_teaching_plan=AsyncMock(
+                return_value=None if case == "missing_plan" else plan,
+            ))
+            if case == "revoked":
+                store.get.side_effect = [run, BrowserRunStoreError("browser_run_not_found")]
+            service._store = store
+            service._publications = Mock(get_frozen=AsyncMock(return_value=None))
+            service._cipher = Mock(decrypt_result=Mock(return_value={"business_key": "CASE_1"}))
+            if case == "prepared":
+                response = await service.get(principal, "session_1", run.task_id, run.run_id)
+                assert response.value == {"business_key": "CASE_1"}
+                assert response.run.status == "completed"
+                assert store.get.await_count == 2
+                service._teaching_publication.assert_awaited_once_with(owner, "skill_1", "v1")
+            else:
+                with pytest.raises(BrowserChatError) as caught:
+                    await service.get(principal, "session_1", run.task_id, run.run_id)
+                assert caught.value.code == (
+                    "browser_run_not_found" if case == "revoked"
+                    else "browser_teaching_candidate_unavailable"
+                )
+                if case != "revoked":
+                    service._cipher.decrypt_result.assert_not_called()
+        finally:
+            authenticated_session.reset(token)
+    asyncio.run(scenario())
 
 
 def test_structured_submission_is_same_subject_and_replay_checks_current_run() -> None:

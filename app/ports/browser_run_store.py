@@ -298,6 +298,12 @@ class BrowserRunAuthorityPort(Protocol):
 
 
 class BrowserRunStorePort(Protocol):
+    async def lookup_request(
+        self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
+    ) -> CanonicalRequest | None:
+        """Read only; verify current owner/Run authority and the exact canonical input."""
+        ...
+
     async def get_or_create_request(
         self,
         owner: BrowserOwner,

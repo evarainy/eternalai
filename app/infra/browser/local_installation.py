@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import httpx2
@@ -49,6 +50,7 @@ from app.infra.browser.fixed_synthetic_seed import (
 from app.infra.browser.local_file_artifacts import (
     FileArtifactCleanupScheduler,
     LocalFileArtifacts,
+    initialize_file_artifact_storage_scope,
 )
 from app.infra.browser.local_profile_cleanup import ProfileCleanupScheduler
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
@@ -59,6 +61,7 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalPlaywrightDriver,
     RegisteredLocalSite,
 )
+from app.infra.browser.multi_installation import BrowserVerticalCollection
 from app.infra.browser.read_execution import BrowserReadExecutionFactory
 from app.infra.browser.runtime_exploration import RuntimeLLMExplorationSuggester
 from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPProvider
@@ -106,6 +109,7 @@ from services.decision.manifest import PinnedCheckpoint
 
 if TYPE_CHECKING:
     from app.composition import ProductionComponents
+    from app.config import ProductionSettings
 
 
 class PostgreSQLLocalCleanupGrant:
@@ -377,10 +381,12 @@ class RegisteredProductionInputs:
     profile_cleanup_contexts: (
         Callable[[], Awaitable[tuple[BrowserProfileContext, ...]]] | None
     ) = None
+    file_artifact_root: Path | None = None
 
 
 def build_registered_production_installation(
     components: ProductionComponents, inputs: RegisteredProductionInputs,
+    *, artifact_scope_create: bool = True,
 ) -> LocalBrowserInstallationDependencies:
     """Bind one real registration to the already built main Runtime authorities."""
     from app.composition import ProductionComponents
@@ -398,6 +404,19 @@ def build_registered_production_installation(
             or inputs.cleanup_authority._publication
             != bytes.fromhex(inputs.source.manifest.digest)):
         raise ValueError("browser_production_inputs_invalid")
+    files = inputs.file_artifacts
+    if inputs.file_artifact_root is not None:
+        if files is not None or type(artifact_scope_create) is not bool:
+            raise ValueError("browser_file_authority_installation_invalid")
+        scope = initialize_file_artifact_storage_scope(
+            inputs.file_artifact_root, create=artifact_scope_create,
+        )
+        files = LocalFileArtifacts(
+            inputs.file_artifact_root, PostgreSQLBrowserFileArtifactAuthority(
+                components.browser_session_factory, dict(inputs.request_digest_keys),
+                inputs.active_request_digest_key_id, storage_scope=scope,
+            ),
+        )
     return LocalBrowserInstallationDependencies(
         session_factory=components.browser_session_factory,
         capability_registry=components.browser_capability_registry,
@@ -427,7 +446,7 @@ def build_registered_production_installation(
         ttl_seconds=inputs.ttl_seconds, input_mode=inputs.input_mode,
         execution_timeout_seconds=inputs.execution_timeout_seconds,
         publication_review=inputs.publication_review,
-        file_artifacts=inputs.file_artifacts,
+        file_artifacts=files,
         teaching_base=inputs.teaching_base,
         locator_repair_hints=inputs.locator_repair_hints,
         approved_checkpoint=inputs.approved_checkpoint,
@@ -576,7 +595,9 @@ def build_local_browser_vertical(
         assert deps.file_artifacts is not None
         installed_file_authority = deps.file_artifacts._authority
         if (not isinstance(installed_file_authority, PostgreSQLBrowserFileArtifactAuthority)
-                or installed_file_authority._sessions is not deps.session_factory):
+                or installed_file_authority._sessions is not deps.session_factory
+                or installed_file_authority.storage_scope
+                != initialize_file_artifact_storage_scope(deps.file_artifacts._root, create=False)):
             raise ValueError("browser_file_authority_installation_invalid")
         file_authority = installed_file_authority
     wrapped: BrowserReadExecutionFactory
@@ -895,3 +916,56 @@ def build_local_browser_vertical(
         configured, _start_resources=start_resources, _stop_resources=stop_resources,
         reviewed_publication=reviewed,
     )
+
+
+def build_production_browser_vertical(
+    components: ProductionComponents, settings: ProductionSettings,
+    supplied: (
+        LocalBrowserInstallationDependencies | tuple[LocalBrowserInstallationDependencies, ...]
+    ),
+) -> BrowserVerticalComponents | BrowserVerticalCollection:
+    """Validate and assemble the same registered lanes for API and worker hosts."""
+    installations = supplied if isinstance(supplied, tuple) else (supplied,)
+    if not installations or settings.browser.transport != "playwright":
+        raise RuntimeError("browser_production_authority_mismatch")
+    model_settings = (
+        settings.browser.decision_origin,
+        settings.browser.request_model,
+        settings.browser.deployment_model,
+    )
+    built: list[BrowserVerticalComponents] = []
+    for installation in installations:
+        if (type(installation) is not LocalBrowserInstallationDependencies
+                or not isinstance(installation.source, RegisteredLocalSite)
+                or installation.session_factory is not components.browser_session_factory
+                or installation.capability_registry
+                is not components.browser_capability_registry
+                or installation.session_binder is not components.session_binder
+                or installation.policy is not components.browser_policy
+                or installation.sessions is not components.browser_sessions
+                or installation.trace is not components.browser_trace):
+            raise RuntimeError("browser_production_authority_mismatch")
+        site = installation.source.manifest.site
+        if all(value is None for value in model_settings):
+            if (
+                site.decision_budget.max_candidates != 1
+                or site.exploration is not None
+                or installation.input_mode != "structured"
+                or installation.decision is not None
+                or installation.approved_checkpoint is not None
+            ):
+                raise RuntimeError("browser_production_authority_mismatch")
+        elif (
+            any(value is None for value in model_settings)
+            or type(installation.decision) is not DecisionHTTPProvider
+            or installation.decision._deployment.disposition != "local_model"
+            or installation.decision._deployment.endpoint_origin != model_settings[0]
+            or site.decision_manifest.request_model != model_settings[1]
+            or site.decision_manifest.deployment_model != model_settings[2]
+        ):
+            raise RuntimeError("browser_production_authority_mismatch")
+        installed = build_local_browser_vertical(installation)
+        if installed is None:
+            raise RuntimeError("browser_vertical_installation_required")
+        built.append(installed)
+    return built[0] if len(built) == 1 else BrowserVerticalCollection(tuple(built))

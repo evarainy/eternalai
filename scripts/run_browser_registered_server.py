@@ -6,21 +6,25 @@ import argparse
 import asyncio
 import importlib
 import keyword
+import signal
 import sys
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from typing import NoReturn, cast
+from typing import Literal, NoReturn, cast
 
 import uvicorn
 
+from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
+from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.local_installation import (
     LocalBrowserInstallationDependencies,
     RegisteredProductionInputs,
+    build_production_browser_vertical,
     build_registered_production_installation,
 )
-from app.main import create_production_app
+from app.infra.browser.multi_installation import BrowserVerticalCollection
 
 OperatorInput = LocalBrowserInstallationDependencies | RegisteredProductionInputs
 OperatorFactory = Callable[
@@ -58,6 +62,7 @@ def _load_factory(reference: str) -> OperatorFactory:
 
 async def _serve(
     factory: OperatorFactory, port: int, host: str = "127.0.0.1",
+    *, role: Literal["api", "worker"] = "api",
 ) -> None:
     settings = ProductionSettings.from_environment()
     if settings.browser.enabled is not True:
@@ -69,7 +74,9 @@ async def _serve(
     async with manager as supplied:
         def bind(item: OperatorInput) -> LocalBrowserInstallationDependencies:
             if type(item) is RegisteredProductionInputs:
-                return build_registered_production_installation(components, item)
+                return build_registered_production_installation(
+                    components, item, artifact_scope_create=role == "worker",
+                )
             if type(item) is LocalBrowserInstallationDependencies:
                 return item
             raise _StartupError
@@ -78,6 +85,14 @@ async def _serve(
             tuple(bind(item) for item in supplied)
             if isinstance(supplied, tuple) else bind(supplied)
         )
+        if role == "worker":
+            vertical = build_production_browser_vertical(components, settings, installation)
+            await _run_worker(vertical)
+            return
+        if role != "api":
+            raise _StartupError
+        from app.main import create_production_app
+
         application = create_production_app(
             settings,
             browser_installation=lambda current: installation
@@ -93,6 +108,39 @@ async def _serve(
             raise _StartupError
 
 
+async def _run_worker(
+    vertical: BrowserVerticalComponents | BrowserVerticalCollection,
+) -> None:
+    """Only the existing PG worker owns browser resources and TTL cleanup."""
+    supervisor = BrowserWorkerSupervisor(
+        vertical.run_business_ready, cleanup_ready=vertical.cleanup_ready,
+        start_resources=vertical.start_resources, stop_resources=vertical.stop_resources,
+    )
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    previous = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+    installed: list[tuple[signal.Signals, bool]] = []
+    try:
+        for item in previous:
+            native = True
+            try:
+                loop.add_signal_handler(item, stopped.set)
+            except NotImplementedError:
+                native = False
+                signal.signal(item, lambda _signum, _frame: loop.call_soon_threadsafe(stopped.set))
+            installed.append((item, native))
+        await supervisor.start()
+        await stopped.wait()
+    finally:
+        try:
+            await supervisor.stop()
+        finally:
+            for item, native in installed:
+                if native:
+                    loop.remove_signal_handler(item)
+                signal.signal(item, previous[item])
+
+
 def _reject_component_mismatch() -> NoReturn:
     raise _StartupError
 
@@ -103,13 +151,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--factory")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--role", choices=("api", "worker"), default="api")
     try:
         args = parser.parse_args(argv)
         if (args.enable is not True or args.factory is None
                 or args.host not in {"127.0.0.1", "0.0.0.0"}
                 or not 1 <= args.port <= 65535):
             raise _StartupError
-        asyncio.run(_serve(_load_factory(args.factory), args.port, args.host))
+        asyncio.run(_serve(_load_factory(args.factory), args.port, args.host, role=args.role))
     except BaseException:
         # Never print a configured Site, origin, credential or exception detail.
         print("browser_registered_server_unavailable", file=sys.stderr)

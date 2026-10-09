@@ -103,13 +103,16 @@ from app.ports.browser_profile_store import (
 from app.ports.browser_publication_store import (
     BrowserPublicationError,
     BrowserPublicationReviewPort,
+    BrowserPublicationStorePort,
     PublicationOperation,
 )
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
+    BrowserRunStorePort,
     ProtectedRunEnvelope,
     RunAdmission,
     RunSnapshot,
+    checked_run_id,
 )
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
@@ -478,7 +481,9 @@ class BrowserVerticalComponents:
         ) -> bool:
             if scope != binding or first_run_id != source_run_id:
                 return False
-            source_current = await self.runs.get(owner, source_task_id, first_run_id)
+            source_current = await self.submission._read_teaching_source(
+                owner, source_task_id, first_run_id,
+            )
             replay_current = await self.runs.get(
                 owner, replay_task_id, second_run_id,
             )
@@ -1096,7 +1101,9 @@ def build_browser_vertical(
         )
         if (
             seed.source_kind != "registered_site"
-            or seed.effect != "read_only"
+            or (seed.effect != "read_only" and not (
+                initial and seed.effect == "controlled_write"
+            ))
             or owner.tenant_id != deps.tenant_id
             or admission.publication_digest.hex() != seed.digest
             or plan.task_id != admission.task_id
@@ -1139,11 +1146,11 @@ def build_browser_vertical(
             candidate_row is None or base_row is None
             or candidate_row["state"] not in {"prepared", "active", "inactive"}
             or (require_execution and candidate_row["state"] == "inactive")
-            or (initial and candidate_row["state"] != "prepared")
+            or (initial and require_execution and candidate_row["state"] != "prepared")
             or (not initial and candidate_row["state"] == "prepared"
                 and base_row["state"] != "active")
             or base_row["state"] not in (
-                {"prepared"} if initial else {"active", "inactive"}
+                {"prepared", "active", "inactive"} if initial else {"active", "inactive"}
             )
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
@@ -1155,7 +1162,9 @@ def build_browser_vertical(
         if (
             candidate != seed or base.digest != plan.source_publication_digest
             or base.source_kind != "registered_site"
-            or base.effect != "read_only"
+            or (base.effect != "read_only" and not (
+                initial and base.effect == "controlled_write"
+            ))
             or (initial and base != seed)
             or (not initial and deps.teaching_base is not None
                 and base != deps.teaching_base)
@@ -1168,7 +1177,7 @@ def build_browser_vertical(
             )
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
-        if initial and (await session.execute(text(
+        if initial and require_execution and (await session.execute(text(
             "SELECT 1 FROM browser_publications WHERE tenant_id=:tenant"
             " AND skill_id=:skill AND state='active' FOR SHARE"
         ), {"tenant": owner.tenant_id,
@@ -1181,8 +1190,11 @@ def build_browser_vertical(
             primitive = catalog.get(item.primitive_id)
             if (
                 primitive is None
-                or primitive.step.effect != "read_only"
-                or primitive.effect.actual_effect != "read_only"
+                or primitive.step.effect != primitive.effect.actual_effect
+                or (primitive.step.effect != "read_only" and not (
+                    initial and seed.effect == "controlled_write"
+                    and primitive.step.effect == "may_write"
+                ))
                 or item.rule_digest != canonical_digest(
                     "browser_site_step.v1", primitive.model_dump(mode="json"),
                 )
@@ -1206,7 +1218,8 @@ def build_browser_vertical(
             raise BrowserPublicationError("browser_teaching_grant_denied")
         current = await locked_capability(session, seed.capability.capability_id)
         if (
-            current is None or current.status != "active" or current.type != "query"
+            current is None or current.status != "active"
+            or current.type != ("action" if seed.effect == "controlled_write" else "query")
             or canonical_json(current.model_dump(mode="json"))
             != seed.capability_snapshot_json
             or capability_version_bindings(current) != seed.capability_bindings
@@ -1221,7 +1234,8 @@ def build_browser_vertical(
     async def resolve_teaching_publication(
         run: RunSnapshot,
     ) -> BrowserPublicationRecord | None:
-        if (seed.source_kind != "registered_site" or seed.effect != "read_only"
+        if (seed.source_kind != "registered_site"
+                or seed.effect not in {"read_only", "controlled_write"}
                 or run.admission.publication_digest.hex() != seed.digest):
             return None
         async with deps.session_factory() as session, session.begin():
@@ -1244,7 +1258,8 @@ def build_browser_vertical(
     async def current_teaching_publication(
         run: RunSnapshot, manifest: BrowserPublicationManifest,
     ) -> bool:
-        if (seed.source_kind != "registered_site" or seed.effect != "read_only"
+        if (seed.source_kind != "registered_site"
+                or seed.effect not in {"read_only", "controlled_write"}
                 or run.admission.publication_digest.hex() != seed.digest):
             return False
         async with deps.session_factory() as session, session.begin():
@@ -1306,7 +1321,8 @@ def build_browser_vertical(
         owner: BrowserOwner, skill_id: str, skill_version: str,
     ) -> BrowserPublicationRecord | None:
         if ((deps.teaching_base is None and (
-                seed.source_kind != "registered_site" or seed.effect != "read_only"
+                seed.source_kind != "registered_site"
+                or seed.effect not in {"read_only", "controlled_write"}
                 or seed.rollback_source_digest is not None))
                 or owner.tenant_id != deps.tenant_id
                 or skill_id != seed.skill.skill_id
@@ -1366,7 +1382,7 @@ def build_browser_vertical(
     ) -> TeachingPlan:
         if (deps.teaching_base is not None or manifest != seed
                 or seed.source_kind != "registered_site"
-                or seed.effect != "read_only"
+                or seed.effect not in {"read_only", "controlled_write"}
                 or seed.rollback_source_digest is not None
                 or admission.publication_digest.hex() != seed.digest):
             raise BrowserPublicationError("browser_initial_validation_unavailable")
@@ -1407,6 +1423,101 @@ def build_browser_vertical(
             owner, base.skill.skill_id, "teach", base.digest,
         ) is True)
 
+    # An exploration source has a different digest from the prepared candidate.
+    # Its read authority is separately bound to the one configured base manifest;
+    # the candidate's execution authority never accepts that digest.
+    base_publications: ActiveBrowserPublications | None = None
+    base_runs: PostgreSQLBrowserRunStore | None = None
+    if deps.teaching_base is not None:
+        base_manifest = BrowserPublicationManifest.model_validate_json(
+            deps.teaching_base.model_dump_json(),
+        )
+        base_authority = SingleSeedManifestAuthority(
+            tenant_id=deps.tenant_id, seed=base_manifest,
+            grants=deps.publication_grants, source_verifier=deps.source_verifier,
+        )
+        base_publications = ActiveBrowserPublications(
+            deps.session_factory, deps.capability_registry, base_authority,
+            authorize_in_session=base_authority.authorize_in_session,
+            capability_in_session=locked_capability,
+        )
+        source_publications = base_publications
+
+        async def check_source_publication(
+            session: AsyncSession, owner: BrowserOwner, digest: bytes,
+            capability_id: str, require_active: bool,
+        ) -> CapabilitySpec:
+            if (require_active or digest != bytes.fromhex(base_manifest.digest)
+                    or capability_id != base_manifest.capability.capability_id):
+                raise BrowserPublicationError("browser_teaching_source_denied")
+            return await source_publications.assert_current_in_session(
+                session, owner, base_manifest, require_active=False, operation="read",
+            )
+
+        async def check_source_publication_outside(
+            owner: BrowserOwner, digest: bytes, capability_id: str, require_active: bool,
+        ) -> CapabilitySpec:
+            async with deps.session_factory() as session, session.begin():
+                return await check_source_publication(
+                    session, owner, digest, capability_id, require_active,
+                )
+
+        source_auth = PostgreSQLBrowserCurrentAuth(
+            session_factory=deps.session_factory, cipher=cipher,
+            session_binder=deps.session_binder, policy=deps.policy,
+            publication_check=check_source_publication_outside,
+            publication_check_in_session=check_source_publication,
+        )
+        base_runs = PostgreSQLBrowserRunStore(
+            session_factory=deps.session_factory,
+            authority=PostgreSQLBrowserRunAuthority(
+                current_auth=source_auth, verification_check=execution.check_verified_candidate,
+                cancel_check=deps.cancel_check, cleanup_authorize=deps.cleanup_authorize,
+                cancel_check_in_session=deps.cancel_check_in_session,
+                cleanup_check=deps.cleanup_check,
+            ),
+            digest_keys=dict(deps.request_digest_keys),
+            active_digest_key_id=deps.active_request_digest_key_id,
+        )
+
+        async def authorize_replay_source(session: AsyncSession, run: RunSnapshot) -> None:
+            if run.owner.tenant_id != deps.tenant_id:
+                raise BrowserPublicationError("browser_teaching_source_denied")
+            digest = run.admission.publication_digest.hex()
+            if digest == seed.digest:
+                await runs._authority.check_run(session, run, "read")
+            elif digest == base_manifest.digest:
+                await source_auth.validate(session, run.admission, require_active=False)
+            else:
+                raise BrowserPublicationError("browser_teaching_source_denied")
+
+        runs.install_replay_source_reader(authorize_replay_source)
+
+    async def teaching_capture_stores(
+        owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> tuple[BrowserRunStorePort, BrowserPublicationStorePort]:
+        source_store, source_store_publications = base_runs, base_publications
+        if (owner.tenant_id != deps.tenant_id or source_store is None
+                or source_store_publications is None or deps.teaching_base is None):
+            raise BrowserPublicationError("browser_teaching_source_denied")
+        checked_run_id(task_id)
+        checked_run_id(run_id)
+        async with deps.session_factory() as session:
+            digest = (await session.execute(text(
+                "SELECT publication_digest FROM browser_runs WHERE tenant_id=:tenant"
+                " AND ai_user_id=:user AND session_id=:session"
+                " AND task_id=:task AND run_id=:run",
+            ), {"tenant": owner.tenant_id, "user": owner.user_id,
+                "session": owner.session_id, "task": task_id,
+                "run": run_id})).scalar_one_or_none()
+        if digest is None:
+            raise BrowserPublicationError("browser_teaching_source_denied")
+        if bytes(digest).hex() == seed.digest:
+            return runs, source_store_publications
+        if bytes(digest).hex() == deps.teaching_base.digest:
+            return source_store, source_store_publications
+        raise BrowserPublicationError("browser_teaching_source_denied")
+
     async def teaching_published_routes(
         owner: BrowserOwner, skill_id: str,
     ) -> frozenset[tuple[str, ...]]:
@@ -1443,19 +1554,18 @@ def build_browser_vertical(
         teaching_base_digest=(deps.teaching_base.digest
                               if deps.teaching_base is not None else None),
         teaching_candidate_digest=(seed.digest if seed.source_kind == "registered_site"
-                                   and seed.effect == "read_only" else None),
+                                   else None),
         teaching_candidate_version=(seed.skill.version
-                                    if seed.source_kind == "registered_site"
-                                    and seed.effect == "read_only" else None),
+                                    if seed.source_kind == "registered_site" else None),
         teaching_publication=(prepared_teaching_publication
-                              if seed.source_kind == "registered_site"
-                              and seed.effect == "read_only" else None),
+                              if seed.source_kind == "registered_site" else None),
         teaching_plan=(build_teaching_plan if deps.teaching_base is not None
                        else build_initial_validation_plan
-                       if seed.source_kind == "registered_site"
-                       and seed.effect == "read_only" else None),
+                       if seed.source_kind == "registered_site" else None),
         teaching_capture_grant=(teaching_capture_grant
-                                if deps.teaching_base is not None else None),
+                                 if deps.teaching_base is not None else None),
+        teaching_capture_stores=(teaching_capture_stores
+                                 if deps.teaching_base is not None else None),
         teaching_published_routes=(teaching_published_routes
                                    if deps.teaching_base is not None else None),
         teaching_review_request=deps.teaching_review_request,

@@ -148,6 +148,10 @@ class BrowserSubmissionService:
         teaching_capture_grant: Callable[
             [BrowserOwner, str], Awaitable[bool]
         ] | None = None,
+        teaching_capture_stores: Callable[
+            [BrowserOwner, str, str],
+            Awaitable[tuple[BrowserRunStorePort, BrowserPublicationStorePort]],
+        ] | None = None,
         teaching_published_routes: Callable[
             [BrowserOwner, str], Awaitable[frozenset[tuple[str, ...]]]
         ] | None = None,
@@ -191,6 +195,7 @@ class BrowserSubmissionService:
         self._teaching_publication = teaching_publication
         self._teaching_plan = teaching_plan
         self._teaching_capture_grant = teaching_capture_grant
+        self._teaching_capture_stores = teaching_capture_stores
         self._teaching_published_routes = teaching_published_routes
         self._teaching_review_request = teaching_review_request
         self._teaching_review_decide = teaching_review_decide
@@ -511,7 +516,8 @@ class BrowserSubmissionService:
                 ))
                 or (teaching and (
                     manifest.source_kind != "registered_site"
-                    or manifest.effect != "read_only"
+                    or (manifest.effect != "read_only"
+                        and self._teaching_base_digest is not None)
                     or manifest.digest != self._teaching_candidate_digest
                     or self._teaching_plan is None
                 ))
@@ -746,6 +752,16 @@ class BrowserSubmissionService:
                 publication = await self._publications.get_frozen(
                     owner, run.admission.publication_digest.hex(),
                 )
+                if (publication is None
+                        and run.admission.publication_digest.hex()
+                        == self._teaching_candidate_digest):
+                    plan = await self._store.load_teaching_plan(owner, task_id, run_id)
+                    if (plan is None or plan.task_id != task_id or plan.run_id != run_id
+                            or plan.publication_digest != self._teaching_candidate_digest):
+                        raise BrowserChatError("browser_teaching_candidate_unavailable")
+                    publication = await self._prepared_teaching_candidate(
+                        owner, plan.publication_digest,
+                    )
                 if publication is None:
                     raise BrowserChatError("browser_publication_unavailable")
                 schema = json.loads(publication.manifest.output.output_schema_json)
@@ -836,6 +852,13 @@ class BrowserSubmissionService:
             raise BrowserChatError("browser_teaching_candidate_unavailable")
         return record
 
+    async def _read_teaching_source(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> RunSnapshot:
+        select = self._teaching_capture_stores
+        store = (await select(owner, task_id, run_id))[0] if select is not None else self._store
+        return await store.get(owner, task_id, run_id)
+
     async def _capture_teaching_context(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
     ) -> tuple[RunTeachingSource, RunTeachingAuthority, ScopeBinding, RunSnapshot,
@@ -847,8 +870,13 @@ class BrowserSubmissionService:
         if grant is None:
             raise BrowserChatError("browser_teaching_unavailable")
         try:
-            run = await self._store.get(owner, task_id, run_id)
-            plan = await self._store.load_teaching_plan(owner, task_id, run_id)
+            select_stores = self._teaching_capture_stores
+            source_store, source_publications = (
+                await select_stores(owner, task_id, run_id)
+                if select_stores is not None else (self._store, self._publications)
+            )
+            run = await source_store.get(owner, task_id, run_id)
+            plan = await source_store.load_teaching_plan(owner, task_id, run_id)
             candidate_digest = (
                 plan.publication_digest if plan is not None
                 else self._teaching_candidate_digest
@@ -866,14 +894,14 @@ class BrowserSubmissionService:
                     or (plan is None and source_digest != self._teaching_base_digest)
                     or await grant(owner, candidate_digest) is not True):
                 raise BrowserChatError("browser_teaching_capture_denied", http_status=403)
-            steps = await self._store.read_teaching_steps(owner, task_id, run_id)
-            terminal_after = await self._store.load_traversal_terminal(
+            steps = await source_store.read_teaching_steps(owner, task_id, run_id)
+            terminal_after = await source_store.load_traversal_terminal(
                 owner, task_id, run_id,
             )
             candidate = await self._prepared_teaching_candidate(
                 owner, candidate_digest,
             )
-            base = await self._publications.get_frozen(owner, source_digest)
+            base = await source_publications.get_frozen(owner, source_digest)
             if (candidate is None or base is None
                     or candidate.manifest.digest != candidate_digest
                     or base.manifest.digest != source_digest
@@ -922,7 +950,7 @@ class BrowserSubmissionService:
                 else (_raise_teaching_source_unavailable()),
             )
             source = capture_authorized_run(run_id, binding=binding, authority=authority)
-            fresh = await self._store.get(owner, task_id, run_id)
+            fresh = await source_store.get(owner, task_id, run_id)
             if (fresh != run or await grant(owner, candidate_digest) is not True):
                 raise BrowserChatError("browser_target_stale", http_status=409)
             self._recheck(invocation)
@@ -991,7 +1019,7 @@ class BrowserSubmissionService:
             )
             if draft.publication != candidate.manifest:
                 raise BrowserChatError("browser_teaching_candidate_mismatch")
-            if (await self._store.get(owner, task_id, run_id) != run
+            if (await self._read_teaching_source(owner, task_id, run_id) != run
                     or await routes_for(owner, candidate.manifest.skill.skill_id) != published
                     or await grant(owner, candidate.manifest.digest) is not True):
                 raise BrowserChatError("browser_target_stale", http_status=409)
@@ -1117,12 +1145,13 @@ class BrowserSubmissionService:
         try:
             run = await self._store.get(owner, task_id, run_id)
             preparation = await self._store.load_write_preparation(owner, task_id, run_id)
-            if (run.phase != "queued" or run.cancel_requested or preparation is None
-                    or preparation.run_id != run_id or preparation.task_id != task_id):
+            if (preparation is None or preparation.run_id != run_id
+                    or preparation.task_id != task_id
+                    or preparation.publication_digest
+                    != run.admission.publication_digest.hex()):
                 raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
             request = await gate.get_request(preparation.request_id)
-            if (request != preparation.gate_request(owner)
-                    or request.expires_at <= datetime.now(UTC)):
+            if request != preparation.gate_request(owner):
                 raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
             candidate = HumanGateDecisionRecord(
                 request_id=request.request_id, task_id=task_id,
@@ -1136,11 +1165,17 @@ class BrowserSubmissionService:
             self._recheck(invocation)
             existing = await gate.get_decision(request.request_id)
             if existing is None:
+                if (run.phase != "queued" or run.cancel_requested
+                        or request.expires_at <= datetime.now(UTC)):
+                    raise BrowserChatError(
+                        "browser_write_confirmation_unavailable", http_status=409,
+                    )
                 try:
                     existing = await gate.record_decision(candidate)
                 except HumanGateConflictError:
                     existing = await gate.get_decision(request.request_id)
             if (existing is None
+                    or not request.requested_at <= existing.decided_at < request.expires_at
                     or existing.model_dump(exclude={"decided_at"})
                     != candidate.model_dump(exclude={"decided_at"})):
                 raise BrowserChatError("browser_write_confirmation_conflict", http_status=409)

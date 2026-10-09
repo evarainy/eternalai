@@ -36,11 +36,9 @@ from app.credential_polling import CredentialPollingScheduler
 from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.local_installation import (
     LocalBrowserInstallationDependencies,
-    build_local_browser_vertical,
+    build_production_browser_vertical,
 )
-from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
 from app.infra.browser.multi_installation import BrowserVerticalCollection
-from app.infra.browser.systemone_http import DecisionHTTPProvider
 from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
@@ -240,51 +238,8 @@ def create_production_app(
         raise RuntimeError("browser_production_installation_required")
     if browser_installation is not None:
         supplied = browser_installation(components)
-        installations = supplied if isinstance(supplied, tuple) else (supplied,)
-        if not installations or resolved_settings.browser.transport != "playwright":
-            raise RuntimeError("browser_production_authority_mismatch")
-        model_settings = (
-            resolved_settings.browser.decision_origin,
-            resolved_settings.browser.request_model,
-            resolved_settings.browser.deployment_model,
-        )
-        built: list[BrowserVerticalComponents] = []
-        for installation in installations:
-            if (type(installation) is not LocalBrowserInstallationDependencies
-                    or not isinstance(installation.source, RegisteredLocalSite)
-                    or installation.session_factory is not components.browser_session_factory
-                    or installation.capability_registry
-                    is not components.browser_capability_registry
-                    or installation.session_binder is not components.session_binder
-                    or installation.policy is not components.browser_policy
-                    or installation.sessions is not components.browser_sessions
-                    or installation.trace is not components.browser_trace):
-                raise RuntimeError("browser_production_authority_mismatch")
-            site = installation.source.manifest.site
-            if all(value is None for value in model_settings):
-                if (
-                    site.decision_budget.max_candidates != 1
-                    or site.exploration is not None
-                    or installation.input_mode != "structured"
-                    or installation.decision is not None
-                    or installation.approved_checkpoint is not None
-                ):
-                    raise RuntimeError("browser_production_authority_mismatch")
-            elif (
-                any(value is None for value in model_settings)
-                or type(installation.decision) is not DecisionHTTPProvider
-                or installation.decision._deployment.disposition != "local_model"
-                or installation.decision._deployment.endpoint_origin != model_settings[0]
-                or site.decision_manifest.request_model != model_settings[1]
-                or site.decision_manifest.deployment_model != model_settings[2]
-            ):
-                raise RuntimeError("browser_production_authority_mismatch")
-            installed = build_local_browser_vertical(installation)
-            if installed is None:
-                raise RuntimeError("browser_vertical_installation_required")
-            built.append(installed)
-        browser_vertical = (
-            built[0] if len(built) == 1 else BrowserVerticalCollection(tuple(built))
+        browser_vertical = build_production_browser_vertical(
+            components, resolved_settings, supplied,
         )
     return create_app(
         runtime=components.runtime,
@@ -312,14 +267,6 @@ def create_production_app(
         ),
         browser_submission=(
             browser_vertical.submission if browser_vertical is not None else None
-        ),
-        browser_worker_supervisor=(
-            BrowserWorkerSupervisor(
-                browser_vertical.run_business_ready, cleanup_ready=browser_vertical.cleanup_ready,
-                start_resources=browser_vertical.start_resources,
-                stop_resources=browser_vertical.stop_resources,
-            )
-            if browser_vertical is not None else None
         ),
     )
 
