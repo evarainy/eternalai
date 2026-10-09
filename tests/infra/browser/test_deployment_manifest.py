@@ -61,7 +61,7 @@ def test_local_offline_manifest_checks_exact_registered_files(tmp_path: Path) ->
             "asset_id": role, "role": role, "relative_path": name,
             "sha256": hashlib.sha256(content).hexdigest(), "license_ref": "fixture_license",
         })
-    body = {"deployment_id": "fixture", "assets": assets}
+    body = {"deployment_id": "fixture", "assets": tuple(assets)}
     body["manifest_digest"] = hashlib.sha256((
         "browser.local.offline.v1\n"
         + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -88,7 +88,7 @@ def test_registered_offline_lock_requires_font_certificate_and_matching_host(
             "license_ref": "synthetic-license-record",
         })
     body = {
-        "deployment_id": "fixture", "assets": assets,
+        "deployment_id": "fixture", "assets": tuple(assets),
         "runtime": {
             "platform": "linux", "architecture": "x86_64",
             "playwright_version": "1.63.0", "node_version": "v22.0.0",

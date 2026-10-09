@@ -280,7 +280,7 @@ def test_launcher_supplies_only_the_six_mounted_values_before_server(
 ) -> None:
     received: dict[str, object] = {}
     for index, (key, filename) in enumerate(launcher._SECRET_FILES.items()):
-        (tmp_path / filename).write_text(f"v{index}\n", encoding="utf-8")
+        (tmp_path / filename).write_bytes(f"v{index}\n".encode("utf-8"))
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(launcher, "_SECRET_ROOT", tmp_path)
     server = ModuleType("scripts.run_browser_registered_server")

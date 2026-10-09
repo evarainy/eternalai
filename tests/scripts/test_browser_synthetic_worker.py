@@ -16,6 +16,14 @@ async def _cleanup_ready() -> object:
     return ()
 
 
+async def _start_resources() -> None:
+    return None
+
+
+async def _stop_resources() -> None:
+    return None
+
+
 def test_worker_reuses_supervisor_and_stops_after_stop_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -30,9 +38,14 @@ def test_worker_reuses_supervisor_and_stops_after_stop_event(
         class FakeSupervisor:
             last_pass_failed = False
 
-            def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+            def __init__(
+                self, callback: object, *, cleanup_ready: object,
+                start_resources: object, stop_resources: object,
+            ) -> None:
                 assert callback == run_ready
                 assert cleanup_ready == _cleanup_ready
+                assert start_resources == _start_resources
+                assert stop_resources == _stop_resources
 
             async def start(self) -> None:
                 events.append("start")
@@ -44,6 +57,7 @@ def test_worker_reuses_supervisor_and_stops_after_stop_event(
         monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FakeSupervisor)
         await entry.run_worker(SimpleNamespace(
             run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+            start_resources=_start_resources, stop_resources=_stop_resources,
         ), stop)
 
     asyncio.run(execute())
@@ -58,9 +72,14 @@ def test_worker_does_not_report_success_after_failed_supervisor_pass(
     class FailedPassSupervisor:
         last_pass_failed = False
 
-        def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+        def __init__(
+            self, callback: object, *, cleanup_ready: object,
+            start_resources: object, stop_resources: object,
+        ) -> None:
             assert callback == run_ready
             assert cleanup_ready == _cleanup_ready
+            assert start_resources == _start_resources
+            assert stop_resources == _stop_resources
             self._run_ready = callback
 
         async def start(self) -> None:
@@ -81,6 +100,7 @@ def test_worker_does_not_report_success_after_failed_supervisor_pass(
         stop.set()
         await entry.run_worker(SimpleNamespace(
             run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+            start_resources=_start_resources, stop_resources=_stop_resources,
         ), stop)
 
     monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FailedPassSupervisor)
@@ -93,9 +113,14 @@ def test_worker_stops_supervisor_when_start_fails(monkeypatch: pytest.MonkeyPatc
     events: list[str] = []
 
     class FailingSupervisor:
-        def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+        def __init__(
+            self, callback: object, *, cleanup_ready: object,
+            start_resources: object, stop_resources: object,
+        ) -> None:
             assert callback == run_ready
             assert cleanup_ready == _cleanup_ready
+            assert start_resources == _start_resources
+            assert stop_resources == _stop_resources
 
         async def start(self) -> None:
             events.append("start")
@@ -111,6 +136,7 @@ def test_worker_stops_supervisor_when_start_fails(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(RuntimeError, match="synthetic start failure"):
         asyncio.run(entry.run_worker(SimpleNamespace(
             run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+            start_resources=_start_resources, stop_resources=_stop_resources,
         ), asyncio.Event()))
     assert events == ["start", "stop"]
 
@@ -127,9 +153,14 @@ def test_worker_stops_supervisor_on_cancellation(monkeypatch: pytest.MonkeyPatch
         class FakeSupervisor:
             last_pass_failed = False
 
-            def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+            def __init__(
+                self, callback: object, *, cleanup_ready: object,
+                start_resources: object, stop_resources: object,
+            ) -> None:
                 assert callback == run_ready
                 assert cleanup_ready == _cleanup_ready
+                assert start_resources == _start_resources
+                assert stop_resources == _stop_resources
 
             async def start(self) -> None:
                 events.append("start")
@@ -142,6 +173,7 @@ def test_worker_stops_supervisor_on_cancellation(monkeypatch: pytest.MonkeyPatch
         task = asyncio.create_task(
             entry.run_worker(SimpleNamespace(
                 run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+                start_resources=_start_resources, stop_resources=_stop_resources,
             ), asyncio.Event())
         )
         started_waiter = asyncio.create_task(started.wait())
@@ -175,6 +207,12 @@ def test_worker_settles_both_lanes_with_actual_supervisor(outcome: str) -> None:
     async def execute() -> None:
         business_started, cleanup_started, stop = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
+        async def start_resources() -> None:
+            calls.append("start_resources")
+
+        async def stop_resources() -> None:
+            calls.append("stop_resources")
+
         async def business() -> object:
             calls.append("business")
             business_started.set()
@@ -191,6 +229,7 @@ def test_worker_settles_both_lanes_with_actual_supervisor(outcome: str) -> None:
 
         task = asyncio.create_task(entry.run_worker(SimpleNamespace(
             run_business_ready=business, cleanup_ready=cleanup,
+            start_resources=start_resources, stop_resources=stop_resources,
         ), stop))
         readiness = asyncio.gather(business_started.wait(), cleanup_started.wait())
         try:
@@ -219,7 +258,7 @@ def test_worker_settles_both_lanes_with_actual_supervisor(outcome: str) -> None:
         )
 
     asyncio.run(execute())
-    assert calls == ["business", "cleanup"]
+    assert calls == ["start_resources", "business", "cleanup", "stop_resources"]
 
 
 @pytest.mark.parametrize(

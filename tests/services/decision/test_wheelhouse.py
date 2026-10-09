@@ -44,7 +44,7 @@ def _bundle(root: Path, *, notices: bool = True) -> Path:
                 "name": name,
                 "version": version,
                 "wheel_sha256": wheel_sha,
-                "source_url": f"https://pypi.org/pypi/{name}/{version}/json",
+                "source_url": f"https://pypi.org/pypi/{name}/{version.split('+')[0]}/json",
                 "license_id": "synthetic-test-only",
                 "notice_path": notice_path,
                 "notice_sha256": hashlib.sha256(notice_body).hexdigest(),

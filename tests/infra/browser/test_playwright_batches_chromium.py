@@ -232,7 +232,7 @@ def test_chromium_native_roles_cover_registered_complex_controls() -> None:
           <div role="menu"><div role="menuitem">Reports</div></div>
           <div role="tablist"><button role="tab" aria-selected="false">Details</button></div>
           <label><input type="checkbox">Include archived</label>
-          <button role="combobox" aria-expanded="false">Status</button>
+          <button role="combobox" aria-label="Status" aria-expanded="false">Status</button>
           <div role="listbox" hidden><div role="option">Open</div></div>
           <div role="dialog" hidden><button>Confirm</button></div>
         </section>""")

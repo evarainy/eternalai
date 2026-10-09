@@ -205,7 +205,7 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
             ("playwright", b"w" * 32), ("helper", b"h" * 32),
         )
     ]
-    body = {"deployment_id": "fixture", "assets": assets}
+    body = {"deployment_id": "fixture", "assets": tuple(assets)}
     body["manifest_digest"] = hashlib.sha256((
         "browser.local.offline.v1\n"
         + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

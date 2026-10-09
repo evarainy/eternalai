@@ -91,7 +91,7 @@ def test_offline_lock_rejects_configuration_change(tmp_path: Path) -> None:
             "sha256": digest.hex(), "license_ref": "synthetic-license-record",
         })
     body = {
-        "deployment_id": "fixture", "assets": assets,
+        "deployment_id": "fixture", "assets": tuple(assets),
         "runtime": {
             "platform": "linux", "architecture": "x86_64",
             "playwright_version": "1.63.0", "node_version": "v22.0.0",
