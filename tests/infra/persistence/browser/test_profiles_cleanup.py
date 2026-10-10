@@ -35,7 +35,7 @@ def _context() -> SimpleNamespace:
 async def test_cleanup_candidate_refuses_recent_head_and_live_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     row = {"disposition": "retired", "disposition_changed_at": None,
            "created_at": now - timedelta(days=3),
            "lease_epoch": 2}
@@ -43,8 +43,9 @@ async def test_cleanup_candidate_refuses_recent_head_and_live_run(
     store._retention_seconds = 86_400
     store._get_cleanup_row = AsyncMock(return_value=row)
     session = Mock()
-    session.execute = AsyncMock()
-    session.execute.return_value.scalar_one.return_value = now
+    clock = Mock()
+    clock.scalar_one.return_value = now
+    session.execute = AsyncMock(return_value=clock)
     with pytest.raises(BrowserProfileError) as pending:
         await store._cleanup_candidate(
             session, _context(), "generation",
@@ -77,7 +78,7 @@ async def test_cleanup_candidate_refuses_recent_head_and_live_run(
 
 @pytest.mark.anyio
 async def test_cleanup_candidate_never_accepts_orphan_without_transition_time() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     store = object.__new__(module.PostgreSQLBrowserProfileStore)
     store._retention_seconds = 86_400
     store._get_cleanup_row = AsyncMock(return_value={
@@ -85,8 +86,9 @@ async def test_cleanup_candidate_never_accepts_orphan_without_transition_time() 
         "created_at": now - timedelta(days=3),
     })
     session = Mock()
-    session.execute = AsyncMock()
-    session.execute.return_value.scalar_one.return_value = now
+    clock = Mock()
+    clock.scalar_one.return_value = now
+    session.execute = AsyncMock(return_value=clock)
     with pytest.raises(BrowserProfileError) as pending:
         await store._cleanup_candidate(
             session, _context(), "generation",
