@@ -147,8 +147,12 @@ class LocalOfflineAsset(Contract):
     def safe_path(self) -> LocalOfflineAsset:
         parts = self.relative_path.split("/")
         if (not self.relative_path.isascii()
-                or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", part)
-                       or part in {".", ".."} or part.startswith(".env") for part in parts)
+                or any(
+                    (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", part)
+                     and not (part == ".venv" and index < len(parts) - 1))
+                    or part in {".", ".."} or part.startswith(".env")
+                    for index, part in enumerate(parts)
+                )
                 or "\\" in self.relative_path):
             raise ValueError("browser_local_asset_path_invalid")
         return self

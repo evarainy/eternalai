@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.infra.browser.deployment_manifest import (
     BrowserDeployment,
+    LocalOfflineAsset,
     LocalOfflineManifest,
     SyntheticSource,
     select_local_offline_manifest,
@@ -113,3 +114,88 @@ def test_registered_offline_lock_requires_font_certificate_and_matching_host(
     monkeypatch.setattr(module.platform, "machine", lambda: "arm64")
     with pytest.raises(ValueError, match="offline_lock_incomplete"):
         manifest.require_registered_site_lock()
+
+
+@pytest.mark.parametrize("relative_path", [
+    ".venv/driver/node.bin",
+    "runtime/.venv/driver/node.bin",
+    "runtime/.venv/nested/.venv/driver/node.bin",
+])
+def test_local_offline_asset_allows_nested_venv_directory(relative_path: str) -> None:
+    asset = LocalOfflineAsset.model_validate({
+        "asset_id": "node", "role": "node", "relative_path": relative_path,
+        "sha256": "a" * 64, "license_ref": "fixture_license",
+    })
+    assert asset.relative_path == relative_path
+
+
+@pytest.mark.parametrize("relative_path", [
+    ".venv", "runtime/.venv",
+    ".venv/../node.bin", "runtime/./.venv/node.bin",
+    "runtime/.venv/.env", "runtime/.venv/.env.production",
+    "runtime/.venv/.env_backup/node.bin",
+    "runtime/.hidden/.venv/node.bin", "runtime/.venv/.hidden/node.bin",
+    "runtime/.venv-extra/node.bin", "runtime/.VENV/node.bin",
+    "runtime//.venv/node.bin", "runtime/.venv/node.bin/",
+    "/runtime/.venv/node.bin", "runtime\\.venv\\node.bin",
+    "runtime/.venv/nödé.bin",
+])
+def test_local_offline_asset_rejects_unsafe_venv_paths(relative_path: str) -> None:
+    with pytest.raises(ValidationError, match="browser_local_asset_path_invalid"):
+        LocalOfflineAsset.model_validate({
+            "asset_id": "node", "role": "node", "relative_path": relative_path,
+            "sha256": "a" * 64, "license_ref": "fixture_license",
+        })
+
+
+def _installed_venv_manifest(root: Path) -> tuple[LocalOfflineManifest, Path]:
+    assets = []
+    node = root / "runtime/.venv/driver/node.bin"
+    for role in ("node", "chromium", "playwright", "helper"):
+        path = node if role == "node" else root / (role + ".bin")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = ("fictitious-" + role).encode()
+        path.write_bytes(content)
+        assets.append({
+            "asset_id": role, "role": role,
+            "relative_path": path.relative_to(root).as_posix(),
+            "sha256": hashlib.sha256(content).hexdigest(), "license_ref": "fixture_license",
+        })
+    body = {"deployment_id": "fixture", "assets": tuple(assets)}
+    body["manifest_digest"] = hashlib.sha256((
+        "browser.local.offline.v1\n"
+        + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    ).encode("ascii")).hexdigest()
+    return LocalOfflineManifest.model_validate(body), node
+
+
+def test_installed_venv_assets_verify_actual_bytes_and_reject_changed_digest(
+    tmp_path: Path,
+) -> None:
+    manifest, node = _installed_venv_manifest(tmp_path)
+    verify_local_offline_assets(tmp_path, manifest)
+    assert node.read_bytes() == b"fictitious-node"
+    node.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="browser_local_asset_digest_invalid"):
+        verify_local_offline_assets(tmp_path, manifest)
+
+
+def test_installed_venv_assets_reject_resolved_path_outside_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "assets"
+    manifest, node = _installed_venv_manifest(root)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(node.read_bytes())
+    original_resolve = Path.resolve
+
+    def resolve(path: Path, strict: bool = False) -> Path:
+        # Inject out-of-root resolution with matching bytes; no native symlink privilege needed.
+        if path == node:
+            return outside
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(ValueError, match="browser_local_asset_path_invalid"):
+        verify_local_offline_assets(root, manifest)
+    assert outside.read_bytes() == b"fictitious-node"
