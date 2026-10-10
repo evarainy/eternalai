@@ -67,7 +67,7 @@ from app.infra.browser.local_resource_lifecycle import (
 from app.infra.browser.playwright_actions import LiveBrowser
 from app.infra.browser.playwright_observer import PlaywrightObserver
 from app.infra.browser.playwright_web_adapter import OperationAuthority
-from app.infra.browser.read_execution import RegisteredReadExecution
+from app.infra.browser.read_execution import RegisteredReadExecution, _log_read_execution_failure
 from app.infra.browser.systemone_http import DecisionHTTPProvider
 from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.auth import Principal
@@ -456,9 +456,11 @@ class LocalBrowserReadExecutionFactory:
             raise BrowserReadExecutionError("denied")
         self._opening.add(run.run_id)
         state: _Execution | None = None
+        failure_stage = "factory_source"
         try:
             if not await self.verify_source(manifest):
                 raise BrowserReadExecutionError("denied")
+            failure_stage = "factory_input"
             if (
                 private_input.get("schema_version") != "browser.request.input.v2"
                 or private_input.get("capability_id") != manifest.capability.capability_id
@@ -525,9 +527,12 @@ class LocalBrowserReadExecutionFactory:
             self._states[run.run_id] = state
             # Register cleanup ownership before worker-driver startup. Invalid
             # private input above never starts or allocates anything.
+            failure_stage = "factory_account_gate"
             await self._account_gate(state)
+            failure_stage = "factory_driver_start"
             await self.resources.ensure_started()
             await self._fence(state)
+            failure_stage = "factory_lease_reserve"
             try:
                 state.claim = await leases.reserve(
                     auth,
@@ -547,15 +552,18 @@ class LocalBrowserReadExecutionFactory:
                 # failure/independent cleanup path, never repeated acquisition.
                 raise
             await self._fence(state)
+            failure_stage = "factory_lease_attach"
             state.run = await checkpoint.attach_lease(
                 provider_key=self.resources.deployment.provider_key,
                 provider_manifest_digest=self.resources.deployment.manifest_digest,
                 lease_epoch=state.claim.lease_epoch,
             )
             await self._fence(state)
+            failure_stage = "factory_lease_start"
             state.claim = await leases.start_acquisition(state.claim)
             await self._fence(state, renew=True)
             restored: dict[str, object] | None = None
+            failure_stage = "factory_profile_load"
             if isinstance(self.source, RegisteredLocalSite):
                 if self._profiles is None or self._cipher is None:
                     raise BrowserReadExecutionError("unavailable")
@@ -605,6 +613,7 @@ class LocalBrowserReadExecutionFactory:
             async def subject_guard() -> None:
                 await self._fence(state)
 
+            failure_stage = "factory_resource_launch"
             state.resource = await self.resources.launch(
                 state.claim,
                 state.session,
@@ -613,6 +622,7 @@ class LocalBrowserReadExecutionFactory:
                 subject_guard=subject_guard,
                 storage_state=restored,
             )
+            failure_stage = "factory_subject_check"
             if isinstance(self.source, RegisteredLocalSite):
                 status = await self.resources.registered_subject_status(state.resource)
                 if status == "wrong_account":
@@ -632,6 +642,7 @@ class LocalBrowserReadExecutionFactory:
                         raise BrowserReadExecutionError("denied")
                 await self.resources.check_subject(state.claim, state.resource.reference)
             await self._fence(state)
+            failure_stage = "factory_lease_record_acquired"
             state.claim = await leases.record_acquired(state.claim, state.resource.acquire_token)
             state.acquired = True
             await self._fence(state, renew=True)
@@ -640,6 +651,7 @@ class LocalBrowserReadExecutionFactory:
                     principal, state.claim, run.task_id, run.run_id,
                     state.run.worker_epoch,
                 )
+            failure_stage = "factory_observer_register"
             observer = PlaywrightObserver(self, {self.source.region.region_id: self.source.region})
             state.observer = observer
             await observer.register_page(state.session, state.resource.page)
@@ -654,6 +666,7 @@ class LocalBrowserReadExecutionFactory:
                 key_digest=key_digest,
                 value_ref=manifest.site.read_rule.key_ref,
             )
+            failure_stage = "factory_context_build"
             context = self._context(state, manifest)
             assert state.session is not None
             bound_session = state.session
@@ -892,6 +905,14 @@ class LocalBrowserReadExecutionFactory:
                 ),
             )
         except BaseException as error:
+            if not isinstance(error, (asyncio.CancelledError, _BrowserReadDeferred)):
+                code = (
+                    error.code if isinstance(error, BrowserReadExecutionError)
+                    else error.failure.code if isinstance(error, BrowserOperationError)
+                    else "timeout" if isinstance(error, TimeoutError)
+                    else "unavailable"
+                )
+                _log_read_execution_failure(failure_stage, error, code)
             if state is not None:
                 state.cancellation.set()
                 if (isinstance(error, _BrowserReadDeferred)

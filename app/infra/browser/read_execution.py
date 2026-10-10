@@ -84,6 +84,41 @@ if TYPE_CHECKING:
     from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
 
 
+def _log_read_execution_failure(stage: str, error: BaseException, code: object) -> None:
+    """Closed diagnostics at existing catches, without exception or Run values."""
+    stages = {
+        "bridge_refresh", "bridge_publication_read", "bridge_input", "bridge_acquisition",
+        "bridge_context_setup", "bridge_executor", "bridge_post_execution",
+        "bridge_publication", "bridge_output_emission",
+        "factory_source", "factory_input", "factory_account_gate", "factory_driver_start",
+        "factory_lease_reserve", "factory_lease_attach", "factory_lease_start",
+        "factory_profile_load", "factory_resource_launch", "factory_subject_check",
+        "factory_lease_record_acquired", "factory_observer_register", "factory_context_build",
+    }
+    types = {
+        "RuntimeError", "ValueError", "TypeError", "TimeoutError", "PermissionError",
+        "FileNotFoundError", "OSError", "ImportError", "ModuleNotFoundError", "AttributeError",
+        "AssertionError", "KeyError", "UnicodeError", "OverflowError", "ValidationError",
+        "BrowserReadExecutionError", "BrowserOperationError", "BrowserRunStoreError",
+        "BrowserPublicationError", "BrowserLeaseError", "BrowserAuthorizationError",
+        "BrowserProfileError", "ProgrammingError", "IntegrityError", "OperationalError",
+        "DBAPIError", "InterfaceError",
+    }
+    name = type(error).__name__
+    diagnostic = {
+        "stage": stage if stage in stages else "unknown",
+        "exception_type": name if name in types else "UnknownException",
+        "trusted_error_code": code if type(code) is str and code in {
+            "unsupported", "denied", "stale", "cancelled", "timeout", "invalid_response",
+            "unavailable",
+        } else None,
+    }
+    logging.getLogger(__name__).error(
+        "browser_read_execution_diagnostic %s",
+        json.dumps(diagnostic, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+    )
+
+
 class BrowserOutputProjector(Protocol):
     def __call__(self, fields: Mapping[str, str]) -> Mapping[str, object]:
         """Frozen registered projection only; never log or retain private fields."""
@@ -380,10 +415,11 @@ class VerifiedBrowserReadExecution:
         read_result = "failed"
         origin = phase_started = time.monotonic()
         phase: str | None = "bootstrap"
+        failure_stage = "bridge_refresh"
         bridge_diagnostic: dict[str, str | int] = {}
 
         def mark(next_phase: str | None, result: str = "ok") -> None:
-            nonlocal phase, phase_started
+            nonlocal phase, phase_started, failure_stage
             now = time.monotonic()
             if phase is not None:
                 prefix = "read_bridge_" + phase
@@ -394,6 +430,8 @@ class VerifiedBrowserReadExecution:
                     prefix + "_parent": "adapter_execution", prefix + "_result": result,
                 })
             phase, phase_started = next_phase, now
+            if next_phase is not None:
+                failure_stage = "bridge_" + next_phase
 
         try:
             run = await checkpoint.refresh()
@@ -402,7 +440,9 @@ class VerifiedBrowserReadExecution:
                 or run.verification == "verified"
             ):
                 raise BrowserReadExecutionError("denied")
+            failure_stage = "bridge_publication_read"
             publication = await self._frozen_for_run(run)
+            failure_stage = "bridge_refresh"
             run = await checkpoint.refresh()
             if (
                 run.phase != "acquiring" or run.effect != "not_sent"
@@ -636,12 +676,14 @@ class VerifiedBrowserReadExecution:
             # No deferred retry is permitted after a resource was opened.
             return BrowserReadOutcome("unknown", None, dispatch_failure_code="unavailable")
         except BrowserReadExecutionError as error:
+            _log_read_execution_failure(failure_stage, error, error.code)
             if error.code == "cancelled":
                 read_result = "cancelled"
             if attempted:
                 return BrowserReadOutcome("unknown", None, dispatch_failure_code=error.code)
             raise
         except BrowserOperationError as error:
+            _log_read_execution_failure(failure_stage, error, error.failure.code)
             if error.failure.code == "cancelled":
                 read_result = "cancelled"
             return BrowserReadOutcome(
@@ -652,7 +694,8 @@ class VerifiedBrowserReadExecution:
         except asyncio.CancelledError:
             read_result = "cancelled"
             raise
-        except Exception:
+        except Exception as error:
+            _log_read_execution_failure(failure_stage, error, "invalid_response")
             if attempted:
                 return BrowserReadOutcome("unknown", None, dispatch_failure_code="invalid_response")
             raise BrowserReadExecutionError("invalid_response") from None
