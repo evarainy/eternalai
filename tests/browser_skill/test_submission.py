@@ -24,6 +24,7 @@ from app.ports.auth import (
     authenticated_session,
 )
 from app.ports.browser_chat import BrowserChatError
+from app.ports.browser_publication_store import BrowserPublicationError
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
     CanonicalRequest,
@@ -851,6 +852,19 @@ def test_non_oa_target_requires_a_registered_source_and_matching_binding() -> No
          "browser_request_admission_failed", None),
         ("teaching_plan", BrowserRunStoreError("browser_initial_plan_invalid"),
          "BrowserRunStoreError", "browser_initial_plan_invalid", "browser_initial_plan_invalid"),
+        ("teaching_plan", BrowserPublicationError("browser_teaching_candidate_denied"),
+         "BrowserPublicationError", "browser_request_admission_failed",
+         "browser_teaching_candidate_denied"),
+        ("teaching_plan", BrowserPublicationError("TEST_ONLY_PRIVATE_EXCEPTION_TEXT"),
+         "BrowserPublicationError", "browser_request_admission_failed", None),
+        ("teaching_plan", BrowserPublicationError("browser_teaching_candidate_denied",
+                                                 "TEST_ONLY_PRIVATE_EXCEPTION_TEXT"),
+         "BrowserPublicationError", "browser_request_admission_failed", None),
+        ("teaching_plan", BrowserPublicationError({"code": "TEST_ONLY_PRIVATE_EXCEPTION_TEXT"}),
+         "BrowserPublicationError", "browser_request_admission_failed", None),
+        ("teaching_plan", type("PublicationSubclass", (BrowserPublicationError,), {})(
+            "browser_teaching_candidate_denied"),
+         "PublicationSubclass", "browser_request_admission_failed", None),
         ("encryption", type("Unsafe\nTEST_ONLY_PRIVATE_CLASS", (ValueError,),
                             {"code": "browser_untrusted_detail"})(
                                 "TEST_ONLY_PRIVATE_EXCEPTION_TEXT"),

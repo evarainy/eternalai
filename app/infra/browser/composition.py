@@ -1155,8 +1155,12 @@ def build_browser_vertical(
         ):
             raise BrowserPublicationError("browser_teaching_candidate_denied")
         try:
-            candidate = BrowserPublicationManifest.model_validate(candidate_row["manifest"])
-            base = BrowserPublicationManifest.model_validate(base_row["manifest"])
+            candidate = BrowserPublicationManifest.model_validate_json(
+                canonical_json(candidate_row["manifest"]),
+            )
+            base = BrowserPublicationManifest.model_validate_json(
+                canonical_json(base_row["manifest"]),
+            )
         except ValueError:
             raise BrowserPublicationError("browser_teaching_candidate_denied") from None
         if (

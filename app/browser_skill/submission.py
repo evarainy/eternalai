@@ -61,7 +61,7 @@ from app.ports.browser_chat import (
     BrowserRunResponse,
     BrowserWritePreview,
 )
-from app.ports.browser_publication_store import BrowserPublicationStorePort
+from app.ports.browser_publication_store import BrowserPublicationError, BrowserPublicationStorePort
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
     BrowserRunStorePort,
@@ -581,6 +581,18 @@ class BrowserSubmissionService:
                     r"(?:browser|request|session|authentication)_[a-z0-9_]{1,80}", code,
                 ) else None
             )
+            publication_code = None
+            if type(error) is BrowserPublicationError and len(error.args) == 1:
+                publication_argument = error.args[0]
+                if type(publication_argument) is str and publication_argument in {
+                    "browser_initial_validation_unavailable",
+                    "browser_teaching_candidate_denied",
+                    "browser_initial_publication_exists",
+                    "browser_teaching_primitive_denied",
+                    "browser_teaching_grant_denied",
+                    "browser_publication_capability_changed",
+                }:
+                    publication_code = publication_argument
             diagnostic = {
                 "stage": admission_stage,
                 "exception_type": exception_type if re.fullmatch(
@@ -589,7 +601,7 @@ class BrowserSubmissionService:
                 "trusted_error_code": safe_code if type(error) in (
                     BrowserChatError, BrowserRunStoreError,
                     BrowserAuthorizationError, SchemaValidationError,
-                ) else None,
+                ) else publication_code,
                 "aggregate_code": safe_code,
                 "task_id": request.task_id if isinstance(request.task_id, str) and re.fullmatch(
                     r"[A-Za-z0-9_-]{1,96}", request.task_id,

@@ -37,6 +37,8 @@ from app.ports.browser_profile_store import (
     BrowserProfileError,
     BrowserProfileGeneration,
 )
+from app.ports.browser_publication_store import BrowserPublicationError
+from app.ports.browser_run_store import ProtectedRunEnvelope, RunAdmission
 from app.ports.browser_store import BrowserBindingKey, BrowserLeaseClaim, BrowserLeaseError
 from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
 from app.ports.policy_guard import PolicyGuardPort
@@ -238,9 +240,12 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
         "tenant", "reader", "oa", "binding", 1,
         registered_subject_digest("oa", "account_a"),
     )
+    registry = PostgreSQLCapabilityRegistry(sessions)
+    registry._get_in_session = AsyncMock(return_value=source.manifest.capability)
+    grants = Mock(check_in_session=AsyncMock(return_value=True))
     installed = build_local_browser_vertical(LocalBrowserInstallationDependencies(
         session_factory=sessions,
-        capability_registry=PostgreSQLCapabilityRegistry(sessions),
+        capability_registry=registry,
         session_binder=binder,
         policy=Mock(spec=PolicyGuardPort), source=source, binding=binding,
         deployment=deployment, decision=decision,
@@ -248,7 +253,7 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
             "local", (), deployment.manifest_digest,
         ),)),
         proof_context=BrowserClaimProofContext(b"p" * 32),
-        publication_grants=Mock(),
+        publication_grants=grants,
         cleanup_authority=Mock(),
         cleanup_authorize=AsyncMock(),
         payload_keys={"payload": b"p" * 32}, active_payload_key_id="payload",
@@ -280,3 +285,55 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
     statement, parameters = session.execute.await_args.args
     assert "SELECT state,activation_revision,manifest FROM browser_publications" in str(statement)
     assert parameters == {"tenant": "tenant", "digest": bytes.fromhex(source.manifest.digest)}
+
+    plan_callback = installed.submission._teaching_plan
+    assert plan_callback is not None
+    owner = BrowserOwner(tenant_id="tenant", user_id="reader", session_id="publication_session")
+    admission = RunAdmission(
+        owner=owner, task_id="initial_task", run_id="initial_run", target_system="oa",
+        binding_id="binding", binding_revision=1, auth_fingerprint=b"f" * 32,
+        auth_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        publication_digest=bytes.fromhex(source.manifest.digest),
+        input_revision=1, input_digest=b"i" * 32,
+        protected_input=ProtectedRunEnvelope(
+            "aes256gcm-browser-input-v1", "payload", b"n" * 12, b"c" * 16,
+        ),
+    )
+    stored = Mock()
+    stored.mappings.return_value.all.return_value = [{
+        "publication_digest": bytes.fromhex(source.manifest.digest),
+        "state": "prepared", "manifest": publication_row["manifest"],
+    }]
+    active = Mock()
+    active.scalar_one_or_none.return_value = None
+    session.execute.reset_mock()
+    session.execute.side_effect = [stored, active]
+    plan = asyncio.run(plan_callback(admission, source.manifest))
+    assert plan.purpose == "initial_validation"
+    assert plan.task_id == admission.task_id and plan.run_id == admission.run_id
+    assert plan.publication_digest == plan.source_publication_digest == source.manifest.digest
+    assert tuple(item.step_id for item in plan.steps) == tuple(
+        item.step_id for item in source.manifest.skill.steps
+    )
+    assert session.execute.await_count == 2
+    assert session.execute.await_args_list[0].args[1] == {
+        "tenant": "tenant", "candidate": admission.publication_digest,
+        "base": admission.publication_digest,
+    }
+    assert grants.check_in_session.await_count == 2
+    for call in grants.check_in_session.await_args_list:
+        assert call.args == (session, owner, source.manifest.skill.skill_id,
+                             "execute", source.manifest.digest)
+    registry._get_in_session.assert_awaited_once_with(
+        session, source.manifest.capability.capability_id, for_share=True,
+    )
+    # JSON mode must still reject a tampered manifest before grant/capability reads.
+    publication_row["manifest"]["digest"] = "0" * 64
+    session.execute.reset_mock()
+    session.execute.side_effect = [stored]
+    grants.check_in_session.reset_mock()
+    registry._get_in_session.reset_mock()
+    with pytest.raises(BrowserPublicationError, match="^browser_teaching_candidate_denied$"):
+        asyncio.run(plan_callback(admission, source.manifest))
+    grants.check_in_session.assert_not_awaited()
+    registry._get_in_session.assert_not_awaited()
