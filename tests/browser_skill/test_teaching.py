@@ -379,6 +379,7 @@ def test_reviewed_publication_reads_approval_and_switches_pg_head() -> None:
 
 def test_rollback_publishes_new_version_with_expected_head() -> None:
     source = registered_site().manifest
+    source_before = source.model_dump_json()
     current = rollback_version_manifest(
         source, skill_version="current_v2", site_version="current_site_v2",
     )
@@ -453,6 +454,20 @@ def test_rollback_publishes_new_version_with_expected_head() -> None:
     ))
     assert result.manifest == expected
     assert result.manifest.rollback_source_digest == source.digest
+    assert result.manifest.skill.version == "restored_v3"
+    assert result.manifest.site.version == "restored_site_v3"
+    assert result.manifest.digest not in {source.digest, current.digest}
+    assert result.manifest.skill.model_dump(
+        exclude={"version", "digest", "site_digest"},
+    ) == source.skill.model_dump(exclude={"version", "digest", "site_digest"})
+    assert result.manifest.site.model_dump(
+        exclude={"version", "digest"},
+    ) == source.site.model_dump(exclude={"version", "digest"})
+    assert result.manifest.verifier == source.verifier
+    assert result.manifest.output == source.output
+    assert result.manifest.capability_snapshot_json == source.capability_snapshot_json
+    assert result.manifest.capability_bindings == source.capability_bindings
+    assert source.model_dump_json() == source_before
     assert calls == [("prepare", expected.digest), ("activate", expected.digest)]
 
 

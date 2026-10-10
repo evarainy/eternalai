@@ -330,7 +330,8 @@ def rollback_version_manifest(
     candidate["digest"] = publication_digest(
         "browser_publication.durable.v1", candidate,
     )
-    return BrowserPublicationManifest.model_validate(candidate)
+    # JSON-mode dumps contain arrays; use the strict JSON validation boundary.
+    return BrowserPublicationManifest.model_validate_json(canonical_json(candidate))
 
 
 class BrowserPublicationRecord(Contract):
