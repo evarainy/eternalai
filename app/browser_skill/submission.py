@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -451,6 +453,11 @@ class BrowserSubmissionService:
             return await self._replay_canonical(
                 invocation, request, semantic, structured=entrypoint == "structured_internal",
             )
+        admission_stage: Literal[
+            "publication", "capability", "arguments", "schema", "binding",
+            "publication_current", "authorization", "input", "encryption",
+            "run_admission", "teaching_plan",
+        ] = "publication"
         try:
             publication = (
                 await self._teaching_publication(owner, skill_id, skill_version)
@@ -473,6 +480,7 @@ class BrowserSubmissionService:
                 and capability.target_system == "oa"
             )
             controlled_write = manifest.effect == "controlled_write"
+            admission_stage = "capability"
             if (
                 manifest.skill.skill_id != skill_id
                 or manifest.effect not in {"read_only", "controlled_write"}
@@ -496,19 +504,25 @@ class BrowserSubmissionService:
                 ))
             ):
                 raise BrowserChatError("browser_capability_unavailable", http_status=403)
+            admission_stage = "arguments"
             arguments = await arguments_for(capability)
             if type(arguments) is not dict:
                 raise BrowserChatError("browser_request_input_invalid", http_status=422)
+            admission_stage = "schema"
             _validate_schema(arguments, capability.input_schema)
+            admission_stage = "binding"
             binding = await self._bindings.resolve(principal, bound_session, capability)
             if (
                 binding.tenant_id != owner.tenant_id or binding.ai_user_id != owner.user_id
                 or binding.target_system != capability.target_system
             ):
                 raise BrowserChatError("browser_binding_stale", http_status=403)
+            admission_stage = "publication_current"
             if not teaching:
                 await self._publications.assert_current(owner, manifest)
+            admission_stage = "authorization"
             self._recheck(invocation)
+            admission_stage = "input"
             run_id = uuid4().hex
             payload: dict[str, object] = {
                 "schema_version": "browser.request.input.v2",
@@ -537,7 +551,9 @@ class BrowserSubmissionService:
                 binding.binding_revision, invocation.fingerprint, invocation.expires_at,
                 bytes.fromhex(manifest.digest), 1, input_digest,
             )
+            admission_stage = "encryption"
             protected = self._cipher.encrypt_input(identity, payload)
+            admission_stage = "run_admission"
             admission = RunAdmission(
                 owner=owner, task_id=request.task_id, run_id=run_id,
                 target_system=binding.target_system, binding_id=binding.binding_id,
@@ -546,6 +562,7 @@ class BrowserSubmissionService:
                 publication_digest=identity.publication_digest,
                 input_revision=1, input_digest=input_digest, protected_input=protected,
             )
+            admission_stage = "teaching_plan"
             plan = (
                 await self._teaching_plan(admission, manifest)
                 if teaching and self._teaching_plan is not None else None
@@ -556,6 +573,32 @@ class BrowserSubmissionService:
                     error, (BrowserChatError, BrowserRunStoreError, BrowserAuthorizationError),
                 ) else "browser_request_input_invalid" if isinstance(error, SchemaValidationError)
                 else "browser_request_admission_failed"
+            )
+            # Metadata only: never pass the exception, traceback or protected input to logging.
+            exception_type = type(error).__name__
+            safe_code = (
+                code if isinstance(code, str) and re.fullmatch(
+                    r"(?:browser|request|session|authentication)_[a-z0-9_]{1,80}", code,
+                ) else None
+            )
+            diagnostic = {
+                "stage": admission_stage,
+                "exception_type": exception_type if re.fullmatch(
+                    r"[A-Za-z][A-Za-z0-9_]{0,63}", exception_type,
+                ) else "UnknownException",
+                "trusted_error_code": safe_code if type(error) in (
+                    BrowserChatError, BrowserRunStoreError,
+                    BrowserAuthorizationError, SchemaValidationError,
+                ) else None,
+                "aggregate_code": safe_code,
+                "task_id": request.task_id if isinstance(request.task_id, str) and re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,96}", request.task_id,
+                ) else None,
+            }
+            # Put JSON in the message so the existing default formatter retains every field.
+            logging.getLogger(__name__).error(
+                "browser_request_admission_diagnostic %s",
+                json.dumps(diagnostic, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
             )
             try:
                 await self._store.reject_request(request, code)

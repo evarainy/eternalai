@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -29,6 +31,7 @@ from app.ports.browser_run_store import (
     RunAdmission,
     RunSnapshot,
 )
+from app.ports.credential_vault import BrowserAuthorizationError
 from app.ports.human_gate import (
     HumanGateDecisionRecord,
     HumanGateRequest,
@@ -835,3 +838,74 @@ def test_non_oa_target_requires_a_registered_source_and_matching_binding() -> No
             authenticated_session.reset(token)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("stage", "failure", "expected_type", "expected_code", "trusted_code"),
+    [
+        ("publication", RuntimeError("TEST_ONLY_PRIVATE_EXCEPTION_TEXT"), "RuntimeError",
+         "browser_request_admission_failed", None),
+        ("binding", BrowserAuthorizationError("browser_binding_denied"),
+         "BrowserAuthorizationError", "browser_binding_denied", "browser_binding_denied"),
+        ("encryption", ValueError("TEST_ONLY_PRIVATE_EXCEPTION_TEXT"), "ValueError",
+         "browser_request_admission_failed", None),
+        ("teaching_plan", BrowserRunStoreError("browser_initial_plan_invalid"),
+         "BrowserRunStoreError", "browser_initial_plan_invalid", "browser_initial_plan_invalid"),
+        ("encryption", type("Unsafe\nTEST_ONLY_PRIVATE_CLASS", (ValueError,),
+                            {"code": "browser_untrusted_detail"})(
+                                "TEST_ONLY_PRIVATE_EXCEPTION_TEXT"),
+         "UnknownException", "browser_request_admission_failed", None),
+    ],
+)
+def test_initial_admission_diagnostic_is_safe_and_preserves_failure(
+    caplog, stage, failure, expected_type, expected_code, trusted_code,
+) -> None:
+    async def scenario() -> None:
+        service, store, cipher, principal = _service(source_kind="registered_site")
+        token = _authentication(principal)
+        try:
+            publication = await service._publications.get_active(
+                service._owner(principal, "session_1"), "skill_1",
+            )
+            service._teaching_candidate_digest = publication.manifest.digest
+            service._teaching_publication = AsyncMock(return_value=publication)
+            service._teaching_plan = AsyncMock(return_value=Mock())
+            if stage == "publication":
+                service._teaching_publication.side_effect = failure
+            elif stage == "binding":
+                service._bindings.resolve = AsyncMock(side_effect=failure)
+            elif stage == "encryption":
+                cipher.encrypt_input = Mock(side_effect=failure)
+            else:
+                service._teaching_plan.side_effect = failure
+            response = await service.submit_initial_validation(
+                principal=principal, bound_session="session_1", skill_id="skill_1",
+                skill_version="v1", arguments={"business_key": "CASE_1"},
+                client_request_id="initial_diagnostic_1",
+            )
+            assert response.status == "failed"
+            assert response.data == {"kind": "failed", "error_code": expected_code}
+            assert store.rejected == [expected_code]
+            assert store.accepted == []
+        finally:
+            authenticated_session.reset(token)
+
+    with caplog.at_level(logging.ERROR, logger="app.browser_skill.submission"):
+        asyncio.run(scenario())
+    records = [record for record in caplog.records
+               if record.name == "app.browser_skill.submission"]
+    assert len(records) == 1
+    record = records[0]
+    prefix = "browser_request_admission_diagnostic "
+    assert record.getMessage().startswith(prefix)
+    diagnostic = json.loads(record.getMessage()[len(prefix):])
+    assert diagnostic == {
+        "stage": stage, "exception_type": expected_type,
+        "trusted_error_code": trusted_code, "aggregate_code": expected_code,
+        "task_id": "task_1",
+    }
+    assert record.exc_info is None
+    assert record.stack_info is None
+    for private in ("TEST_ONLY_PRIVATE_EXCEPTION_TEXT", "TEST_ONLY_PRIVATE_CLASS",
+                    "browser_untrusted_detail", "CASE_1", "user_1", "tenant_1", "session_1"):
+        assert private not in caplog.text
