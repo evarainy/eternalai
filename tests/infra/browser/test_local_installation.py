@@ -44,6 +44,7 @@ from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.task_store import SessionStorePort
 from app.ports.trace import TracePort
+from tests.browser_skill.test_runtime import persisted_run
 from tests.infra.browser.test_local_read_execution import registered_site
 from tests.services.decision.test_manifest import artifact_bundle
 
@@ -327,6 +328,28 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
     registry._get_in_session.assert_awaited_once_with(
         session, source.manifest.capability.capability_id, for_share=True,
     )
+    # Exercise the installed worker resolver against JSONB arrays. These explicit
+    # positive plan/auth fixtures do not claim current-authorization coverage.
+    resolution_run = replace(persisted_run(phase="running"), admission=admission)
+    installed.runs.load_teaching_plan_in_session = AsyncMock(return_value=plan)
+    installed.current_auth.validate = AsyncMock(return_value={})
+    session.execute.reset_mock()
+    session.execute.side_effect = None
+    session.execute.return_value = selected
+    resolved = asyncio.run(installed.execution._frozen_for_run(resolution_run))
+    assert resolved == record
+    installed.runs.load_teaching_plan_in_session.assert_awaited_once_with(session, admission)
+    installed.current_auth.validate.assert_awaited_once_with(
+        session, admission, teaching_plan=plan,
+    )
+    session.execute.assert_awaited_once()
+    assert session.execute.await_args.args[1] == {
+        "tenant": owner.tenant_id, "digest": admission.publication_digest,
+    }
+    publication_row["state"] = "inactive"
+    with pytest.raises(BrowserPublicationError, match="^browser_teaching_candidate_unavailable$"):
+        asyncio.run(installed.execution._frozen_for_run(resolution_run))
+    publication_row["state"] = "prepared"
     # JSON mode must still reject a tampered manifest before grant/capability reads.
     publication_row["manifest"]["digest"] = "0" * 64
     session.execute.reset_mock()

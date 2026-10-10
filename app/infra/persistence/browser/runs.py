@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -35,7 +36,7 @@ from app.browser_skill.models import (
     ScopeStamp,
     TeachingPlan,
 )
-from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
 from app.browser_skill.registry import canonical_digest
 from app.browser_skill.repair import (
     FormalFailedStep,
@@ -1071,10 +1072,22 @@ class PostgreSQLBrowserRunStore:
         if row is None:
             raise BrowserRunStoreError("browser_step_publication_unavailable")
         try:
-            manifest = BrowserPublicationManifest.model_validate(row["manifest"])
+            manifest = BrowserPublicationManifest.model_validate_json(
+                canonical_json(row["manifest"]),
+            )
         except ValueError:
+            logging.getLogger(__name__).error(
+                'browser_run_store_diagnostic {"stage":"frozen_publication_validation",'
+                '"exception_type":"BrowserRunStoreError",'
+                '"trusted_error_code":"browser_step_publication_invalid"}'
+            )
             raise BrowserRunStoreError("browser_step_publication_invalid") from None
         if manifest.digest != run.admission.publication_digest.hex():
+            logging.getLogger(__name__).error(
+                'browser_run_store_diagnostic {"stage":"frozen_publication_digest",'
+                '"exception_type":"BrowserRunStoreError",'
+                '"trusted_error_code":"browser_step_publication_invalid"}'
+            )
             raise BrowserRunStoreError("browser_step_publication_invalid")
         return manifest
 
@@ -1108,7 +1121,7 @@ class PostgreSQLBrowserRunStore:
             ):
                 raise BrowserRunStoreError("browser_step_audit_invalid")
             try:
-                step = RunTeachingStep.model_validate(payload["step"])
+                step = RunTeachingStep.model_validate_json(canonical_json(payload["step"]))
             except (KeyError, ValueError):
                 raise BrowserRunStoreError("browser_step_audit_invalid") from None
             if step.run_id != run.run_id or step.event.sequence != sequence:
@@ -1439,7 +1452,7 @@ class PostgreSQLBrowserRunStore:
         if event.get("schema_version") != _TEACHING_PLAN_VERSION:
             raise BrowserRunStoreError("browser_teaching_plan_invalid")
         try:
-            plan = TeachingPlan.model_validate(event["plan"])
+            plan = TeachingPlan.model_validate_json(canonical_json(event["plan"]))
         except (KeyError, ValueError):
             raise BrowserRunStoreError("browser_teaching_plan_invalid") from None
         if (
@@ -1476,7 +1489,9 @@ class PostgreSQLBrowserRunStore:
         if source_row is None:
             raise BrowserRunStoreError("browser_teaching_source_unavailable")
         try:
-            source = BrowserPublicationManifest.model_validate(source_row["manifest"])
+            source = BrowserPublicationManifest.model_validate_json(
+                canonical_json(source_row["manifest"]),
+            )
         except ValueError:
             raise BrowserRunStoreError("browser_teaching_source_invalid") from None
         if source.digest != plan.source_publication_digest:

@@ -1254,7 +1254,7 @@ def build_browser_vertical(
                 "digest": run.admission.publication_digest})).mappings().one_or_none()
             if row is None:
                 raise BrowserPublicationError("browser_teaching_candidate_unavailable")
-            record = BrowserPublicationRecord.model_validate(dict(row))
+            record = BrowserPublicationRecord.model_validate_json(canonical_json(dict(row)))
             if (record.manifest != seed or record.state == "inactive"):
                 raise BrowserPublicationError("browser_teaching_candidate_unavailable")
             return record
