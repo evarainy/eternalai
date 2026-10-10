@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import importlib.metadata
 import json
+import logging
 import os
 import re
 import secrets
@@ -664,6 +665,8 @@ class _NativeChromium:
 
     async def call(self, operation: str) -> dict[str, Any]:
         async with self.lock:
+            failure_stage = "native_request"
+            native_diagnostic: dict[str, object] = {}
             try:
                 if (
                     operation not in {"launch", "status", "stop"}
@@ -684,12 +687,45 @@ class _NativeChromium:
                     )
                     + b"\n"
                 )
+                failure_stage = "native_read"
                 async with asyncio.timeout(self.timeout):
                     await self.process.stdin.drain()
                     line = await self.process.stdout.readline()
                 if not line or len(line) > 8192:
                     raise ValueError
+                failure_stage = "native_response"
                 response = json.loads(line)
+                if (operation == "launch" and type(response) is dict
+                        and type(response.get("id")) is int
+                        and response.get("id") == self.sequence
+                        and response.get("ok") is False
+                        and response.get("code") == "unavailable"):
+                    stage, reason, code = (
+                        response.get("stage"), response.get("reason"), response.get("native_code"),
+                    )
+                    features = response.get("features")
+                    native_diagnostic = {
+                        "stage": stage if type(stage) is str and stage in {
+                            "ipc_request", "package_verification", "binary_verification",
+                            "browser_launch", "native_identity",
+                        } else "unknown",
+                        "native_reason": reason if type(reason) is str and reason in {
+                            "namespace_permission_denied", "sandbox_unavailable",
+                            "filesystem_unwritable", "browser_dependency_missing",
+                            "native_launch_unavailable",
+                        } else "unknown",
+                        "native_code": code if type(code) is str and code in {
+                            "EACCES", "EROFS", "ENOENT", "EPERM", "ETIMEDOUT",
+                            "EADDRINUSE", "EADDRNOTAVAIL",
+                        } else None,
+                        "features": {
+                            key: features[key] for key in (
+                                "crashpad_database_missing", "home_readonly", "namespace_denied",
+                                "sandbox_rewrite", "timeout", "spawn_eacces", "launch_exit",
+                                "endpoint_listen_error",
+                            ) if type(features) is dict and type(features.get(key)) is bool
+                        },
+                    }
                 if (
                     type(response) is not dict
                     or type(response.get("id")) is not int
@@ -708,10 +744,12 @@ class _NativeChromium:
                     or result.get("exited") is not (operation == "stop")
                 ):
                     raise ValueError
+                failure_stage = "native_identity"
                 original = {k: result[k] for k in ("identity", "pid", "start", "boot")}
                 if operation == "launch":
                     if self.original is not None:
                         raise ValueError
+                    failure_stage = "native_endpoint"
                     endpoint = urlsplit(result["endpoint"])
                     if (
                         endpoint.scheme != "ws"
@@ -732,7 +770,23 @@ class _NativeChromium:
                 return result
             except TimeoutError:
                 raise BrowserReadExecutionError("timeout") from None
-            except Exception:
+            except Exception as error:
+                if operation == "launch":
+                    name = type(error).__name__
+                    diagnostic = {
+                        "stage": failure_stage,
+                        "exception_type": name if name in {
+                            "ValueError", "JSONDecodeError", "KeyError", "TypeError",
+                            "AssertionError", "BrokenPipeError", "ConnectionResetError",
+                            "RuntimeError", "OSError",
+                        } else "UnknownException",
+                        "trusted_error_code": "unavailable", **native_diagnostic,
+                    }
+                    logging.getLogger(__name__).error(
+                        "browser_native_launch_diagnostic %s",
+                        json.dumps(diagnostic, ensure_ascii=True, sort_keys=True,
+                                   separators=(",", ":")),
+                    )
                 raise BrowserReadExecutionError("unavailable") from None
 
     async def dispose_helper(self) -> bool:
@@ -926,6 +980,11 @@ class LocalBrowserResources:
             raise BrowserReadExecutionError("denied")
         probe_started_at = time.monotonic()
         if not await self.driver.probe():
+            logging.getLogger(__name__).error(
+                'browser_resource_launch_diagnostic {"stage":"driver_probe",'
+                '"exception_type":"BrowserReadExecutionError",'
+                '"trusted_error_code":"unavailable"}'
+            )
             raise BrowserReadExecutionError("unavailable")
         stages_ms["driver_probe_ms"] = round(
             (time.monotonic() - probe_started_at) * 1000, 3,
@@ -978,9 +1037,11 @@ class LocalBrowserResources:
         # verified identity or an endpoint. Failed starts remain tracked.
         self._helpers[id(native)] = native
         item: _Resource | None = None
+        failure_stage = "guard"
         try:
             await guard()
             phase_started_at = time.monotonic()
+            failure_stage = "native_launch"
             result = await native.call("launch")
             stages_ms["native_launch_ms"] = round(
                 (time.monotonic() - phase_started_at) * 1000, 3,
@@ -993,9 +1054,11 @@ class LocalBrowserResources:
                 stages_ms=stages_ms,
             )
             self._resources[identity] = item
+            failure_stage = "guard"
             await guard()
             try:
                 phase_started_at = time.monotonic()
+                failure_stage = "browser_connect"
                 browser = await self.driver.chromium().connect(
                     result["endpoint"], timeout=deployment.timeout_seconds * 1000,
                 )
@@ -1007,8 +1070,10 @@ class LocalBrowserResources:
                 raise
             item.connection = browser
             browser.on("disconnected", lambda _browser: self._disconnected(item))
+            failure_stage = "guard"
             await guard()
             phase_started_at = time.monotonic()
+            failure_stage = "context_create"
             context = await asyncio.wait_for(
                 browser.new_context(
                     accept_downloads=(
@@ -1027,6 +1092,7 @@ class LocalBrowserResources:
             )
             item.context = context
             item.live = LiveBrowser(session, browser, context)
+            failure_stage = "guard"
             await guard()
 
             async def route(request: Any) -> None:
@@ -1048,6 +1114,7 @@ class LocalBrowserResources:
                     await request.abort("blockedbyclient")
                 await subject_guard()
 
+            failure_stage = "route_setup"
             await asyncio.wait_for(context.route("**/*", route), deployment.timeout_seconds)
             if not synthetic:
                 async def socket_route(socket: Any) -> None:
@@ -1063,33 +1130,70 @@ class LocalBrowserResources:
                 await asyncio.wait_for(
                     context.route_web_socket("**/*", socket_route), deployment.timeout_seconds,
                 )
+            failure_stage = "guard"
             await guard()
             phase_started_at = time.monotonic()
+            failure_stage = "page_create"
             page = await asyncio.wait_for(context.new_page(), deployment.timeout_seconds)
             stages_ms["page_create_ms"] = round(
                 (time.monotonic() - phase_started_at) * 1000, 3,
             )
             item.page = page
+            failure_stage = "guard"
             await guard()
             # Page routes take precedence over the adapter's later context
             # origin route, so continue_() cannot bypass exact-byte fulfillment.
             page.set_default_timeout(deployment.timeout_seconds * 1000)
             if synthetic:
+                failure_stage = "route_setup"
                 await asyncio.wait_for(page.route("**/*", route), deployment.timeout_seconds)
+            failure_stage = "guard"
             await guard()
             target = (source.manifest.site.source.origin + "/" if synthetic
                       else source.entry_url)
             phase_started_at = time.monotonic()
+            failure_stage = "navigation"
             await page.goto(target, wait_until="domcontentloaded")
             stages_ms["navigation_ms"] = round(
                 (time.monotonic() - phase_started_at) * 1000, 3,
             )
+            failure_stage = "guard"
             await guard()
             if synthetic:
+                failure_stage = "subject_check"
                 await self.check_subject(claim, reference)
+            failure_stage = "guard"
             await guard()
             return item
         except BaseException as error:
+            if not isinstance(error, asyncio.CancelledError) and not (
+                failure_stage == "native_launch"
+                and isinstance(error, BrowserReadExecutionError) and error.code == "unavailable"
+            ):
+                name = type(error).__name__
+                mapped_code = (
+                    error.code if isinstance(error, BrowserReadExecutionError)
+                    else error.failure.code if isinstance(error, BrowserOperationError)
+                    else "timeout" if isinstance(error, TimeoutError) else "unavailable"
+                )
+                diagnostic = {
+                    "stage": failure_stage,
+                    "exception_type": name if name in {
+                        "Error", "TimeoutError", "ValueError", "TypeError", "RuntimeError",
+                        "OSError", "BrowserReadExecutionError", "BrowserOperationError",
+                        "BrowserAuthorizationError", "BrowserLeaseError", "BrowserRunStoreError",
+                    } else "UnknownException",
+                    "trusted_error_code": mapped_code
+                    if type(mapped_code) is str and mapped_code in {
+                        "unsupported", "denied", "stale", "cancelled", "timeout",
+                        "invalid_response", "unavailable",
+                    } else None,
+                }
+                logging.getLogger(__name__).error(
+                    "browser_resource_launch_diagnostic %s",
+                    json.dumps(diagnostic, ensure_ascii=True, sort_keys=True,
+                               separators=(",", ":")),
+                )
             # Release is still forbidden until cleanup's independent grant and
             # native exit proof run. EOF is best-effort containment, not proof.
             if item is not None:
