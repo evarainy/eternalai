@@ -816,7 +816,7 @@ def test_non_oa_target_requires_a_registered_source_and_matching_binding() -> No
         token = _authentication(principal)
         try:
             denied = await synthetic.submit(**{**params, "principal": principal})
-            assert denied.data["error_code"] == "browser_capability_not_readonly"
+            assert denied.data["error_code"] == "browser_capability_unavailable"
             assert synthetic_store.accepted == []
         finally:
             authenticated_session.reset(token)

@@ -1273,9 +1273,16 @@ def test_reservation_wait_cannot_send_reused_or_changed_original_node(
             elif mutation == "disabled":
                 original.enabled = False
             elif mutation == "page_epoch":
-                w.view = w.view.model_copy(update={"scope": w.view.scope.model_copy(
+                next_scope = w.view.scope.model_copy(
                     update={"page_epoch": w.view.scope.page_epoch + 1},
-                )})
+                )
+                w.view = w.view.model_copy(update={
+                    "scope": next_scope,
+                    "candidates": tuple(candidate.model_copy(update={
+                        "ref": candidate.ref.model_copy(update={"scope": next_scope}),
+                    }) for candidate in w.view.candidates),
+                })
+                assert scope_snapshot(w.view, w.session.binding, w.plan.policy).scope == next_scope
             else:
                 w.frame.url = "https://unregistered.invalid"
             release.set()
