@@ -62,7 +62,8 @@ def test_bridge_logs_safe_original_stage_and_preserves_failure_mapping(
     else:
         cipher.decrypt_input.side_effect = error
     bridge = VerifiedBrowserReadExecution(
-        factory, cipher, publications, Mock(), result_digest_key=b"r" * 32,
+        factory=factory, lifecycle=Mock(), publications=publications, cipher=cipher,
+        result_digest_key=b"r" * 32,
     )
     checkpoint = Mock(spec=BrowserWorkerCheckpoint)
     checkpoint.refresh = AsyncMock(return_value=run)
