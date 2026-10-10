@@ -217,7 +217,22 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
         b"n" * 32, b"c" * 32, enabled=True,
         assets_root=tmp_path, offline_manifest=inventory,
     )
-    sessions: async_sessionmaker[AsyncSession] = async_sessionmaker()
+    # JSONB arrays are Python lists on the actual prepared-publication read boundary.
+    publication_row = {
+        "state": "prepared", "activation_revision": 0,
+        "manifest": json.loads(source.manifest.model_dump_json()),
+    }
+    assert isinstance(publication_row["manifest"]["capability_bindings"], list)
+    assert isinstance(publication_row["manifest"]["site"]["navigation_origins"], list)
+    session = AsyncMock(spec=AsyncSession)
+    session.__aenter__.return_value = session
+    session.__aexit__.return_value = None
+    session.begin.return_value.__aenter__.return_value = session
+    session.begin.return_value.__aexit__.return_value = None
+    selected = Mock()
+    selected.mappings.return_value.one_or_none.return_value = publication_row
+    session.execute.return_value = selected
+    sessions = cast(async_sessionmaker[AsyncSession], Mock(return_value=session))
     binder = PrincipalSessionBinder(binding_key=b"fictitious-test-session-key-32bytes")
     binding = BrowserBindingFact(
         "tenant", "reader", "oa", "binding", 1,
@@ -250,3 +265,18 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
     assert installed.chat is None
     assert installed.submission.skill_id == source.manifest.skill.skill_id
     assert installed.profiles is not None
+
+    callback = installed.submission._teaching_publication
+    assert callback is not None
+    record = asyncio.run(callback(
+        BrowserOwner(tenant_id="tenant", user_id="reader", session_id="publication_session"),
+        source.manifest.skill.skill_id, source.manifest.skill.version,
+    ))
+    assert record is not None
+    assert record.state == "prepared"
+    assert record.activation_revision == 0
+    assert record.manifest == source.manifest
+    session.execute.assert_awaited_once()
+    statement, parameters = session.execute.await_args.args
+    assert "SELECT state,activation_revision,manifest FROM browser_publications" in str(statement)
+    assert parameters == {"tenant": "tenant", "digest": bytes.fromhex(source.manifest.digest)}

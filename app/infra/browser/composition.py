@@ -1336,7 +1336,7 @@ def build_browser_vertical(
                 "digest": bytes.fromhex(seed.digest)})).mappings().one_or_none()
             if row is None:
                 return None
-            record = BrowserPublicationRecord.model_validate(dict(row))
+            record = BrowserPublicationRecord.model_validate_json(canonical_json(dict(row)))
             return record if record.state == "prepared" and record.manifest == seed else None
 
     async def build_teaching_plan(
