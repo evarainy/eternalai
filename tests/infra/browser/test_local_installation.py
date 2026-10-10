@@ -347,9 +347,11 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
         "tenant": owner.tenant_id, "digest": admission.publication_digest,
     }
     publication_row["state"] = "inactive"
+    publication_row["activation_revision"] = 2
     with pytest.raises(BrowserPublicationError, match="^browser_teaching_candidate_unavailable$"):
         asyncio.run(installed.execution._frozen_for_run(resolution_run))
     publication_row["state"] = "prepared"
+    publication_row["activation_revision"] = 0
     # JSON mode must still reject a tampered manifest before grant/capability reads.
     publication_row["manifest"]["digest"] = "0" * 64
     session.execute.reset_mock()
