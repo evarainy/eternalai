@@ -4,7 +4,7 @@
 
 ## 固定配置与装配
 
-- [ ] 为每个服务指定稳定 `service_config_id`、版本、deployment、tenant、issuer/resource、固定 MCP/注册/授权/token 地址和精确 callback/version。配置仅允许 HTTPS 或明确 loopback 测试 HTTP；不含真实 token。两个同名工具必须映射不同服务 Capability ID。
+- [ ] 为每个服务指定稳定 `service_config_id`、版本、deployment、tenant、issuer/resource、固定 MCP/注册/授权/token 地址和精确 callback/version。配置允许 HTTP 或 HTTPS，不按主机类型限制；固定 URL、OAuth issuer 同源及 callback 不同 hostname 等既有校验继续生效；不含真实 token。两个同名工具必须映射不同服务 Capability ID。
 - [ ] 由配置负责人通过既有安全配置渠道提供 `MCP_SERVICE_CONFIGS_JSON`，解析为 `Settings.mcp_services`；代码默认空列表、最多 16 个 profile，profile 默认 disabled。不得把本地替身配置复制为正式配置。
 - [ ] 配置变化先分析旧注册、旧 grant、UNKNOWN 制品及未决操作；存储会拒绝同 profile 的静默配置漂移。批准版本升级/兼容恢复方案后再迁移，不能删除重建或更换 client 来绕过旧制品约束。
 - [ ] 确认既有加密密钥安全供应及备份恢复流程。真实凭证仅进入环境/秘密渠道，不贴日志、截图、报告或 PR。

@@ -68,10 +68,7 @@ class ServiceConfig(BaseModel):
                 or parsed.fragment
                 or parsed.query
                 or not parsed.hostname
-                or not (
-                    parsed.scheme == "https"
-                    or (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1"})
-                )
+                or parsed.scheme not in {"http", "https"}
             ):
                 raise ValueError("mcp_configuration_invalid")
         issuer = urlsplit(self.issuer)
