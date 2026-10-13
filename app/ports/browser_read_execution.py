@@ -1,4 +1,4 @@
-"""Trusted READ_ONLY worker boundary; never deserialize these objects from HTTP.
+"""Trusted worker boundary for READ_ONLY and the explicit finite FILL_STOP mode.
 
 The durable store owns worker CAS. Implementations own real browser/provider IO
 and must fence each awaited boundary through the supplied checkpoint. No method
@@ -21,6 +21,7 @@ from app.browser_skill.repair import FormalRepairObservation, RepairFailureReaso
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
+from app.ports.browser_fill_stop import FillStopReport
 from app.ports.browser_run_store import (
     DispatchFailureCode,
     ProtectedRunEnvelope,
@@ -39,6 +40,14 @@ class BrowserReadExecutionError(RuntimeError):
 
 
 class BrowserWorkerCheckpoint(Protocol):
+    async def record_fill_stop(self, report: FillStopReport) -> None: ...
+
+    async def reserve_fill_stop(self) -> RunSnapshot:
+        """Consume the exact persisted FILL_STOP confirmation once before pipe IO."""
+        ...
+
+    async def assert_fill_stop_reservation(self) -> None: ...
+
     async def refresh(self, *, allow_cancel: bool = False) -> RunSnapshot:
         """Re-read current authority and renew exact worker epoch before/after IO."""
         ...
@@ -140,7 +149,7 @@ class BrowserReadExecutionPort(Protocol):
     async def execute(
         self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserReadOutcome:
-        """Actual Executor + IndependentVerifier; encrypt only the exact verified read."""
+        """Actual installed execution/verification; encrypt only its verified projection."""
         ...
 
     def verified_persisted(self, run: RunSnapshot) -> None:

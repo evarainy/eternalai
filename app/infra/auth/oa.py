@@ -74,6 +74,10 @@ _RSA_DIAGNOSTIC_TYPES = frozenset(
 
 OAAuthenticationFailureStage: TypeAlias = Literal[
     "oa_session_setup_failed",
+    "oa_setup_identity_derivation_failed",
+    "oa_setup_credential_snapshot_failed",
+    "oa_setup_http_session_factory_failed",
+    "oa_setup_clock_failed",
     "oa_rsa_request_failed",
     "oa_rsa_public_key_missing_or_invalid",
     "oa_rsa_code_type_invalid",
@@ -339,6 +343,7 @@ class OACredentialVerifier:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
         failure_kind: OAAuthenticationFailureKind = "local_failure"
         failure_diagnostics: dict[str, str] = {}
+        setup_stage: OAAuthenticationFailureStage = "oa_setup_identity_derivation_failed"
         try:
             # Anonymous input may only locate a read-only snapshot, never invalidate a writer.
             before_login: CredentialSnapshot | None = None
@@ -346,10 +351,13 @@ class OACredentialVerifier:
                 prospective_id = identity_surrogate(
                     credential.loginid.get_secret_value(), key=self._identity_hmac_key
                 )
+                setup_stage = "oa_setup_credential_snapshot_failed"
                 before_login = await self._credential_store.snapshot(
                     prospective_id, "oa", tenant_id=self._tenant_id
                 )
+            setup_stage = "oa_setup_http_session_factory_failed"
             session = self._session_factory()
+            setup_stage = "oa_setup_clock_failed"
             now = self._clock()
             failure_stage = "oa_rsa_request_failed"
             rsa_info = await session.get_json(
@@ -485,7 +493,7 @@ class OACredentialVerifier:
             logging.getLogger(__name__).warning(
                 "%s%s",
                 _AUTH_FAILURE_LOG_PREFIX,
-                failure_stage,
+                setup_stage if failure_stage == "oa_session_setup_failed" else failure_stage,
             )
             if failure_stage in _RSA_RESPONSE_FAILURE_STAGES:
                 for name, value in sorted(failure_diagnostics.items()):
@@ -653,6 +661,13 @@ def _login_succeeded(payload: dict[str, Any]) -> bool:
     return str(msgcode) == "0" and _is_true(loginstatus)
 
 
+def parse_oa_login_subject(payload: dict[str, Any]) -> str:
+    """Reuse checkLogin success/identity rules; never infer identity from page DOM."""
+    if not _login_succeeded(payload):
+        raise OAAuthenticationDeniedError("oa_browser_login_rejected")
+    return _required_oa_user_id(payload)
+
+
 def _authentication_failure_kind(
     stage: OAAuthenticationFailureStage,
     error: Exception,
@@ -704,4 +719,5 @@ __all__ = (
     "PrincipalRoleReader",
     "UrllibOASession",
     "make_urllib_session_factory",
+    "parse_oa_login_subject",
 )

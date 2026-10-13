@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import ssl
+from collections.abc import Awaitable, Callable, Mapping
+from time import monotonic
 from typing import Any
 
 import anyio
 
 from app.infra.mcp.transport import BoundedPostTransport
+from app.mcp.diagnostics import McpLogRefs, record_mcp_event
 from app.mcp.models import McpFailure, ServiceConfig, digest
 from app.ports.mcp import McpAuthorizationContext, McpTokenResolverPort
 from mcp import Client
@@ -15,9 +18,16 @@ from mcp.types import DiscoverResult
 
 
 class McpDriver:
-    def __init__(self, configs: dict[str, ServiceConfig], tokens: McpTokenResolverPort) -> None:
+    def __init__(
+        self,
+        configs: dict[str, ServiceConfig],
+        tokens: McpTokenResolverPort,
+        *,
+        tls_contexts: Mapping[tuple[str, int, str], ssl.SSLContext] | None = None,
+    ) -> None:
         self._configs = configs
         self._tokens = tokens
+        self._tls_contexts = dict(tls_contexts or {})
         self._global = anyio.Semaphore(4)
         self._connections: dict[tuple[str, str, str, str], anyio.Lock] = {}
         self._connection_users: dict[tuple[str, str, str, str], int] = {}
@@ -95,7 +105,49 @@ class McpDriver:
                 await before_send()
             return await self._tokens.resolve(context)
 
-        transport = BoundedPostTransport(config, token)
+        try:
+            return await self._exchange(
+                config,
+                token,
+                tool,
+                arguments,
+                input_digest=input_digest,
+                safety_digest=safety_digest,
+                task_id=context.task_id,
+                connection_id=context.connection_id,
+                tls_context=self._tls_contexts.get(
+                    (config.service_config_id, config.service_config_version, config.endpoint)
+                ),
+            )
+        except McpFailure as exc:
+            if exc.code == "mcp_authorization_rejected":
+                await self._tokens.reject(context)
+            raise
+
+    @staticmethod
+    async def _exchange(
+        config: ServiceConfig,
+        token: Callable[[], Awaitable[str]],
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        input_digest: str,
+        safety_digest: str,
+        task_id: str = "",
+        trace_id: str = "",
+        connection_id: str = "",
+        tls_context: ssl.SSLContext | None = None,
+    ) -> dict[str, Any]:
+        """Shared SDK exchange; authorization completion supplies its own guard.
+
+        Kept private to infrastructure. Ordinary call() still requires an ACTIVE
+        context; the fixed authorization probe cannot dispatch arbitrary tools.
+        """
+        started = monotonic()
+        refs: McpLogRefs = {
+            "task_id": task_id, "trace_id": trace_id, "connection_id": connection_id,
+        }
+        transport = BoundedPostTransport(config, token, tls_context=tls_context, **refs)
         called = False
         contract_failure: McpFailure | None = None
         try:
@@ -116,6 +168,9 @@ class McpDriver:
                     if client.protocol_version != config.protocol_version:
                         raise McpFailure("mcp_protocol_mismatch")
                     # This provider's complete per-grant catalog has ttlMs=0 and no pagination.
+                    record_mcp_event(
+                        "catalog_validation", "started", profile=config, tool=tool, **refs
+                    )
                     listing = await client.list_tools(cache_mode="bypass")
                     if listing.next_cursor or len(listing.tools) > 256:
                         raise McpFailure("mcp_catalog_invalid")
@@ -138,13 +193,28 @@ class McpDriver:
                     ):
                         contract_failure = McpFailure("mcp_catalog_drift")
                         raise contract_failure
+                    record_mcp_event(
+                        "catalog_validation",
+                        "success",
+                        profile=config,
+                        tool=tool,
+                        outbound_count=len(transport.sent_methods),
+                        **refs,
+                    )
                     called = True
                     result = await client.call_tool(tool, arguments)
+                    record_mcp_event(
+                        "tool_return",
+                        "success",
+                        profile=config,
+                        tool=tool,
+                        started_at=started,
+                        outbound_count=transport.sent_methods.count("tools/call"),
+                        **refs,
+                    )
                     return result.model_dump(by_alias=True, mode="json", exclude_none=True)
         except Exception as exc:
             failure = transport.last_failure
-            if failure is not None and failure.code == "mcp_authorization_rejected":
-                await self._tokens.reject(context)
             code = (
                 contract_failure.code
                 if contract_failure
@@ -152,6 +222,18 @@ class McpDriver:
                 if failure
                 else exc.code
                 if isinstance(exc, McpFailure)
+                else "mcp_timeout"
+                if isinstance(exc, TimeoutError)
                 else "mcp_protocol_failed"
+            )
+            record_mcp_event(
+                "tool_return",
+                "failed",
+                profile=config,
+                tool=tool,
+                error_code=code,
+                started_at=started,
+                outbound_count=transport.sent_methods.count("tools/call"),
+                **refs,
             )
             raise McpFailure(code, may_have_sent=called) from None

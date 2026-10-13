@@ -28,6 +28,7 @@ from app.browser_skill.repair import (
     RepairFailureReason,
 )
 from app.browser_skill.run_contracts import CommitFact
+from app.ports.browser_fill_stop import FillStopReport
 
 if TYPE_CHECKING:
     from app.browser_skill.site_rules import SiteStepRule
@@ -298,6 +299,16 @@ class BrowserRunAuthorityPort(Protocol):
 
 
 class BrowserRunStorePort(Protocol):
+    async def record_fill_stop(self, claim: RunSnapshot, report: FillStopReport) -> None: ...
+
+    async def load_fill_stop(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> FillStopReport | None: ...
+
+    async def reserve_fill_stop(self, claim: RunSnapshot) -> RunSnapshot: ...
+
+    async def assert_fill_stop_reservation(self, claim: RunSnapshot) -> None: ...
+
     async def lookup_request(
         self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
         *, settle_expired: bool = False,

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fictional record query</title></head>
+<body>
+<section id="query-region">
+  <h1>Task-owned fictional records</h1>
+  <form action="/result" method="post">
+    <label for="code">Query code</label>
+    <input id="code" name="code" aria-label="Query code" data-testid="query-code" maxlength="16" required>
+    <label for="period">Query period</label>
+    <input id="period" name="period" aria-label="Query period" data-testid="query-period" maxlength="7" required>
+    <input type="hidden" name="query_sequence" value="{{QUERY_SEQUENCE}}">
+    <button type="submit" data-testid="query-submit">Run query</button>
+  </form>
+  {{RESULT}}
+  <span id="projection-complete">Complete</span>
+</section>
+</body>
+</html>

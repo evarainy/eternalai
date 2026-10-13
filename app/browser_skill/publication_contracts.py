@@ -186,7 +186,7 @@ class BrowserVerifierDefinition(Contract):
     verifier_id: OpaqueId
     version: OpaqueId
     digest: Digest
-    contract: Literal["independent_confirmed_key_v1", "independent_query_detail_v1"] = (
+    contract: Literal["independent_confirmed_key_v1", "independent_query_detail_v1", "d_form_fields_v1"] = (
         "independent_confirmed_key_v1"
     )
     read_rule: ReadRule
@@ -196,7 +196,7 @@ class BrowserVerifierDefinition(Contract):
 
     @model_validator(mode="after")
     def integrity(self) -> Self:
-        if (self.contract == "independent_query_detail_v1") != isinstance(
+        if (self.contract in {"independent_query_detail_v1", "d_form_fields_v1"}) != isinstance(
             self.read_rule, RegisteredQueryReadRule,
         ):
             raise ValueError("browser_publication_verifier_mode_mismatch")
@@ -237,7 +237,7 @@ class BrowserPublicationManifest(Contract):
         "registered_synthetic_fixture"
     )
     effect: Literal["read_only", "controlled_write"] = "read_only"
-    execution_mode: Literal["browser_async_v1"] = "browser_async_v1"
+    execution_mode: Literal["browser_async_v1", "d_form_fill_stop_v1"] = "browser_async_v1"
     rollback_source_digest: Digest | None = None
 
     @property
@@ -276,6 +276,22 @@ class BrowserPublicationManifest(Contract):
         ):
             raise ValueError("browser_publication_rollback_source_invalid")
         has_write = any(rule.step.effect == "may_write" for rule in self.site.steps)
+        if self.execution_mode == "d_form_fill_stop_v1" and (
+            self.source_kind != "registered_site" or self.effect != "controlled_write"
+            or self.verifier.contract != "d_form_fields_v1"
+            or self.skill.parameters != ("bound_form", "category", "position", "description")
+            or set(capability.input_schema.get("properties", {})) != {"category", "position", "description"}
+            or set(capability.input_schema.get("required", [])) != {"category", "position", "description"}
+            or capability.input_schema.get("additionalProperties") is not False
+            or tuple((step.step_id, step.operation, step.effect) for step in self.skill.steps)
+            != (("category", "select_option", "may_write"),
+                ("position", "fill", "may_write"), ("description", "fill", "may_write"))
+            or self.site.read_rule.key_ref.name != "bound_form"
+            or self.site.traversal is not None or self.site.exploration is not None
+        ):
+            raise ValueError("browser_fill_stop_contract_invalid")
+        if self.verifier.contract == "d_form_fields_v1" and self.execution_mode != "d_form_fill_stop_v1":
+            raise ValueError("browser_fill_stop_contract_invalid")
         if ((self.effect == "controlled_write") != has_write
                 or (has_write and self.source_kind != "registered_site")):
             raise ValueError("browser_publication_effect_denied")

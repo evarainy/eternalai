@@ -27,9 +27,12 @@ from app.credential_polling import CredentialPollingPolicy, CredentialPollingSer
 from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.auth.crypto import identity_surrogate
 from app.infra.auth.oa import (
+    OAAuthenticationDeniedError,
     OAAuthenticationError,
     OACredentialVerifier,
+    OAInvalidResponseError,
     make_urllib_session_factory,
+    parse_oa_login_subject,
 )
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
 from app.ports.auth import (
@@ -424,6 +427,26 @@ def test_binding_verification_does_not_persist_a_session_before_identity_match()
     assert store.records == []
     assert openers[0].check_login_calls == 1
     assert openers[0].requested_user_ids == ["123"]
+
+
+@pytest.mark.parametrize("payload,subject", [
+    ({"msgcode": 0, "loginstatus": True, "userid": 731}, "731"),
+    ({"msgcode": "0", "loginstatus": "true", "userid": " 731 "}, "731"),
+])
+def test_shared_browser_login_parser_uses_existing_success_identity_rules(payload, subject):
+    assert parse_oa_login_subject(payload) == subject
+
+
+@pytest.mark.parametrize("payload,error", [
+    ({"msgcode": 1, "loginstatus": True, "userid": "731"}, OAAuthenticationDeniedError),
+    ({"msgcode": 0, "loginstatus": False, "userid": "731"}, OAAuthenticationDeniedError),
+    ({"msgcode": False, "loginstatus": True, "userid": "731"}, OAInvalidResponseError),
+    ({"msgcode": 0, "loginstatus": True, "userid": True}, ValueError),
+    ({"msgcode": 0, "loginstatus": True, "userid": ""}, ValueError),
+])
+def test_shared_browser_login_parser_rejects_unproven_or_invalid_identity(payload, error):
+    with pytest.raises(error):
+        parse_oa_login_subject(payload)
 
 
 def test_oa_string_userid_shape_remains_compatible() -> None:

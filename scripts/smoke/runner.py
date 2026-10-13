@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn, TypeAlias
 from urllib.error import HTTPError, URLError
@@ -1873,7 +1874,9 @@ def _render_drift_node(node: dict[str, Any]) -> str:
 
 
 def _run_capability_registry_preflight(settings: ProductionSettings) -> bool:
-    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+    with asyncio.Runner(
+        loop_factory=partial(make_event_loop, database_url=settings.database_url)
+    ) as runner:
         result = runner.run(_inspect_capability_registry(settings))
     print(f"capability_registry_preflight={result.state}")
     print(
@@ -2144,7 +2147,9 @@ def _run_persisted_provider_checks_with_supported_loop(
     *,
     account: str,
 ) -> tuple[LiveOutcome, LiveOutcome]:
-    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+    with asyncio.Runner(
+        loop_factory=partial(make_event_loop, database_url=settings.database_url)
+    ) as runner:
         return runner.run(
             _run_persisted_provider_checks(settings, account=account)
         )
@@ -2179,7 +2184,9 @@ async def _run_persisted_provider_checks(
 def _run_live_checks_with_supported_loop(
     settings: ProductionSettings,
 ) -> tuple[LiveOutcome, LiveOutcome]:
-    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+    with asyncio.Runner(
+        loop_factory=partial(make_event_loop, database_url=settings.database_url)
+    ) as runner:
         return runner.run(_run_live_checks(settings))
 
 

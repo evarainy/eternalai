@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict
@@ -12,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from app.api.v1.csrf import CSRFDependency
 from app.ports.auth import (
     AuthenticatedSessionContext,
+    AuthenticationError,
     AuthenticationPort,
     LoginCredential,
     Principal,
@@ -23,6 +26,7 @@ from app.ports.auth import (
 
 SESSION_COOKIE_NAME = "eternalai_session"
 SESSION_COOKIE_PATH = "/api/v1"
+_logger = logging.getLogger(__name__)
 PrincipalDependency = Callable[[Request], Awaitable[Principal]]
 _MAX_LOGIN_BODY_BYTES = 16_384
 
@@ -134,20 +138,25 @@ def make_router(
         request: Request,
         response: Response,
     ) -> LoginResponse:
+        request_id = uuid4().hex
         if (
             authentication is None
             or session_tokens is None
             or session_cookie_ttl_seconds is None
             or session_cookie_ttl_seconds <= 0
         ):
+            _log_login_failure(request_id, "authentication_unavailable")
             _raise_authentication_failed()
         body = await _parse_login_credential(request)
         if body is None:
+            _log_login_failure(request_id, "invalid_login_request")
             _raise_authentication_failed()
         assert authentication is not None
         assert session_tokens is not None
         assert session_cookie_ttl_seconds is not None
-        token = await _authenticate_and_issue(authentication, session_tokens, body)
+        token = await _authenticate_and_issue(
+            authentication, session_tokens, body, request_id=request_id
+        )
         if token is None:
             _raise_authentication_failed()
         response.set_cookie(
@@ -219,6 +228,14 @@ def make_router(
     return router
 
 
+def _log_login_failure(request_id: str, category: str) -> None:
+    _logger.warning(
+        "auth_login_failed route=/api/v1/auth/login status=401 request_id=%s category=%s",
+        request_id,
+        category,
+    )
+
+
 async def _parse_login_credential(request: Request) -> LoginCredential | None:
     declared_length = request.headers.get("content-length")
     if declared_length is not None:
@@ -245,14 +262,25 @@ async def _authenticate_and_issue(
     authentication: AuthenticationPort,
     session_tokens: SessionTokenPort,
     credential: LoginCredential,
+    *,
+    request_id: str,
 ) -> str | None:
+    stage = "authentication"
     try:
         principal = await authentication.authenticate(credential)
+        stage = "session_issue"
         token = session_tokens.issue(principal)
         if not isinstance(token, str) or not token:
+            _log_login_failure(request_id, "session_issue_invalid")
             return None
         return token
-    except Exception:
+    except Exception as error:
+        category = (
+            "authentication_error"
+            if isinstance(error, AuthenticationError)
+            else "unexpected_exception"
+        )
+        _log_login_failure(request_id, f"{stage}_{category}")
         return None
 
 

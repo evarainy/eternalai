@@ -134,6 +134,7 @@ class BrowserSubmissionService:
         input_digest_key: bytes, enabled: bool = False,
         write_gate: HumanGatePort | None = None,
         confirmed_key_digest: Callable[[bytes, str], str] | None = None,
+        fill_stop_reports: bool = False,
         list_artifacts: Callable[[RunSnapshot], Awaitable[tuple[BrowserArtifactView, ...]]]
         | None = None,
         read_artifact: Callable[[RunSnapshot, str], Awaitable[tuple[str, bytes]]]
@@ -185,6 +186,7 @@ class BrowserSubmissionService:
         self._bindings, self._cipher = bindings, cipher
         self._binder, self._trace = session_binder, trace
         self._input_key, self._enabled = input_digest_key, enabled
+        self._fill_stop_reports = fill_stop_reports
         checked_run_id(skill_id)
         self._sessions, self._skill_id = sessions, skill_id
         self._write_gate = write_gate
@@ -263,10 +265,49 @@ class BrowserSubmissionService:
                 or current.expires_at != invocation.expires_at):
             raise BrowserChatError("authentication_required", http_status=401)
 
+    @staticmethod
+    def _ordinary_semantic(message: str, channel: str) -> bytes:
+        if (type(message) is not str or not message.strip()
+                or channel not in {"web", "cli", "api", "mock"}):
+            raise BrowserChatError("browser_request_input_invalid", http_status=422)
+        semantic = _json({"schema_version": "browser.request.semantic.ordinary.v1",
+                          "channel": channel, "message": message})
+        if len(semantic) > 1_048_576:
+            raise BrowserChatError("browser_request_input_invalid", http_status=422)
+        return semantic
+
+    async def lookup_ordinary_request(
+        self, *, principal: Principal, bound_session: str, client_request_id: str,
+        message: str, channel: Literal["web", "cli", "api", "mock"],
+    ) -> ResponseEnvelope | None:
+        invocation = self._invocation(principal, bound_session)
+        semantic = self._ordinary_semantic(message, channel)
+        try:
+            request = await self._store.lookup_request(
+                invocation.owner, client_request_id, semantic, settle_expired=True,
+            )
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except BrowserAuthorizationError as error:
+            raise BrowserChatError(error.code, http_status=403) from None
+        except Exception:
+            raise BrowserChatError("browser_request_lookup_unavailable") from None
+        self._recheck(invocation)
+        if request is None:
+            return None
+        if self._fill_stop_reports:
+            return await self._replay_canonical(
+                invocation, request, semantic, structured=False, ordinary=True,
+            )
+        return self._duplicate(request)
+
     async def submit(
         self, *, principal: Principal, bound_session: str,
         skill_id: str, skill_version: str, arguments: dict[str, Any],
         client_request_id: str,
+        request_message: str | None = None,
+        request_channel: Literal["web", "cli", "api", "mock"] | None = None,
+        on_admitted: Callable[[ResponseEnvelope], None] | None = None,
     ) -> ResponseEnvelope:
         """Submit structured input for the verified session's own subject.
 
@@ -277,13 +318,17 @@ class BrowserSubmissionService:
         self._invocation(principal, bound_session)
         if type(arguments) is not dict:
             raise BrowserChatError("browser_request_input_invalid", http_status=422)
+        ordinary = request_message is not None or request_channel is not None
         try:
-            semantic = _json({"schema_version": "browser.request.semantic.v2",
-                              "skill_id": skill_id, "skill_version": skill_version,
-                              "arguments": arguments})
+            semantic = (self._ordinary_semantic(request_message, request_channel)
+                        if request_message is not None and request_channel is not None else
+                        _json({"schema_version": "browser.request.semantic.v2",
+                               "skill_id": skill_id, "skill_version": skill_version,
+                               "arguments": arguments}))
         except (TypeError, ValueError):
             raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
-        if len(semantic) > 1_048_576 or len(_json(arguments)) > 16_384:
+        if (ordinary and (request_message is None or request_channel is None)
+                or len(semantic) > 1_048_576 or len(_json(arguments)) > 16_384):
             raise BrowserChatError("browser_request_input_invalid", http_status=422)
 
         async def supplied(_capability: CapabilitySpec) -> dict[str, Any]:
@@ -292,8 +337,8 @@ class BrowserSubmissionService:
         return await self._submit(
             principal=principal, bound_session=bound_session, skill_id=skill_id,
             skill_version=skill_version, semantic=semantic, arguments_for=supplied,
-            client_request_id=client_request_id, channel="api",
-            entrypoint="structured_internal",
+            client_request_id=client_request_id, channel=request_channel or "api",
+            entrypoint="structured_internal", ordinary=ordinary, on_admitted=on_admitted,
         )
 
     async def submit_teaching(
@@ -414,6 +459,8 @@ class BrowserSubmissionService:
         entrypoint: Literal["runtime_chat", "structured_internal"],
         teaching: bool = False,
         replay_source: tuple[str, str, str] | None = None,
+        ordinary: bool = False,
+        on_admitted: Callable[[ResponseEnvelope], None] | None = None,
     ) -> ResponseEnvelope:
         invocation = self._invocation(principal, bound_session)
         owner = invocation.owner
@@ -450,6 +497,13 @@ class BrowserSubmissionService:
         except Exception:
             raise BrowserChatError("browser_chat_unavailable") from None
         if not request.parse_winner:
+            if ordinary:
+                response = (await self._replay_canonical(
+                    invocation, request, semantic, structured=False, ordinary=True,
+                ) if self._fill_stop_reports else self._duplicate(request))
+                if on_admitted is not None and response.status == "running":
+                    on_admitted(response)
+                return response
             return await self._replay_canonical(
                 invocation, request, semantic, structured=entrypoint == "structured_internal",
             )
@@ -489,9 +543,12 @@ class BrowserSubmissionService:
                 or not (registered_target or synthetic_oa)
                 or not capability.binding_required
                 or capability.execution_identity != "user_delegated"
+                or (ordinary and manifest.effect != "read_only"
+                    and manifest.execution_mode != "d_form_fill_stop_v1")
                 or (controlled_write and (
                     manifest.source_kind != "registered_site"
-                    or entrypoint != "structured_internal"
+                    or (entrypoint != "structured_internal" and not (
+                        ordinary and manifest.execution_mode == "d_form_fill_stop_v1"))
                     or self._write_gate is None
                     or self._confirmed_key_digest is None
                 ))
@@ -634,6 +691,10 @@ class BrowserSubmissionService:
             # Never issue reject_request after attempting the accept transaction.
             raise BrowserChatError("browser_request_admission_unavailable") from None
         accepted = project_accepted(committed, owner)
+        if on_admitted is not None:
+            # Synchronous publication after the actual accept COMMIT, before
+            # write preparation, Trace or any subsequent cancellation boundary.
+            on_admitted(self._envelope(request, "running", accepted.model_dump()))
         if manifest.effect == "controlled_write":
             try:
                 await self._ensure_write_preparation(
@@ -698,7 +759,9 @@ class BrowserSubmissionService:
         if not self._awaiting_write_preparation(run):
             raise BrowserRunStoreError("browser_write_preparation_stale")
         key_name = manifest.site.read_rule.key_ref.name
-        value = arguments.get(key_name)
+        # The form identity is server-bound, never a fourth model/user parameter.
+        # The preparation also binds the exact input, owner, binding and Run.
+        value = "bound_form" if manifest.execution_mode == "d_form_fill_stop_v1" else arguments.get(key_name)
         if (type(value) is not str or not 1 <= len(value) <= 256
                 or len(value.encode("utf-8")) > 512):
             raise BrowserChatError("browser_request_input_invalid", http_status=422)
@@ -773,7 +836,7 @@ class BrowserSubmissionService:
 
     async def _replay_canonical(
         self, invocation: _Invocation, request: CanonicalRequest, semantic: bytes,
-        *, structured: bool,
+        *, structured: bool, ordinary: bool = False,
     ) -> ResponseEnvelope:
         """Read the same Run; recover only its still-unconsumed write preparation."""
         self._recheck(invocation)
@@ -784,8 +847,11 @@ class BrowserSubmissionService:
             return self._duplicate(request)
         try:
             run = await self._store.get(owner, request.task_id, request.run.run_id)
-            if structured and self._awaiting_write_preparation(run):
-                payload = json.loads(semantic)
+            if (structured or ordinary) and self._awaiting_write_preparation(run):
+                # Ordinary semantic identity contains the original message,
+                # not parsed parameters. Reuse the admitted protected input.
+                payload = (self._cipher.decrypt_input(run.admission) if ordinary
+                           else json.loads(semantic))
                 publication = await self._publications.get_frozen(
                     owner, run.admission.publication_digest.hex(),
                 )
@@ -801,8 +867,16 @@ class BrowserSubmissionService:
                     )
                 if (publication is None or publication.manifest.digest
                         != run.admission.publication_digest.hex()
-                        or payload.get("skill_id") != publication.manifest.skill.skill_id
-                        or payload.get("skill_version") != publication.manifest.skill.version):
+                        or (ordinary and (
+                            publication.state != "active"
+                            or publication.manifest.execution_mode != "d_form_fill_stop_v1"
+                            or payload.get("schema_version") != "browser.request.input.v2"
+                            or payload.get("capability_id") != publication.manifest.capability.capability_id
+                        ))
+                        or (not ordinary and (
+                            payload.get("skill_id") != publication.manifest.skill.skill_id
+                            or payload.get("skill_version") != publication.manifest.skill.version
+                        ))):
                     raise BrowserChatError("browser_publication_unavailable")
                 manifest = publication.manifest
                 if (manifest.effect == "controlled_write"
@@ -838,6 +912,12 @@ class BrowserSubmissionService:
             raise BrowserChatError(error.code, http_status=403) from None
         except SchemaValidationError:
             raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
+        except BrowserChatError:
+            raise
+        except Exception:
+            # A committed Run must not be projected as ready when recovery of
+            # its preparation failed. Cancellation still propagates unchanged.
+            raise BrowserChatError("browser_write_preparation_unavailable") from None
 
     def _duplicate(
         self, request: CanonicalRequest, *, run: RunSnapshot | None = None,
@@ -931,16 +1011,28 @@ class BrowserSubmissionService:
                 if fresh != run:
                     raise BrowserChatError("browser_target_stale", http_status=409)
                 run = fresh
+            fill_stop = (await self._store.load_fill_stop(owner, task_id, run_id)
+                         if self._fill_stop_reports else None)
             self._recheck(invocation)
             return BrowserRunResponse(
                 run=self._view(run, artifacts=artifacts), value=value,
                 write_preview=preview,
+                fill_stop=fill_stop,
             )
         except BrowserRunStoreError as error:
             raise self._store_error(error) from None
         except BrowserChatError:
             raise
-        except Exception:
+        except Exception as error:
+            try:
+                exception_type = type(error).__name__
+                logging.getLogger(__name__).warning(
+                    "browser_fallback_diagnostic stage=run_projection exception_type=%s",
+                    exception_type if exception_type.isascii() and exception_type.isidentifier()
+                    and len(exception_type) <= 64 else "UnknownException",
+                )
+            except Exception:
+                pass  # Diagnostic failure must preserve the original failure path.
             raise BrowserChatError("browser_run_projection_invalid") from None
 
     async def read_artifact(
@@ -1312,6 +1404,8 @@ class BrowserSubmissionService:
                     or existing.model_dump(exclude={"decided_at"})
                     != candidate.model_dump(exclude={"decided_at"})):
                 raise BrowserChatError("browser_write_confirmation_conflict", http_status=409)
+            if self._fill_stop_reports and decision == "rejected":
+                await self._store.request_cancel(owner, task_id, run_id)
             fresh = await self._store.get(owner, task_id, run_id)
             if fresh.admission != run.admission:
                 raise BrowserChatError("browser_target_stale", http_status=409)

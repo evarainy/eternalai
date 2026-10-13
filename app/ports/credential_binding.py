@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import AsyncContextManager, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.ports.auth import (
+    AuthenticatedSessionContext,
     CredentialAuthenticationResult,
     CredentialSnapshot,
     CredentialWriteStamp,
@@ -64,6 +65,39 @@ class CredentialBindingView(BaseModel):
     bound: bool
 
 
+class BrowserBindingActivationRequest(PasswordBindingCredential):
+    """Explicit self-service activation of one existing OA binding revision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    binding_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,96}$")
+    binding_revision: int = Field(ge=1, le=9007199254740991, strict=True)
+
+
+class BrowserBindingActivationView(BaseModel):
+    """Activation metadata; this does not attest a logged-in browser resource."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_system: Literal["oa"] = "oa"
+    binding_id: str
+    binding_revision: int
+    binding_state: Literal["active"] = "active"
+    verified_at: datetime
+
+
+class BrowserBindingStatusView(BaseModel):
+    """Self-service selection metadata; no subject digest or encrypted material."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_system: Literal["oa"] = "oa"
+    binding_id: str | None = None
+    binding_revision: int | None = None
+    binding_state: Literal["unverified", "active", "unbound", "revoked"] = "unbound"
+    verified_at: datetime | None = None
+
+
 class CredentialPollCandidate(BaseModel):
     """Value-free due-candidate metadata; never carries a password."""
 
@@ -92,6 +126,23 @@ class CredentialBindingStorePort(Protocol):
     ) -> CredentialSnapshot: ...
 
     async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
+    async def browser_activation_snapshot(
+        self, principal: Principal, binding_id: str, binding_revision: int,
+    ) -> CredentialSnapshot:
+        """Read only an existing, unverified, unrevoked password binding."""
+        ...
+
+    async def get_browser_binding_status(self, principal: Principal) -> BrowserBindingStatusView:
+        """Return only this authenticated user's existing OA binding references."""
+        ...
+
+    async def activate_browser_binding(
+        self, credential: PasswordBindingCredential, *, verified: Principal,
+        captured_session: AuthenticatedSessionContext, expected_write: CredentialWriteStamp,
+    ) -> BrowserBindingActivationView:
+        """Atomically store verified password and subject under live session/CAS checks."""
+        ...
 
     def poll_lock(
         self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
@@ -210,6 +261,9 @@ __all__ = (
     "BackgroundCredentialAcquirerPort",
     "BackgroundWorkObjectSyncPort",
     "BackgroundWorkObjectSyncError",
+    "BrowserBindingActivationRequest",
+    "BrowserBindingActivationView",
+    "BrowserBindingStatusView",
     "CredentialAcquisitionError",
     "CredentialAcquisitionFailureCode",
     "CredentialBindingStorePort",

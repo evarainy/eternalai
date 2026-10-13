@@ -378,6 +378,38 @@ class PostgreSQLMcpStore:
             )
             return txn
 
+    async def cancel_authorization(self, transaction: AuthorizationTransaction) -> None:
+        """Finish only the claimed authorization generation, never a newer one."""
+        txn = transaction
+        async with self.sessions.begin() as session:
+            changed = (
+                await session.execute(
+                    sa.update(connections)
+                    .where(
+                        connections.c.connection_id == txn.owner.connection_id,
+                        connections.c.tenant_id == txn.owner.tenant_id,
+                        connections.c.user_id == txn.owner.user_id,
+                        connections.c.service_config_id == txn.owner.service_config_id,
+                        connections.c.registration_id == txn.registration_id,
+                        connections.c.service_config_version == txn.service_config_version,
+                        connections.c.binding_epoch == txn.binding_epoch,
+                        connections.c.login_session_fingerprint
+                        == txn.login_session_fingerprint,
+                        connections.c.state == "AUTHORIZING",
+                    )
+                    .values(
+                        state="DISCONNECTED",
+                        binding_epoch=connections.c.binding_epoch + 1,
+                        identity_evidence=None,
+                        identity_policy_version=None,
+                        expires_at=None,
+                    )
+                    .returning(connections.c.connection_id)
+                )
+            ).scalar_one_or_none()
+            if changed is None:
+                raise McpFailure("mcp_authorization_stale")
+
     async def store_grant(
         self,
         transaction: AuthorizationTransaction,

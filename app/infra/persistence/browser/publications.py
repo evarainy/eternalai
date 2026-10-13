@@ -438,6 +438,19 @@ class PostgreSQLBrowserPublicationStore:
             initial=(checked, task_id, run_id, approval_ref),
         )
 
+    async def activate_fixed_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    ) -> BrowserPublicationRecord:
+        """Activate only the installed D FILL_STOP seed with its explicit grant."""
+        checked = _manifest(manifest)
+        authorize = getattr(self._authority, "authorize_fixed_initial", None)
+        if not callable(authorize) or await authorize(_owner(owner), checked) is not True:
+            raise BrowserPublicationError("browser_publication_review_required")
+        return await self._transition(
+            owner, checked.skill.skill_id, checked.digest, 0, "activate",
+            fixed_initial=checked,
+        )
+
     async def deactivate(self, owner: BrowserOwner, skill_id: str, publication_digest: str,
                          *, expected_revision: int) -> BrowserPublicationRecord:
         return await self._transition(owner, skill_id, publication_digest,
@@ -450,6 +463,7 @@ class PostgreSQLBrowserPublicationStore:
                           | None = None,
                           initial: tuple[BrowserPublicationManifest, str, str, str]
                           | None = None,
+                          fixed_initial: BrowserPublicationManifest | None = None,
                           expected_active_digest: str | None = None,
                           ) -> BrowserPublicationRecord:
         owner = _owner(owner)
@@ -471,33 +485,41 @@ class PostgreSQLBrowserPublicationStore:
                     or record.activation_revision != expected_revision):
                 raise BrowserPublicationError("browser_publication_revision_conflict")
             if operation == "activate" and record.manifest.source_kind == "registered_site":
-                if self._review is None or (review is None) == (initial is None):
-                    raise BrowserPublicationError("browser_publication_review_required")
-                try:
-                    if initial is not None:
-                        checked, task_id, run_id, approval = initial
-                        if checked != record.manifest:
-                            raise BrowserPublicationError("browser_publication_review_required")
-                        accepted = await self._review.check_initial_in_session(
-                            session, owner, checked, task_id=task_id,
-                            run_id=run_id, approval_ref=approval,
-                        )
-                    else:
-                        assert review is not None
-                        checked, draft, replay, approval, reviewer, evidence = review
-                        if checked != record.manifest:
-                            raise BrowserPublicationError("browser_publication_review_required")
-                        accepted = await self._review.check_in_session(
-                            session, owner, checked, draft_digest=draft,
-                            replay_digest=replay, approval_ref=approval,
-                            reviewer_ref=reviewer, evidence_digest=evidence,
-                        )
-                except Exception:
-                    raise BrowserPublicationError(
-                        "browser_publication_review_unavailable"
-                    ) from None
-                if accepted is not True:
-                    raise BrowserPublicationError("browser_publication_review_denied")
+                if fixed_initial is not None:
+                    authorize = getattr(self._authority, "authorize_fixed_initial", None)
+                    if (review is not None or initial is not None
+                            or fixed_initial != record.manifest
+                            or not callable(authorize)
+                            or await authorize(owner, fixed_initial) is not True):
+                        raise BrowserPublicationError("browser_publication_review_required")
+                else:
+                    if self._review is None or (review is None) == (initial is None):
+                        raise BrowserPublicationError("browser_publication_review_required")
+                    try:
+                        if initial is not None:
+                            checked, task_id, run_id, approval = initial
+                            if checked != record.manifest:
+                                raise BrowserPublicationError("browser_publication_review_required")
+                            accepted = await self._review.check_initial_in_session(
+                                session, owner, checked, task_id=task_id,
+                                run_id=run_id, approval_ref=approval,
+                            )
+                        else:
+                            assert review is not None
+                            checked, draft, replay, approval, reviewer, evidence = review
+                            if checked != record.manifest:
+                                raise BrowserPublicationError("browser_publication_review_required")
+                            accepted = await self._review.check_in_session(
+                                session, owner, checked, draft_digest=draft,
+                                replay_digest=replay, approval_ref=approval,
+                                reviewer_ref=reviewer, evidence_digest=evidence,
+                            )
+                    except Exception:
+                        raise BrowserPublicationError(
+                            "browser_publication_review_unavailable"
+                        ) from None
+                    if accepted is not True:
+                        raise BrowserPublicationError("browser_publication_review_denied")
             await self._authorize(owner, skill_id, operation)
             # Deactivation must remain possible after source/Capability revocation.
             if operation == "activate":
@@ -515,7 +537,7 @@ class PostgreSQLBrowserPublicationStore:
                         != expected_active_digest
                     ):
                         raise BrowserPublicationError("browser_publication_head_changed")
-                    if initial is not None and prior is not None:
+                    if (initial is not None or fixed_initial is not None) and prior is not None:
                         raise BrowserPublicationError("browser_publication_head_changed")
                     if prior is not None:
                         previous = _record(prior)

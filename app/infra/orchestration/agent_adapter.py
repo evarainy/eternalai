@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
+from time import monotonic
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -13,6 +14,8 @@ from app.evaluator.overview import required_postcondition_rule
 from app.infra.orchestration.overview_evaluation import build_overview_evaluation_input
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.workflow.catalog import OVERVIEW_ID, OAReadOverviewInput, OAReadOverviewOutput
+from app.mcp.diagnostics import record_mcp_event
+from app.mcp.models import ServiceConfig
 from app.ports.agent_orchestration import (
     AgentCapabilitySelection,
     AgentResponseContext,
@@ -46,12 +49,16 @@ class AgentOrchestrationAdapter:
         workflow_engine: WorkflowEnginePort | None,
         response_builder: ResponseEnvelopeBuilder,
         validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None = None,
+        capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = None,
+        mcp_result_profiles: Mapping[str, ServiceConfig] | None = None,
     ) -> None:
         self._capability_registry = capability_registry
         self._gateway = gateway
         self._workflow_engine = workflow_engine
         self._response_builder = response_builder
         self._validate_workflow = validate_workflow
+        self._capability_formatters = dict(capability_formatters or {})
+        self._mcp_result_profiles = dict(mcp_result_profiles or {})
 
     async def select_capability(
         self,
@@ -255,6 +262,39 @@ class AgentOrchestrationAdapter:
         confirmation: ConfirmationPreview | None = None,
         business_verification: BusinessVerification | None = None,
     ) -> ResponseEnvelope:
+        started = monotonic()
+        response = self._build_response(
+            context=context,
+            execution=execution,
+            projection=projection,
+            confirmation=confirmation,
+            business_verification=business_verification,
+        )
+        profile = self._mcp_result_profiles.get(context.capability_id)
+        if profile is not None:
+            record_mcp_event(
+                "chat_terminal",
+                "success" if response.status == "completed" else "failed",
+                profile=profile,
+                tool="business_context_get",
+                task_id=context.task_id,
+                trace_id=context.trace_id,
+                error_code=execution.error_code or "",
+                started_at=started,
+            )
+        return response
+
+    def _build_response(
+        self,
+        *,
+        context: AgentResponseContext,
+        execution: ExecutionResult,
+        projection: ProjectionContractSnapshot | None,
+        confirmation: ConfirmationPreview | None = None,
+        business_verification: BusinessVerification | None = None,
+    ) -> ResponseEnvelope:
+        if execution.status == "running":
+            raise OrchestrationContractError("Browser admission requires the Runtime handoff")
         target_system = _target_system_for_capability(context.capability_id)
         if (
             required_postcondition_rule(context.capability_id) is not None
@@ -265,18 +305,23 @@ class AgentOrchestrationAdapter:
             and business_verification.result in {"failed", "error"}
         ):
             return self._response_builder.build_failed(
-                context.response_id, context.task_id, context.session_id,
+                context.response_id,
+                context.task_id,
+                context.session_id,
                 "查询已返回，但概览结果未通过核验，本次未展示。",
-                "The overview could not be verified.", context.trace_id,
+                "The overview could not be verified.",
+                context.trace_id,
             )
         if execution.status == "completed":
             data = project_response_data(
                 execution.data,
                 projection.load_output_schema() if projection is not None else None,
             )
-            message = _format_capability_response(
-                context.capability_id,
-                data,
+            formatter = self._capability_formatters.get(context.capability_id)
+            message = (
+                formatter(data or {})
+                if formatter is not None
+                else _format_capability_response(context.capability_id, data)
             )
             return self._response_builder.build_message(
                 context.response_id,
@@ -293,7 +338,9 @@ class AgentOrchestrationAdapter:
                 context.response_id,
                 context.task_id,
                 context.session_id,
-                "无权限，操作被拒绝",
+                "上游业务权限不足，请联系业务管理员"
+                if execution.error_code == "upstream_permission_denied"
+                else "无权限，操作被拒绝",
                 "Access denied.",
                 context.trace_id,
             )
@@ -309,6 +356,12 @@ class AgentOrchestrationAdapter:
                     target_system=target_system,
                 )
             identity_message, identity_fallback = _identity_block_message(execution.error_code)
+            if target_system == "business_platform":
+                identity_message = (
+                    "业务授权已失效，请到 Apps 重新授权"
+                    if execution.error_code in {"identity_expired", "identity_revoked"}
+                    else "需要连接业务账号，请到 Apps 完成授权"
+                )
             return self._response_builder.build_operator_handback_bind_required(
                 context.response_id,
                 context.task_id,

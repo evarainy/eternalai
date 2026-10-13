@@ -1118,3 +1118,119 @@ def test_same_bound_session_uses_verified_tenant(pg_workflow_factory, mode):
                 ).scalar_one() == {"action": 0, "handle": 1, "directory-outage": 2}[mode]
 
     _run_pg(exercise())
+
+
+def _chat_api_client(fixture):
+    from types import SimpleNamespace
+
+    # Explicit browser opt-in must not intercept the ordinary handle route.
+    async def forbidden_start(**kwargs):
+        raise AssertionError("ordinary Chat must use Runtime and Gateway")
+
+    tokens = StaticSessionTokens()
+    tokens.principal = fixture.principal
+    app = create_app(
+        runtime=fixture.runtime, session_tokens=tokens,
+        session_revocations=MemorySessionRevocations(), session_binder=make_session_binder(),
+        session_cookie_ttl_seconds=3600, csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        browser_chat=SimpleNamespace(skill_id="chat_read_fixture", start=forbidden_start),
+    )
+    client = TestClient(app, base_url="https://testserver",
+                        backend_options={"loop_factory": make_event_loop})
+    client.cookies.update(auth_cookies())
+    return client
+
+
+def test_chat_browser_http_ordinary_route_binds_scope_and_reuses_canonical_ids() -> None:
+    from app.ports.browser_gateway import browser_request_scope
+    from tests.runtime.test_runtime_gateway_result_mapping import _chat_browser_fixture
+
+    fixture = _chat_browser_fixture()
+    observed = []
+    original = fixture.runtime.handle_user_message
+
+    async def capture(*args, **kwargs):
+        scope = browser_request_scope.get()
+        assert scope is not None and scope.matches(kwargs["principal"], kwargs["session_id"])
+        observed.append((scope.client_request_id, scope.bound_session))
+        return await original(*args, **kwargs)
+
+    fixture.runtime.handle_user_message = capture
+    body = {**_valid_body(), "message": fixture.message,
+            "client_request_id": "73100000-0000-4000-8000-000000000001"}
+    with _chat_api_client(fixture) as client:
+        first = client.post("/api/v1/runtime/handle", json=body, headers=TEST_CSRF_HEADERS)
+        repeated = client.post("/api/v1/runtime/handle", json=body, headers=TEST_CSRF_HEADERS)
+    assert first.status_code == repeated.status_code == 200
+    assert first.headers["cache-control"] == repeated.headers["cache-control"] == "no-store"
+    assert first.json()["status"] == repeated.json()["status"] == "running"
+    assert first.json()["task_id"] == repeated.json()["task_id"] == "canonical-B"
+    assert first.json()["data"] == repeated.json()["data"] == {
+        "kind": "accepted", "task_id": "canonical-B", "run_id": "canonical-R",
+        "state_revision": 1,
+    }
+    assert len(fixture.llm.calls) == len(fixture.submission.submit_calls) == 1
+    assert observed == [(body["client_request_id"], first.json()["session_id"])] * 2
+    assert observed[0][1] != body["session_id"]
+    assert browser_request_scope.get() is None
+
+
+@pytest.mark.parametrize("condition, status", [
+    ("missing_auth", 401), ("missing_csrf", 403), ("invalid_request_key", 422),
+])
+def test_chat_browser_http_rejected_input_has_zero_model_and_submission(condition, status) -> None:
+    from tests.runtime.test_runtime_gateway_result_mapping import _chat_browser_fixture
+
+    fixture = _chat_browser_fixture()
+    body = {**_valid_body(), "message": fixture.message,
+            "client_request_id": "73100000-0000-4000-8000-000000000001"}
+    with _chat_api_client(fixture) as client:
+        if condition == "missing_auth":
+            client.cookies.clear()
+        if condition == "invalid_request_key":
+            body["client_request_id"] = "not-a-uuid"
+        response = client.post("/api/v1/runtime/handle", json=body,
+                               headers={} if condition == "missing_csrf" else TEST_CSRF_HEADERS)
+    assert response.status_code == status
+    assert fixture.llm.calls == fixture.submission.submit_calls == fixture.tasks.created == []
+    assert fixture.handoff.commits == []
+
+
+def test_chat_browser_original_submission_port_keeps_multi_installation_signature() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.infra.browser.multi_installation import BrowserVerticalCollection
+    from app.ports.browser_chat import BrowserSubmissionPort
+    from tests.runtime.test_runtime_gateway_result_mapping import (
+        _chat_browser_fixture,
+        _chat_browser_receipt,
+    )
+
+    fixture = _chat_browser_fixture()
+    receipt = _chat_browser_receipt("session-1")
+    calls = []
+
+    class OriginalSubmission:
+        async def submit(self, *, principal, bound_session, skill_id, skill_version,
+                         arguments, client_request_id):
+            calls.append((principal, bound_session, skill_id, skill_version,
+                          arguments, client_request_id))
+            return receipt
+
+    collection = object.__new__(BrowserVerticalCollection)
+    collection._canonical = AsyncMock(return_value=None)
+    collection._active = AsyncMock(return_value=SimpleNamespace(
+        _seed=SimpleNamespace(skill=SimpleNamespace(version="v1")),
+        submission=OriginalSubmission(),
+    ))
+    original_port: BrowserSubmissionPort = collection
+    result = asyncio.run(original_port.submit(
+        principal=fixture.principal, bound_session="session-1", skill_id="legacy-skill",
+        skill_version="v1", arguments={"business_key": "DEMO-731"},
+        client_request_id="73100000-0000-4000-8000-000000000001",
+    ))
+    assert result is receipt
+    assert calls == [(fixture.principal, "session-1", "legacy-skill", "v1",
+                      {"business_key": "DEMO-731"}, "73100000-0000-4000-8000-000000000001")]
+    assert collection._canonical.await_count == collection._active.await_count == 1

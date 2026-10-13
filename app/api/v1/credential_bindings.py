@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
-from typing import NoReturn
+from datetime import UTC, datetime
+from typing import NoReturn, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
 from app.api.v1.auth import PrincipalDependency
-from app.ports.auth import LoginCredential, Principal
+from app.ports.auth import LoginCredential, Principal, authenticated_session
 from app.ports.credential_binding import (
+    BrowserBindingActivationRequest,
+    BrowserBindingActivationView,
+    BrowserBindingStatusView,
     CredentialBindingStorePort,
     CredentialBindingVerifierPort,
     CredentialBindingView,
@@ -28,6 +33,15 @@ _BINDING_REQUEST_BODY = {
         },
     }
 }
+_BROWSER_ACTIVATION_BODY = {
+    "requestBody": {
+        "required": True,
+        "content": {"application/json": {
+            "schema": BrowserBindingActivationRequest.model_json_schema(),
+        }},
+    }
+}
+BindingRequest = TypeVar("BindingRequest", bound=BaseModel)
 
 
 class CredentialBindingService:
@@ -104,6 +118,58 @@ class CredentialBindingService:
         except Exception:
             _raise_binding_unavailable()
 
+    async def activate_browser_binding(
+        self, principal: Principal, request: BrowserBindingActivationRequest,
+    ) -> BrowserBindingActivationView:
+        """First verification uses this explicit request, never a Vault/poll reader."""
+        try:
+            captured = authenticated_session.get()
+            if (captured is None or captured.principal != principal
+                    or captured.expires_at <= datetime.now(UTC)):
+                _raise_binding_failed()
+            async with self._store.poll_lock(
+                principal.ai_user_id, "oa", tenant_id=principal.org_ctx.tenant_id,
+            ) as acquired:
+                if not acquired:
+                    _raise_binding_failed()
+                snapshot = await self._store.browser_activation_snapshot(
+                    principal, request.binding_id, request.binding_revision,
+                )
+                if (snapshot.absent or snapshot.tenant_id != principal.org_ctx.tenant_id
+                        or snapshot.ai_user_id != principal.ai_user_id
+                        or snapshot.target_system != "oa"
+                        or snapshot.binding_id != request.binding_id
+                        or snapshot.binding_revision != request.binding_revision):
+                    _raise_binding_failed()
+                stamp = await self._store.claim_write(snapshot)
+                verified = await self._verifier.verify_for_binding(LoginCredential(
+                    loginid=request.login_id, userpassword=request.password,
+                ))
+                subject = verified.org_ctx.directory_user_id
+                if ((verified.org_ctx.tenant_id, verified.ai_user_id) != (
+                        principal.org_ctx.tenant_id, principal.ai_user_id)
+                        or type(subject) is not str or not subject.strip()
+                        or subject != subject.strip() or len(subject) > 256
+                        or (principal.org_ctx.directory_user_id is not None
+                            and subject != principal.org_ctx.directory_user_id)
+                        or authenticated_session.get() != captured
+                        or captured.expires_at <= datetime.now(UTC)):
+                    _raise_binding_failed()
+                return await self._store.activate_browser_binding(
+                    PasswordBindingCredential(login_id=request.login_id, password=request.password),
+                    verified=verified, captured_session=captured, expected_write=stamp,
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            _raise_binding_failed()
+
+    async def browser_binding_status(self, principal: Principal) -> BrowserBindingStatusView:
+        try:
+            return await self._store.get_browser_binding_status(principal)
+        except Exception:
+            _raise_binding_unavailable()
+
 
 def make_router(
     service: CredentialBindingService | None,
@@ -145,12 +211,38 @@ def make_router(
     ) -> CredentialBindingView:
         return await configured().unbind(principal, target_system)
 
+    @router.post(
+        "/oa/browser-activation", response_model=BrowserBindingActivationView,
+        openapi_extra=_BROWSER_ACTIVATION_BODY,
+    )
+    async def activate_browser_binding(
+        request: Request, principal: Principal = Depends(require_principal),
+    ) -> BrowserBindingActivationView:
+        # The production host supplies the same authenticated, CSRF-protected
+        # dependency used by ordinary credential-binding mutations.
+        activation = await _parse_binding_request(request, BrowserBindingActivationRequest)
+        if activation is None:
+            _raise_binding_failed()
+        return await configured().activate_browser_binding(principal, activation)
+
+    @router.get("/oa/browser-activation", response_model=BrowserBindingStatusView)
+    async def browser_binding_status(
+        principal: Principal = Depends(require_principal),
+    ) -> BrowserBindingStatusView:
+        return await configured().browser_binding_status(principal)
+
     return router
 
 
 async def _parse_binding_credential(
     request: Request,
 ) -> PasswordBindingCredential | None:
+    return await _parse_binding_request(request, PasswordBindingCredential)
+
+
+async def _parse_binding_request(
+    request: Request, model: type[BindingRequest],
+) -> BindingRequest | None:
     declared_length = request.headers.get("content-length")
     if declared_length is not None:
         if (
@@ -163,7 +255,7 @@ async def _parse_binding_credential(
         raw_body = await request.body()
         if len(raw_body) > _MAX_BINDING_BODY_BYTES:
             return None
-        return PasswordBindingCredential.model_validate(json.loads(raw_body))
+        return model.model_validate(json.loads(raw_body))
     except Exception:
         return None
 

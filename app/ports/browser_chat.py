@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -14,6 +14,7 @@ from app.browser_skill.models import BrowserOwner, Contract, Digest, OpaqueId
 from app.browser_skill.run_contracts import BrowserRunView
 from app.ports.auth import Principal
 from app.ports.browser_run_store import ProtectedRunEnvelope, RunSnapshot
+from app.ports.browser_fill_stop import FillStopReport
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.credential_vault import BrowserBindingFact
 from app.ports.response_envelope import ResponseEnvelope
@@ -90,6 +91,7 @@ class BrowserRunResponse(Contract):
     run: BrowserRunView
     value: dict[str, Any] | None = Field(default=None, repr=False)
     write_preview: BrowserWritePreview | None = None
+    fill_stop: FillStopReport | None = None
 
 
 class BrowserRunAccessPort(Protocol):
@@ -126,6 +128,35 @@ class BrowserSubmissionPort(BrowserRunAccessPort, Protocol):
         self, *, principal: Principal, bound_session: str, skill_id: str,
         skill_version: str, arguments: dict[str, Any], client_request_id: str,
     ) -> ResponseEnvelope: ...
+
+
+class BrowserOrdinarySubmissionPort(BrowserSubmissionPort, Protocol):
+    """Single-installation ordinary Chat extension, not a multi-lane contract.
+
+    The original structured submission and Run-access port remains unchanged.
+    Only the explicitly installed ordinary Gateway uses these extra methods.
+    """
+
+    async def submit(
+        self, *, principal: Principal, bound_session: str, skill_id: str,
+        skill_version: str, arguments: dict[str, Any], client_request_id: str,
+        request_message: str | None = None,
+        request_channel: Literal["web", "cli", "api", "mock"] | None = None,
+        on_admitted: Callable[[ResponseEnvelope], None] | None = None,
+    ) -> ResponseEnvelope: ...
+
+    async def lookup_ordinary_request(
+        self, *, principal: Principal, bound_session: str, client_request_id: str,
+        message: str, channel: Literal["web", "cli", "api", "mock"],
+    ) -> ResponseEnvelope | None:
+        """Owned MAC lookup; may close an expired original pre-Run claim.
+
+        The same raw-message/channel semantic input is used by ordinary submit.
+        None alone permits new parsing. Errors and conflicts never mean absence.
+        Settlement locks the same original claim; no claim reassignment, model,
+        dispatch or new request key is allowed.
+        """
+        ...
 
 
 class BrowserChatPort(BrowserRunAccessPort, Protocol):

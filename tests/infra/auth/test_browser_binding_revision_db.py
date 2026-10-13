@@ -14,8 +14,18 @@ from sqlalchemy import text
 
 from app.db.session import make_async_engine, make_async_session_factory
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
-from app.ports.auth import CredentialStoreError, OASessionCredential, StaleCredentialWrite
+from app.infra.browser.local_resource_lifecycle import registered_subject_digest
+from app.ports.auth import (
+    AuthenticatedSessionContext,
+    CredentialStoreError,
+    OASessionCredential,
+    Principal,
+    PrincipalOrgContext,
+    StaleCredentialWrite,
+    authenticated_session,
+)
 from app.ports.credential_binding import PasswordBindingCredential
+from app.ports.credential_vault import BrowserAuthorizationError, BrowserBindingFact
 
 
 def password():
@@ -442,4 +452,154 @@ def test_child_tasks_do_not_inherit_authority_to_use_parent_coordinator(migrated
 
                 await asyncio.gather(direct_write(), same_slot(), other_slot())
 
+    asyncio.run(exercise())
+
+
+@asynccontextmanager
+async def activation_case(url):
+    async with isolated(url) as (_, factory, store, tenant, user):
+        principal = Principal(ai_user_id=user, display_name="Synthetic activation",
+                              roles=("synthetic-role",), org_ctx=PrincipalOrgContext(
+                                  tenant_id=tenant, directory_user_id="synthetic-oa-subject",
+                              ))
+        captured = AuthenticatedSessionContext(
+            principal, uuid4().bytes + uuid4().bytes, datetime.now(UTC) + timedelta(minutes=10),
+        )
+        async with factory() as session:
+            await session.execute(text(
+                "INSERT INTO principal_roles (tenant_id,ai_user_id,role)"
+                " VALUES (:tenant,:user,:role)",
+            ), {"tenant": tenant, "user": user, "role": "synthetic-role"})
+            await session.commit()
+        try:
+            await store.store(user, "oa", credential(), tenant_id=tenant,
+                              expected_write=await claim(store, tenant, user))
+            submitted = password()
+            await store.bind_password(user, "oa", submitted, tenant_id=tenant,
+                                      expected_write=await claim(store, tenant, user))
+            snapshot = await store.snapshot(user, "oa", tenant_id=tenant)
+            selected = await store.browser_activation_snapshot(
+                principal, snapshot.binding_id, snapshot.binding_revision,
+            )
+            assert selected == snapshot
+            stamp = await store.claim_write(selected)
+            token = authenticated_session.set(captured)
+            try:
+                yield factory, store, principal, captured, submitted, stamp
+            finally:
+                authenticated_session.reset(token)
+        finally:
+            async with factory() as session:
+                await session.execute(text(
+                    "DELETE FROM principal_roles WHERE tenant_id=:tenant AND ai_user_id=:user",
+                ), {"tenant": tenant, "user": user})
+                await session.execute(text(
+                    "DELETE FROM auth_session_revocations WHERE token_fingerprint=:fp",
+                ), {"fp": captured.fingerprint})
+                await session.commit()
+
+
+def test_first_browser_activation_is_one_revisioned_password_subject_update(migrated_database_url):
+    async def exercise():
+        async with activation_case(migrated_database_url) as case:
+            factory, store, principal, captured, submitted, stamp = case
+            view = await store.activate_browser_binding(
+                submitted, verified=principal, captured_session=captured, expected_write=stamp,
+            )
+            assert view.binding_id == stamp.snapshot.binding_id
+            assert view.binding_revision == stamp.snapshot.binding_revision + 1
+            row = await state(factory, principal.org_ctx.tenant_id, principal.ai_user_id)
+            assert row["binding_state"] == "active"
+            assert row["credential_write_revision"] == stamp.snapshot.credential_write_revision + 1
+            assert row["refresh_operation_id"] is None and row["refresh_deadline"] is None
+            assert row["cipher_version"] is None and row["encrypted_payload"] is None
+            digest = registered_subject_digest("oa", "synthetic-oa-subject")
+            fact = BrowserBindingFact(principal.org_ctx.tenant_id, principal.ai_user_id, "oa",
+                                      view.binding_id, view.binding_revision, digest)
+            loaded = await store.load_for_browser(fact, "browser_login")
+            assert loaded.password == submitted.password
+            assert (submitted.password.get_secret_value().encode()
+                    not in row["encrypted_password_payload"])
+            with pytest.raises(BrowserAuthorizationError):
+                await store.load_for_browser(fact, "browser_restore")
+            with pytest.raises(StaleCredentialWrite):
+                await store.activate_browser_binding(
+                    submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                )
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("fault", [
+    "unbind", "rebind", "revoked", "session_revoked", "role_removed", "timeout",
+])
+def test_browser_activation_fences_intervening_changes_without_password_update(
+    migrated_database_url, fault,
+):
+    async def exercise():
+        async with activation_case(migrated_database_url) as case:
+            factory, store, principal, captured, submitted, stamp = case
+            tenant, user = principal.org_ctx.tenant_id, principal.ai_user_id
+            if fault == "unbind":
+                await store.unbind_password(user, "oa", tenant_id=tenant)
+            elif fault == "rebind":
+                await store.bind_password(user, "oa", password(), tenant_id=tenant,
+                                          expected_write=await claim(store, tenant, user))
+            else:
+                async with factory() as session:
+                    if fault == "session_revoked":
+                        await session.execute(text(
+                            "INSERT INTO auth_session_revocations (token_fingerprint,expires_at)"
+                            " VALUES (:fp,:expires)",
+                        ), {"fp": captured.fingerprint, "expires": captured.expires_at})
+                    elif fault == "role_removed":
+                        await session.execute(text(
+                            "DELETE FROM principal_roles"
+                            " WHERE tenant_id=:tenant AND ai_user_id=:user",
+                        ), {"tenant": tenant, "user": user})
+                    elif fault == "revoked":
+                        await session.execute(text(
+                            "UPDATE oa_session_credentials SET revoked_at=clock_timestamp(),"
+                            "binding_state='revoked' WHERE tenant_id=:tenant AND ai_user_id=:user",
+                        ), {"tenant": tenant, "user": user})
+                    else:
+                        await session.execute(text(
+                            "UPDATE oa_session_credentials SET refresh_deadline=clock_timestamp()"
+                            " - interval '1 second' WHERE tenant_id=:tenant AND ai_user_id=:user",
+                        ), {"tenant": tenant, "user": user})
+                    await session.commit()
+            before = await state(factory, tenant, user)
+            with pytest.raises(CredentialStoreError):
+                await store.activate_browser_binding(
+                    submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                )
+            assert await state(factory, tenant, user) == before
+
+    asyncio.run(exercise())
+
+
+def test_active_browser_binding_is_excluded_at_all_poll_read_boundaries(migrated_database_url):
+    async def exercise():
+        async with activation_case(migrated_database_url) as case:
+            _, store, principal, captured, submitted, stamp = case
+            tenant, user = principal.org_ctx.tenant_id, principal.ai_user_id
+            before = await store.list_poll_candidates(tenant_id=tenant)
+            assert len(before) == 1 and before[0].ai_user_id == user
+            candidate = await store.refresh_poll_candidate(user, "oa", tenant_id=tenant)
+            assert candidate is not None
+            loaded = await store.load_password_for_poll(
+                user, "oa", tenant_id=tenant, expected_write=stamp,
+            )
+            assert loaded.password == submitted.password
+            await store.activate_browser_binding(
+                submitted, verified=principal, captured_session=captured, expected_write=stamp,
+            )
+            assert await store.list_poll_candidates(tenant_id=tenant) == []
+            assert await store.refresh_poll_candidate(user, "oa", tenant_id=tenant) is None
+            # Even a freshly claimed writer cannot use the polling password reader.
+            fresh = await claim(store, tenant, user)
+            with pytest.raises(CredentialStoreError, match=r"^password binding cannot be loaded$"):
+                await store.load_password_for_poll(
+                    user, "oa", tenant_id=tenant, expected_write=fresh,
+                )
     asyncio.run(exercise())

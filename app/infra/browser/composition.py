@@ -61,6 +61,7 @@ from app.browser_skill.teaching import (
 from app.browser_skill.trajectory import ParameterApproval
 from app.browser_skill.write_workflow import _owner_digest
 from app.infra.auth.crypto import PrincipalSessionBinder
+from app.infra.browser.d_form_execution import DFormRuntime
 from app.infra.browser.local_file_artifacts import (
     FileArtifactOwner,
     LocalFileArtifactError,
@@ -201,6 +202,33 @@ class SingleSeedManifestAuthority:
             return False
         return await self._source.verify(checked) is True
 
+    async def authorize_fixed_initial(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    ) -> bool:
+        """The D-only initial activation grant; reviewed publication stays separate."""
+        from app.infra.browser.d_form_authority import FixedDFormPublicationGrants
+        from app.infra.browser.d_form_fixed_approval import APPROVED_FIXED_SOURCE_DIGEST
+        from app.infra.browser.d_form_manifest import (
+            CAPABILITY_ID,
+            SKILL_ID,
+            source_digest,
+        )
+
+        return (
+            type(self._grants) is FixedDFormPublicationGrants
+            and owner.tenant_id == self._tenant_id == "default"
+            and manifest == self._seed
+            and manifest.skill.skill_id == SKILL_ID
+            and manifest.capability.capability_id == CAPABILITY_ID
+            and manifest.source_kind == "registered_site"
+            and manifest.effect == "controlled_write"
+            and manifest.rollback_source_digest is None
+            and source_digest() == APPROVED_FIXED_SOURCE_DIGEST
+            and await self._grants.check(
+                owner, SKILL_ID, "activate", manifest.digest,
+            ) is True
+        )
+
 
 class ActiveBrowserPublications(PostgreSQLBrowserPublicationStore):
     """Frozen reads retain history; execution additionally requires its active head."""
@@ -259,8 +287,8 @@ class BrowserVerticalDependencies:
     active_request_digest_key_id: str
     input_digest_key: bytes = field(repr=False)
     result_digest_key: bytes = field(repr=False)
-    execution_factory: BrowserReadExecutionFactory
-    lifecycle: BrowserReadLifecycle
+    execution_factory: BrowserReadExecutionFactory | None
+    lifecycle: BrowserReadLifecycle | None
     profile_capture_proof: BrowserProfileCaptureProofPort
     profile_cleanup_proof: BrowserProfileCleanupProofPort
     profile_cleanup_authority: BrowserProfileCleanupAuthorityPort
@@ -273,6 +301,7 @@ class BrowserVerticalDependencies:
     sessions: SessionStorePort
     worker_id: str
     enabled: bool = False
+    fill_stop_runtime: DFormRuntime | None = None
     worker_ttl_seconds: int = 60
     profile_retention_seconds: int | None = None
     business_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None
@@ -327,7 +356,7 @@ class BrowserVerticalComponents:
     binding_reader: PostgreSQLBrowserBindingReader
     profiles: PostgreSQLBrowserProfileStore
     runs: PostgreSQLBrowserRunStore
-    execution: VerifiedBrowserReadExecution
+    execution: VerifiedBrowserReadExecution | DFormRuntime
     worker: BrowserReadWorker
     chat: BrowserChatService | None
     submission: BrowserSubmissionService
@@ -886,11 +915,9 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
     for key in (deps.input_digest_key, deps.result_digest_key):
         if type(key) is not bytes or len(key) != 32:
             raise ValueError("browser_vertical_digest_key_invalid")
-    required = (
+    required: tuple[tuple[object, str], ...] = (
         (deps.publication_grants, "check"), (deps.source_verifier, "verify"),
-        (deps.policy, "decide"), (deps.execution_factory, "open"),
-        (deps.lifecycle, "lookup_capture"), (deps.lifecycle, "send_capture"),
-        (deps.lifecycle, "stop"), (deps.lifecycle, "cleanup"),
+        (deps.policy, "decide"),
         (deps.profile_capture_proof, "verify_capture"),
         (deps.profile_capture_proof, "check_live_subject"),
         (deps.profile_cleanup_proof, "verify_cleanup"),
@@ -898,6 +925,13 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
         (deps.chat_bindings, "resolve"),
         (deps.sessions, "get_session"), (deps.sessions, "create_session"),
     )
+    if (deps.seed.execution_mode == "d_form_fill_stop_v1") != (deps.fill_stop_runtime is not None):
+        raise ValueError("browser_fill_stop_installation_invalid")
+    if deps.fill_stop_runtime is None:
+        required += ((deps.execution_factory, "open"), (deps.lifecycle, "lookup_capture"),
+                     (deps.lifecycle, "send_capture"), (deps.lifecycle, "stop"), (deps.lifecycle, "cleanup"))
+    elif deps.fill_stop_runtime.manifest != deps.seed or deps.teaching_base is not None:
+        raise ValueError("browser_fill_stop_installation_invalid")
     if (any(not callable(getattr(dependency, method, None)) for dependency, method in required)
             or (deps.chat_parser is not None
                 and not callable(getattr(deps.chat_parser, "parse", None)))
@@ -1026,6 +1060,7 @@ def build_browser_vertical(
         session_factory=deps.session_factory, cipher=cipher, session_binder=deps.session_binder,
         policy=deps.policy, publication_check=publication_check,
         publication_check_in_session=publication_check_in_session,
+        fill_stop_capability_id=seed.capability.capability_id if deps.fill_stop_runtime is not None else None,
     )
     binding_reader = PostgreSQLBrowserBindingReader(deps.session_factory)
     profiles = PostgreSQLBrowserProfileStore(
@@ -1060,11 +1095,27 @@ def build_browser_vertical(
             attributes=attributes,
         )
 
-    execution = VerifiedBrowserReadExecution(
-        deps.execution_factory, deps.lifecycle, publications, cipher,
-        result_digest_key=deps.result_digest_key, record_diagnostic=record_read_diagnostic,
-        repair_hints=deps.locator_repair_hints,
-    )
+    execution: VerifiedBrowserReadExecution | DFormRuntime
+    if deps.fill_stop_runtime is not None:
+        execution = deps.fill_stop_runtime
+
+        async def fill_stop_publication(run: RunSnapshot) -> None:
+            if run.admission.publication_digest.hex() != seed.digest:
+                raise BrowserRunStoreError("browser_fill_stop_publication_stale")
+            # The existing prepared initial-validation path can verify this
+            # exact seed before activation; ordinary Chat still requires active.
+            if not await current_teaching_publication(run, seed):
+                await publications.assert_current(run.owner, seed)
+
+        execution.install(cipher=cipher, result_key=deps.result_digest_key, publication=fill_stop_publication)
+    else:
+        if deps.execution_factory is None or deps.lifecycle is None:
+            raise ValueError("browser_vertical_trusted_dependency_required")
+        execution = VerifiedBrowserReadExecution(
+            deps.execution_factory, deps.lifecycle, publications, cipher,
+            result_digest_key=deps.result_digest_key, record_diagnostic=record_read_diagnostic,
+            repair_hints=deps.locator_repair_hints,
+        )
     run_authority = PostgreSQLBrowserRunAuthority(
         current_auth=current_auth, verification_check=execution.check_verified_candidate,
         cancel_check=deps.cancel_check, cleanup_authorize=deps.cleanup_authorize,
@@ -1075,6 +1126,7 @@ def build_browser_vertical(
         if (seed.effect == "controlled_write"
                 and run.admission.publication_digest.hex() == seed.digest
                 and run.phase == "queued"
+                and not run.cancel_requested
                 and not await runs.write_confirmation_ready_in_session(session, run)):
             return False
         return (deps.business_ready_in_session is None
@@ -1275,13 +1327,13 @@ def build_browser_vertical(
             await current_auth.validate(session, run.admission, teaching_plan=plan)
             return True
 
-    execution.install_teaching_publication(
-        resolve_teaching_publication, current_teaching_publication,
-    )
+    if isinstance(execution, VerifiedBrowserReadExecution):
+        execution.install_teaching_publication(resolve_teaching_publication, current_teaching_publication)
     worker = BrowserReadWorker(
         runs, execution, profiles, worker_id=deps.worker_id, enabled=True,
         ttl_seconds=deps.worker_ttl_seconds,
         record_diagnostic=record_read_diagnostic,
+        capture_profiles=deps.fill_stop_runtime is None,
     )
     def file_owner(run: RunSnapshot) -> FileArtifactOwner:
         admission = run.admission
@@ -1553,6 +1605,7 @@ def build_browser_vertical(
         write_gate=(PostgreSQLHumanGate(deps.session_factory)
                     if seed.effect == "controlled_write" else None),
         confirmed_key_digest=deps.confirmed_key_digest,
+        fill_stop_reports=deps.fill_stop_runtime is not None,
         list_artifacts=list_file_views if deps.file_artifacts is not None else None,
         read_artifact=read_file if deps.file_artifacts is not None else None,
         teaching_base_digest=(deps.teaching_base.digest

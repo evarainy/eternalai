@@ -9,9 +9,11 @@ import logging
 import re
 import socket
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from http.client import HTTPMessage
 from pathlib import Path
+from time import monotonic
 from typing import IO, Any, NoReturn, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
@@ -22,6 +24,7 @@ from urllib.request import (
     Request,
     build_opener,
 )
+from uuid import UUID
 
 from pydantic import SecretStr, ValidationError
 
@@ -40,6 +43,78 @@ from app.infra.adapters.oa.contracts import (
     normalize_system_message_records,
 )
 from app.ports.auth import OASessionCredential
+
+_CHAT_STAGE_LOGGER = logging.getLogger("eternalai.chat_stages")
+_CHAT_STAGE_LOGGER.addHandler(logging.NullHandler())
+_CHAT_STAGE_LOGGER.propagate = False
+_CHAT_STAGE_NODES = frozenset({
+    'candidate', 'catalog', 'credential_read', 'execution', 'fixed_reply', 'identity', 'intent',
+    'model', 'normalization', 'oa_result', 'oa_route', 'provider_transport'
+})
+_CHAT_STAGE_OUTCOMES = frozenset({
+    'blocked', 'failed', 'ok', 'skipped', 'start', 'unknown'
+})
+_CHAT_STAGE_REASONS = frozenset({
+    'adapter_error', 'adapter_http_500', 'adapter_payload_invalid', 'adapter_timeout',
+    'ambiguous', 'argument_validation', 'binding_required', 'blank_input',
+    'capability_not_found', 'catalog_invalid', 'completed', 'completion_returned',
+    'confirm_required', 'context_length_exceeded', 'credential_not_required',
+    'credential_resolved', 'd_form_consumed', 'denied', 'empty', 'empty_response', 'failed',
+    'http_server', 'identity_expired', 'identity_revoked', 'identity_unbound', 'internal_error',
+    'invalid_request', 'low_confidence', 'match_capability', 'match_none',
+    'model_not_available', 'no_active_capability_registered', 'no_capability_found',
+    'no_matching_capability', 'no_unique_active_candidate', 'no_visible_capability', 'none',
+    'not_configured', 'over_budget', 'payload_invalid', 'payload_received', 'permission_denied',
+    'policy_denied', 'provider_error', 'provider_returned', 'rate_limited', 'ready',
+    'request_error', 'response_received', 'running', 'schema_invalid',
+    'structured_output_error', 'timeout', 'unknown', 'unparsed', 'upstream_permission_denied',
+    'visible_empty', 'visible_present', 'waiting_user'
+})
+_CHAT_STAGE_CAPABILITIES = frozenset({
+    'oa.list_pending_workflows', 'oa.list_system_messages'
+})
+
+
+def _record_chat_stage(
+    trace_id: object, node: str, outcome: str, *, reason: object = None,
+    capability_id: object = None, elapsed_ms: int | None = None,
+    http_status: object = None,
+) -> None:
+    # Project only code-owned enums and Runtime's existing server UUID trace.
+    try:
+        if type(trace_id) is not str or node not in _CHAT_STAGE_NODES:
+            return
+        trace = UUID(trace_id)
+        if trace.version != 4 or str(trace) != trace_id:
+            return
+        _CHAT_STAGE_LOGGER.info(
+            "chat_stage node=%s outcome=%s capability=%s reason=%s "
+            "http_status=%s elapsed_ms=%s trace=%s",
+            node, outcome if outcome in _CHAT_STAGE_OUTCOMES else "unknown",
+            capability_id if type(capability_id) is str
+            and capability_id in _CHAT_STAGE_CAPABILITIES else "none" if capability_id is None
+            else "other",
+            reason if type(reason) is str and reason in _CHAT_STAGE_REASONS
+            else "none" if reason is None else "unknown",
+            http_status if type(http_status) is int and 100 <= http_status <= 599 else "null",
+            elapsed_ms if type(elapsed_ms) is int and 0 <= elapsed_ms <= 86_400_000
+            else "null", trace.hex,
+        )
+    except Exception:
+        # Diagnostics must not replace the existing business result.
+        return
+
+
+_oa_stage_scope: ContextVar[tuple[object, str] | None] = ContextVar("oa_stage_scope", default=None)
+
+
+def _record_oa_stage(node: str, outcome: str, *, reason: object = None,
+                     http_status: object = None, elapsed_ms: int | None = None) -> None:
+    scope = _oa_stage_scope.get()
+    if scope is not None:
+        _record_chat_stage(scope[0], node, outcome, reason=reason,
+                           capability_id=scope[1], http_status=http_status, elapsed_ms=elapsed_ms)
+
 
 _DEFAULT_MESSAGE_CENTER_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
@@ -298,6 +373,7 @@ class LiveOAReadProvider:
             raw_records, authoritative_count = (
                 await self._list_pending_workflow_records(credential)
             )
+            _record_oa_stage("normalization", "start")
             try:
                 actual_fingerprint = (
                     build_live_pending_workflows_fingerprint(raw_records)
@@ -355,6 +431,7 @@ class LiveOAReadProvider:
                 credential,
                 self._system_messages_form,
             )
+            _record_oa_stage("normalization", "start")
             try:
                 actual_fingerprint = build_live_system_messages_fingerprint(
                     raw_records
@@ -786,6 +863,8 @@ class LiveOAReadProvider:
         endpoint_path: str,
         parameters: Mapping[str, str],
     ) -> dict[str, Any]:
+        started = monotonic()
+        _record_oa_stage("provider_transport", "start")
         owned_parameters = dict(parameters)
         encoded_parameters = b""
         payload: dict[str, Any] | None = None
@@ -816,6 +895,8 @@ class LiveOAReadProvider:
             )
             payload = await asyncio.to_thread(self._open_json, opener, request)
         except HTTPError as exc:
+            _record_oa_stage("provider_transport", "failed",
+                             reason=_http_error_kind(int(exc.code)), http_status=exc.code)
             error_kind = _http_error_kind(int(exc.code))
         except OALiveIdentityUnbound:
             error_kind = "identity_unbound"
@@ -846,6 +927,13 @@ class LiveOAReadProvider:
             _log_provider_failure("http_request")
             error_kind = "request_error"
         finally:
+            _record_oa_stage(
+                "provider_transport",
+                "failed" if error_kind is not None or payload is None else "ok",
+                reason=error_kind or (
+                    "payload_received" if payload is not None else "request_error"),
+                elapsed_ms=round((monotonic() - started) * 1000),
+            )
             request = None
             encoded_parameters = b""
             owned_parameters.clear()
@@ -879,6 +967,9 @@ class LiveOAReadProvider:
     ) -> dict[str, Any]:
         with opener.open(request, timeout=self._timeout_seconds) as response:
             status_code = int(response.getcode())
+            _record_oa_stage("provider_transport",
+                             "ok" if 200 <= status_code < 300 else "failed",
+                             reason="response_received", http_status=status_code)
             raise_for_http_status(status_code)
             raw = response.read(self._max_response_bytes + 1)
         if len(raw) > self._max_response_bytes:

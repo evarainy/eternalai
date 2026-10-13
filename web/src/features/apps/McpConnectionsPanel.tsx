@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from 'antd';
-import { authorizeMcp, disconnectMcp, listMcpConnections, listMcpServices, safeMcpLink } from '../../api/mcp';
+import { authorizeMcp, disconnectMcp, listMcpConnections, listMcpServices, safeMcpAuthorizationLink } from '../../api/mcp';
 import type { ConnectionView, ServiceView } from '../../generated/mcp/mcp.schemas';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './McpPanels.module.css';
@@ -77,7 +77,7 @@ function Connections({ generation }: { generation: number }) {
       } else {
         const result = await authorizeMcp(service.service_config_id);
         if (!current(id)) return;
-        const href = safeMcpLink(result.authorization_url);
+        const href = safeMcpAuthorizationLink(result.authorization_url);
         if (!href) throw new Error('unavailable');
         setLink({ service: service.service_config_id, href });
       }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, NoReturn
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.admin.evidence import (
@@ -33,6 +33,12 @@ from app.admin.registry import (
 )
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
+from app.ports.browser_fill_stop import (
+    DFormManagementCommand,
+    DFormManagementError,
+    DFormManagementPort,
+    DFormManagementState,
+)
 
 
 class AdminCapabilityListResponse(BaseModel):
@@ -158,6 +164,7 @@ def _raise_http(error: RuntimeError) -> NoReturn:
 def make_router(
     service: AdminRegistryService | None,
     require_principal: PrincipalDependency,
+    *, d_form_management: DFormManagementPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -165,6 +172,76 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> AdminRequestContext:
         return _request_context(principal)
+
+    async def d_form_access(principal: Principal) -> DFormManagementPort:
+        if d_form_management is None:
+            raise HTTPException(503, {"code": "d_form_management_unavailable",
+                                      "message": "D form management is unavailable."})
+        # The installed fixed D owner has a narrower, live session/binding grant.
+        # Every other management route retains its existing Policy check.
+        fixed_access = getattr(d_form_management, "check_fixed_access", None)
+        if callable(fixed_access):
+            try:
+                if await fixed_access(principal) is True:
+                    return d_form_management
+            except Exception:
+                raise HTTPException(
+                    503, {"code": "d_form_management_unavailable",
+                          "message": "D form access is unavailable."},
+                ) from None
+        try:
+            await _configured(service).list_bindings(
+                principal.ai_user_id, _request_context(principal),
+            )
+        except RuntimeError as error:
+            _raise_http(error)
+        return d_form_management
+
+    @router.get("/d-form", response_model=DFormManagementState)
+    async def d_form_state(
+        response: Response, principal: Principal = Depends(require_principal),
+    ) -> DFormManagementState:
+        response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+        management = await d_form_access(principal)
+        try:
+            return await management.state(principal)
+        except DFormManagementError as error:
+            raise HTTPException(
+                403, {"code": error.code, "message": "D form state is unavailable."},
+                                headers={"Cache-Control": "no-store"}) from None
+        except Exception:
+            raise HTTPException(503, {"code": "d_form_management_unavailable",
+                                      "message": "D form state is unavailable."},
+                                headers={"Cache-Control": "no-store"}) from None
+
+    @router.post(
+        "/d-form/actions", response_model=DFormManagementState,
+        openapi_extra={"requestBody": {"required": True, "content": {
+            "application/json": {"schema": DFormManagementCommand.model_json_schema()},
+        }}},
+    )
+    async def d_form_action(
+        request: Request, response: Response,
+        principal: Principal = Depends(require_principal),
+    ) -> DFormManagementState:
+        response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+        management = await d_form_access(principal)
+        try:
+            encoded = await request.body()
+            if len(encoded) > 16384:
+                raise ValueError
+            body = DFormManagementCommand.model_validate_json(encoded)
+        except Exception:
+            # Never echo conversation IDs or parameter values through validation errors.
+            raise HTTPException(422, {"code": "d_form_command_invalid",
+                                      "message": "D form command is invalid."},
+                                headers={"Cache-Control": "no-store"}) from None
+        try:
+            return await management.perform(principal, body)
+        except DFormManagementError as error:
+            raise HTTPException(
+                409, {"code": error.code, "message": "D form action was refused."},
+                                headers={"Cache-Control": "no-store"}) from None
 
     @router.get("/registry", response_model=AdminCapabilityListResponse)
     async def list_capabilities(

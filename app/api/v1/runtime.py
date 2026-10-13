@@ -12,10 +12,17 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs, Valida
 
 from app.api.v1.auth import PrincipalDependency
 from app.contracts.sdui.models import UserAction
-from app.ports.auth import Principal, SessionBindingError
+from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
+from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
-from app.ports.runtime import RuntimePort, UserActionOutcome
+from app.ports.runtime import (
+    DFormCollectionReference,
+    RuntimePort,
+    UserActionOutcome,
+    d_form_collection_reference,
+)
+from app.ports.task_store import DFormCollectionError
 
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
@@ -50,6 +57,7 @@ class HandleRequest(BaseModel):
     message: str
     client_capabilities: dict[str, Any] = Field(default_factory=dict)
     client_request_id: str | None = Field(default=None, min_length=1, max_length=96)
+    d_form_collection: DFormCollectionReference | None = None
 
 
 class ActionRequest(BaseModel):
@@ -183,6 +191,8 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> ResponseEnvelope:
         if body.client_capabilities.get("browser_async_v1") is True:
+            if body.d_form_collection is not None:
+                raise HTTPException(422, {"code": "collection_not_found"})
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
             session_id = _bind_session(
@@ -226,14 +236,32 @@ def make_router(
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
-        envelope: ResponseEnvelope = await bound_runtime.handle_user_message(
-            channel=body.channel,
-            principal=principal,
-            session_id=session_id,
-            message=body.message,
-            client_capabilities=body.client_capabilities,
-        )
-        return envelope
+        scope = None
+        if browser_chat is not None and body.client_request_id is not None:
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+            captured = authenticated_session.get()
+            if captured is None or captured.principal != principal:
+                raise HTTPException(status_code=403, detail={"code": "policy_denied"})
+            try:
+                scope = BrowserRequestScope(captured, session_id, body.client_request_id)
+            except ValueError:
+                raise HTTPException(status_code=422, detail={"code": "adapter_payload_invalid"}) from None
+        token = browser_request_scope.set(scope)
+        collection_token = d_form_collection_reference.set(body.d_form_collection)
+        try:
+            return await bound_runtime.handle_user_message(
+                channel=body.channel, principal=principal, session_id=session_id,
+                message=body.message, client_capabilities=body.client_capabilities,
+            )
+        except DFormCollectionError as error:
+            raise HTTPException(
+                404 if error.code == "collection_not_found" else 409,
+                {"code": error.code}, headers=_PRIVATE_HEADERS,
+            ) from None
+        finally:
+            d_form_collection_reference.reset(collection_token)
+            browser_request_scope.reset(token)
 
     @router.post("/action", response_model=ActionResponseEnvelope)
     async def handle_action(

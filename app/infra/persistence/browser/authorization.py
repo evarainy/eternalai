@@ -139,10 +139,15 @@ class PostgreSQLBrowserCurrentAuth:
         policy: PolicyGuardPort,
         publication_check: PublicationCheck,
         publication_check_in_session: PublicationCheckInSession | None = None,
+        fill_stop_capability_id: str | None = None,
     ) -> None:
         self._sessions, self._cipher = session_factory, cipher
         self._binder, self._policy, self._publication = session_binder, policy, publication_check
         self._publication_in_session = publication_check_in_session
+        # Trusted composition pins this to the single frozen FILL_STOP seed.
+        # Policy CONFIRM defers execution to its persisted Run HumanGate; DENY
+        # and every other capability retain their original behavior.
+        self._fill_stop_capability_id = fill_stop_capability_id
         self._teaching_publication: TeachingPublicationCheck | None = None
         self._teaching_plan_lookup: TeachingPlanLookup | None = None
 
@@ -322,7 +327,10 @@ class PostgreSQLBrowserCurrentAuth:
             decoded.arguments,
             context,
         )
-        if decision.decision != "allow":
+        if decision.decision != "allow" and not (
+            decision.decision == "confirm" and capability.type == "action"
+            and capability.capability_id == self._fill_stop_capability_id
+        ):
             raise BrowserAuthorizationError("browser_policy_denied")
         return decoded
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 
@@ -44,7 +45,16 @@ class _PrivateRunRoute(APIRoute):
             except HTTPException as error:
                 error.headers = {**(error.headers or {}), **_HEADERS}
                 raise
-            except Exception:
+            except Exception as error:
+                try:
+                    exception_type = type(error).__name__
+                    logging.getLogger(__name__).warning(
+                        "browser_fallback_diagnostic stage=private_run_route exception_type=%s",
+                        exception_type if exception_type.isascii() and exception_type.isidentifier()
+                        and len(exception_type) <= 64 else "UnknownException",
+                    )
+                except Exception:
+                    pass  # Diagnostic failure must preserve the original failure path.
                 raise HTTPException(
                     503, {"code": "browser_chat_unavailable"}, headers=_HEADERS,
                 ) from None

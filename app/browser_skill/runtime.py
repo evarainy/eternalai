@@ -19,6 +19,7 @@ from app.browser_skill.repair import FormalRepairObservation, RepairFailureReaso
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileStorePort
+from app.ports.browser_fill_stop import FillStopReport
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
     BrowserReadExecutionError,
@@ -104,6 +105,19 @@ class _Checkpoint:
             self._write_reservation = None
         return step
 
+    async def reserve_fill_stop(self) -> RunSnapshot:
+        await self.refresh()
+        self.run = await self.store.reserve_fill_stop(self.run)
+        return self.run
+
+    async def assert_fill_stop_reservation(self) -> None:
+        await self.refresh()
+        await self.store.assert_fill_stop_reservation(self.run)
+
+    async def record_fill_stop(self, report: FillStopReport) -> None:
+        await self.refresh(allow_cancel=True)
+        await self.store.record_fill_stop(self.run, report)
+
     async def record_failed_step(
         self, rule: SiteStepRule, scope: ScopeStamp, policy_digest: str,
         sequence: int, reason: RepairFailureReason,
@@ -166,6 +180,7 @@ class BrowserReadWorker:
         ttl_seconds: int = 60,
         record_diagnostic: Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]]
         | None = None,
+        capture_profiles: bool = True,
     ) -> None:
         checked_run_id(worker_id)
         if type(enabled) is not bool or type(ttl_seconds) is not int or not 5 <= ttl_seconds <= 300:
@@ -173,6 +188,7 @@ class BrowserReadWorker:
         self._store, self._execution, self._profiles = store, execution, profiles
         self._worker_id, self._enabled, self._ttl = worker_id, enabled, ttl_seconds
         self._record_diagnostic = record_diagnostic
+        self._capture_profiles = capture_profiles
         self.shutdown_unsettled = False
         self.shutdown_unsettled_runs: dict[str, RunSnapshot] = {}
 
@@ -313,7 +329,8 @@ class BrowserReadWorker:
             # This branch intentionally never opens an execution, runs a query,
             # or calls a verifier for an already durable verified result.
             mark("capture")
-            await self._settle_capture(checkpoint)
+            if self._capture_profiles:
+                await self._settle_capture(checkpoint)
             mark("finalize")
             checkpoint.run = await self._store.finalize(checkpoint.run, status="completed")
             return checkpoint.run
@@ -380,6 +397,9 @@ class BrowserReadWorker:
         if run.status in {"completed", "failed", "cancelled"}:
             return
         if run.verification == "verified":
+            if not self._capture_profiles:
+                checkpoint.run = await self._store.finalize(run, status="completed")
+                return
             # A durable verified result stays authoritative. The local capture
             # obligation is settled as quarantined when shutdown interrupts it.
             if run.capture_status == "not_requested":
@@ -412,18 +432,45 @@ class BrowserReadWorker:
         )
 
     async def _cancel(self, checkpoint: _Checkpoint) -> RunSnapshot:
-        await checkpoint.refresh(allow_cancel=True)
-        await self._execution.stop(checkpoint.run, checkpoint)
-        await checkpoint.refresh(allow_cancel=True)
-        # Store's independent authority checks actual termination/barrier proof.
-        checkpoint.run = await self._store.acknowledge_cancel(checkpoint.run)
-        checkpoint.run = await self._store.finalize(
-            checkpoint.run, status="failed" if checkpoint.run.effect == "unknown" else "cancelled",
-            error_code="browser_effect_unknown" if checkpoint.run.effect == "unknown"
-            else "browser_cancelled",
-            dispatch_failure_code="effect_unknown" if checkpoint.run.effect == "unknown" else None,
-        )
-        return checkpoint.run
+        stage = "refresh"
+        try:
+            await checkpoint.refresh(allow_cancel=True)
+            stage = "stop"
+            await self._execution.stop(checkpoint.run, checkpoint)
+            stage = "refresh_after_stop"
+            await checkpoint.refresh(allow_cancel=True)
+            # Store's independent authority checks actual termination/barrier proof.
+            stage = "acknowledge"
+            checkpoint.run = await self._store.acknowledge_cancel(checkpoint.run)
+            stage = "finalize"
+            checkpoint.run = await self._store.finalize(
+                checkpoint.run,
+                status="failed" if checkpoint.run.effect == "unknown" else "cancelled",
+                error_code="browser_effect_unknown" if checkpoint.run.effect == "unknown"
+                else "browser_cancelled",
+                dispatch_failure_code=(
+                    "effect_unknown" if checkpoint.run.effect == "unknown" else None
+                ),
+            )
+            return checkpoint.run
+        except Exception as error:
+            # Fixed metadata only: never exception text, SQL, parameters or owner values.
+            code = type(error).__name__
+            if code not in {
+                "BrowserRunStoreError", "BrowserReadExecutionError", "BrowserLeaseError",
+                "ProgrammingError", "DBAPIError", "TimeoutError", "ValueError",
+            }:
+                code = "unexpected_error"
+            sqlstate = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if sqlstate in {"42P08", "42P18", "42703", "42P01", "55P03", "40P01"}:
+                code = "database_" + sqlstate
+            try:
+                logging.getLogger(__name__).warning(
+                    "browser_cancel_failure stage=%s code=%s", stage, code,
+                )
+            except Exception:
+                pass  # Preserve the cancellation failure if diagnostics are unavailable.
+            raise
 
     async def _settle_capture(self, checkpoint: _Checkpoint) -> None:
         await checkpoint.refresh(allow_cancel=True)

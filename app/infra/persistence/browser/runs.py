@@ -53,6 +53,7 @@ from app.browser_skill.trajectory import (
     TrajectoryEvent,
 )
 from app.browser_skill.verifier import IndependentVerifier
+from app.ports.browser_fill_stop import FillStopReport
 from app.browser_skill.write_workflow import (
     BrowserWritePreparation,
     _owner_digest,
@@ -1423,7 +1424,9 @@ class PostgreSQLBrowserRunStore:
         if event is None or event.get("schema_version") != _WRITE_PREPARED_VERSION:
             raise BrowserRunStoreError("browser_write_preparation_missing")
         try:
-            preparation = BrowserWritePreparation.model_validate(event["preparation"])
+            preparation = BrowserWritePreparation.model_validate_json(
+                json.dumps(event["preparation"])
+            )
         except (KeyError, ValueError):
             raise BrowserRunStoreError("browser_write_preparation_invalid") from None
         if (
@@ -1709,6 +1712,83 @@ class PostgreSQLBrowserRunStore:
                 return False
             raise
         return True
+
+    async def record_fill_stop(self, claim: RunSnapshot, report: FillStopReport) -> None:
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            manifest = await self._frozen_publication(session, current)
+            if manifest.execution_mode != "d_form_fill_stop_v1":
+                raise BrowserRunStoreError("browser_fill_stop_receipt_denied")
+            checked = FillStopReport.model_validate_json(report.model_dump_json())
+            event_id = self._write_event_id("fill-stop-receipt", current.run_id)
+            existing = await self._write_event(session, current, "browser.fill_stop.receipt.v1", event_id)
+            if existing is not None:
+                if existing.get("report") != checked.model_dump(mode="json"):
+                    raise BrowserRunStoreError("browser_fill_stop_receipt_conflict")
+                return
+            await self._append_write_event(session, current, kind="browser.fill_stop.receipt.v1",
+                event_id=event_id, revision_delta=0, data={"report": checked.model_dump(mode="json")})
+
+    async def load_fill_stop(self, owner: BrowserOwner, task_id: str, run_id: str) -> FillStopReport | None:
+        async with self._transaction() as session:
+            current = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, current, "read")
+            value = await self._write_event(session, current, "browser.fill_stop.receipt.v1",
+                                           self._write_event_id("fill-stop-receipt", current.run_id))
+            if value is None:
+                return None
+            return FillStopReport.model_validate_json(json.dumps(value.get("report")))
+
+    async def reserve_fill_stop(self, claim: RunSnapshot) -> RunSnapshot:
+        """One whole finite D flow; no fabricated v4.2 per-control receipts."""
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            manifest = await self._frozen_publication(session, current)
+            if (manifest.execution_mode != "d_form_fill_stop_v1"
+                    or manifest.effect != "controlled_write"
+                    or current.phase != "running" or current.cancel_requested
+                    or current.lease_epoch is None or current.effect != "not_sent"
+                    or current.verification is not None):
+                raise BrowserRunStoreError("browser_fill_stop_dispatch_stale")
+            preparation = await self._prepared_write(session, current)
+            await self._gate_request(session, current, preparation, confirmed=True)
+            if preparation.write_steps_digest != _write_steps_digest(manifest):
+                raise BrowserRunStoreError("browser_fill_stop_dispatch_mismatch")
+            consumed_id = self._write_event_id("write-consumed", preparation.request_id)
+            send_id = self._write_event_id("fill-stop-send", current.run_id)
+            if (await self._write_event(session, current, _WRITE_CONSUMED_VERSION, consumed_id)
+                    is not None or await self._write_event(session, current, _WRITE_SEND_VERSION, send_id)
+                    is not None):
+                raise BrowserRunStoreError("browser_write_send_reused")
+            data = {"request_id": preparation.request_id,
+                    "action_digest": preparation.action_digest,
+                    "worker_epoch": current.worker_epoch, "lease_epoch": current.lease_epoch}
+            await self._append_write_event(session, current, kind=_WRITE_CONSUMED_VERSION,
+                                           event_id=consumed_id, data=data)
+            await self._append_write_event(session, current, kind=_WRITE_SEND_VERSION,
+                                           event_id=send_id, data={**data, "mode": "FILL_STOP",
+                                                                "write_steps_digest": preparation.write_steps_digest})
+            return await self._update(session, current, {"effect": current.effect})
+
+    async def assert_fill_stop_reservation(self, claim: RunSnapshot) -> None:
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            manifest = await self._frozen_publication(session, current)
+            if (manifest.execution_mode != "d_form_fill_stop_v1"
+                    or current.phase != "running" or current.cancel_requested
+                    or current.lease_epoch is None or current.effect != "not_sent"):
+                raise BrowserRunStoreError("browser_fill_stop_dispatch_stale")
+            preparation = await self._prepared_write(session, current)
+            await self._gate_request(session, current, preparation, confirmed=True)
+            send = await self._write_event(session, current, _WRITE_SEND_VERSION,
+                                          self._write_event_id("fill-stop-send", current.run_id))
+            if (send is None or send.get("mode") != "FILL_STOP"
+                    or send.get("request_id") != preparation.request_id
+                    or send.get("action_digest") != preparation.action_digest
+                    or send.get("write_steps_digest") != preparation.write_steps_digest
+                    or send.get("worker_epoch") != current.worker_epoch
+                    or send.get("lease_epoch") != current.lease_epoch):
+                raise BrowserRunStoreError("browser_write_send_unreserved")
 
     async def reserve_write_dispatch(
         self, claim: RunSnapshot, *, command: ActionCommand,

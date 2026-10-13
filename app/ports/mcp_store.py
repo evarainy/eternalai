@@ -111,5 +111,5 @@ class IdentityAssertionPort(Protocol):
         service_config_id: str,
         token_metadata: dict[str, Any],
     ) -> str | None:
-        """Return approved same-subject evidence, or None to keep connection pending."""
+        """Return policy-approved connection identity evidence, or keep it pending."""
         ...
