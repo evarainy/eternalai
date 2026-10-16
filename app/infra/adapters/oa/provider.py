@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 from http.client import HTTPMessage
 from pathlib import Path
 from time import monotonic
-from typing import IO, Any, NoReturn, Protocol
+from types import TracebackType
+from typing import IO, Any, NoReturn, Protocol, TypeGuard
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import (
@@ -194,6 +195,25 @@ class OAStructuralDriftReporter(Protocol):
     def __call__(self, report: OAStructuralDriftReport) -> None: ...
 
 
+class _OAOpenResponse(Protocol):
+    def __enter__(self) -> _OAOpenResponse: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+    def getcode(self) -> int: ...
+
+    def read(self, amount: int = -1) -> bytes: ...
+
+
+class _OARequestOpener(Protocol):
+    def open(self, request: Request, *, timeout: float) -> _OAOpenResponse: ...
+
+
 class OAContractPackError(RuntimeError):
     """The selected Replay Contract Pack cannot be loaded safely."""
 
@@ -301,7 +321,7 @@ class LiveOAReadProvider:
         max_pages: int = _DEFAULT_MAX_PAGES,
         max_records: int = _DEFAULT_MAX_RECORDS,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
-        opener_factory: Callable[[], OpenerDirector] | None = None,
+        opener_factory: Callable[[], _OARequestOpener] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._base_url, self._allowed_origin = validate_base_url(base_url)
@@ -498,7 +518,7 @@ class LiveOAReadProvider:
             raise OALiveIdentityUnbound("OA credential is required")
         cookie_header = ""
         sessionkey = ""
-        opener: OpenerDirector | None = None
+        opener: _OARequestOpener | None = None
         split_payload: dict[str, Any] | None = None
         counts_payload: dict[str, Any] | None = None
         datas_payload: dict[str, Any] | None = None
@@ -664,7 +684,7 @@ class LiveOAReadProvider:
         if credential is None:
             raise OALiveIdentityUnbound("OA credential is required")
         cookie_header = ""
-        opener: OpenerDirector | None = None
+        opener: _OARequestOpener | None = None
         payload: dict[str, Any] | None = None
         page_records: list[Any] = []
         raw_records: list[Any] = []
@@ -839,7 +859,7 @@ class LiveOAReadProvider:
     async def _request_message_center_page(
         self,
         *,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         cookie_header: str,
         form: Mapping[str, str],
         cursor: tuple[str, str],
@@ -869,7 +889,7 @@ class LiveOAReadProvider:
     async def _request_form_payload(
         self,
         *,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         cookie_header: str,
         endpoint_path: str,
         parameters: Mapping[str, str],
@@ -973,7 +993,7 @@ class LiveOAReadProvider:
 
     def _open_json(
         self,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         request: Request,
     ) -> dict[str, Any]:
         with opener.open(request, timeout=self._timeout_seconds) as response:
@@ -1388,7 +1408,7 @@ def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
     raise OALiveRequestError("OA response processing failed")
 
 
-def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> bool:
+def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> TypeGuard[str]:
     return (
         isinstance(sessionkey, str)
         and len(sessionkey) == _PENDING_WORKFLOW_SESSION_KEY_LENGTH

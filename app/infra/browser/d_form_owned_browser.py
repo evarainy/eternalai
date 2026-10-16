@@ -17,9 +17,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
+
+from playwright.async_api import BrowserContext, CDPSession, Frame, Page
 
 from app.browser_skill.site_rules import canonical_origin, navigation_allowed
 from app.infra.browser.d_form_cli import CODES
@@ -1333,14 +1335,16 @@ class OwnedDFormBrowser:
         Its navigation actions are independent of the later three-field receipt.
         An exact preparation failure stops the worker before any field input.
         """
-        from app.infra.browser.d_form_flow import Stop
-        from app.infra.browser.d_portal_flow import PortalFlow
+        from app.infra.browser.d_form_flow import FrameTree, Stop
+        from app.infra.browser.d_portal_flow import PortalFlow, TargetInfo
 
         self._stage("portal")
         owner = self
 
         class FencedPortal(PortalFlow):
-            def page_changed(self, code: str, frame: Any = None, page: Any = None) -> None:
+            def page_changed(
+                self, code: str, frame: Frame | None = None, page: Page | None = None
+            ) -> None:
                 # Temporary demo window: child frame navigations and new same-context
                 # pages do not deny; the bound main frame, close and origins still do.
                 if owner._login_relaxed and (
@@ -1369,10 +1373,16 @@ class OwnedDFormBrowser:
                     owner._login_relaxed
                     and self.page is not None
                     and not self.page.is_closed()
-                    and self.page in self.context.pages
+                    and self.page in cast(BrowserContext, self.context).pages
                 ):
-                    self.pages = set(self.context.pages)
-                    tree = (await self.cdp.send("Page.getFrameTree"))["frameTree"]
+                    # connect() sets page/context/cdp together before prepare_portal().
+                    self.pages = set(cast(BrowserContext, self.context).pages)
+                    tree = cast(
+                        FrameTree,
+                        (await cast(CDPSession, self.cdp).send("Page.getFrameTree"))[
+                            "frameTree"
+                        ],
+                    )
                     self.frame_ids = {item["frame"]["id"] for item in self.walk(tree)}
 
             async def check(self) -> None:
@@ -1381,7 +1391,9 @@ class OwnedDFormBrowser:
                 await super().check()
                 await fence()
 
-            async def sources(self, page: Any, cdp: Any, stable: bool = True) -> Any:
+            async def sources(
+                self, page: Page, cdp: CDPSession, stable: bool = True
+            ) -> tuple[TargetInfo, FrameTree]:
                 await fence()
                 await owner.check_context_targets(portal=True)
                 if stable:

@@ -305,6 +305,9 @@ class BrowserChatPayloadCipher:
             value,
         )
 
+    def decrypt_input(self, admission: RunAdmission) -> dict[str, Any]:
+        return self._cipher.decrypt_input(admission)
+
     def decrypt_result(self, run: RunSnapshot) -> dict[str, Any]:
         return self._cipher.decrypt_result(run)
 

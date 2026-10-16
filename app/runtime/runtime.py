@@ -11,7 +11,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from threading import Lock
 from time import monotonic
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter, ValidationError
@@ -1656,7 +1656,7 @@ class RuntimeImpl:
                     trace_id=trace_id,
                     task_id=task_id,
                     session_id=session_id,
-                    business_status=exec_result.status,
+                    business_status=cast(TerminalBusinessStatus, exec_result.status),
                     error_code=exec_result.error_code,
                     raw_execution=raw_execution,
                     business_verification=business_verification,
@@ -2907,7 +2907,7 @@ class RuntimeImpl:
                 trace_id=pending.trace_id,
                 task_id=pending.task_id,
                 session_id=session_id,
-                business_status=exec_result.status,
+                business_status=cast(TerminalBusinessStatus, exec_result.status),
                 error_code=exec_result.error_code,
                 raw_execution=raw_execution,
                 business_verification=business_verification,

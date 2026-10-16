@@ -179,6 +179,7 @@ describe('RegistryPage', () => {
           execution_identity: 'user_delegated',
           binding_required: false,
           policy_digest: null,
+          automation_level: 'manual',
         });
       });
       expect(apiMocks.createCapability.mock.calls[0]?.[0]).not.toHaveProperty('status');

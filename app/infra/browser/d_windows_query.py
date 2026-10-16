@@ -29,6 +29,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+from app.browser_skill.executor import DecisionContextFactory
 from app.browser_skill.models import (
     ActionCommand,
     BrowserSessionRef,
@@ -172,26 +173,26 @@ class _JobAccounting(ctypes.Structure):
 
 
 class _StartupInfo(ctypes.Structure):
-    _fields_ = (
-        [
-            ("cb", wintypes.DWORD),
-            ("reserved", wintypes.LPWSTR),
-            ("desktop", wintypes.LPWSTR),
-            ("title", wintypes.LPWSTR),
-        ]
-        + [
-            (name, wintypes.DWORD)
-            for name in ("x", "y", "width", "height", "x_chars", "y_chars", "fill", "flags")
-        ]
-        + [
-            ("show", wintypes.WORD),
-            ("reserved_size", wintypes.WORD),
-            ("reserved_bytes", ctypes.POINTER(ctypes.c_ubyte)),
-            ("stdin", wintypes.HANDLE),
-            ("stdout", wintypes.HANDLE),
-            ("stderr", wintypes.HANDLE),
-        ]
-    )
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("reserved", wintypes.LPWSTR),
+        ("desktop", wintypes.LPWSTR),
+        ("title", wintypes.LPWSTR),
+        ("x", wintypes.DWORD),
+        ("y", wintypes.DWORD),
+        ("width", wintypes.DWORD),
+        ("height", wintypes.DWORD),
+        ("x_chars", wintypes.DWORD),
+        ("y_chars", wintypes.DWORD),
+        ("fill", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("show", wintypes.WORD),
+        ("reserved_size", wintypes.WORD),
+        ("reserved_bytes", ctypes.POINTER(ctypes.c_ubyte)),
+        ("stdin", wintypes.HANDLE),
+        ("stdout", wintypes.HANDLE),
+        ("stderr", wintypes.HANDLE),
+    ]
 
 
 class _ProcessInfo(ctypes.Structure):
@@ -222,7 +223,7 @@ class _OwnedWindowsJob:
     def __init__(self) -> None:
         if os.name != "nt":
             raise BrowserReadExecutionError("unsupported")
-        self.api = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.api = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
         pointer, handle, dword = ctypes.c_void_p, wintypes.HANDLE, wintypes.DWORD
         signatures = {
             "CreateJobObjectW": (handle, [pointer, wintypes.LPCWSTR]),
@@ -1343,7 +1344,7 @@ class DWindowsQueryFactory:
 
     def _decisions(
         self, state: _RunBrowser
-    ) -> Callable[[ExecutionContext, DecisionRequest], DecisionCallContext]:
+    ) -> DecisionContextFactory:
         def create(context: ExecutionContext, request: DecisionRequest) -> DecisionCallContext:
             def targets() -> tuple[TargetRef, ...]:
                 observer, session = state.observer, state.session

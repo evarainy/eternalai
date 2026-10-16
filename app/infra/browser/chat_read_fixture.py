@@ -326,19 +326,21 @@ def make_read_spec_resolver(
         mode="independent_query_detail_v1",
     )
 
+    expected_binding = binding
+
     async def resolve(
-        session: BrowserSessionRef, context: ExecutionContext, current: ScopeBinding
+        session: BrowserSessionRef, context: ExecutionContext, binding: ScopeBinding
     ) -> ReadSpec:
         if (
-            binding.owner != run.owner
-            or binding.authorization_run_id != run.run_id
-            or binding.binding_id != run.admission.binding_id
-            or binding.binding_revision != run.admission.binding_revision
-            or binding.lease_epoch != run.lease_epoch
-            or binding.evidence_version != "verified-session-v1"
-            or session.binding != binding
-            or current != binding
-            or context.expected_binding != binding
+            expected_binding.owner != run.owner
+            or expected_binding.authorization_run_id != run.run_id
+            or expected_binding.binding_id != run.admission.binding_id
+            or expected_binding.binding_revision != run.admission.binding_revision
+            or expected_binding.lease_epoch != run.lease_epoch
+            or expected_binding.evidence_version != "verified-session-v1"
+            or session.binding != expected_binding
+            or binding != expected_binding
+            or context.expected_binding != expected_binding
             or context.skill != manifest.skill
             or context.source != manifest.site.source
             or run.admission.publication_digest.hex() != manifest.digest

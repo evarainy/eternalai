@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 from scripts.smoke.errors import SmokeError
@@ -505,7 +506,7 @@ def _render_env_mutations(
         if key in removals:
             continue
         if key in updates:
-            rendered.append(_replace_env_assignment_value(raw_line, updates[key]))
+            rendered.append(_replace_env_assignment_value(raw_line, updates[cast(str, key)]))
         else:
             rendered.append(raw_line)
     result = "".join(rendered)

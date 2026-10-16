@@ -108,6 +108,7 @@ explicitly names a future dedicated allowlist file.
 | python | pydantic | >=2,<3 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements; P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
 | python | jsonschema | >=4.23,<5 | backend-runtime | pending_internal_mirror_confirmation | P2-SMOKE-AUTH-DIAG-001; 雨爷批准 2026-08-06（Gateway 执行 Registry input_schema） |
 | python | types-jsonschema | >=4.23,<5 | backend-tooling | pending_internal_mirror_confirmation | P2-SMOKE-AUTH-DIAG-001; jsonschema mypy 类型守卫 |
+| python | types-psutil | ==7.2.2.20260906 | backend-tooling | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-16 required-CI type closure; official typeshed stubs for pinned psutil 7.2.2, development only |
 | python | pytest | >=8,<9 | backend-test | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend test runner for TDD/validation) |
 | python | ruff | >=0.8,<1 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend linting / formatting validation) |
 | python | mypy | >=1.13,<2 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend static type checking) |

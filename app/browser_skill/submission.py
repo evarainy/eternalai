@@ -867,7 +867,7 @@ class BrowserSubmissionService:
                     and cause.code == "browser_binding_stale"
                 ):
                     publication_cause = "browser_binding_stale"
-            diagnostic = {
+            admission_diagnostic = {
                 "stage": admission_stage,
                 "exception_type": exception_type
                 if re.fullmatch(
@@ -897,7 +897,12 @@ class BrowserSubmissionService:
             # Put JSON in the message so the existing default formatter retains every field.
             logging.getLogger(__name__).error(
                 "browser_request_admission_diagnostic %s",
-                json.dumps(diagnostic, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    admission_diagnostic,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
             )
             try:
                 await self._store.reject_request(request, code)

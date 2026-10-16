@@ -14,7 +14,7 @@ from app.browser_skill.models import BrowserOwner, Contract, Digest, OpaqueId
 from app.browser_skill.run_contracts import BrowserRunView
 from app.ports.auth import Principal
 from app.ports.browser_fill_stop import FillStopReport
-from app.ports.browser_run_store import ProtectedRunEnvelope, RunSnapshot
+from app.ports.browser_run_store import ProtectedRunEnvelope, RunAdmission, RunSnapshot
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.credential_vault import BrowserBindingFact
 from app.ports.response_envelope import ResponseEnvelope
@@ -51,6 +51,8 @@ class BrowserChatCipherPort(Protocol):
         identity: BrowserChatInputIdentity,
         value: Mapping[str, object],
     ) -> ProtectedRunEnvelope: ...
+
+    def decrypt_input(self, admission: RunAdmission) -> dict[str, Any]: ...
 
     def decrypt_result(self, run: RunSnapshot) -> dict[str, Any]: ...
 

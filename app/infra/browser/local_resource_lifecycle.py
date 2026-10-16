@@ -21,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
@@ -1103,10 +1103,11 @@ class LocalBrowserResources:
                     and request.request.resource_type == "document"
                 ):
                     await request.fulfill(
-                        status=200, content_type="text/html; charset=utf-8", body=source.html
+                        status=200, content_type="text/html; charset=utf-8",
+                        body=cast(FixedSyntheticSource, source).html,
                     )
                 elif not synthetic and navigation_allowed(
-                    request.request.url, source.origins,
+                    request.request.url, cast(RegisteredLocalSite, source).origins,
                 ):
                     await request.continue_()
                 else:
@@ -1121,7 +1122,7 @@ class LocalBrowserResources:
                     await subject_guard()
                     origin = urlsplit(socket.url)
                     socket_origin = f"{origin.scheme}://{origin.netloc}"
-                    if socket_origin in source.websocket_origins:
+                    if socket_origin in cast(RegisteredLocalSite, source).websocket_origins:
                         socket.connect_to_server()
                     else:
                         item.faulted = True
@@ -1150,7 +1151,7 @@ class LocalBrowserResources:
             failure_stage = "guard"
             await guard()
             target = (source.manifest.site.source.origin + "/" if synthetic
-                      else source.entry_url)
+                      else cast(RegisteredLocalSite, source).entry_url)
             phase_started_at = time.monotonic()
             failure_stage = "navigation"
             await page.goto(target, wait_until="domcontentloaded")

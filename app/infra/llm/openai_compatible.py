@@ -11,7 +11,7 @@ import socket
 from collections import Counter
 from http.client import HTTPResponse
 from time import monotonic
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import OpenerDirector, Request, build_opener
 
@@ -86,9 +86,10 @@ def _safe_int(value: object) -> str:
 
 
 def _safe_float(value: object, *, lower: float, upper: float) -> str:
-    if type(value) not in (int, float) or not math.isfinite(value):
+    if type(value) not in (int, float) or not math.isfinite(cast(int | float, value)):
         return "unknown"
-    return str(value) if lower <= value <= upper else "unknown"
+    numeric = cast(int | float, value)
+    return str(value) if lower <= numeric <= upper else "unknown"
 
 
 def _safe_request_facts(payload: dict[str, Any]) -> _SafeRequestFacts:

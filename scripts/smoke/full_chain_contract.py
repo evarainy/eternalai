@@ -99,7 +99,7 @@ class FullChainFailure(BaseModel):
 
     error_code: FullChainFailureCode
     runtime_error_code: FullChainRuntimeErrorCode | None = None
-    schema_version: Literal[FULL_CHAIN_FAILURE_SCHEMA_VERSION]
+    schema_version: Literal["p2.smoke.full-chain.v2"]
 
     @model_validator(mode="after")
     def _require_runtime_error_code_only_for_runtime_failure(

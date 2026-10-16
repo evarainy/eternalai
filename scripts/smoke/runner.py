@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, NoReturn, TypeAlias
+from typing import Any, NoReturn, TypeAlias, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
@@ -814,7 +814,7 @@ def _spawn_service(
     log_path: Path,
 ) -> subprocess.Popen[bytes]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP") if os.name == "nt" else 0
     try:
         with log_path.open("wb") as log:
             return subprocess.Popen(
@@ -1272,7 +1272,7 @@ def _windows_process_identity(pid: int) -> str | None:
     process_query_limited_information = 0x1000
     handle: Any = None
     try:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
         kernel32.OpenProcess.argtypes = (
             ctypes.c_ulong,
             ctypes.c_int,
@@ -1805,7 +1805,7 @@ def _command_verify(
     print(f"report={report_path.name}")
     if capture_created:
         print(f"pending_capture={_PENDING_CAPTURE_PROFILE}")
-    if _verify_success(system, pending, full_chain):
+    if _verify_success(cast(LiveOutcome, system), cast(LiveOutcome, pending), full_chain):
         return 0
     _print_stop_instruction()
     return 1
@@ -2330,6 +2330,9 @@ async def _run_one_live_check(
             expected_sort_params=values["pending_sort_params"],
         )
     reports: list[OAStructuralDriftReport] = []
+
+    def report_drift(report: OAStructuralDriftReport) -> None:
+        reports.append(report)
     provider = LiveOAReadProvider(
         base_url=settings.oa_base_url,
         message_center_endpoint_path=values["message_center_path"],
@@ -2348,7 +2351,7 @@ async def _run_one_live_check(
         timeout_seconds=settings.oa_timeout_seconds,
         pending_workflows_contract_pack_dir=values["pending_pack"],
         system_messages_contract_pack_dir=values["system_pack"],
-        drift_reporter=reports.append,
+        drift_reporter=report_drift,
         page_size=settings.oa_message_center_page_size,
         opener_factory=lambda: RecordingOpener(evidence),
     )

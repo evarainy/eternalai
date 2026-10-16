@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.request import ProxyHandler, build_opener
 
 from pydantic import SecretStr
@@ -83,6 +83,9 @@ from app.ports.auth import VerifiedSessionToken
 from app.ports.browser_publication_store import BrowserPublicationError, PublicationOperation
 from app.ports.browser_store import BrowserBindingKey
 from app.ports.credential_vault import BrowserBindingFact
+
+if TYPE_CHECKING:
+    from app.infra.browser.read_execution import VerifiedBrowserReadExecution
 
 _BROWSERS = Path("/ms-playwright")
 _SYNTHETIC_SKILL = "fixed_synthetic_message_detail"
@@ -472,7 +475,8 @@ async def open_synthetic_operator(
             if vertical is None:
                 raise ValueError("browser_operator_installation_unavailable")
             if trial_id == OBSERVE_TRIAL and not full_run:
-                vertical.execution._install_fixed_observe_only(source.manifest)
+                read_execution = cast("VerifiedBrowserReadExecution", vertical.execution)
+                read_execution._install_fixed_observe_only(source.manifest)
             try:
                 if worker_resources:
                     await vertical.start_resources()

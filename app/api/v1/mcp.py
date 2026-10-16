@@ -352,7 +352,8 @@ def make_router(
             or any(len(query.getlist(k)) != 1 for k in query)
         ):
             raise McpFailure("mcp_authorization_invalid")
-        await available().oauth.callback(
+        current = available()
+        await current.oauth.callback(
             context,
             state=query["state"],
             code=query.get("code"),
@@ -360,8 +361,9 @@ def make_router(
             callback_uri=str(request.url.replace(query="")),
             error=query.get("error"),
         )
-        if "error" not in query and available().complete_authorization_owner is not None:
-            await available().complete_authorization_owner(context)
+        complete_authorization_owner = current.complete_authorization_owner
+        if "error" not in query and complete_authorization_owner is not None:
+            await complete_authorization_owner(context)
         if "error" in query:
             return RedirectResponse(
                 "/apps", status_code=303,

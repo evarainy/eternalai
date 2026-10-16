@@ -14,6 +14,31 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from types import FrameType
+from typing import IO, TYPE_CHECKING, Literal, NoReturn, Protocol, TextIO, TypedDict, cast
+
+
+class _WindowsProcedure(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> int | None: ...
+
+
+class _WindowsKernel(Protocol):
+    GetSystemDirectoryW: _WindowsProcedure
+    CreateEventW: _WindowsProcedure
+    OpenEventW: _WindowsProcedure
+    SetEvent: _WindowsProcedure
+    WaitForSingleObject: _WindowsProcedure
+    CloseHandle: _WindowsProcedure
+
+
+class _StageMessage(TypedDict):
+    stage: int
+    status: Literal["PASS", "FAIL"]
+    seconds: float
+    error_code: str
 
 WALL_LIMIT = 1800
 CANCEL_GRACE = 30
@@ -39,7 +64,7 @@ def system_console_executable() -> Path | None:
         return None
     import ctypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel = cast(_WindowsKernel, getattr(ctypes, "WinDLL")("kernel32", use_last_error=True))
     kernel.GetSystemDirectoryW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
     kernel.GetSystemDirectoryW.restype = ctypes.c_uint
     buffer = ctypes.create_unicode_buffer(32768)
@@ -62,10 +87,10 @@ def process_executable_allowed(
     )
 
 
-def windows_events():
+def windows_events() -> _WindowsKernel:
     import ctypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel = cast(_WindowsKernel, getattr(ctypes, "WinDLL")("kernel32", use_last_error=True))
     kernel.CreateEventW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_wchar_p]
     kernel.CreateEventW.restype = ctypes.c_void_p
     kernel.OpenEventW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
@@ -79,7 +104,7 @@ def windows_events():
     return kernel
 
 
-def cancel_run(event_name):
+def cancel_run(event_name: str) -> bool:
     # Windows TerminateProcess does not deliver Python SIGTERM. A caller must
     # set this transient, task-scoped event for graceful cancellation instead.
     if sys.platform != "win32" or not EVENT_PATTERN.fullmatch(event_name):
@@ -141,7 +166,7 @@ CODES = {
 }
 
 
-def validate(line):
+def validate(line: str) -> _StageMessage | None:
     try:
         item = json.loads(line)
         if type(item) is not dict or set(item) != {"stage", "status", "seconds", "error_code"}:
@@ -157,19 +182,19 @@ def validate(line):
             return None
         if item["status"] == "FAIL" and item["error_code"] == "OK":
             return None
-        return item
+        return cast(_StageMessage, item)
     except BaseException:
         return None
 
 
-def emit(stage, status, seconds, code):
+def emit(stage: int, status: str, seconds: float, code: str) -> None:
     item = dict(stage=stage, status=status, seconds=round(seconds, 3), error_code=code)
     if validate(json.dumps(item)) is None:
         raise ValueError("CONFIG_FAILED")
     os.write(1, (json.dumps(item) + "\n").encode())
 
 
-def guard_environment():
+def guard_environment() -> None:
     essential = {
         k: os.environ[k]
         for k in ("SystemRoot", "WINDIR", "COMSPEC", "PATH", "TEMP", "TMP")
@@ -183,25 +208,29 @@ def guard_environment():
     logging.disable(logging.CRITICAL)
 
     class Sink:
-        def write(self, text):
+        def write(self, text: str) -> int:
             return len(text)
 
-        def flush(self):
+        def flush(self) -> None:
             pass
 
-        def isatty(self):
+        def isatty(self) -> bool:
             return False
 
-    sys.stdout = Sink()
-    sys.stderr = Sink()
+    sys.stdout = cast(TextIO, Sink())
+    sys.stderr = cast(TextIO, Sink())
 
 
-async def worker(request_path, event_name):
+async def worker(request_path: str, event_name: str) -> int:
     # This file name is a local receipt destination; the request itself arrives
     # on stdin. Never persist parameters, bindings, names or exception details.
     guard_environment()
-    from d_form_flow import CODES as runtime_codes
-    from d_form_flow import Flow, Stop
+    if TYPE_CHECKING:
+        from app.infra.browser.d_form_flow import CODES as runtime_codes
+        from app.infra.browser.d_form_flow import Flow, Stop
+    else:
+        from d_form_flow import CODES as runtime_codes
+        from d_form_flow import Flow, Stop
 
     if runtime_codes != CODES:
         emit(1, "FAIL", 0, "CONFIG_FAILED")
@@ -218,7 +247,7 @@ async def worker(request_path, event_name):
             emit(1, "FAIL", 0, "CONFIG_FAILED")
             return 2
 
-        async def watch():
+        async def watch() -> None:
             while not cancel.is_set():
                 state = kernel.WaitForSingleObject(event_handle, 0)
                 if state == 0:
@@ -231,7 +260,7 @@ async def worker(request_path, event_name):
 
         watcher = asyncio.create_task(watch())
 
-    def stop(*_):
+    def stop(_signum: int, _frame: FrameType | None) -> None:
         loop.call_soon_threadsafe(cancel.set)
 
     for code in (signal.SIGINT, signal.SIGTERM):
@@ -247,7 +276,7 @@ async def worker(request_path, event_name):
         # its own asyncio listener. No model service is on this allowance.
         import psutil
 
-        def audit(event, args):
+        def audit(event: str, args: tuple[object, ...]) -> None:
             if event == "socket.connect":
                 address = args[1]
                 if isinstance(address, tuple) and address[:2] == ("127.0.0.1", flow.binding.port):
@@ -285,7 +314,9 @@ async def worker(request_path, event_name):
             kernel.CloseHandle(event_handle)
 
 
-def supervisor(receipt_path, request_bytes, cancel_event_name=None):
+def supervisor(
+    receipt_path: str | Path, request_bytes: bytes, cancel_event_name: str | None = None
+) -> int:
     if len(request_bytes) > 32768:
         emit(1, "FAIL", 0, "CONFIG_FAILED")
         return 2
@@ -293,22 +324,27 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
     if receipt_path.suffix != ".json" or receipt_path.exists() or not receipt_path.parent.is_dir():
         emit(1, "FAIL", 0, "CONFIG_FAILED")
         return 2
-    child = None
+    child: subprocess.Popen[bytes] | None = None
     kernel = None
     event_handle = None
     event_name = ""
-    owned = {}
-    cancelled_at = None
+    owned: dict[int, tuple[float, Path]] = {}
+    cancelled_at: float | None = None
+
     import importlib.util
+    from importlib.machinery import ModuleSpec
 
     import psutil
 
-    spec = importlib.util.find_spec("playwright")
-    node = Path(spec.origin).parent / "driver" / ("node.exe" if sys.platform == "win32" else "node")
+    # The pinned Playwright dependency is a regular installed package with __init__.py.
+    spec = cast(ModuleSpec, importlib.util.find_spec("playwright"))
+    node = Path(cast(str, spec.origin)).parent / "driver" / (
+        "node.exe" if sys.platform == "win32" else "node"
+    )
     allowed_executables = python_executables(Path(sys.executable)) | {node.resolve()}
     console = system_console_executable()
 
-    def remember():
+    def remember() -> None:
         if child is None or child.poll() is not None:
             return
         try:
@@ -337,9 +373,9 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
         except psutil.NoSuchProcess:
             pass
 
-    def reclaim():
+    def reclaim() -> bool:
         clean = True
-        stopped = []
+        stopped: list[psutil.Process] = []
         # Only recorded descendants of this exact worker, with identical
         # creation time and Python/Playwright Node executable, can be killed.
         for pid, (created, executable) in reversed(list(owned.items())):
@@ -360,14 +396,14 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
                 clean = False
         return clean
 
-    def request_cancel():
+    def request_cancel() -> bool:
         if event_handle:
-            return bool(kernel.SetEvent(event_handle))
+            return bool(cast(_WindowsKernel, kernel).SetEvent(event_handle))
         if child is not None and child.poll() is None:
             child.send_signal(signal.SIGTERM)
         return True
 
-    def cancel_and_wait(deadline=None):
+    def cancel_and_wait(deadline: float | None = None) -> bool:
         nonlocal cancelled_at
         if cancelled_at is None:
             cancelled_at = time.perf_counter()
@@ -406,7 +442,7 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
             emit(1, "FAIL", 0, "CONFIG_FAILED")
             return 2
 
-        def signal_cancel(*_):
+        def signal_cancel(_signum: int, _frame: FrameType | None) -> NoReturn:
             raise KeyboardInterrupt()
 
         previous = {
@@ -424,17 +460,20 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW") if sys.platform == "win32" else 0,
         )
         process = psutil.Process(child.pid)
         owned[child.pid] = (process.create_time(), Path(process.exe()).resolve())
-        messages = queue.Queue(maxsize=32)
+        messages: queue.Queue[_StageMessage | None] = queue.Queue(maxsize=32)
+        # PIPE is passed for both streams in the Popen call directly above.
+        child_stdin = cast(IO[bytes], child.stdin)
+        child_stdout = cast(IO[bytes], child.stdout)
 
-        def io():
+        def io() -> None:
             try:
-                child.stdin.write(request_bytes)
-                child.stdin.close()
-                for line in child.stdout:
+                child_stdin.write(request_bytes)
+                child_stdin.close()
+                for line in child_stdout:
                     item = validate(line.decode("utf-8", errors="replace"))
                     if item is not None:
                         messages.put(item)
@@ -450,7 +489,7 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
             remember()
             if (
                 event_handle
-                and kernel.WaitForSingleObject(event_handle, 0) == 0
+                and cast(_WindowsKernel, kernel).WaitForSingleObject(event_handle, 0) == 0
                 and cancelled_at is None
             ):
                 cancelled_at = time.perf_counter()
@@ -478,12 +517,10 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
                 break
             last = item
             emit(
-                **dict(
-                    stage=item["stage"],
-                    status=item["status"],
-                    seconds=item["seconds"],
-                    code=item["error_code"],
-                )
+                stage=item["stage"],
+                status=item["status"],
+                seconds=item["seconds"],
+                code=item["error_code"],
             )
         code = child.wait(timeout=5)
         if not reclaim():
@@ -510,7 +547,7 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
             signal.signal(code, handler)
 
 
-def main():
+def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--worker":
         return asyncio.run(worker(sys.argv[2], sys.argv[3]))
     if len(sys.argv) == 3 and sys.argv[1] == "--cancel":

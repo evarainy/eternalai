@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -118,7 +118,7 @@ class _State:
     owned_resource_cleanup_proven: bool = False
     process: asyncio.subprocess.Process | None = None
     owned: dict[int, tuple[float, Path]] = field(default_factory=dict)
-    stages: dict[int, dict[str, Any]] = field(default_factory=dict)
+    stages: dict[int, Mapping[str, object]] = field(default_factory=dict)
     output_invalid: bool = False
     connected: bool = False
     input_sent: bool = False
@@ -784,7 +784,7 @@ class DFormRuntime:
                 stderr=asyncio.subprocess.DEVNULL,
                 env=env,
                 limit=2048,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW"),
             )
             root = psutil.Process(state.process.pid)
             if Path(root.exe()).resolve() != self.options.python.resolve():
@@ -843,7 +843,7 @@ class DFormRuntime:
             await checkpoint.record_fill_stop(state.report)
             state.run = await checkpoint.refresh(allow_cancel=True)
             if state.report.verification != "verified":
-                effect = (
+                effect: Literal["not_sent", "acknowledged", "unknown"] = (
                     "unknown"
                     if (
                         state.report.execution_status == "unknown"
@@ -946,7 +946,7 @@ class DFormRuntime:
             state.report = self._report(state, "CANCELLED" if cancelled else "AUTHORITY_LOST")
             if cancelled:
                 await checkpoint.record_fill_stop(state.report)
-                effect = (
+                cancel_effect: Literal["not_sent", "acknowledged", "unknown"] = (
                     "unknown"
                     if (
                         state.report.execution_status == "unknown"
@@ -954,7 +954,9 @@ class DFormRuntime:
                     )
                     else ("acknowledged" if state.report.actions_completed else "not_sent")
                 )
-                return BrowserReadOutcome(effect, "incomplete", dispatch_failure_code="cancelled")
+                return BrowserReadOutcome(
+                    cancel_effect, "incomplete", dispatch_failure_code="cancelled"
+                )
             return BrowserReadOutcome("unknown", None, dispatch_failure_code="denied")
         except Exception as error:
             failed_stage = (
@@ -1181,7 +1183,8 @@ class DFormRuntime:
         if state.acquired_evidence is not None and hmac.compare_digest(
             evidence, state.acquired_evidence
         ):
-            await self.check_subject(expected.claim, state.resource_ref)
+            # Acquired evidence is assigned only after resource_ref at the acquire point.
+            await self.check_subject(expected.claim, cast(bytes, state.resource_ref))
             outcome = "acquired"
         elif (
             state.release_evidence is not None
