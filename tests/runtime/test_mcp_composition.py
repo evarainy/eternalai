@@ -345,7 +345,11 @@ def test_two_services_same_user_same_tool_are_isolated_after_composition_restart
                         user_id="synthetic-user",
                         connection_id=context.connection_id,
                     )
-                    assert (await call("service-a", build())).status == "denied"
+                    after_disconnect = await call("service-a", build())
+                    assert (after_disconnect.status, after_disconnect.error_code) == (
+                        "binding_required",
+                        "identity_expired",
+                    )
                     assert (await call("service-b", build())).status == "completed"
                     assert (first.effects, second.effects) == (2, 3)
                     headers_a = {
