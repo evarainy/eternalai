@@ -107,6 +107,7 @@ services/decision/*
 !app/__init__.py
 !app/admin/__init__.py
 !app/admin/actions.py
+!app/admin/d_form.py
 !app/admin/evidence.py
 !app/admin/registry.py
 !app/api/__init__.py

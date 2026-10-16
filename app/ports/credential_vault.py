@@ -49,6 +49,11 @@ class BrowserAuthFact:
             or self.expires_at.utcoffset() is None
         ):
             raise ValueError("browser_auth_fact_invalid")
+        if self.authorization_revision is not None and (
+            type(self.authorization_revision) is not int
+            or not 0 <= self.authorization_revision <= 9007199254740991
+        ):
+            raise ValueError("browser_auth_fact_invalid")
         revision_mode = (
             type(self.authorization_revision) is int
             and 0 <= self.authorization_revision <= 9007199254740991

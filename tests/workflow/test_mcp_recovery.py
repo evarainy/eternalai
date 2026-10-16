@@ -239,6 +239,10 @@ def output_contract() -> OutputContract:
     )
 
 
+def read_output_contract() -> OutputContract:
+    return replace(output_contract(), persistence_fields=("synthetic",))
+
+
 class SyntheticSubmitPrecondition:
     """Explicit synthetic supplier guarantee; never a production approval."""
 
@@ -298,7 +302,10 @@ async def harness(
             gates = PostgreSQLHumanGate(store.sessions)
             workflows = PostgreSQLWorkflowStore(store)
             tasks = PostgreSQLTaskStore(store.sessions)
-            contracts = {name: output_contract() for name in INPUT_SCHEMAS}
+            contracts = {
+                name: output_contract() if name in WRITE_TOOLS else read_output_contract()
+                for name in INPUT_SCHEMAS
+            }
             contracts.update(output_contracts or {})
             specs, mappings = catalog(profile, contracts)
             for spec in specs:

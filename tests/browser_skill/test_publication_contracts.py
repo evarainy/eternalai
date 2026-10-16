@@ -60,10 +60,10 @@ def test_exploration_route_is_bounded_to_a_validated_read_catalog() -> None:
         allowed_regions=(source.site.steps[0].observation.region_id,),
         max_steps=2, max_seconds=30,
     )
-    values = source.site_plan().model_dump(mode="json")
+    values = source.site_plan().model_dump(mode="python")
     values.update(
-        primitive_rules=[rule.model_dump(mode="json") for rule in source.site.steps],
-        exploration=exploration.model_dump(mode="json"),
+        primitive_rules=[rule.model_dump(mode="python") for rule in source.site.steps],
+        exploration=exploration.model_dump(mode="python"),
     )
     plan = RegisteredSitePlan.model_validate(values)
     assert plan.exploration == exploration
@@ -84,7 +84,7 @@ def test_exploration_route_is_bounded_to_a_validated_read_catalog() -> None:
 
 def test_virtual_scroll_requires_a_frozen_read_target_and_bounded_traversal() -> None:
     source = registered_site().manifest
-    values = source.site_plan().model_dump(mode="json")
+    values = source.site_plan().model_dump(mode="python")
     values["traversal"] = RegisteredTraversal(
         region_id=source.site.steps[0].observation.region_id,
         object_type=source.site.read_rule.object_type,
@@ -96,7 +96,7 @@ def test_virtual_scroll_requires_a_frozen_read_target_and_bounded_traversal() ->
         ordinal_rule_digest="3" * 64,
         total_rule_digest="4" * 64,
         terminal_rule_digest="5" * 64,
-    ).model_dump(mode="json")
+    ).model_dump(mode="python")
     assert RegisteredSitePlan.model_validate(values).traversal.advance_mode == "scroll"
     values["traversal"]["mode"] = "paged"
     with pytest.raises(ValueError, match="site_traversal_scroll_mode_invalid"):

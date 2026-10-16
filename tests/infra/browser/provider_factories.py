@@ -107,10 +107,17 @@ class Context:
     def __init__(self):
         self.raw = state()
         self.pages = []
+        self.closed = 0
+        self.failure = None
 
     async def storage_state(self, *, indexed_db):
         assert indexed_db is True
         return self.raw
+
+    async def close(self):
+        self.closed += 1
+        if self.failure:
+            raise self.failure
 
 
 class Closable:

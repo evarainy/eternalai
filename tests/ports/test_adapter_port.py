@@ -30,6 +30,8 @@ EXPECTED_ADAPTER_RESULT_FIELDS = {
     "error_code",
     "raw_payload_ref",
     "trace_metadata",
+    "browser_admission",
+    "browser_diagnostic",
     "mcp_outcome",
     "mcp_read",
 }
@@ -39,6 +41,7 @@ EXPECTED_ADAPTER_STATUS_VALUES = (
     "error",
     "timeout",
     "permission_denied",
+    "accepted",
 )
 
 EXPECTED_ADAPTER_FAILURE_STAGE_VALUES = (
@@ -94,6 +97,8 @@ def test_adapter_result_defaults_match_contract() -> None:
     assert result.error_code is None
     assert result.raw_payload_ref is None
     assert result.trace_metadata is None
+    assert result.browser_admission is None
+    assert result.browser_diagnostic is None
     assert result.mcp_outcome is None
     assert result.mcp_read is None
 

@@ -259,7 +259,10 @@ def test_http_rejection_persists_and_late_response_cannot_revoke_new_grant(
                 original = await context_for(store)
                 separate_service = await context_for(store, service="service-b")
                 separate_user = await context_for(store, user="synthetic-other-user")
-                with pytest.raises(McpFailure, match="^mcp_authorization_rejected$"):
+                expected_code = (
+                    "mcp_authorization_rejected" if status == 401 else "mcp_permission_denied"
+                )
+                with pytest.raises(McpFailure, match=f"^{expected_code}$"):
                     await McpDriver({"service-a": profile}, store).call(
                         original,
                         "business_context_get",
@@ -274,10 +277,17 @@ def test_http_rejection_persists_and_late_response_cannot_revoke_new_grant(
                     user_id="synthetic-user",
                     service_config_id="service-a",
                 )
-                assert rejected is not None and rejected.state == "DISCONNECTED"
-                assert rejected.binding_epoch == original.binding_epoch + 1
-                with pytest.raises(McpFailure, match="mcp_authorization_invalid"):
-                    await restarted.resolve(original)
+                assert rejected is not None
+                if status == 401:
+                    assert rejected.state == "DISCONNECTED"
+                    assert rejected.binding_epoch == original.binding_epoch + 1
+                    with pytest.raises(McpFailure, match="^mcp_authorization_invalid$"):
+                        await restarted.resolve(original)
+                else:
+                    assert rejected.state == "ACTIVE"
+                    assert rejected.binding_epoch == original.binding_epoch
+                    assert rejected.grant_epoch == original.grant_epoch
+                    assert await restarted.resolve(original) == "synthetic-token-canary"
                 assert await restarted.resolve(separate_service) == "synthetic-token-canary"
                 assert await restarted.resolve(separate_user) == "synthetic-token-canary"
                 await bind(restarted, profile, token_value="synthetic-replacement")

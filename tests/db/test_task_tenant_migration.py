@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
 
 import pytest
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +22,7 @@ from app.db.config import normalize_database_url
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = REPO_ROOT / "alembic" / "versions" / "20260901_120000_task_tenant.py"
+PREDECESSOR_REVISION = "20260901_090000"
 SYNTHETIC_TASK_COUNT = 3
 
 
@@ -27,8 +31,12 @@ def _database_url() -> str:
     if value is None:
         raise AssertionError("DATABASE_URL must be set by the test runner environment")
     url = make_url(normalize_database_url(value))
-    if url.host != "127.0.0.1" or url.port != 15432:
-        raise AssertionError("task tenant migration tests require 127.0.0.1:15432")
+    if (url.host, url.port, url.database) != (
+        "127.0.0.1",
+        15432,
+        "eternalai_test",
+    ):
+        raise AssertionError("task tenant migration tests require the fixed CI test database")
     return value
 
 
@@ -42,6 +50,48 @@ def _load_migration() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture
+def predecessor_connection() -> Iterator[Connection]:
+    """Build the real predecessor in a transaction-local, empty schema."""
+    engine = create_engine(normalize_database_url(_database_url()))
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            schema = f"task_tenant_migration_{uuid4().hex}"
+            try:
+                connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+                connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+                assert connection.execute(text("SELECT current_schema()")).scalar_one() == schema
+                assert inspect(connection).get_table_names(schema=schema) == []
+
+                config = Config(str(REPO_ROOT / "alembic.ini"))
+                config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+                script = ScriptDirectory.from_config(config)
+                context = MigrationContext.configure(
+                    connection,
+                    opts={
+                        "fn": lambda revisions, _: script._upgrade_revs(
+                            PREDECESSOR_REVISION, revisions
+                        )
+                    },
+                )
+                with context.begin_transaction(), Operations.context(context):
+                    context.run_migrations()
+                assert (
+                    connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                    == PREDECESSOR_REVISION
+                )
+                assert "tenant_id" not in {
+                    column["name"] for column in inspect(connection).get_columns("tasks")
+                }
+                assert _task_snapshot(connection) == (0, set())
+                yield connection
+            finally:
+                transaction.rollback()
+    finally:
+        engine.dispose()
 
 
 def _synthetic_task_rows(count: int) -> list[dict[str, str]]:
@@ -101,122 +151,106 @@ def test_zero_synthetic_tasks_are_rejected_as_non_discriminating() -> None:
         _synthetic_task_rows(0)
 
 
-def test_tenant_check_constraint_rejects_blank_values_and_preserves_nullable_history() -> None:
-    engine = create_engine(normalize_database_url(_database_url()))
+def test_tenant_check_constraint_rejects_blank_values_and_preserves_nullable_history(
+    predecessor_connection: Connection,
+) -> None:
     migration = _load_migration()
-    try:
-        with engine.connect() as connection:
-            transaction = connection.begin()
-            try:
-                migration.op = Operations(MigrationContext.configure(connection))
-                migration.downgrade()
-                migration.upgrade()
+    connection = predecessor_connection
+    migration.op = Operations(MigrationContext.configure(connection))
+    migration.upgrade()
 
-                for rejected_tenant_id in ("", "   "):
-                    savepoint = connection.begin_nested()
-                    try:
-                        with pytest.raises(IntegrityError) as exc_info:
-                            _insert_task_with_tenant(connection, rejected_tenant_id)
-                        sqlstate = getattr(exc_info.value.orig, "sqlstate", None) or getattr(
-                            exc_info.value.orig,
-                            "pgcode",
-                            None,
-                        )
-                        assert sqlstate == "23514"
-                    finally:
-                        savepoint.rollback()
+    for rejected_tenant_id in ("", "   "):
+        savepoint = connection.begin_nested()
+        try:
+            with pytest.raises(IntegrityError) as exc_info:
+                _insert_task_with_tenant(connection, rejected_tenant_id)
+            sqlstate = getattr(exc_info.value.orig, "sqlstate", None) or getattr(
+                exc_info.value.orig,
+                "pgcode",
+                None,
+            )
+            assert sqlstate == "23514"
+        finally:
+            savepoint.rollback()
 
-                allowed_tenant_ids = (None, "tenant-x", "\t")
-                inserted = {
-                    _insert_task_with_tenant(connection, tenant_id): tenant_id
-                    for tenant_id in allowed_tenant_ids
-                }
-                persisted = dict(
-                    connection.execute(
-                        text(
-                            "SELECT task_id, tenant_id FROM tasks"
-                            " WHERE task_id = ANY(:task_ids)"
-                        ),
-                        {"task_ids": sorted(inserted)},
-                    ).all()
-                )
-                assert persisted == inserted
-                # PostgreSQL BTRIM(text) removes spaces by default, not tabs. The
-                # current migration therefore intentionally records this boundary.
-                assert any(tenant_id == "\t" for tenant_id in persisted.values())
-            finally:
-                transaction.rollback()
-    finally:
-        engine.dispose()
+    allowed_tenant_ids = (None, "tenant-x", "\t")
+    inserted = {
+        _insert_task_with_tenant(connection, tenant_id): tenant_id
+        for tenant_id in allowed_tenant_ids
+    }
+    persisted = dict(
+        connection.execute(
+            text(
+                "SELECT task_id, tenant_id FROM tasks"
+                " WHERE task_id = ANY(:task_ids)"
+            ),
+            {"task_ids": sorted(inserted)},
+        ).all()
+    )
+    assert persisted == inserted
+    # PostgreSQL BTRIM(text) removes spaces by default, not tabs. The
+    # current migration therefore intentionally records this boundary.
+    assert any(tenant_id == "\t" for tenant_id in persisted.values())
 
 
-def test_non_empty_historical_tasks_survive_upgrade_downgrade_upgrade() -> None:
+def test_non_empty_historical_tasks_survive_upgrade_downgrade_upgrade(
+    predecessor_connection: Connection,
+) -> None:
     rows = _synthetic_task_rows(SYNTHETIC_TASK_COUNT)
     expected_ids = {row["task_id"] for row in rows}
     assert len(expected_ids) == SYNTHETIC_TASK_COUNT > 0
 
-    engine = create_engine(normalize_database_url(_database_url()))
+    connection = predecessor_connection
     migration = _load_migration()
-    try:
-        with engine.connect() as connection:
-            transaction = connection.begin()
-            try:
-                migration.op = Operations(MigrationContext.configure(connection))
-                migration.downgrade()
-                assert "tenant_id" not in {
-                    column["name"] for column in inspect(connection).get_columns("tasks")
-                }
+    migration.op = Operations(MigrationContext.configure(connection))
+    assert "tenant_id" not in {
+        column["name"] for column in inspect(connection).get_columns("tasks")
+    }
 
-                connection.execute(
-                    text(
-                        "INSERT INTO tasks"
-                        " (task_id, session_id, ai_user_id, status)"
-                        " VALUES (:task_id, :session_id, :ai_user_id, :status)"
-                    ),
-                    rows,
-                )
-                expected_snapshot = _task_snapshot(connection)
-                assert expected_snapshot[0] == len(expected_snapshot[1])
-                assert expected_ids <= expected_snapshot[1]
-                assert expected_snapshot[0] >= SYNTHETIC_TASK_COUNT > 0
+    connection.execute(
+        text(
+            "INSERT INTO tasks"
+            " (task_id, session_id, ai_user_id, status)"
+            " VALUES (:task_id, :session_id, :ai_user_id, :status)"
+        ),
+        rows,
+    )
+    expected_snapshot = _task_snapshot(connection)
+    assert expected_snapshot == (SYNTHETIC_TASK_COUNT, expected_ids)
 
-                migration.upgrade()
-                _assert_tenant_schema(connection)
-                assert _task_snapshot(connection) == expected_snapshot
-                assert (
-                    connection.execute(
-                        text(
-                            "SELECT COUNT(*) FROM tasks"
-                            " WHERE task_id = ANY(:task_ids) AND tenant_id IS NULL"
-                        ),
-                        {"task_ids": sorted(expected_ids)},
-                    ).scalar_one()
-                    == SYNTHETIC_TASK_COUNT
-                )
+    migration.upgrade()
+    _assert_tenant_schema(connection)
+    assert _task_snapshot(connection) == expected_snapshot
+    assert (
+        connection.execute(
+            text(
+                "SELECT COUNT(*) FROM tasks"
+                " WHERE task_id = ANY(:task_ids) AND tenant_id IS NULL"
+            ),
+            {"task_ids": sorted(expected_ids)},
+        ).scalar_one()
+        == SYNTHETIC_TASK_COUNT
+    )
 
-                migration.downgrade()
-                assert "tenant_id" not in {
-                    column["name"] for column in inspect(connection).get_columns("tasks")
-                }
-                assert _task_snapshot(connection) == expected_snapshot
+    migration.downgrade()
+    assert "tenant_id" not in {
+        column["name"] for column in inspect(connection).get_columns("tasks")
+    }
+    assert _task_snapshot(connection) == expected_snapshot
 
-                migration.upgrade()
-                _assert_tenant_schema(connection)
-                assert _task_snapshot(connection) == expected_snapshot
-                assert (
-                    connection.execute(
-                        text(
-                            "SELECT COUNT(*) FROM tasks"
-                            " WHERE task_id = ANY(:task_ids) AND tenant_id IS NULL"
-                        ),
-                        {"task_ids": sorted(expected_ids)},
-                    ).scalar_one()
-                    == SYNTHETIC_TASK_COUNT
-                )
-            finally:
-                transaction.rollback()
-    finally:
-        engine.dispose()
+    migration.upgrade()
+    _assert_tenant_schema(connection)
+    assert _task_snapshot(connection) == expected_snapshot
+    assert (
+        connection.execute(
+            text(
+                "SELECT COUNT(*) FROM tasks"
+                " WHERE task_id = ANY(:task_ids) AND tenant_id IS NULL"
+            ),
+            {"task_ids": sorted(expected_ids)},
+        ).scalar_one()
+        == SYNTHETIC_TASK_COUNT
+    )
 
 
 def test_migration_source_has_no_task_backfill_or_row_deletion() -> None:

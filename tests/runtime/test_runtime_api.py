@@ -890,10 +890,13 @@ def test_client_tenant_is_not_an_authority(endpoint, body):
             headers=TEST_CSRF_HEADERS,
         )
     assert response.status_code == 422
-    assert any(
-        item["loc"] == ["body", "tenant_id"] and item["type"] == "extra_forbidden"
-        for item in response.json()["detail"]
-    )
+    if endpoint == "handle":
+        assert response.json()["detail"] == {"code": "runtime_request_input_invalid"}
+    else:
+        assert any(
+            item["loc"] == ["body", "tenant_id"] and item["type"] == "extra_forbidden"
+            for item in response.json()["detail"]
+        )
     assert runtime.calls == 0
 
 

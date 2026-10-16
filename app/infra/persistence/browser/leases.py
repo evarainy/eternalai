@@ -667,6 +667,9 @@ class PostgreSQLBrowserLeaseStore:
         resource = self._resource(snapshot, claim)
         if resource is None or self._subject is None:
             raise BrowserLeaseError("browser_resource_unavailable")
+        # The snapshot transaction has released its locks; revocation can race
+        # before subject I/O even when the later locked check rejects it.
+        await self._current(claim.auth, claim.binding)
         await self._subject.check_subject(claim, resource)
         # A new lock transaction rechecks authority after the external DOM await.
         async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):

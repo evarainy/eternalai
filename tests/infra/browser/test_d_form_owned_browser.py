@@ -41,10 +41,9 @@ def test_login_navigation_cannot_replace_origin(path):
         replace(contract(), login_path=path)
 
 
-def test_stop_contract_is_complete_and_immutable():
-    with pytest.raises(ValueError, match="browser_login_contract_invalid"):
-        replace(contract(), stops={"captcha": "#synthetic-captcha"})
-    value = contract()
+def test_stop_contract_accepts_optional_subset_and_is_immutable():
+    value = replace(contract(), stops={"captcha": "#synthetic-captcha"})
+    assert dict(value.stops) == {"captcha": "#synthetic-captcha"}
     with pytest.raises(TypeError):
         value.stops["mfa"] = "#replacement"
 
@@ -109,7 +108,7 @@ def state_runtime(tmp_path):
     return runtime, state, run
 
 
-def test_attachment_exit_keeps_owned_window_and_capacity_quarantined(tmp_path):
+def test_attachment_exit_attempts_owned_close_but_quarantines_without_proof(tmp_path):
     async def exercise():
         runtime, state, run = state_runtime(tmp_path)
         assert await runtime.cleanup(run) == "quarantined"
@@ -118,7 +117,9 @@ def test_attachment_exit_keeps_owned_window_and_capacity_quarantined(tmp_path):
         assert await runtime.cleanup(run) == "quarantined"
         runtime._leases.quarantine.assert_awaited_once()
         runtime._leases.cleanup.assert_not_awaited()
-        state.owned_browser.close_owned.assert_not_awaited()
+        assert state.owned_browser.close_owned.await_count == 2
+        assert runtime._cleanup_authorize.await_count == 4
+        assert state.owned_browser.owned_resource_cleanup_proven is False
     asyncio.run(exercise())
 
 

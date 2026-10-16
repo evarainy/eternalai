@@ -22,6 +22,7 @@ from app.ports.auth import (
     CredentialSnapshot,
     CredentialWriteStamp,
     LoginCredential,
+    OASessionCredential,
     Principal,
     PrincipalOrgContext,
     authenticated_session,
@@ -30,10 +31,23 @@ from app.ports.credential_binding import (
     BrowserBindingActivationRequest,
     BrowserBindingActivationView,
     BrowserBindingStatusView,
+    CredentialBindingVerification,
     CredentialBindingView,
     CredentialTargetSystem,
     PasswordBindingCredential,
 )
+
+
+def _verification(principal: Principal) -> CredentialBindingVerification:
+    subject = principal.org_ctx.directory_user_id or "synthetic-oa"
+    return CredentialBindingVerification(
+        principal=principal,
+        session_credential=OASessionCredential(
+            oa_user_id=SecretStr(subject),
+            cookies={"synthetic-session": SecretStr("synthetic-cookie")},
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        ),
+    )
 
 
 def _activation_fixture():
@@ -54,7 +68,7 @@ def _activation_fixture():
         binding_id="synthetic-binding", binding_revision=3, binding_state="unverified",
     ))
     verifier = Mock()
-    verifier.verify_for_binding = AsyncMock(return_value=principal)
+    verifier.verify_for_binding = AsyncMock(return_value=_verification(principal))
     request = BrowserBindingActivationRequest(
         login_id=SecretStr("ACTIVATION-LOGIN-CANARY"),
         password=SecretStr("ACTIVATION-PASSWORD-CANARY"),
@@ -76,13 +90,17 @@ class FakeAuthentication:
         self.fail_with = fail_with
         self.calls = 0
 
-    async def verify_for_binding(self, credential: LoginCredential) -> Principal:
+    async def verify_for_binding(
+        self, credential: LoginCredential
+    ) -> CredentialBindingVerification:
         self.calls += 1
         if self.fail_with is not None:
             raise RuntimeError(self.fail_with)
         assert credential.loginid.get_secret_value()
         assert credential.userpassword.get_secret_value()
-        return PRINCIPAL
+        return _verification(PRINCIPAL.model_copy(update={
+            "org_ctx": PRINCIPAL.org_ctx.model_copy(update={"directory_user_id": "synthetic-oa"}),
+        }))
 
 
 class FakeStore:
@@ -283,6 +301,9 @@ def test_browser_activation_uses_submitted_credential_and_exact_write_stamp() ->
         assert supplied.userpassword == request.password
         written = store.activate_browser_binding.await_args
         assert written.args[0].password == request.password
+        assert written.kwargs["verified"] == captured.principal
+        assert (written.kwargs["session_credential"]
+                is verifier.verify_for_binding.return_value.session_credential)
         assert written.kwargs["captured_session"] == captured
         assert written.kwargs["expected_write"].snapshot.binding_revision == 3
         assert "ACTIVATION-PASSWORD-CANARY" not in view.model_dump_json()
@@ -304,7 +325,7 @@ def test_browser_activation_rejects_verifier_identity_without_writing(fault) -> 
                 directory_user_id=(None if fault == "missing_subject" else
                                    "other-subject" if fault == "subject" else "synthetic-oa"),
             )})
-        verifier.verify_for_binding.return_value = principal
+        verifier.verify_for_binding.return_value = _verification(principal)
         token = authenticated_session.set(captured)
         try:
             with pytest.raises(HTTPException) as error:
@@ -347,7 +368,7 @@ def test_browser_activation_requires_live_unchanged_request_session(fault) -> No
         if fault == "changed_during_verify":
             async def verify(_credential):
                 authenticated_session.set(None)
-                return captured.principal
+                return _verification(captured.principal)
             verifier.verify_for_binding.side_effect = verify
         token = authenticated_session.set(None if fault == "missing" else captured)
         try:

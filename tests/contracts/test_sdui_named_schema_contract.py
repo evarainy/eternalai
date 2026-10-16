@@ -179,6 +179,7 @@ def test_runtime_openapi_wires_exact_discriminated_user_actions() -> None:
         "$ref": "#/components/schemas/UserAction"
     }
     assert schemas["ResponseEnvelope"]["properties"]["status"]["enum"] == [
+        "running",
         "completed",
         "blocked",
         "waiting_user",

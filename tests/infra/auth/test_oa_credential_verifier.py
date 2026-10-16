@@ -421,9 +421,12 @@ def test_background_authentication_preserves_revocation_in_store_handoff() -> No
 def test_binding_verification_does_not_persist_a_session_before_identity_match() -> None:
     verifier, store, openers, credential = _fixture(login_succeeds=True)
 
-    principal = asyncio.run(verifier.verify_for_binding(credential))
+    verification = asyncio.run(verifier.verify_for_binding(credential))
 
-    assert principal.ai_user_id.startswith("usr_v1_")
+    assert verification.principal.ai_user_id.startswith("usr_v1_")
+    assert (verification.session_credential.oa_user_id.get_secret_value()
+            == verification.principal.org_ctx.directory_user_id)
+    assert verification.session_credential.cookies
     assert store.records == []
     assert openers[0].check_login_calls == 1
     assert openers[0].requested_user_ids == ["123"]

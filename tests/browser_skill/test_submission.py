@@ -916,6 +916,7 @@ def test_initial_admission_diagnostic_is_safe_and_preserves_failure(
     assert diagnostic == {
         "stage": stage, "exception_type": expected_type,
         "trusted_error_code": trusted_code, "aggregate_code": expected_code,
+        "trusted_cause_code": None,
         "task_id": "task_1",
     }
     assert record.exc_info is None

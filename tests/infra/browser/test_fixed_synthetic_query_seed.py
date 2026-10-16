@@ -7,13 +7,14 @@ import json
 import re
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import cast, get_args
 
 import pytest
 from pydantic import ValidationError
 
-from app.browser_skill.executor import BrowserExecutor
+from app.browser_skill.executor import BrowserExecutor, ExecutionOutcome, ReadAwaitStage
 from app.browser_skill.models import (
+    BrowserFailure,
     BrowserOwner,
     BrowserSessionRef,
     ConfirmedBusinessKey,
@@ -207,6 +208,25 @@ def test_query_seed_binds_admitted_key_without_expected_output() -> None:
         _ = source.fixture_reference_values
 
 
+def _fixed_query_failure_diagnostic(
+    executor: BrowserExecutor, result: ExecutionOutcome,
+) -> str:
+    diagnostic = executor._last_failure_diagnostic
+    stages = get_args(ReadAwaitStage)
+    codes = get_args(BrowserFailure.model_fields["code"].annotation)
+    phases = get_args(BrowserFailure.model_fields["phase"].annotation)
+    stage = diagnostic[0] if diagnostic is not None and diagnostic[0] in stages else "unknown"
+    code = diagnostic[2] if diagnostic is not None and diagnostic[2] in codes else "unknown"
+    failure = result.failure
+    phase = (
+        failure.phase
+        if isinstance(failure, BrowserFailure) and failure.phase in phases
+        else "unknown"
+    )
+    failure_type = "BrowserFailure" if isinstance(failure, BrowserFailure) else "none"
+    return f"stage={stage} code={code} phase={phase} type={failure_type}"
+
+
 def test_query_two_candidates_use_actual_executor_decision_and_live_target() -> None:
     async def run() -> None:
         w, decoy_ref, real_ref = _query_world()
@@ -215,7 +235,9 @@ def test_query_two_candidates_use_actual_executor_decision_and_live_target() -> 
             w.adapter, w.decision, verifier, w.site, w.read_spec, w.decision_context,
         )
         result = await executor.run(w.session, w.context)
-        assert result.sequence == "completed" and result.failure is None
+        assert result.sequence == "completed" and result.failure is None, (
+            _fixed_query_failure_diagnostic(executor, result)
+        )
         assert result.model_calls == 1 and len(w.decision.calls) == 1
         request = w.decision.calls[0]
         assert request.criteria == w.plan.steps[0].target_criteria
@@ -284,10 +306,13 @@ def test_selected_real_row_still_needs_independent_json_validation() -> None:
         w, _, real_ref = _query_world()
         w.row.values["#fixture-collection"] = "{}"
         verifier = IndependentVerifier(w.adapter, w.site, w.read_spec)
-        result = await BrowserExecutor(
+        executor = BrowserExecutor(
             w.adapter, w.decision, verifier, w.site, w.read_spec, w.decision_context,
-        ).run(w.session, w.context)
-        assert result.decisions[0].selected == real_ref
+        )
+        result = await executor.run(w.session, w.context)
+        assert result.decisions and result.decisions[0].selected == real_ref, (
+            _fixed_query_failure_diagnostic(executor, result)
+        )
         assert result.receipts[0].state == "acknowledged"
         assert result.verification is not None and result.verification.status == "mismatch"
         assert w.adapter._private_reads == {}

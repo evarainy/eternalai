@@ -125,15 +125,28 @@ def test_page_evidence_rejects_duplicate_or_missing_row_ordinal() -> None:
 def test_page_evidence_rejects_row_reuse_during_current_authority_check() -> None:
     async def run() -> None:
         w = traversal_world()
+        before_collected = False
+        changed = False
+        collect = w.adapter._collection_facts
+
+        async def mark_before(region: Any, read: Any, traversal: Any, max_rows: int) -> Any:
+            nonlocal before_collected
+            result = await collect(region, read, traversal, max_rows)
+            before_collected = True
+            return result
 
         def change_row() -> None:
-            if w.authority_calls == 2:
+            nonlocal changed
+            if before_collected and not changed:
                 w.row.values[".key"] = "different-record"
+                changed = True
 
+        w.adapter._collection_facts = mark_before
         w.authority_hook = change_row
         with pytest.raises(BrowserOperationError) as caught:
             await w.adapter.page_evidence(w.session, "inbox", w.context)
         assert caught.value.failure.code == "stale"
+        assert changed
 
     asyncio.run(run())
 
@@ -211,7 +224,7 @@ def test_expected_popup_is_registered_only_after_business_identity_check(
             w.row.values[".object_type"] = "other"
         receipt = await w.adapter.execute(w.session, await w.command(), w.context)
         assert w.dom_sends == ["click"]
-        if wrong_object:
+        if wrong_object or extra_popup:
             assert receipt.state == "possibly_sent" and adopted == []
         else:
             assert receipt.state == "acknowledged" and adopted == [popup]
@@ -221,7 +234,7 @@ def test_expected_popup_is_registered_only_after_business_identity_check(
 
 @pytest.mark.parametrize("deny_sink", [False, True])
 def test_expected_download_seals_only_registered_click_and_exact_owner(
-    deny_sink: bool,
+    deny_sink: bool, tmp_path: Path,
 ) -> None:
     async def run() -> None:
         w = query_world("click")
@@ -234,7 +247,7 @@ def test_expected_download_seals_only_registered_click_and_exact_owner(
             popup_expectations=(), download_expectations=(rule,),
             manifest=SimpleNamespace(capability=SimpleNamespace(target_system="oa")),
         )
-        source_path = Path("C:/private/browser-download")
+        source_path = tmp_path / "browser-download"
         owner = FileArtifactOwner(
             w.binding.owner.tenant_id, w.binding.owner.user_id,
             w.binding.owner.session_id, "oa", w.binding.binding_id,

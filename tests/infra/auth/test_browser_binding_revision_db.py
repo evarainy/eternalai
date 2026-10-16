@@ -462,6 +462,11 @@ async def activation_case(url):
                               roles=("synthetic-role",), org_ctx=PrincipalOrgContext(
                                   tenant_id=tenant, directory_user_id="synthetic-oa-subject",
                               ))
+        session_credential = OASessionCredential(
+            oa_user_id=SecretStr("synthetic-oa-subject"),
+            cookies={"synthetic-session": SecretStr("synthetic-cookie")},
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
         captured = AuthenticatedSessionContext(
             principal, uuid4().bytes + uuid4().bytes, datetime.now(UTC) + timedelta(minutes=10),
         )
@@ -485,7 +490,7 @@ async def activation_case(url):
             stamp = await store.claim_write(selected)
             token = authenticated_session.set(captured)
             try:
-                yield factory, store, principal, captured, submitted, stamp
+                yield factory, store, principal, captured, submitted, stamp, session_credential
             finally:
                 authenticated_session.reset(token)
         finally:
@@ -502,9 +507,10 @@ async def activation_case(url):
 def test_first_browser_activation_is_one_revisioned_password_subject_update(migrated_database_url):
     async def exercise():
         async with activation_case(migrated_database_url) as case:
-            factory, store, principal, captured, submitted, stamp = case
+            factory, store, principal, captured, submitted, stamp, session_credential = case
             view = await store.activate_browser_binding(
-                submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                submitted, verified=principal, session_credential=session_credential,
+                captured_session=captured, expected_write=stamp,
             )
             assert view.binding_id == stamp.snapshot.binding_id
             assert view.binding_revision == stamp.snapshot.binding_revision + 1
@@ -512,19 +518,30 @@ def test_first_browser_activation_is_one_revisioned_password_subject_update(migr
             assert row["binding_state"] == "active"
             assert row["credential_write_revision"] == stamp.snapshot.credential_write_revision + 1
             assert row["refresh_operation_id"] is None and row["refresh_deadline"] is None
-            assert row["cipher_version"] is None and row["encrypted_payload"] is None
+            assert row["cipher_version"] is not None and row["encrypted_payload"] is not None
             digest = registered_subject_digest("oa", "synthetic-oa-subject")
             fact = BrowserBindingFact(principal.org_ctx.tenant_id, principal.ai_user_id, "oa",
                                       view.binding_id, view.binding_revision, digest)
             loaded = await store.load_for_browser(fact, "browser_login")
+            assert isinstance(loaded, PasswordBindingCredential)
             assert loaded.password == submitted.password
             assert (submitted.password.get_secret_value().encode()
                     not in row["encrypted_password_payload"])
-            with pytest.raises(BrowserAuthorizationError):
-                await store.load_for_browser(fact, "browser_restore")
+            assert (session_credential.oa_user_id.get_secret_value().encode()
+                    not in row["encrypted_payload"])
+            assert (session_credential.cookies["synthetic-session"].get_secret_value().encode()
+                    not in row["encrypted_payload"])
+            restored = await store.load_for_browser(fact, "browser_restore")
+            assert isinstance(restored, OASessionCredential)
+            assert restored == session_credential
+            foreign = replace(fact, subject_digest=registered_subject_digest("oa", "other-subject"))
+            with pytest.raises(BrowserAuthorizationError) as denied:
+                await store.load_for_browser(foreign, "browser_restore")
+            assert denied.value.code == "browser_binding_stale"
             with pytest.raises(StaleCredentialWrite):
                 await store.activate_browser_binding(
-                    submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                    submitted, verified=principal, session_credential=session_credential,
+                    captured_session=captured, expected_write=stamp,
                 )
 
     asyncio.run(exercise())
@@ -538,7 +555,7 @@ def test_browser_activation_fences_intervening_changes_without_password_update(
 ):
     async def exercise():
         async with activation_case(migrated_database_url) as case:
-            factory, store, principal, captured, submitted, stamp = case
+            factory, store, principal, captured, submitted, stamp, session_credential = case
             tenant, user = principal.org_ctx.tenant_id, principal.ai_user_id
             if fault == "unbind":
                 await store.unbind_password(user, "oa", tenant_id=tenant)
@@ -571,7 +588,8 @@ def test_browser_activation_fences_intervening_changes_without_password_update(
             before = await state(factory, tenant, user)
             with pytest.raises(CredentialStoreError):
                 await store.activate_browser_binding(
-                    submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                    submitted, verified=principal, session_credential=session_credential,
+                    captured_session=captured, expected_write=stamp,
                 )
             assert await state(factory, tenant, user) == before
 
@@ -581,7 +599,7 @@ def test_browser_activation_fences_intervening_changes_without_password_update(
 def test_active_browser_binding_is_excluded_at_all_poll_read_boundaries(migrated_database_url):
     async def exercise():
         async with activation_case(migrated_database_url) as case:
-            _, store, principal, captured, submitted, stamp = case
+            _, store, principal, captured, submitted, stamp, session_credential = case
             tenant, user = principal.org_ctx.tenant_id, principal.ai_user_id
             before = await store.list_poll_candidates(tenant_id=tenant)
             assert len(before) == 1 and before[0].ai_user_id == user
@@ -592,7 +610,8 @@ def test_active_browser_binding_is_excluded_at_all_poll_read_boundaries(migrated
             )
             assert loaded.password == submitted.password
             await store.activate_browser_binding(
-                submitted, verified=principal, captured_session=captured, expected_write=stamp,
+                submitted, verified=principal, session_credential=session_credential,
+                captured_session=captured, expected_write=stamp,
             )
             assert await store.list_poll_candidates(tenant_id=tenant) == []
             assert await store.refresh_poll_candidate(user, "oa", tenant_id=tenant) is None

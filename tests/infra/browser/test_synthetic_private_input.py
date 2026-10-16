@@ -167,7 +167,9 @@ def test_operator_unlock_has_no_path_selection_or_console_fallback(
     monkeypatch.setattr(vault, "prompt_passphrase", console)
     assert vault.read_private_operator_document(SecretStr(phrase)) == document
     checked.assert_called_once_with(vault.VAULT_DIRECTORY / vault.OPERATOR_FILE,
-                                    expected_name=vault.OPERATOR_FILE)
+                                    expected_name=vault.OPERATOR_FILE,
+                                    trial_id=vault.ORIGINAL_TRIAL,
+                                    attempt_id=None)
     console.assert_not_called()
 
 
@@ -207,7 +209,12 @@ def test_shared_ciphertext_reader_retains_metadata_and_nofollow_guards(
     directory = Mock()
     monkeypatch.setattr(vault, "os", file_io)
     monkeypatch.setattr(vault, "_current_uid", lambda: 1000)
-    monkeypatch.setattr(vault, "_file_path", lambda _: path)
+    def fixed_path(name: str, *, trial_id: str, attempt_id: str | None) -> Mock:
+        assert name == vault.OPERATOR_FILE
+        assert trial_id == vault.ORIGINAL_TRIAL and attempt_id is None
+        return path
+
+    monkeypatch.setattr(vault, "_file_path", fixed_path)
     monkeypatch.setattr(vault, "_check_directory", directory)
     with pytest.raises(ValueError, match="^browser_vault_unlock_failed$"):
         vault._read_checked_ciphertext(path, expected_name=vault.OPERATOR_FILE)
@@ -389,9 +396,13 @@ def test_once_real_entry_preserves_single_attempt_guard_and_receipt(
         opened.append((actual, kwargs))
         yield components
 
-    async def execute(actual: object, expected: object) -> bool:
+    async def execute(
+        actual: object, expected: object, *,
+        identity_attempt_id: str | None, full_run: bool,
+    ) -> bool:
         assert actual is components
         assert (expected.task_id, expected.run_id) == (reference["task_id"], reference["run_id"])
+        assert identity_attempt_id is None and full_run is False
         budget.request_count = 1
         return True
 

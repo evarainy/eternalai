@@ -412,9 +412,10 @@ def _open_with_simulated_transport(
         await boundary("lease_renew")
         return replace(claim, lease_revision=claim.lease_revision + 1)
 
-    async def launch(claim, session, given_source, *, guard, subject_guard):
+    async def launch(claim, session, given_source, *, guard, subject_guard, storage_state):
         events.append("launch")
         assert current.lease_epoch == claim.lease_epoch and given_source is source
+        assert storage_state is None
 
         async def native_status(operation):
             assert operation in {"status", "stop"}

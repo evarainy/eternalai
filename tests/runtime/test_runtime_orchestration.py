@@ -1117,7 +1117,9 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
         for node in ast.walk(method)
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._build_envelope"
     ]
-    assert sorted(entry_callers) == ["_complete_resumed_workflow", "handle_user_message"]
+    assert sorted(entry_callers) == [
+        "_complete_resumed_workflow", "handle_user_message", "handle_user_message"
+    ]
     builder_owners = [
         method.name
         for method in runtime_class.body
