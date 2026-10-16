@@ -99,12 +99,16 @@ explicitly names a future dedicated allowlist file.
 |---|---|---|---|---|---|
 | python | mcp | ==2.2.0 | production | public_registry_development_only | P2-MCP-PLATFORM-001 approved SDK boundary |
 | python | httpx2 | >=2.5.0,<3 | production | public_registry_development_only | P2-MCP-PLATFORM-001 bounded MCP HTTP transport |
+| python | playwright | ==1.63.0 | production | public_registry_development_only | User 2026-10-02 v4.2 approved Python async Playwright; browser binaries and deployment verification remain separate |
+| python | psutil | ==7.2.2 | production (Windows only) | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 scoped dependency wiring for Windows process identity, profile and CDP listener checks; runtime verification remains separate |
+| python | pyee | ==13.0.1 | production-transitive | public_registry_development_only | User 2026-10-02 v4.2 Playwright 1.63.0 required dependency, pinned by uv.lock |
 | python | openai | >=1.0.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements |
 | python | fastapi | >=0.115,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
 | python | uvicorn | >=0.34,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P2-PILOT-FOUNDATION-001; 雨爷批准 2026-07-27（生产 ASGI 进程入口） |
 | python | pydantic | >=2,<3 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements; P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
 | python | jsonschema | >=4.23,<5 | backend-runtime | pending_internal_mirror_confirmation | P2-SMOKE-AUTH-DIAG-001; 雨爷批准 2026-08-06（Gateway 执行 Registry input_schema） |
 | python | types-jsonschema | >=4.23,<5 | backend-tooling | pending_internal_mirror_confirmation | P2-SMOKE-AUTH-DIAG-001; jsonschema mypy 类型守卫 |
+| python | types-psutil | ==7.2.2.20260906 | backend-tooling | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-16 required-CI type closure; official typeshed stubs for pinned psutil 7.2.2, development only |
 | python | pytest | >=8,<9 | backend-test | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend test runner for TDD/validation) |
 | python | ruff | >=0.8,<1 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend linting / formatting validation) |
 | python | mypy | >=1.13,<2 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend static type checking) |
@@ -115,6 +119,7 @@ explicitly names a future dedicated allowlist file.
 | python | alembic | >=1.13,<2.0 | spike; backend-migration | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (Alembic baseline dependency for later migration integration) |
 | python | sqlalchemy | >=2.0,<3.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (SQLAlchemy backend baseline) |
 | python | psycopg | >=3.1,<4.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-004A / P0-INFRA-004 database baseline runtime driver |
+| python | asyncpg | ==0.32.0 | backend-runtime | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 controller-relayed authorization for asyncpg + Proactor compatibility and exact dependency metadata scope |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |

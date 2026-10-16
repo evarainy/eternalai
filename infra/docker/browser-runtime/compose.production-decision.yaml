@@ -1,0 +1,12 @@
+# Overlay only for an actually provisioned, pinned local Decision service.
+# Both roles validate the same signed Site; no model is loaded by this overlay.
+x-decision-environment: &decision-environment
+  BROWSER_DECISION_ORIGIN: ${BROWSER_DECISION_ORIGIN:?Set the approved local Decision origin}
+  BROWSER_DECISION_REQUEST_MODEL: ${BROWSER_DECISION_REQUEST_MODEL:?Set the request model ID}
+  BROWSER_DECISION_DEPLOYMENT_MODEL: ${BROWSER_DECISION_DEPLOYMENT_MODEL:?Set the pinned deployment model ID}
+
+services:
+  browser-api:
+    environment: *decision-environment
+  browser-worker:
+    environment: *decision-environment

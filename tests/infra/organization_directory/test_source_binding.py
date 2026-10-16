@@ -10,7 +10,7 @@ from pydantic import SecretStr
 
 from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.organization_directory.source_binding import BoundOrganizationDirectorySourceFactory
-from app.ports.auth import OASessionCredential
+from app.ports.auth import CredentialAuthenticationResult, OASessionCredential
 from app.ports.credential_binding import PasswordBindingCredential
 from app.ports.organization_directory_sync import DirectorySourceError
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
@@ -84,7 +84,9 @@ def test_actual_acquirer_keeps_revoked_session_closed_and_checks_identity():
             )
         )
         authentication = AsyncMock()
-        authentication.authenticate.return_value = PRINCIPAL
+        authentication.refresh_credential.return_value = CredentialAuthenticationResult(
+            PRINCIPAL, await store.claim_write(CANDIDATE.snapshot)
+        )
         session = AsyncMock()
         session.post_form.return_value = {"loginSetting": {"hasValidateCode": False}}
         acquirer = OAPasswordCredentialAcquirer(
@@ -96,18 +98,23 @@ def test_actual_acquirer_keeps_revoked_session_closed_and_checks_identity():
         bound, credentials = factory(store, acquirer)
         async with bound() as source:
             assert source is not None
-        assert authentication.authenticate.await_args.kwargs == {
-            "reactivate_revoked_session": False,
+        assert authentication.refresh_credential.await_args.kwargs == {
+            "expected_write": store.stamp,
             "expected_subject": (CANDIDATE.tenant_id, CANDIDATE.ai_user_id),
         }
         credentials.load.assert_awaited_once_with(
             CANDIDATE.ai_user_id, "oa", tenant_id=CANDIDATE.tenant_id
         )
         assert store.successes == store.counted_failures == 0
-        authentication.authenticate.return_value = PRINCIPAL.model_copy(
-            update={
-                "org_ctx": PRINCIPAL.org_ctx.model_copy(update={"tenant_id": "synthetic-other"}),
-            }
+        authentication.refresh_credential.return_value = CredentialAuthenticationResult(
+            PRINCIPAL.model_copy(
+                update={
+                    "org_ctx": PRINCIPAL.org_ctx.model_copy(
+                        update={"tenant_id": "synthetic-other"}
+                    ),
+                }
+            ),
+            store.stamp,
         )
         with pytest.raises(DirectorySourceError) as error:
             async with bound():
@@ -171,7 +178,7 @@ def test_directory_source_lock_delays_only_the_same_users_real_polling_path(disp
             assert target == "oa"
             return candidates.get(user)
 
-        async def succeeded(user, target, *, tenant_id):
+        async def succeeded(user, target, *, tenant_id, expected_write):
             store.successes += 1
             candidates.pop(user)
 
@@ -183,7 +190,10 @@ def test_directory_source_lock_delays_only_the_same_users_real_polling_path(disp
         class Acquirer:
             async def acquire(self, candidate):
                 acquired.append(candidate.ai_user_id)
-                return PRINCIPAL.model_copy(update={"ai_user_id": candidate.ai_user_id})
+                return CredentialAuthenticationResult(
+                    PRINCIPAL.model_copy(update={"ai_user_id": candidate.ai_user_id}),
+                    candidate.write_stamp,
+                )
 
         class WorkObjects:
             async def sync_for_background(self, principal):

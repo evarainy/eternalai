@@ -6,6 +6,7 @@ from typing import Any, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
+from app.ports.browser_gateway import BrowserGatewayAdmission, BrowserGatewayDiagnostic
 from app.ports.error_codes import ErrorCode as ErrorCode
 from app.ports.evaluation import OverviewEvaluationInput
 from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
@@ -21,6 +22,7 @@ ExecutionStatus: TypeAlias = Literal[
     "timeout",
     "no_capability_found",
     "waiting_user",
+    "running",
 ]
 
 
@@ -31,10 +33,33 @@ class ExecutionResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     trace_id: str
+    browser_admission: BrowserGatewayAdmission | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    @field_validator("browser_admission", mode="before")
+    @classmethod
+    def _browser_admission_value(cls, value: object) -> object:
+        if value is not None and type(value) is not BrowserGatewayAdmission:
+            raise ValueError("browser evidence must be a process-local typed value")
+        return value
+
+    @field_validator("browser_diagnostic", mode="before")
+    @classmethod
+    def _browser_diagnostic_value(cls, value: object) -> object:
+        if value is not None and type(value) is not BrowserGatewayDiagnostic:
+            raise ValueError("browser evidence must be a process-local typed value")
+        return value
+
     mcp_outcome: McpValidatedOutcome | None = Field(default=None, exclude=True, repr=False)
     mcp_read: McpValidatedRead | None = Field(default=None, exclude=True, repr=False)
     postcondition_input: OverviewEvaluationInput | None = Field(
-        default=None, exclude=True, repr=False,
+        default=None,
+        exclude=True,
+        repr=False,
     )
 
     @field_validator("postcondition_input", mode="before")

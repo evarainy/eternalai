@@ -7,10 +7,11 @@ from typing import Any, Literal, Mapping, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.ports.browser_gateway import BrowserGatewayAdmission, BrowserGatewayDiagnostic
 from app.ports.capability_gateway import ErrorCode
 from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
 
-AdapterStatus: TypeAlias = Literal["success", "error", "timeout", "permission_denied"]
+AdapterStatus: TypeAlias = Literal["success", "error", "timeout", "permission_denied", "accepted"]
 
 AdapterFailureStage: TypeAlias = Literal[
     "argument_validation",
@@ -64,6 +65,27 @@ class AdapterResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     raw_payload_ref: str | None = None
+    browser_admission: BrowserGatewayAdmission | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    @field_validator("browser_admission", mode="before")
+    @classmethod
+    def _browser_admission_value(cls, value: object) -> object:
+        if value is not None and type(value) is not BrowserGatewayAdmission:
+            raise ValueError("browser evidence must be a process-local typed value")
+        return value
+
+    @field_validator("browser_diagnostic", mode="before")
+    @classmethod
+    def _browser_diagnostic_value(cls, value: object) -> object:
+        if value is not None and type(value) is not BrowserGatewayDiagnostic:
+            raise ValueError("browser evidence must be a process-local typed value")
+        return value
+
     mcp_outcome: McpValidatedOutcome | None = Field(default=None, exclude=True, repr=False)
     mcp_read: McpValidatedRead | None = Field(default=None, exclude=True, repr=False)
     trace_metadata: AdapterTraceMetadata | None = Field(

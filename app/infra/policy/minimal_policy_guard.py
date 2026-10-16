@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
 from app.admin.actions import AUDIT_READER_ROLE
@@ -30,11 +30,13 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
         audit_read_capability_ids: Collection[str] = (),
         governed_outer_ids: Collection[str] = (),
         governed_leaf_ids: Collection[str] = (),
+        mcp_candidate_allowed: Callable[[str, str, RequestOrgContext], bool] | None = None,
     ) -> None:
         self._admin_capability_ids = frozenset(admin_capability_ids)
         self._audit_read_capability_ids = frozenset(audit_read_capability_ids)
         self._governed_outer_ids = frozenset(governed_outer_ids)
         self._governed_leaf_ids = frozenset(governed_leaf_ids)
+        self._mcp_candidate_allowed = mcp_candidate_allowed
 
     async def decide(
         self,
@@ -48,6 +50,11 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
                 decision="deny",
                 reason_code="policy_denied",
             )
+        if capability_id.startswith("business.") and self._mcp_candidate_allowed is not None:
+            if not isinstance(
+                request_context, RequestOrgContext
+            ) or not self._mcp_candidate_allowed(ai_user_id, capability_id, request_context):
+                return PolicyDecision(decision="deny", reason_code="policy_denied")
         if capability_id in self._governed_outer_ids:
             return PolicyDecision(
                 decision="confirm", reason_code="high_risk_action_requires_confirm"
@@ -79,9 +86,7 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
                     reason_code="admin_action_not_allowed",
                 )
             required_role = (
-                AUDIT_READER_ROLE
-                if capability_id in self._audit_read_capability_ids
-                else "admin"
+                AUDIT_READER_ROLE if capability_id in self._audit_read_capability_ids else "admin"
             )
             if required_role in request_context.roles:
                 return PolicyDecision(decision="allow")
@@ -105,6 +110,9 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
         request_context: RequestOrgContext,
     ) -> CandidateVisibility:
         """Exclude only what ``decide`` always denies on the business plane."""
+        if capability_id.startswith("business.") and self._mcp_candidate_allowed is not None:
+            if not self._mcp_candidate_allowed(ai_user_id, capability_id, request_context):
+                return "exclude"
         if capability_id in self._governed_leaf_ids or (
             capability_id.startswith("business.") and ".internal." in capability_id
         ):

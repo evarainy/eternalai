@@ -39,11 +39,19 @@ class McpExecutionContextFactory:
         connection = await self.store.connection(
             tenant_id=tenant_id, user_id=user_id, service_config_id=mapping.service_config_id
         )
-        if (
-            connection is None
-            or connection.state != "ACTIVE"
-            or connection.login_session_fingerprint != session.fingerprint.hex()
+        if connection is None:
+            raise McpFailure("mcp_identity_unbound")
+        if connection.login_session_fingerprint != session.fingerprint.hex():
+            raise McpFailure("mcp_authorization_invalid")
+        if connection.state in {"AUTHORIZING", "PENDING_IDENTITY"}:
+            raise McpFailure("mcp_identity_pending")
+        if connection.state == "REVOKED":
+            raise McpFailure("mcp_identity_revoked")
+        if connection.state in {"EXPIRED", "DISCONNECTED"} or (
+            connection.expires_at is not None and connection.expires_at <= datetime.now(UTC)
         ):
+            raise McpFailure("mcp_identity_expired")
+        if connection.state != "ACTIVE" or not connection.identity_evidence:
             raise McpFailure("mcp_authorization_invalid")
         context = McpAuthorizationContext(
             tenant_id=tenant_id,

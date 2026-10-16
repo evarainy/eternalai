@@ -31,16 +31,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 NOW = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
 SOURCE = Path("app/infra/identity/postgresql.py")
 CONTRACT_PACK = (
-    Path(__file__).resolve().parents[2]
-    / "contract_packs"
-    / "oa"
-    / "ecology9-pending-workflows-v3"
+    Path(__file__).resolve().parents[2] / "contract_packs" / "oa" / "ecology9-pending-workflows-v3"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
-    Path(__file__).resolve().parents[2]
-    / "contract_packs"
-    / "oa"
-    / "ecology9-system-messages-v1"
+    Path(__file__).resolve().parents[2] / "contract_packs" / "oa" / "ecology9-system-messages-v1"
 )
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -77,10 +71,12 @@ def test_active_projection_uses_only_metadata_and_returns_namespaced_reference()
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id,"
+                        " :cipher_version, :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -188,10 +184,12 @@ def test_expired_projection_never_emits_a_binding_reference(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id, 'unused',"
+                        " :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -262,10 +260,12 @@ def test_revoked_projection_precedes_expiry_and_preserves_binding_reference(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id, 'unused',"
+                        " :nonce, :encrypted_payload,"
                         " :expires_at, :revoked_at, :updated_at)"
                     ),
                     {
@@ -324,10 +324,12 @@ def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() ->
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id, 'unused',"
+                        " :nonce, :encrypted_payload,"
                         " :expires_at, NULL, :updated_at)"
                     ),
                     {
@@ -401,10 +403,12 @@ def test_revoke_reports_expired_previous_status_without_changing_expires_at() ->
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id, 'unused',"
+                        " :nonce, :encrypted_payload,"
                         " :expires_at, NULL, :updated_at)"
                     ),
                     {
@@ -545,6 +549,9 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
                     expires_at=NOW + timedelta(minutes=5),
                 ),
                 tenant_id="default",
+                expected_write=await credential_store.claim_write(
+                    await credential_store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
             secret_provider = CountingSecretProvider(
                 credential_store=credential_store, now=lambda: NOW, tenant_id="default"
@@ -814,6 +821,9 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
                     expires_at=NOW + timedelta(minutes=5),
                 ),
                 tenant_id="default",
+                expected_write=await credential_store.claim_write(
+                    await credential_store.snapshot(user_b_id, "oa", tenant_id="default")
+                ),
             )
             secret_provider = CountingSecretProvider(
                 credential_store=credential_store, now=lambda: NOW, tenant_id="default"
@@ -918,6 +928,9 @@ def test_same_user_tenant_projection(dispatch_db):
                     expires_at=datetime.now(UTC) + timedelta(hours=1),
                 ),
                 tenant_id=tenant,
+                expected_write=await store.claim_write(
+                    await store.snapshot(user, "oa", tenant_id=tenant)
+                ),
             )
         assert (
             await mapping.revoke_mapping(f"oa-session-v1:{user}", tenant_id="synthetic-TB")

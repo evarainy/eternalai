@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from time import monotonic
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 import anyio
@@ -16,6 +19,7 @@ import httpx2
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from pydantic import TypeAdapter
 
+from app.mcp.diagnostics import McpLogRefs, record_mcp_event
 from app.mcp.models import McpFailure, ServiceConfig, digest
 from mcp.shared.message import ClientMessageMetadata, SessionMessage
 from mcp.types import JSONRPCMessage
@@ -97,10 +101,18 @@ class BoundedPostTransport:
         token: Callable[[], Awaitable[str]],
         *,
         http_client: httpx2.AsyncClient | None = None,
+        tls_context: ssl.SSLContext | None = None,
+        task_id: str = "",
+        trace_id: str = "",
+        connection_id: str = "",
     ) -> None:
         self.config = config
         self._token = token
         self._http_client = http_client
+        self._tls_context = tls_context
+        self._log_refs: McpLogRefs = {
+            "task_id": task_id, "trace_id": trace_id, "connection_id": connection_id,
+        }
         self.last_failure: McpFailure | None = None
         self.sent_methods: list[str] = []
         self.catalog_annotations: dict[str, str] = {}
@@ -133,6 +145,7 @@ class BoundedPostTransport:
         ](1)
         outgoing_send, outgoing_read = anyio.create_memory_object_stream[SessionMessage](1)
         client = self._http_client or httpx2.AsyncClient(
+            verify=self._tls_context if self._tls_context is not None else True,
             follow_redirects=False,
             trust_env=False,
             timeout=httpx2.Timeout(self.config.deadline_seconds, connect=5, pool=5),
@@ -178,7 +191,10 @@ class BoundedPostTransport:
             except Exception as exc:
                 failure = exc if isinstance(exc, McpFailure) else McpFailure("mcp_transport_failed")
                 self.last_failure = failure
-                if request_id is None or failure.code == "mcp_authorization_rejected":
+                if request_id is None or failure.code in {
+                    "mcp_authorization_rejected",
+                    "mcp_permission_denied",
+                }:
                     # Notifications have no response ID to wake an SDK request. Terminate
                     # the task group, so queued list/call packets cannot outlive rejection.
                     raise failure
@@ -201,6 +217,44 @@ class BoundedPostTransport:
         payload: dict[str, Any],
         metadata: Any,
     ) -> dict[str, Any] | None:
+        started = monotonic()
+        tool = (
+            "business_context_get"
+            if payload.get("params", {}).get("name") == "business_context_get"
+            else ""
+        )
+        record_mcp_event("mcp_post", "started", profile=self.config, tool=tool, **self._log_refs)
+        try:
+            result = await self._send(client, payload, metadata)
+        except BaseException as exc:
+            record_mcp_event(
+                "mcp_post",
+                "failed",
+                profile=self.config,
+                tool=tool,
+                error_code=exc.code if isinstance(exc, McpFailure) else "mcp_request_interrupted",
+                started_at=started,
+                outbound_count=len(self.sent_methods),
+                **self._log_refs,
+            )
+            raise
+        record_mcp_event(
+            "mcp_post",
+            "success",
+            profile=self.config,
+            tool=tool,
+            started_at=started,
+            outbound_count=len(self.sent_methods),
+            **self._log_refs,
+        )
+        return result
+
+    async def _send(
+        self,
+        client: httpx2.AsyncClient,
+        payload: dict[str, Any],
+        metadata: Any,
+    ) -> dict[str, Any] | None:
         method = payload.get("method")
         if method not in {
             "initialize",
@@ -213,12 +267,12 @@ class BoundedPostTransport:
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         if len(raw) > 4 * 1024 * 1024:
             raise McpFailure("mcp_request_too_large")
-        headers = {
+        headers = httpx2.Headers({
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
             "Accept-Encoding": "identity",
             "MCP-Protocol-Version": self.config.protocol_version,
-        }
+        })
         if isinstance(metadata, ClientMessageMetadata):
             if metadata.resumption_token or metadata.on_resumption_token_update:
                 raise McpFailure("mcp_resume_denied")
@@ -255,8 +309,10 @@ class BoundedPostTransport:
                         raise McpFailure("mcp_session_unsupported")
                     if response.headers.get("content-encoding", "identity") != "identity":
                         raise McpFailure("mcp_encoding_unsupported")
-                    if response.status_code in (401, 403):
+                    if response.status_code == 401:
                         raise McpFailure("mcp_authorization_rejected")
+                    if response.status_code == 403:
+                        raise McpFailure("mcp_permission_denied")
                     if response.status_code not in (200, 202):
                         raise McpFailure("mcp_http_failed")
                     body = bytearray()
@@ -286,7 +342,13 @@ class BoundedPostTransport:
                         return self._sse(bytes(body), payload["id"])
                     raise McpFailure("mcp_content_type_invalid")
         except Exception as exc:
-            code = exc.code if isinstance(exc, McpFailure) else "mcp_transport_failed"
+            code = (
+                exc.code
+                if isinstance(exc, McpFailure)
+                else "mcp_timeout"
+                if isinstance(exc, (TimeoutError, httpx2.TimeoutException))
+                else "mcp_transport_failed"
+            )
             raise McpFailure(code, may_have_sent=sent) from None
 
     @staticmethod
@@ -334,6 +396,28 @@ class BoundedPostTransport:
 class BoundedOAuthHttp:
     """No SDK OAuth provider, refresh, discovery fallback, redirects or retries."""
 
+    def __init__(
+        self, *, tls_contexts: Mapping[str, ssl.SSLContext] | None = None
+    ) -> None:
+        # Only these approved URLs may override default certificate validation.
+        self._tls_contexts = dict(tls_contexts or {})
+        if self._tls_contexts.keys() - {
+            "https://34.64.8.101/oauth/register",
+            "https://34.64.8.101/oauth/token",
+        }:
+            raise McpFailure("mcp_tls_configuration_invalid")
+
+    @staticmethod
+    def _http_failure_code(status: int) -> str:
+        # A closed, non-provider-supplied status vocabulary for diagnostics.
+        if status in {400, 401, 403, 404, 405, 409, 415, 422, 429, 500, 502, 503, 504}:
+            return f"mcp_oauth_http_{status}"
+        if 400 <= status < 500:
+            return "mcp_oauth_http_4xx"
+        if 500 <= status < 600:
+            return "mcp_oauth_http_5xx"
+        return "mcp_oauth_http_other"
+
     async def post(self, endpoint: str, payload: dict[str, Any], *, form: bool) -> dict[str, Any]:
         from urllib.parse import urlencode
 
@@ -341,9 +425,13 @@ class BoundedOAuthHttp:
         if len(raw) > 16384:
             raise McpFailure("mcp_oauth_request_too_large")
         seal_vendor_logs()
+        stage = "oauth_token_http" if form else "oauth_registration_http"
+        started = monotonic()
+        diagnostic_code = ""
         try:
             with anyio.fail_after(30):
                 async with httpx2.AsyncClient(
+                    verify=self._tls_contexts.get(endpoint, True),
                     follow_redirects=False,
                     trust_env=False,
                     timeout=httpx2.Timeout(30, connect=5, pool=5),
@@ -361,8 +449,10 @@ class BoundedOAuthHttp:
                         },
                     ) as response:
                         if response.status_code not in (200, 201):
+                            diagnostic_code = self._http_failure_code(response.status_code)
                             raise McpFailure("mcp_oauth_rejected")
                         if response.headers.get("content-encoding", "identity") != "identity":
+                            diagnostic_code = "mcp_oauth_encoding_invalid"
                             raise McpFailure("mcp_oauth_invalid")
                         body = bytearray()
                         async for chunk in response.aiter_raw():
@@ -370,5 +460,33 @@ class BoundedOAuthHttp:
                             if len(body) > 16384:
                                 raise McpFailure("mcp_oauth_response_too_large")
                         return parse_json(bytes(body))
+        except McpFailure as exc:
+            record_mcp_event(
+                stage,
+                "failed",
+                error_code=diagnostic_code or (
+                    "mcp_oauth_parse_invalid"
+                    if exc.code == "mcp_response_invalid" else exc.code
+                ),
+                started_at=started,
+                outbound_count=1,
+            )
+            raise
+        except (TimeoutError, httpx2.TimeoutException):
+            record_mcp_event(
+                stage, "failed", error_code="mcp_oauth_timeout",
+                started_at=started,
+            )
+            raise McpFailure("mcp_oauth_failed") from None
+        except httpx2.RequestError:
+            record_mcp_event(
+                stage, "failed", error_code="mcp_oauth_network",
+                started_at=started,
+            )
+            raise McpFailure("mcp_oauth_failed") from None
         except Exception:
+            record_mcp_event(
+                stage, "failed", error_code="mcp_oauth_unexpected",
+                started_at=started,
+            )
             raise McpFailure("mcp_oauth_failed") from None

@@ -195,7 +195,8 @@ def test_actual_http_authorization_rejection_invalidates_exact_context(
     peer = Peer("2025-11-25", fault=f"{phase}{status}")
     tokens = RejectedTokens()
     with serving(peer) as profile:
-        with pytest.raises(McpFailure, match="^mcp_authorization_rejected$") as caught:
+        expected_code = "mcp_authorization_rejected" if status == 401 else "mcp_permission_denied"
+        with pytest.raises(McpFailure, match=f"^{expected_code}$") as caught:
             asyncio.run(
                 McpDriver({"service-a": profile}, tokens).call(
                     authorization(),
@@ -206,7 +207,7 @@ def test_actual_http_authorization_rejection_invalidates_exact_context(
                     write=False,
                 )
             )
-    assert tokens.rejected == [authorization()]
+    assert tokens.rejected == ([authorization()] if status == 401 else [])
     assert caught.value.may_have_sent is False
     assert peer.effects == 0
     assert [body["method"] for _, _, body in peer.calls] == (

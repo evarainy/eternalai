@@ -40,7 +40,11 @@ from tests.infra.mcp.test_transport import serving
 from tests.infra.persistence.test_mcp_store import bind, database
 from tests.mcp.test_contracts import VALID
 from tests.workflow.test_engine import RecordingTrace
-from tests.workflow.test_mcp_recovery import BusinessPeer, output_contract
+from tests.workflow.test_mcp_recovery import (
+    BusinessPeer,
+    output_contract,
+    read_output_contract,
+)
 
 
 def test_http_runtime_confirmation_failure_and_apps_recovery_are_wired(
@@ -233,7 +237,7 @@ def test_two_services_same_user_same_tool_are_isolated_after_composition_restart
                     credential_encryption_key=b"s" * 32,
                 )
                 contracts = {
-                    (p.service_config_id, "business_context_get"): output_contract()
+                    (p.service_config_id, "business_context_get"): read_output_contract()
                     for p in (one, two)
                 }
 
@@ -262,7 +266,7 @@ def test_two_services_same_user_same_tool_are_isolated_after_composition_restart
                 refs = {}
                 for p in (one, two):
                     await bind(store, p, token_value="synthetic-token-" + p.service_config_id)
-                    specs, mappings = catalog(p, {"business_context_get": output_contract()})
+                    specs, mappings = catalog(p, {"business_context_get": read_output_contract()})
                     for spec in specs:
                         await registry.create(spec)
                     for mapping in mappings:
@@ -341,7 +345,11 @@ def test_two_services_same_user_same_tool_are_isolated_after_composition_restart
                         user_id="synthetic-user",
                         connection_id=context.connection_id,
                     )
-                    assert (await call("service-a", build())).status == "denied"
+                    after_disconnect = await call("service-a", build())
+                    assert (after_disconnect.status, after_disconnect.error_code) == (
+                        "binding_required",
+                        "identity_expired",
+                    )
                     assert (await call("service-b", build())).status == "completed"
                     assert (first.effects, second.effects) == (2, 3)
                     headers_a = {

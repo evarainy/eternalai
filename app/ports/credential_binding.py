@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncContextManager, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.ports.auth import LoginCredential, Principal
+from app.ports.auth import (
+    AuthenticatedSessionContext,
+    CredentialAuthenticationResult,
+    CredentialSnapshot,
+    CredentialWriteStamp,
+    LoginCredential,
+    OASessionCredential,
+    Principal,
+)
 
 CredentialTargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms"]
 CredentialPollStatus: TypeAlias = Literal[
@@ -46,6 +55,14 @@ class PasswordBindingCredential(BaseModel):
     password: SecretStr
 
 
+@dataclass(frozen=True, slots=True)
+class CredentialBindingVerification:
+    """Identity and fresh OA session from the same non-persisting verification."""
+
+    principal: Principal = field(repr=False)
+    session_credential: OASessionCredential = field(repr=False)
+
+
 class CredentialBindingView(BaseModel):
     """Value-free status safe for authenticated API responses."""
 
@@ -58,6 +75,39 @@ class CredentialBindingView(BaseModel):
     bound: bool
 
 
+class BrowserBindingActivationRequest(PasswordBindingCredential):
+    """Explicit self-service activation of one existing OA binding revision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    binding_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,96}$")
+    binding_revision: int = Field(ge=1, le=9007199254740991, strict=True)
+
+
+class BrowserBindingActivationView(BaseModel):
+    """Activation metadata; this does not attest a logged-in browser resource."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_system: Literal["oa"] = "oa"
+    binding_id: str
+    binding_revision: int
+    binding_state: Literal["active"] = "active"
+    verified_at: datetime
+
+
+class BrowserBindingStatusView(BaseModel):
+    """Self-service selection metadata; no subject digest or encrypted material."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_system: Literal["oa"] = "oa"
+    binding_id: str | None = None
+    binding_revision: int | None = None
+    binding_state: Literal["unverified", "active", "unbound", "revoked"] = "unbound"
+    verified_at: datetime | None = None
+
+
 class CredentialPollCandidate(BaseModel):
     """Value-free due-candidate metadata; never carries a password."""
 
@@ -68,6 +118,8 @@ class CredentialPollCandidate(BaseModel):
     target_system: CredentialTargetSystem
     poll_failure_count: int
     updated_at: datetime
+    snapshot: CredentialSnapshot
+    write_stamp: CredentialWriteStamp | None = None
 
 
 class CredentialAcquisitionError(RuntimeError):
@@ -79,6 +131,34 @@ class CredentialAcquisitionError(RuntimeError):
 
 
 class CredentialBindingStorePort(Protocol):
+    async def snapshot(
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
+    ) -> CredentialSnapshot: ...
+
+    async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
+    async def browser_activation_snapshot(
+        self, principal: Principal, binding_id: str, binding_revision: int,
+    ) -> CredentialSnapshot:
+        """Read only an existing, unverified, unrevoked password binding."""
+        ...
+
+    async def get_browser_binding_status(self, principal: Principal) -> BrowserBindingStatusView:
+        """Return only this authenticated user's existing OA binding references."""
+        ...
+
+    async def activate_browser_binding(
+        self, credential: PasswordBindingCredential, *, verified: Principal,
+        session_credential: OASessionCredential,
+        captured_session: AuthenticatedSessionContext, expected_write: CredentialWriteStamp,
+    ) -> BrowserBindingActivationView:
+        """Store the verified password, subject and fresh OA session in one CAS."""
+        ...
+
+    def poll_lock(
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+    ) -> AsyncContextManager[bool]: ...
+
     async def bind_password(
         self,
         ai_user_id: str,
@@ -86,6 +166,7 @@ class CredentialBindingStorePort(Protocol):
         credential: PasswordBindingCredential,
         *,
         tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> CredentialBindingView: ...
 
     async def get_password_binding(
@@ -98,10 +179,14 @@ class CredentialBindingStorePort(Protocol):
 
 
 class CredentialBindingVerifierPort(Protocol):
-    async def verify_for_binding(self, credential: LoginCredential) -> Principal: ...
+    async def verify_for_binding(
+        self, credential: LoginCredential,
+    ) -> CredentialBindingVerification: ...
 
 
 class CredentialPollingStorePort(Protocol):
+    async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
     async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]: ...
 
     async def refresh_poll_candidate(
@@ -113,15 +198,30 @@ class CredentialPollingStorePort(Protocol):
     ) -> AsyncContextManager[bool]: ...
 
     async def mark_poll_succeeded(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_non_authentication_failure(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_non_counted_failure(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_terminal_authentication_failure(
@@ -131,17 +231,25 @@ class CredentialPollingStorePort(Protocol):
         failure: CredentialTerminalFailure,
         *,
         tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
 
 class PasswordBindingReaderPort(Protocol):
     async def load_password_for_poll(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> PasswordBindingCredential: ...
 
 
 class BackgroundCredentialAcquirerPort(Protocol):
-    async def acquire(self, candidate: CredentialPollCandidate) -> Principal: ...
+    async def acquire(
+        self, candidate: CredentialPollCandidate
+    ) -> CredentialAuthenticationResult: ...
 
 
 class BackgroundWorkObjectSyncPort(Protocol):
@@ -166,10 +274,14 @@ __all__ = (
     "BackgroundCredentialAcquirerPort",
     "BackgroundWorkObjectSyncPort",
     "BackgroundWorkObjectSyncError",
+    "BrowserBindingActivationRequest",
+    "BrowserBindingActivationView",
+    "BrowserBindingStatusView",
     "CredentialAcquisitionError",
     "CredentialAcquisitionFailureCode",
     "CredentialBindingStorePort",
     "CredentialBindingVerifierPort",
+    "CredentialBindingVerification",
     "CredentialBindingView",
     "CredentialCountedFailureCode",
     "CredentialPollingStorePort",

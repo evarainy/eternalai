@@ -151,6 +151,11 @@ const PROJECTS = [
         method: 'get',
         operationId: 'read_me_api_v1_me_get',
       },
+      {
+        path: '/api/v1/me/avatar',
+        method: 'get',
+        operationId: 'read_avatar_api_v1_me_avatar_get',
+      },
     ],
   },
   {

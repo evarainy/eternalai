@@ -1,6 +1,26 @@
 {
   "components": {
     "schemas": {
+      "BrowserOwnerScope": {
+        "additionalProperties": false,
+        "description": "Server HMAC cache aliases; never internal IDs or authorization grants.",
+        "properties": {
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "user_id"
+        ],
+        "title": "BrowserOwnerScope",
+        "type": "object"
+      },
       "MeOrg": {
         "additionalProperties": false,
         "description": "Plain-text organization labels; never raw markup, never an upstream id.",
@@ -71,6 +91,27 @@
             ],
             "title": "Avatar Path"
           },
+          "browser_owner_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserOwnerScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "browser_skill_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Skill Id"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -128,6 +169,23 @@
           }
         },
         "summary": "Read Me"
+      }
+    },
+    "/api/v1/me/avatar": {
+      "get": {
+        "operationId": "read_avatar_api_v1_me_avatar_get",
+        "responses": {
+          "200": {
+            "content": {
+              "image/gif": {},
+              "image/jpeg": {},
+              "image/png": {},
+              "image/webp": {}
+            },
+            "description": "The caller's own avatar image."
+          }
+        },
+        "summary": "Read Avatar"
       }
     }
   }

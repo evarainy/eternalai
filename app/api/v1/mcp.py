@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -66,9 +66,21 @@ class ResumeRequest(BaseModel):
 
 class McpApiService:
     def __init__(
-        self, oauth: OAuthConnections, operations: GovernedOperations, workflows: WorkflowEnginePort
+        self,
+        oauth: OAuthConnections,
+        operations: GovernedOperations,
+        workflows: WorkflowEnginePort,
+        *,
+        bind_authorization_owner: Callable[
+            [str, AuthenticatedSessionContext], Awaitable[None]
+        ] | None = None,
+        complete_authorization_owner: Callable[
+            [AuthenticatedSessionContext], Awaitable[None]
+        ] | None = None,
     ) -> None:
         self.oauth, self.operations, self.workflows = oauth, operations, workflows
+        self.bind_authorization_owner = bind_authorization_owner
+        self.complete_authorization_owner = complete_authorization_owner
 
     async def operation(
         self, operation_id: str, session: AuthenticatedSessionContext
@@ -321,6 +333,8 @@ def make_router(
         service_config_id: str, context: AuthenticatedSessionContext = Depends(session)
     ) -> AuthorizationView:
         current = available()
+        if current.bind_authorization_owner is not None:
+            await current.bind_authorization_owner(service_config_id, context)
         await current.oauth.store.configure(current.oauth.service(service_config_id, context))
         return AuthorizationView(
             authorization_url=await current.oauth.authorize(service_config_id, context)
@@ -329,17 +343,32 @@ def make_router(
     @router.get("/oauth/callback", response_model=Literal["authorization_received"])
     async def callback(
         request: Request, context: AuthenticatedSessionContext = Depends(session)
-    ) -> str:
+    ) -> str | Response:
         query = request.query_params
-        if set(query) != {"code", "state", "iss"} or any(len(query.getlist(k)) != 1 for k in query):
+        if (
+            not set(query) <= {"code", "state", "iss", "error"}
+            or "state" not in query
+            or ("code" in query) == ("error" in query)
+            or any(len(query.getlist(k)) != 1 for k in query)
+        ):
             raise McpFailure("mcp_authorization_invalid")
-        await available().oauth.callback(
+        current = available()
+        await current.oauth.callback(
             context,
             state=query["state"],
-            code=query["code"],
-            issuer=query["iss"],
+            code=query.get("code"),
+            issuer=query.get("iss"),
             callback_uri=str(request.url.replace(query="")),
+            error=query.get("error"),
         )
+        complete_authorization_owner = current.complete_authorization_owner
+        if "error" not in query and complete_authorization_owner is not None:
+            await complete_authorization_owner(context)
+        if "error" in query:
+            return RedirectResponse(
+                "/apps", status_code=303,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
         return "authorization_received"
 
     @router.post("/connections/{connection_id}/disconnect", response_model=Literal["disconnected"])

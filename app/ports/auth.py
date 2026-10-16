@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import AsyncContextManager, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -103,7 +103,80 @@ class CredentialStoreError(RuntimeError):
     """Uniform fail-closed error for unreadable encrypted credential storage."""
 
 
+@dataclass(frozen=True, slots=True)
+class CredentialSnapshot:
+    """Read-only optimistic snapshot; absence never authorizes an overwrite."""
+
+    tenant_id: str
+    ai_user_id: str
+    target_system: str
+    binding_id: str
+    binding_revision: int
+    credential_write_revision: int
+    refresh_epoch: int
+    absent: bool = False
+
+    def __post_init__(self) -> None:
+        if (
+            not all(
+                isinstance(value, str) and value.strip()
+                for value in (self.tenant_id, self.ai_user_id, self.target_system, self.binding_id)
+            )
+            or type(self.absent) is not bool
+            or any(
+                type(value) is not int or not 0 <= value <= 9007199254740991
+                for value in (
+                    self.binding_revision,
+                    self.credential_write_revision,
+                    self.refresh_epoch,
+                )
+            )
+            or self.binding_revision == 0
+        ):
+            raise ValueError("credential_snapshot_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialWriteStamp:
+    """One claimed write, captured before IO and checked against database time."""
+
+    snapshot: CredentialSnapshot
+    operation_id: str
+    deadline: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.snapshot, CredentialSnapshot)
+            or not isinstance(self.operation_id, str)
+            or not self.operation_id
+            or not isinstance(self.deadline, datetime)
+            or self.deadline.tzinfo is None
+            or self.deadline.utcoffset() is None
+        ):
+            raise ValueError("credential_write_stamp_invalid")
+
+
+class StaleCredentialWrite(CredentialStoreError):
+    """A newer binding, writer or expired operation fenced this result."""
+
+    code = "credential_write_stale"
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialAuthenticationResult:
+    principal: Principal
+    write_stamp: CredentialWriteStamp | None
+
+
 class AuthenticationPort(Protocol):
+    async def refresh_credential(
+        self,
+        credential: LoginCredential,
+        *,
+        expected_subject: tuple[str, str],
+        expected_write: CredentialWriteStamp,
+    ) -> CredentialAuthenticationResult: ...
+
     async def authenticate(
         self,
         credential: LoginCredential,
@@ -122,6 +195,22 @@ class SessionTokenPort(Protocol):
 
 
 class CredentialStorePort(Protocol):
+    def writer_guard(self) -> AsyncContextManager[None]: ...
+
+    def poll_lock(
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
+    ) -> AsyncContextManager[bool]: ...
+
+    async def snapshot(
+        self,
+        ai_user_id: str,
+        target_system: str,
+        *,
+        tenant_id: str,
+    ) -> CredentialSnapshot: ...
+
+    async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
     async def store(
         self,
         ai_user_id: str,
@@ -130,7 +219,8 @@ class CredentialStorePort(Protocol):
         *,
         tenant_id: str,
         reactivate_revoked_session: bool = True,
-    ) -> None: ...
+        expected_write: CredentialWriteStamp,
+    ) -> CredentialWriteStamp: ...
 
     async def load(
         self, ai_user_id: str, target_system: str, *, tenant_id: str

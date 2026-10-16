@@ -70,6 +70,8 @@ EXPECTED_EXECUTION_RESULT_FIELDS = {
     "data",
     "error_code",
     "trace_id",
+    "browser_admission",
+    "browser_diagnostic",
     "mcp_outcome",
     "mcp_read",
 }
@@ -82,6 +84,7 @@ EXPECTED_EXECUTION_STATUS_VALUES = (
     "timeout",
     "no_capability_found",
     "waiting_user",
+    "running",
 )
 
 

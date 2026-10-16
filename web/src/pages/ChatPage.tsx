@@ -1,34 +1,284 @@
 /// <reference types="vite/client" />
 
-import { forwardRef, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps, FormEvent } from 'react';
 import { Conversations, Prompts, Sender, Welcome } from '@ant-design/x';
 import { useMutation } from '@tanstack/react-query';
-import { Button, Input, Typography } from 'antd';
+import { Alert, Button, Checkbox, Input, Space, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
 import { Icon } from '../shared/ui/Icon';
+import { ApiError } from '../api/mutator';
 import {
   projectResponse,
+  isRecord,
   type PresentationKind,
   type ProjectedResponse,
+  type DFormCollectionReference,
 } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
+import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
+import { BrowserRunCard } from '../features/browser/BrowserRunCard';
+import {
+  cancelBrowserRun,
+  decideBrowserFillStop,
+  isBrowserUnconfirmed,
+  parseBrowserAccepted,
+  parseBrowserPending,
+  readBrowserRun,
+  submitBrowserMessage,
+  submitOrdinaryBrowserCapableMessage,
+  type BrowserAccepted,
+  type BrowserRunRead,
+} from '../features/browser/api';
+import {
+  clearBrowserAccepted,
+  loadBrowserAccepted,
+  parseBrowserOwnerScope,
+  parseBrowserSkillId,
+  saveBrowserAccepted,
+  type BrowserOwnerScope,
+} from '../features/browser/acceptedStore';
 import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
 import type { UIComponentTargetSystem, UserAction } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
-import { useCurrentIdentity } from '../app/identity';
+import { useAuthStore } from '../stores/authStore';
+import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
 import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
 
+interface ChatPageProps {
+  /** A trusted server configuration must supply the one published skill ID. */
+  browserSkillId?: string;
+}
+
+interface BrowserTarget {
+  readonly accepted: BrowserAccepted;
+  readonly conversationId: string;
+  readonly owner: BrowserOwnerScope;
+  readonly authGeneration: number;
+  readonly requestGeneration: number;
+  readonly originalSubmission: ChatSubmission | null;
+}
+
+interface ChatSubmission {
+  readonly collection: DFormCollectionReference | null;
+  readonly boundSessionId: string | null;
+  readonly requestId: string;
+  readonly owner: BrowserOwnerScope | null;
+  readonly message: string;
+  readonly sessionId: string;
+  readonly authGeneration: number;
+  readonly browser: null | {
+    readonly skillId: string;
+    readonly requestId: string;
+    readonly owner: BrowserOwnerScope;
+  };
+}
+
+function BrowserRunMonitor({
+  target, onTerminal, fillStopMode = false, onRecoverOriginal, recovering, recoveryRevision,
+}: {
+  target: BrowserTarget;
+  onTerminal: (terminal: boolean) => void;
+  fillStopMode?: boolean;
+  onRecoverOriginal: (() => void) | null;
+  recovering: boolean;
+  recoveryRevision: number;
+}) {
+  const [read, setRead] = useState<BrowserRunRead | null>(null);
+  const [pollError, setPollError] = useState(false);
+  const [readFailure, setReadFailure] = useState<{ status: number | null; code: string }>({
+    status: null, code: 'browser_read_failed',
+  });
+  const [refresh, setRefresh] = useState(0);
+  const [deciding, setDeciding] = useState(false);
+  const currentRead = useRef<BrowserRunRead | null>(null);
+  const cancelRequest = useRef<AbortController | null>(null);
+  const live = useRef(true);
+
+  const applyRead = useCallback((incoming: BrowserRunRead): boolean | null => {
+    if (!live.current) return null;
+    const decision = compareBrowserRunUpdate(currentRead.current?.run ?? null, incoming.run, {
+      taskId: target.accepted.task_id,
+      runId: target.accepted.run_id,
+      requestGeneration: target.requestGeneration,
+      currentGeneration: target.requestGeneration,
+    });
+    if (decision === 'apply' || decision === 'noop') {
+      currentRead.current = incoming;
+      setRead(incoming);
+      setPollError(false);
+      setReadFailure({ status: null, code: 'browser_read_failed' });
+      const terminal = incoming.run.result !== null;
+      const cleanupPending = fillStopMode && incoming.run.result?.cleanup === 'pending';
+      if (terminal && !cleanupPending) onTerminal(true);
+      return terminal && !cleanupPending;
+    } else if (decision === 'conflict') {
+      setRead(null);
+      setPollError(true);
+      return null;
+    }
+    return false;
+  }, [target, onTerminal, fillStopMode]);
+
+  useEffect(() => {
+    live.current = true;
+    setReadFailure({ status: null, code: 'browser_read_failed' });
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
+    // D: 15-minute confirmation window + 1800-second supervisor and cleanup.
+    const observationMs = fillStopMode ? 2_880_000 : 180_000;
+    const deadline = performance.now() + observationMs;
+    const deadlineTimer = setTimeout(() => { controller.abort(); setPollError(true); }, observationMs);
+    const poll = async () => {
+      if (!live.current || controller.signal.aborted) return;
+      if (++attempts > Math.ceil(observationMs / 2000) || performance.now() >= deadline) {
+        clearTimeout(deadlineTimer);
+        controller.abort();
+        setPollError(true);
+        return;
+      }
+      try {
+        const response = await readBrowserRun(
+          target.accepted.task_id, target.accepted.run_id,
+          target.conversationId, controller.signal,
+        );
+        if (!live.current || controller.signal.aborted) return;
+        if (applyRead(response) !== false) {
+          clearTimeout(deadlineTimer);
+          return;
+        }
+        timer = setTimeout(() => { void poll(); }, 2000);
+      } catch (error) {
+        if (live.current && !controller.signal.aborted) {
+          clearTimeout(deadlineTimer);
+          setRead(null);
+          setPollError(true);
+          const code = error instanceof ApiError && [
+            'browser_write_preparation_invalid', 'browser_run_projection_invalid',
+            'browser_chat_unavailable', 'session_not_found', 'browser_run_not_found',
+            'authentication_required', 'browser_target_stale',
+          ].includes(error.code) ? error.code
+            : error instanceof DOMException && error.name === 'AbortError' ? 'browser_read_aborted'
+              : error instanceof Error && error.message === 'browser_run_response_invalid'
+                ? 'browser_run_response_invalid' : 'browser_read_failed';
+          setReadFailure({ status: error instanceof ApiError ? error.status : null, code });
+        }
+      }
+    };
+    void poll();
+    return () => {
+      clearTimeout(deadlineTimer);
+      live.current = false;
+      controller.abort();
+      cancelRequest.current?.abort();
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [target, refresh, applyRead, fillStopMode, recoveryRevision]);
+
+  const onCancel = async (taskId: string, runId: string) => {
+    if (!live.current || taskId !== target.accepted.task_id
+        || runId !== target.accepted.run_id) return;
+    const controller = new AbortController();
+    cancelRequest.current = controller;
+    try {
+      const response = await cancelBrowserRun(
+        taskId, runId, target.conversationId, controller.signal,
+      );
+      if (live.current && !controller.signal.aborted && applyRead(response) === null) {
+        throw new Error('browser_run_update_conflict');
+      }
+    } finally {
+      if (cancelRequest.current === controller) cancelRequest.current = null;
+    }
+  };
+
+  const onDecide = async (decision: 'confirmed' | 'rejected') => {
+    if (!live.current || deciding || read?.writePreview == null) return;
+    setDeciding(true);
+    const controller = new AbortController();
+    cancelRequest.current = controller;
+    try {
+      const incoming = await decideBrowserFillStop(target.accepted.task_id, target.accepted.run_id,
+        target.conversationId, decision, controller.signal);
+      if (live.current && !controller.signal.aborted) {
+        applyRead(incoming);
+        setRefresh((value) => value + 1);
+      }
+    } catch {
+      if (live.current && !controller.signal.aborted) setPollError(true);
+    } finally {
+      if (cancelRequest.current === controller) cancelRequest.current = null;
+      if (live.current) setDeciding(false);
+    }
+  };
+
+  if (read === null) {
+    return pollError ? (
+      <Alert type="warning" showIcon title="无法读取浏览器任务"
+        description={`HTTP：${readFailure.status ?? '未取得'}；错误码：${readFailure.code}`}
+        action={<Button onClick={() => setRefresh((value) => value + 1)}>重试读取</Button>} />
+    ) : <p role="status">正在读取浏览器任务…</p>;
+  }
+  return (
+    <div>
+      {fillStopMode && read.run.progress?.phase === 'queued' && read.run.result === null
+        && !read.run.cancel.requested && read.writePreview == null ? (
+          <Alert type="warning" showIcon title="尚未取得可用的填写确认"
+            description={onRecoverOriginal === null
+              ? '当前页面缺少原请求信息，可继续读取或取消原任务。'
+              : '可检查原请求并补齐确认准备，继续使用当前任务。'}
+            action={<Button disabled={recovering || onRecoverOriginal === null} loading={recovering}
+              onClick={() => onRecoverOriginal?.()}>恢复原任务确认</Button>} />
+        ) : null}
+      {read.writePreview != null ? (
+        <Alert type="warning" showIcon title="确认仅填写三项后停止"
+          description="仅填写类别、故障位置和故障描述，不保存或提交。具体值在本地浏览器协调框核对。"
+          action={<Space>
+            <Button disabled={deciding} onClick={() => { void onDecide('rejected'); }}>拒绝</Button>
+            <Button type="primary" loading={deciding} onClick={() => { void onDecide('confirmed'); }}>确认填写</Button>
+          </Space>} />
+      ) : null}
+      <BrowserRunCard
+        parsedView={read.run}
+        taskId={target.accepted.task_id}
+        runId={target.accepted.run_id}
+        requestGeneration={target.requestGeneration}
+        currentGeneration={target.requestGeneration}
+        resultValue={read.fillStop == null ? read.value : null}
+        onCancel={onCancel}
+      />
+      {read.fillStop != null ? (
+        <Alert showIcon type={read.run.status === 'completed' && read.run.result?.verification === 'verified'
+          && read.fillStop.verification === 'verified' ? 'success' : 'warning'}
+          title={read.run.status === 'completed' && read.run.result?.verification === 'verified' && read.fillStop.verification === 'verified'
+            ? '三项已填写并核验，已停止' : '填写任务状态已回传'}
+          description={`类别：${read.fillStop.field_checks.category === true ? '匹配' : '未核验通过'}；`
+            + `位置：${read.fillStop.field_checks.position === true ? '匹配' : '未核验通过'}；`
+            + `描述：${read.fillStop.field_checks.description === true ? '匹配' : '未核验通过'}。`
+            + `耗时 ${read.fillStop.seconds.toFixed(3)} 秒；状态码 ${read.fillStop.error_code}。`
+            + (read.fillStop.cleanup_confirmed ? '' : ' 执行连接清理仍待核验。')} />
+      ) : null}
+      {pollError ? (
+        <Alert type="warning" showIcon title="浏览器任务更新暂不可用"
+          description={`HTTP：${readFailure.status ?? '未取得'}；错误码：${readFailure.code}`}
+          action={<Button onClick={() => setRefresh((value) => value + 1)}>重试读取</Button>} />
+      ) : null}
+    </div>
+  );
+}
+
 const presentationLabels: Record<PresentationKind, string> = {
+  unconfirmed: '提交待确认',
   completed: '办理完成',
   cancelled: '已取消',
   confirmation_invalidated: '确认已失效',
@@ -46,6 +296,13 @@ const presentationLabels: Record<PresentationKind, string> = {
   network: '网络异常',
   request_error: '请求失败',
 };
+
+function unconfirmedSubmission(): ProjectedResponse {
+  return {
+    role: 'assistant', text: '提交结果尚未确认，可使用原请求继续检查。',
+    presentationKind: 'unconfirmed', responseId: null, confirm: null, records: null, actionOutcome: null,
+  };
+}
 
 /** 没有办成的那几类；用于提醒用户「这不是没有数据，是这一条没办成」。 */
 const UNSUCCESSFUL_KINDS: ReadonlySet<PresentationKind> = new Set<PresentationKind>([
@@ -133,7 +390,9 @@ function AssistantDetails({
   if (entry.presentationKind === 'clarification') {
     return (
       <Text className={styles.guidance}>
-        请将原请求与明确范围一起完整重述为一条新请求。
+        {entry.dFormCollection !== undefined
+          ? '请按上方提示补充缺少的信息。'
+          : '请将原请求与明确范围一起完整重述为一条新请求。'}
       </Text>
     );
   }
@@ -161,13 +420,17 @@ function AssistantDetails({
         />
       )}
       {entry.records === null ? null : <RecordsList records={entry.records} />}
+      {entry.dFormCategoryOptions?.length ? (
+        <Text type="secondary">可选报修类别：{entry.dFormCategoryOptions.join('、')}</Text>
+      ) : null}
     </>
   );
 }
 
-export default function ChatPage() {
+export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const draft = useAIDockStore((state) => state.draft);
   const transcript = useAIDockStore((state) => state.transcript);
+  const currentSessionId = useAIDockStore((state) => state.sessionId);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
@@ -177,44 +440,359 @@ export default function ChatPage() {
     return outcome === undefined ? null : userActionOutcomeMessages[outcome];
   };
   const identity = useCurrentIdentity();
+  const identityQuery = useIdentityQuery();
+  const { data: me, refetch: refetchMe } = identityQuery;
+  const authStatus = useAuthStore((state) => state.status);
+  const authGeneration = useAuthStore((state) => state.generation);
+  const browserOwner = useMemo(() => parseBrowserOwnerScope(me), [me]);
+  const meSkillId = useMemo(() => parseBrowserSkillId(me), [me]);
+  const activeSkillId = meSkillId !== null
+    && (browserSkillId === undefined || browserSkillId === meSkillId) ? meSkillId : null;
+  const browserAvailable = authStatus === 'authenticated'
+    && browserOwner !== null && activeSkillId !== null;
+  const requestMetadataReady = authStatus === 'authenticated' && identityQuery.isSuccess
+    && me?.authenticated === true && (me.browser_skill_id == null || browserAvailable);
+  const [browserOptIn, setBrowserOptIn] = useState(false);
+  const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
+  const [browserTerminal, setBrowserTerminal] = useState(false);
+  const [browserRecoveryRevision, setBrowserRecoveryRevision] = useState(0);
+  const [browserStorageError, setBrowserStorageError] = useState(false);
+  const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
+  const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
+  const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
+  const [collection, setCollection] = useState<{
+    reference: DFormCollectionReference; sessionId: string; authGeneration: number;
+    ownerKey: string | null; serverSessionId: string;
+  } | null>(null);
+  const browserGeneration = useRef(0);
+  const restoredScope = useRef<string | null>(null);
+  const ownerKey = browserOwner === null ? null
+    : `${browserOwner.tenant_id}/${browserOwner.user_id}`;
+  const ownerKeyRef = useRef<string | null>(ownerKey);
+  ownerKeyRef.current = ownerKey;
+  const currentCollection = collection !== null && collection.sessionId === currentSessionId
+    && collection.authGeneration === authGeneration && collection.ownerKey === ownerKey
+    && authStatus === 'authenticated' ? collection.reference : null;
+  const skillIdRef = useRef<string | null>(meSkillId);
+  skillIdRef.current = meSkillId;
+  const identityCheck = useRef(0);
   const requestInFlight = useRef(false);
+  const activeSubmission = useRef<ChatSubmission | null>(null);
+  const browserSubmitContext = useRef<{
+    controller: AbortController; ownerKey: string;
+  } | null>(null);
+
+  useEffect(() => () => {
+    browserSubmitContext.current?.controller.abort();
+    activeSubmission.current = null;
+  }, []);
+  useEffect(() => { setBrowserIdentityReady(true); }, [authGeneration]);
+  useEffect(() => {
+    if (browserSubmitContext.current !== null
+        && browserSubmitContext.current.ownerKey !== ownerKey) {
+      browserSubmitContext.current.controller.abort();
+    }
+  }, [ownerKey]);
+
+  const recheckBrowserIdentity = useCallback(() => {
+    const auth = useAuthStore.getState();
+    if (auth.status !== 'authenticated') return;
+    const sequence = ++identityCheck.current;
+    const previousOwner = ownerKeyRef.current;
+    const previousSkill = skillIdRef.current;
+    setBrowserIdentityReady(false);
+    void refetchMe().then((result) => {
+      if (identityCheck.current !== sequence
+          || useAuthStore.getState().generation !== auth.generation) return;
+      if (!result.isSuccess) return;
+      const nextOwner = parseBrowserOwnerScope(result.data);
+      const nextSkill = parseBrowserSkillId(result.data);
+      const nextKey = nextOwner === null ? null
+        : `${nextOwner.tenant_id}/${nextOwner.user_id}`;
+      if (nextKey !== previousOwner || nextSkill !== previousSkill) {
+        clearBrowserAccepted();
+        browserSubmitContext.current?.controller.abort();
+        setBrowserTarget(null);
+        setBrowserTerminal(false);
+        setPendingSubmission(null);
+        setRetrySubmission(null);
+        setCollection(null);
+        setBrowserOptIn(false);
+      }
+      setBrowserIdentityReady(true);
+    }).catch(() => { /* Keep the previous browser result hidden until retry. */ });
+  }, [refetchMe]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+    let channel: BroadcastChannel | null = null;
+    const checkSequence = identityCheck;
+    const onFocus = () => recheckBrowserIdentity();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') recheckBrowserIdentity();
+    };
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('eternalai-auth');
+        channel.onmessage = (event: MessageEvent<unknown>) => {
+          if (event.data === 'recheck-identity') recheckBrowserIdentity();
+        };
+      }
+    } catch { /* Focus still checks current server identity. */ }
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      ++checkSequence.current;
+      channel?.close();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authStatus, authGeneration, recheckBrowserIdentity]);
+
+  useEffect(() => {
+    if (!browserAvailable || browserOwner === null) return;
+    const scope = `${authGeneration}/${browserOwner.tenant_id}/${browserOwner.user_id}`;
+    if (restoredScope.current === scope) return;
+    restoredScope.current = scope;
+    const stored = loadBrowserAccepted(browserOwner);
+    if (stored === null) return;
+    const state = useAIDockStore.getState();
+    if (state.sessionId !== null && state.sessionId !== stored.conversation_id) {
+      clearBrowserAccepted();
+      return;
+    }
+    if (state.sessionId === null) {
+      if (state.transcript.length > 0 || state.draft.trim()) {
+        clearBrowserAccepted();
+        return;
+      }
+      useAIDockStore.setState({ sessionId: stored.conversation_id });
+    }
+    setBrowserTarget({
+      accepted: stored.accepted, conversationId: stored.conversation_id,
+      owner: stored.owner, authGeneration,
+      requestGeneration: ++browserGeneration.current,
+      originalSubmission: null,
+    });
+    setBrowserTerminal(false);
+  }, [browserAvailable, browserOwner, authGeneration]);
+
+  useEffect(() => {
+    if (browserTarget === null) return;
+    if (!browserAvailable || browserOwner === null
+        || browserTarget.authGeneration !== authGeneration
+        || browserTarget.owner.tenant_id !== browserOwner.tenant_id
+        || browserTarget.owner.user_id !== browserOwner.user_id
+        || useAIDockStore.getState().sessionId !== browserTarget.conversationId) {
+      clearBrowserAccepted();
+      setBrowserTarget(null);
+      setBrowserTerminal(false);
+      setBrowserOptIn(false);
+      setPendingSubmission(null);
+      setRetrySubmission(null);
+    }
+  }, [browserTarget, browserAvailable, browserOwner, authGeneration, currentSessionId]);
+
+  useEffect(() => {
+    const stillCurrent = (submission: ChatSubmission): boolean =>
+      authStatus === 'authenticated' && submission.authGeneration === authGeneration
+      && submission.sessionId === currentSessionId
+      && (submission.owner === null || ownerKey ===
+        `${submission.owner.tenant_id}/${submission.owner.user_id}`);
+    if (pendingSubmission !== null && !stillCurrent(pendingSubmission)) {
+      setPendingSubmission(null);
+    }
+    if (retrySubmission !== null && !stillCurrent(retrySubmission)) {
+      setRetrySubmission(null);
+    }
+    if (!browserAvailable && browserOptIn) setBrowserOptIn(false);
+  }, [currentSessionId, authStatus, authGeneration, ownerKey, browserAvailable,
+    browserOptIn, pendingSubmission, retrySubmission]);
+
+  const submissionIsCurrent = (submission: ChatSubmission): boolean => {
+    const auth = useAuthStore.getState();
+    return auth.status === 'authenticated' && auth.generation === submission.authGeneration
+      && useAIDockStore.getState().sessionId === submission.sessionId
+      && (submission.owner === null || ownerKeyRef.current ===
+        `${submission.owner.tenant_id}/${submission.owner.user_id}`);
+  };
+
+  const sendBrowserSubmission = async (submission: ChatSubmission): Promise<unknown> => {
+    const browser = submission.browser;
+    const owner = submission.owner;
+    if (owner === null) throw new Error('browser_submission_invalid');
+    const controller = new AbortController();
+    browserSubmitContext.current = {
+      controller, ownerKey: `${owner.tenant_id}/${owner.user_id}`,
+    };
+    const stopOnSessionChange = useAIDockStore.subscribe((state) => {
+      if (state.sessionId !== submission.sessionId) controller.abort();
+    });
+    const stopOnAuthChange = useAuthStore.subscribe((state) => {
+      if (state.status !== 'authenticated' || state.generation !== submission.authGeneration) {
+        controller.abort();
+      }
+    });
+    const deadlineTimer = setTimeout(() => { controller.abort(); }, 135_000);
+    try {
+      return browser === null
+        ? await submitOrdinaryBrowserCapableMessage(
+          submission.message, submission.sessionId, submission.requestId, controller.signal,
+          submission.collection,
+        )
+        : await submitBrowserMessage(
+          submission.message, submission.sessionId, browser.skillId, browser.requestId,
+          controller.signal,
+        );
+    } finally {
+      clearTimeout(deadlineTimer);
+      stopOnSessionChange();
+      stopOnAuthChange();
+      if (browserSubmitContext.current?.controller === controller) {
+        browserSubmitContext.current = null;
+      }
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
-      const store = useAIDockStore.getState();
-      const sessionId = store.ensureSession();
+      const submission = activeSubmission.current;
+      if (submission === null || submission.message !== message) {
+        throw new Error('chat_submission_invalid');
+      }
+      const { sessionId } = submission;
       const reference = /^(?:确认|confirm)\s+(\S+)$/i.exec(message)?.[1] ?? null;
       try {
-        const result = projectResponse(await handleApiV1RuntimeHandlePost({
-          channel: 'web',
-          session_id: sessionId,
-          message,
-          client_capabilities: {},
-        }));
+        const response = submission.owner === null
+          ? await handleApiV1RuntimeHandlePost({
+            channel: 'web', session_id: sessionId, message, client_request_id: submission.requestId,
+            client_capabilities: {},
+            ...(submission.collection === null ? {} : { d_form_collection: submission.collection }),
+          })
+          : await sendBrowserSubmission(submission);
+        const boundSessionId = isRecord(response) && typeof response.session_id === 'string'
+          ? response.session_id : '';
+        if (submission.boundSessionId !== null && boundSessionId !== submission.boundSessionId) {
+          throw new Error('collection_session_mismatch');
+        }
+        const pending = submission.owner === null ? null : parseBrowserPending(response);
+        if (pending !== null) {
+          if (submissionIsCurrent(submission)) {
+            setPendingSubmission(submission);
+            setRetrySubmission(null);
+          }
+          return null;
+        }
+        if (submission.owner !== null) {
+          const accepted = parseBrowserAccepted(response);
+          if (accepted !== null) {
+            if (submissionIsCurrent(submission)) {
+              setCollection(null);
+              if (browserTarget?.originalSubmission === submission) {
+                if (accepted.task_id !== browserTarget.accepted.task_id
+                    || accepted.run_id !== browserTarget.accepted.run_id) {
+                  throw new Error('browser_recovery_target_mismatch');
+                }
+                // Keep the same target, monitor key, generation and terminal state.
+                setBrowserRecoveryRevision((value) => value + 1);
+              } else {
+                setBrowserTarget({
+                  accepted, conversationId: sessionId, owner: submission.owner,
+                  authGeneration: submission.authGeneration,
+                  requestGeneration: ++browserGeneration.current,
+                  originalSubmission: activeSkillId === 'd_form_fill_stop' ? submission : null,
+                });
+                setBrowserTerminal(false);
+                setBrowserStorageError(!saveBrowserAccepted(
+                  submission.owner, sessionId, accepted,
+                ));
+              }
+              setPendingSubmission(null);
+              setRetrySubmission(null);
+            }
+            return null;
+          }
+        }
+        const uncertain = isBrowserUnconfirmed(response, submission.requestId);
+        const result = uncertain ? unconfirmedSubmission() : projectResponse(response);
+        if (result.dFormCollection !== undefined
+            && !/^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(boundSessionId)) {
+          throw new Error('collection_session_mismatch');
+        }
+        if (submission.owner !== null && submissionIsCurrent(submission)) {
+          setPendingSubmission(null);
+          setRetrySubmission(uncertain ? submission : null);
+        }
+        if (!submissionIsCurrent(submission)) return null;
+        if (!uncertain && result.presentationKind !== 'unconfirmed') {
+          setCollection(result.dFormCollection === undefined ? null : {
+            reference: result.dFormCollection, sessionId,
+            serverSessionId: boundSessionId,
+            authGeneration: submission.authGeneration, ownerKey: ownerKeyRef.current,
+          });
+        } else {
+          setRetrySubmission(submission);
+        }
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         return result;
       } catch (error) {
         const projectedError = projectRequestError(error);
-        if (projectedError === null) {
+        if (projectedError === null && submission.owner === null) {
           throw error;
         }
-        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, projectedError);
-        return projectedError;
+        const result = submission.owner !== null ? unconfirmedSubmission()
+          : projectedError ?? projectResponse(null);
+        if (submission.owner !== null && submissionIsCurrent(submission)) {
+          setPendingSubmission(null);
+          setRetrySubmission(submission);
+        }
+        if (!submissionIsCurrent(submission)) return null;
+        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
+        return result;
       }
     },
     onSettled: () => {
+      activeSubmission.current = null;
       requestInFlight.current = false;
     },
   });
 
-  const submit = () => {
-    const message = draft.trim();
+  const submit = (retry?: ChatSubmission) => {
+    const message = retry?.message ?? draft.trim();
     if (!message || requestInFlight.current) {
       return;
     }
+    const currentAuth = useAuthStore.getState();
+    if (!requestMetadataReady || currentAuth.status !== 'authenticated'
+        || currentAuth.generation !== authGeneration || browserAvailable && !browserIdentityReady) return;
+    if (retry !== undefined && !submissionIsCurrent(retry)) return;
+    if (retry?.browser !== null && retry?.browser !== undefined && !browserIdentityReady) return;
+    if (retry === undefined && browserOptIn && !browserAvailable) return;
+    if (retry === undefined && browserOptIn && !browserIdentityReady) return;
+    if (activeSkillId === 'd_form_fill_stop' && browserTarget !== null && !browserTerminal
+        && (retry === undefined || retry !== browserTarget.originalSubmission)) return;
+    if (retry === undefined && (browserOptIn || activeSkillId === 'd_form_fill_stop')
+        && ((browserTarget !== null && !browserTerminal) || pendingSubmission !== null)) return;
+    const sessionId = retry?.sessionId ?? useAIDockStore.getState().ensureSession();
+    const browser = retry?.browser ?? (currentCollection === null && browserOptIn && browserOwner !== null
+      && activeSkillId !== null ? {
+        skillId: activeSkillId, requestId: crypto.randomUUID(), owner: browserOwner,
+      } : null);
+    const submission: ChatSubmission = retry ?? {
+      message, sessionId, authGeneration: useAuthStore.getState().generation, browser,
+      requestId: browser?.requestId ?? crypto.randomUUID(),
+      owner: browserAvailable ? browserOwner : null,
+      collection: currentCollection === null ? null : { ...currentCollection },
+      boundSessionId: currentCollection !== null && collection !== null
+        ? collection.serverSessionId : null,
+    };
     requestInFlight.current = true;
-    appendTranscript({ role: 'user', text: message });
-    setDraft('');
+    if (retry === undefined) {
+      setRetrySubmission(null);
+      appendTranscript({ role: 'user', text: message });
+      setDraft('');
+    }
+    activeSubmission.current = submission;
     mutation.mutate(message);
   };
 
@@ -242,6 +820,28 @@ export default function ChatPage() {
     submit();
   };
 
+  const startFreshSession = () => {
+    setCollection(null);
+    clearBrowserAccepted();
+    setBrowserTarget(null);
+    setBrowserTerminal(false);
+    setPendingSubmission(null);
+    setRetrySubmission(null);
+    setBrowserStorageError(false);
+    setBrowserOptIn(false);
+    startNewSession();
+  };
+
+  const visibleBrowserTarget = browserAvailable && browserIdentityReady
+    && browserOwner !== null
+    && browserTarget !== null && currentSessionId === browserTarget.conversationId
+    && browserTarget.authGeneration === authGeneration
+    && browserTarget.owner.tenant_id === browserOwner.tenant_id
+    && browserTarget.owner.user_id === browserOwner.user_id ? browserTarget : null;
+  const browserSubmissionBlocked = (browserOptIn || activeSkillId === 'd_form_fill_stop')
+    && (!browserIdentityReady || (browserTarget !== null && !browserTerminal)
+      || pendingSubmission !== null);
+
   const lastEntry = transcript.at(-1);
   const lastEntryFailed =
     lastEntry !== undefined &&
@@ -256,7 +856,7 @@ export default function ChatPage() {
         如实写明历史存不起来，不做刷新即失效却看起来像历史的列表。
       */}
       <aside aria-label="我问过的" className={styles.sessionRail}>
-        <Button block className={styles.newSessionButton} onClick={startNewSession}>
+        <Button block className={styles.newSessionButton} onClick={startFreshSession}>
           新对话
         </Button>
         <h2 className={styles.railTitle}>我问过的</h2>
@@ -352,6 +952,39 @@ export default function ChatPage() {
               </ol>
             )}
 
+            {visibleBrowserTarget === null ? null : (
+              <BrowserRunMonitor
+                key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}
+                target={visibleBrowserTarget}
+                onTerminal={setBrowserTerminal}
+                fillStopMode={activeSkillId === 'd_form_fill_stop'}
+                onRecoverOriginal={visibleBrowserTarget.originalSubmission === null ? null : () => {
+                  const original = visibleBrowserTarget.originalSubmission;
+                  if (original !== null) submit(original);
+                }}
+                recovering={mutation.isPending}
+                recoveryRevision={browserRecoveryRevision}
+              />
+            )}
+            {!browserIdentityReady && browserTarget !== null ? (
+              <Alert type="warning" showIcon title="正在核对浏览器任务身份"
+                action={<Button onClick={recheckBrowserIdentity}>重试核对</Button>} />
+            ) : null}
+            {browserStorageError && visibleBrowserTarget !== null ? (
+              <Alert type="warning" showIcon title="刷新后可能无法恢复此浏览器任务" />
+            ) : null}
+            {pendingSubmission !== null && submissionIsCurrent(pendingSubmission) ? (
+              <Alert type="info" showIcon title="浏览器任务正在准备，尚未生成运行记录"
+                action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  onClick={() => submit(pendingSubmission)}>继续检查</Button>} />
+            ) : null}
+            {retrySubmission !== null && submissionIsCurrent(retrySubmission) ? (
+              <Alert type="warning" showIcon title={browserTarget?.originalSubmission === retrySubmission
+                ? '原任务恢复结果尚未确认，可重试原请求' : '提交结果尚未确认，可使用原请求继续检查'}
+                action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  onClick={() => submit(retrySubmission)}>检查原请求</Button>} />
+            ) : null}
+
             {mutation.isPending ? (
               <div className={styles.pendingNotice} role="status">
                 <span className={styles.pendingDot} aria-hidden="true" />
@@ -359,7 +992,8 @@ export default function ChatPage() {
               </div>
             ) : null}
 
-            {lastEntryFailed && !mutation.isPending ? (
+            {lastEntryFailed && !mutation.isPending
+              && visibleBrowserTarget === null && pendingSubmission === null ? (
               <p className={styles.failureNotice}>
                 上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
               </p>
@@ -379,6 +1013,10 @@ export default function ChatPage() {
             data-focus-ring="host"
             onSubmit={handleSubmit}
           >
+            {authStatus === 'authenticated' && !requestMetadataReady ? (
+              <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
+                action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
+            ) : null}
             <Sender
               autoSize={{ minRows: 3, maxRows: 6 }}
               className={styles.sender}
@@ -386,18 +1024,30 @@ export default function ChatPage() {
               disabled={mutation.isPending}
               footer={
                 <div className={styles.composerActions}>
+                  {browserAvailable && browserIdentityReady && activeSkillId !== 'd_form_fill_stop' ? (
+                    <Checkbox checked={browserOptIn} onChange={(event) => {
+                      setBrowserOptIn(event.target.checked);
+                    }}>
+                      使用浏览器只读技能
+                    </Checkbox>
+                  ) : null}
                   <Button
                     type="primary"
                     htmlType="submit"
                     loading={mutation.isPending}
-                    disabled={!draft.trim() || mutation.isPending}
+                    disabled={!draft.trim() || mutation.isPending || browserSubmissionBlocked || !requestMetadataReady}
                   >
                     发送
                   </Button>
                 </div>
               }
-              onChange={(value) => setDraft(value)}
-              onSubmit={submit}
+              onChange={(value) => {
+                setDraft(value);
+                if (retrySubmission !== null && value.trim() !== retrySubmission.message) {
+                  setRetrySubmission(null);
+                }
+              }}
+              onSubmit={() => submit()}
               placeholder="问点什么，比如：我今天有什么要办的"
               suffix={false}
               value={draft}

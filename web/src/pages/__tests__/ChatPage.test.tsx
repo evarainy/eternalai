@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../app/theme';
+import { identityQueryKey } from '../../app/identity';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { RecordsList } from '../../components/RecordsList';
 import {
@@ -64,6 +65,40 @@ vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
 });
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111';
+const BROWSER_STORAGE_KEY = 'eternalai.browser.accepted.v1';
+
+function browserMe(userId: string) {
+  return {
+    authenticated: true,
+    display_name: DISPLAY_NAME,
+    org: null,
+    org_status: 'ok',
+    avatar_path: null,
+    browser_owner_scope: { tenant_id: 'tenant_alias', user_id: userId },
+    browser_skill_id: 'browser_read_skill_1',
+  };
+}
+
+function verifiedBrowserRun() {
+  return {
+    schema_version: 'browser.run.v1', task_id: 'task_1', run_id: 'run_1',
+    state_revision: 2, status: 'completed', progress: null,
+    cancel: { requested: false, acknowledged: false },
+    result: {
+      business: 'completed', effect: 'acknowledged', verification: 'verified',
+      cleanup: 'pending', error_code: null, dispatch_failure_code: null,
+      terminal_revision: 2, automatic_replay: false,
+    },
+    artifacts: [], draft: null,
+  };
+}
+
+function acceptedBrowserEnvelope() {
+  return envelope({
+    status: 'running',
+    data: { kind: 'accepted', task_id: 'task_1', run_id: 'run_1', state_revision: 1 },
+  });
+}
 
 function response(
   body: unknown,
@@ -205,10 +240,20 @@ function renderChat(client = makeClient()) {
   return { client, ...rendered };
 }
 
-function sendMessage(message: string) {
+function attemptSendMessage(message: string) {
   fireEvent.change(screen.getByLabelText('办理请求'), {
     target: { value: message },
   });
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
+}
+
+async function sendMessage(message: string) {
+  fireEvent.change(screen.getByLabelText('办理请求'), {
+    target: { value: message },
+  });
+  // A normal send requires the current generation /me response, just as the UI
+  // does. Readiness races use attemptSendMessage to exercise the blocked path.
+  await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
 }
 
@@ -224,6 +269,8 @@ function storageText(storage: Storage): string {
 }
 
 beforeEach(() => {
+  // Restore before re-establishing the identity response for this test.
+  vi.restoreAllMocks();
   identityMock.readMe.mockReset();
   identityMock.readMe.mockResolvedValue({
     authenticated: true,
@@ -247,7 +294,6 @@ beforeEach(() => {
 
 describe('ChatPage request boundary', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     localStorage.clear();
@@ -256,17 +302,132 @@ describe('ChatPage request boundary', () => {
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
   });
 
+  it('blocks ordinary Chat until the current generation me query succeeds', async () => {
+    let resolveMe!: (value: ReturnType<typeof browserMe>) => void;
+    identityMock.readMe.mockReturnValueOnce(new Promise((resolve) => { resolveMe = resolve; }));
+    const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    await waitFor(() => expect(identityMock.readMe).toHaveBeenCalledTimes(1));
+    attemptSendMessage('查询虚构记录 DEMO-731');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtimeMock.handle).not.toHaveBeenCalled();
+
+    await act(async () => { resolveMe(browserMe('owner_a')); });
+    await waitFor(() => expect(client.getQueryState(identityQueryKey(1))?.status).toBe('success'));
+    expect(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, options] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/v1/runtime/handle');
+    expect(JSON.parse(options.body)).toMatchObject({
+      channel: 'web', message: '查询虚构记录 DEMO-731', client_request_id: SESSION_A,
+      client_capabilities: {},
+    });
+  });
+
+  it('does not use a late old-generation me response to enable a new Chat send', async () => {
+    let oldMe!: (value: ReturnType<typeof browserMe>) => void;
+    let newMe!: (value: ReturnType<typeof browserMe>) => void;
+    identityMock.readMe.mockReturnValueOnce(new Promise((resolve) => { oldMe = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { newMe = resolve; }));
+    const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    await waitFor(() => expect(identityMock.readMe).toHaveBeenCalledTimes(1));
+    act(() => { useAuthStore.setState({ generation: 2, status: 'authenticated' }); });
+    await waitFor(() => expect(identityMock.readMe).toHaveBeenCalledTimes(2));
+    await act(async () => { oldMe(browserMe('old_owner')); });
+    await waitFor(() => expect(client.getQueryState(identityQueryKey(1))?.status).toBe('success'));
+    expect(client.getQueryState(identityQueryKey(2))?.status).toBe('pending');
+    attemptSendMessage('查询虚构记录 DEMO-842');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).toBeNull();
+    expect(screen.queryByRole('region', { name: '浏览器结果' })).not.toBeInTheDocument();
+
+    await act(async () => { newMe(browserMe('new_owner')); });
+    await waitFor(() => expect(client.getQueryState(identityQueryKey(2))?.status).toBe('success'));
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).message).toBe('查询虚构记录 DEMO-842');
+  });
+
+  it('discards an old-owner ordinary Chat admission after an auth generation change', async () => {
+    identityMock.readMe.mockResolvedValue(browserMe('owner_a'));
+    let resolveHandle!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => { resolveHandle = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    await waitFor(() => expect(client.getQueryState(identityQueryKey(1))?.status).toBe('success'));
+    await sendMessage('查询虚构记录 DEMO-731');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const signal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+    identityMock.readMe.mockResolvedValue(browserMe('owner_b'));
+    act(() => { useAuthStore.setState({ generation: 2, status: 'authenticated' }); });
+    expect(signal.aborted).toBe(true);
+    await act(async () => { resolveHandle(response(acceptedBrowserEnvelope())); });
+    await waitFor(() => expect(client.getQueryState(identityQueryKey(2))?.status).toBe('success'));
+    expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).toBeNull();
+    expect(screen.queryByRole('region', { name: '浏览器结果' })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(useAIDockStore.getState().transcript.filter((item) => item.role === 'assistant')).toEqual([]);
+  });
+
+  it('hides a verified value and clears accepted IDs after a cross-tab owner switch', async () => {
+    identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
+      .mockResolvedValueOnce(browserMe('owner_b'));
+    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
+      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+    )));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
+    await sendMessage('synthetic read');
+    expect(await screen.findByRole('region', { name: '浏览器结果' }))
+      .toHaveTextContent('visible_to_owner_a');
+    expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).not.toBeNull();
+
+    fireEvent.focus(window);
+    expect(screen.queryByText(/visible_to_owner_a/)).not.toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).toBeNull());
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/runtime/handle'))
+      .toHaveLength(1);
+  });
+
+  it('keeps a verified value hidden while fresh identity is unavailable', async () => {
+    identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
+      .mockRejectedValueOnce(new Error('synthetic_identity_unavailable'));
+    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
+      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+    )));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
+    await sendMessage('synthetic read');
+    expect(await screen.findByRole('region', { name: '浏览器结果' }))
+      .toHaveTextContent('visible_to_owner_a');
+
+    fireEvent.focus(window);
+    expect(screen.queryByText(/visible_to_owner_a/)).not.toBeInTheDocument();
+    expect(await screen.findByText('正在核对浏览器任务身份')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/runtime/handle'))
+      .toHaveLength(1);
+  });
+
   it('uses the generated client with the fixed web request and one shared CSRF header', async () => {
     const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('  查询我的 OA 待办  ');
+    await sendMessage('  查询我的 OA 待办  ');
 
     await screen.findByText('办理完成');
     expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
     expect(runtimeMock.handle).toHaveBeenCalledWith({
       channel: 'web',
+      client_request_id: SESSION_A,
       client_capabilities: {},
       message: '查询我的 OA 待办',
       session_id: SESSION_A,
@@ -292,21 +453,24 @@ describe('ChatPage request boundary', () => {
     vi.stubGlobal('fetch', fetchMock);
     const firstMount = renderChat();
 
-    sendMessage('第一条请求');
+    await sendMessage('第一条请求');
     await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(1));
     await screen.findByText('办理完成');
-    sendMessage('第二条请求');
+    await sendMessage('第二条请求');
     await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(2));
     firstMount.unmount();
 
     renderChat();
-    sendMessage('新页面请求');
+    await sendMessage('新页面请求');
     await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(3));
 
     expect(runtimeMock.handle.mock.calls.map(([request]) => request.session_id)).toEqual([
       SESSION_A,
       SESSION_A,
       SESSION_A,
+    ]);
+    expect(runtimeMock.handle.mock.calls.map(([request]) => request.client_request_id)).toEqual([
+      SESSION_A, SESSION_A, SESSION_A,
     ]);
   });
 
@@ -320,7 +484,11 @@ describe('ChatPage request boundary', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('只发送一次');
+    await sendMessage('只发送一次');
+    expect(runtimeMock.handle).toHaveBeenCalledWith({
+      channel: 'web', session_id: SESSION_A, client_request_id: SESSION_A,
+      message: '只发送一次', client_capabilities: {},
+    });
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
     expect(screen.getByLabelText('办理请求')).toBeDisabled();
     const pendingButton = screen.getByText('发送').closest('button');
@@ -339,7 +507,6 @@ describe('ChatPage request boundary', () => {
 
 describe('ChatPage response projection', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
@@ -372,7 +539,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('状态测试');
+    await sendMessage('状态测试');
 
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getByText(label)).toBeInTheDocument();
@@ -387,7 +554,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('需要降级文本');
+    await sendMessage('需要降级文本');
 
     expect(await screen.findByText('安全降级文本')).toBeInTheDocument();
   });
@@ -413,16 +580,17 @@ describe('ChatPage response projection', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('查询单据状态');
+    await sendMessage('查询单据状态');
     expect(await screen.findByText('请先选择明确的账套后继续')).toBeInTheDocument();
     expect(screen.getByText(/完整重述为一条新请求/)).toBeInTheDocument();
     expect(screen.queryByText(/RAW_OPTION/)).not.toBeInTheDocument();
 
-    sendMessage('查询湖南账套的 U8-AP-0033 单据状态');
+    await sendMessage('查询湖南账套的 U8-AP-0033 单据状态');
     expect(await screen.findByText('已查询指定账套')).toBeInTheDocument();
     expect(runtimeMock.handle).toHaveBeenCalledTimes(2);
     expect(runtimeMock.handle.mock.calls[1]?.[0]).toEqual({
       channel: 'web',
+      client_request_id: SESSION_A,
       client_capabilities: {},
       message: '查询湖南账套的 U8-AP-0033 单据状态',
       session_id: SESSION_A,
@@ -473,7 +641,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('提交请假流程');
+    await sendMessage('提交请假流程');
 
     expect(await screen.findByText('请复核后提交操作')).toBeInTheDocument();
     expect(
@@ -506,7 +674,7 @@ describe('ChatPage response projection', () => {
     );
     const { container } = renderChat();
 
-    sendMessage('复核参数展示');
+    await sendMessage('复核参数展示');
 
     expect(await screen.findByText('private_note')).toBeInTheDocument();
     expect(screen.getByText('decision')).toBeInTheDocument();
@@ -539,7 +707,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('缺少响应引用');
+    await sendMessage('缺少响应引用');
 
     expect(await screen.findByText('请复核后提交操作')).toBeInTheDocument();
     expect(
@@ -566,7 +734,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询待办');
+    await sendMessage('查询待办');
 
     expect(await screen.findByText('待办查询完成')).toBeInTheDocument();
     expect(screen.queryByText('待办记录')).not.toBeInTheDocument();
@@ -589,7 +757,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询消息');
+    await sendMessage('查询消息');
 
     expect(await screen.findByText('消息查询完成')).toBeInTheDocument();
     expect(screen.queryByText('系统消息')).not.toBeInTheDocument();
@@ -605,7 +773,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('未知数据');
+    await sendMessage('未知数据');
 
     expect(await screen.findByText('通用完成文本')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: /待办记录|系统消息/ })).not.toBeInTheDocument();
@@ -625,7 +793,7 @@ describe('ChatPage response projection', () => {
       ),
     );
 
-    sendMessage('数量不一致');
+    await sendMessage('数量不一致');
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('当前仅展示已取回的 1 条记录。')).toBeInTheDocument();
     expect(screen.getByText('OA 标示共有 2 条。')).toBeInTheDocument();
@@ -644,7 +812,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询不完整待办');
+    await sendMessage('查询不完整待办');
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('采购申请审批')).toBeInTheDocument();
@@ -663,7 +831,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询不完整消息');
+    await sendMessage('查询不完整消息');
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('流程提醒')).toBeInTheDocument();
@@ -682,7 +850,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询生产方声明不完整的消息');
+    await sendMessage('查询生产方声明不完整的消息');
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('流程提醒')).toBeInTheDocument();
@@ -708,7 +876,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询零行不完整待办');
+    await sendMessage('查询零行不完整待办');
 
     expect(await screen.findByText('当前仅展示已取回的 0 条记录。')).toBeInTheDocument();
     expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
@@ -811,7 +979,7 @@ describe('ChatPage response projection', () => {
     );
     const { container } = renderChat();
 
-    sendMessage('安全展示消息正文');
+    await sendMessage('安全展示消息正文');
 
     expect(await screen.findByText('展开完整正文')).toBeInTheDocument();
     expect(screen.getByText(content)).toBeInTheDocument();
@@ -841,7 +1009,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('未知动作结果');
+    await sendMessage('未知动作结果');
 
     expect(
       await screen.findByText('当前响应无法安全显示，请稍后重试。'),
@@ -884,7 +1052,7 @@ describe('ChatPage response projection', () => {
       );
       renderChat();
 
-      sendMessage('动作结果文案');
+      await sendMessage('动作结果文案');
 
       expect(await screen.findByText(expected)).toBeInTheDocument();
       expect(new Set(actionOutcomeCases.map(([, message]) => message)).size).toBe(9);
@@ -913,7 +1081,7 @@ describe('ChatPage response projection', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('提交审批同意');
+    await sendMessage('提交审批同意');
     const confirmButton = await screen.findByRole('button', {
       name: '确认提交这项操作',
     });
@@ -1009,7 +1177,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询敏感汇总');
+    await sendMessage('查询敏感汇总');
 
     expect(await screen.findByText('无权限，操作被拒绝')).toBeInTheDocument();
     expect(screen.getByText('请求被拒绝')).toBeInTheDocument();
@@ -1039,7 +1207,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询 OA 待办');
+    await sendMessage('查询 OA 待办');
 
     expect(await screen.findByText(`目标系统：${label}`)).toBeInTheDocument();
     expect(screen.queryByText('RAW_BIND_REASON')).not.toBeInTheDocument();
@@ -1074,7 +1242,7 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('不兼容响应测试');
+    await sendMessage('不兼容响应测试');
 
     expect(
       await screen.findByText('当前响应无法安全显示，请稍后重试。'),
@@ -1094,12 +1262,30 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('非 JSON 响应测试');
+    await sendMessage('非 JSON 响应测试');
 
     expect(
       await screen.findByText('当前响应无法安全显示，请稍后重试。'),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_NON_JSON_RESPONSE');
+  });
+
+  it('keeps submission context out of mutation variables while pending and after completion', async () => {
+    let resolveResponse!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    const message = '私有执行上下文测试';
+    await sendMessage(message);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const variables = () => client.getMutationCache().getAll().map((item) => item.state.variables);
+    expect(useAIDockStore.getState().sessionId).toBe(SESSION_A);
+    expect(variables()).toEqual([message]);
+    await act(async () => { resolveResponse(response(envelope())); });
+    await screen.findByText('办理完成');
+    expect(variables()).toEqual([message]);
+    expect(JSON.stringify(variables())).not.toContain(SESSION_A);
   });
 
   it('retains only approved projections and does not expose other raw envelope fields', async () => {
@@ -1142,7 +1328,7 @@ describe('ChatPage response projection', () => {
     );
     const { client } = renderChat();
 
-    sendMessage('安全投影测试');
+    await sendMessage('安全投影测试');
     await screen.findByText('办理完成');
 
     const observableState = [
@@ -1167,7 +1353,6 @@ describe('ChatPage response projection', () => {
 
 describe('ChatPage HTTP failures', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
@@ -1226,7 +1411,7 @@ describe('ChatPage HTTP failures', () => {
     for (const key of seededKeys) expect(client.getQueryData(key)).toBeDefined();
     const previousQueries = client.getQueryCache().getAll();
 
-    sendMessage('触发重新认证');
+    await sendMessage('触发重新认证');
 
     expect(await screen.findByText('重新认证')).toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe('unauthenticated');
@@ -1265,7 +1450,7 @@ describe('ChatPage HTTP failures', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('CSRF 测试');
+    await sendMessage('CSRF 测试');
 
     expect(
       await screen.findByText('当前请求来源未通过安全校验，请联系管理员检查部署配置。'),
@@ -1290,7 +1475,7 @@ describe('ChatPage HTTP failures', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage(`HTTP ${status}`);
+    await sendMessage(`HTTP ${status}`);
 
     expect(await screen.findByText(expected)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
@@ -1303,7 +1488,7 @@ describe('ChatPage HTTP failures', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    sendMessage('网络失败测试');
+    await sendMessage('网络失败测试');
 
     expect(await screen.findByText('网络连接异常，请稍后再试。')).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_NETWORK_DETAIL');
@@ -1458,7 +1643,7 @@ describe('ChatPage assistant surfaces', () => {
     expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
 
-    sendMessage('查一下我的待办');
+    await sendMessage('查一下我的待办');
 
     // 加载中：有明确的进行中提示。
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
@@ -1547,7 +1732,6 @@ describe('/chat 欢迎语：展示级字号，不受正文闭集约束', () => {
 
 describe('confirmation terminal cards', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
@@ -1563,7 +1747,7 @@ describe('confirmation terminal cards', () => {
         .mockResolvedValueOnce(response(envelope({ data: { action_outcome: 'accepted', result: null } })));
       vi.stubGlobal('fetch', fetchMock);
       renderChat();
-      sendMessage('发起操作');
+      await sendMessage('发起操作');
       const oldCard = await screen.findByRole('region', { name: '操作提交前复核' });
       const cancel = within(oldCard).getByRole('button', { name: '取消这项操作' });
       const confirm = within(oldCard).getByRole('button', { name: '确认提交这项操作' });
@@ -1574,7 +1758,7 @@ describe('confirmation terminal cards', () => {
         channel: 'web', session_id: SESSION_A,
         action: { action_type: 'cancel', response_id: 'response-confirm-1' },
       });
-      sendMessage('发起新操作');
+      await sendMessage('发起新操作');
       await waitFor(() => expect(screen.getAllByRole('region', { name: '操作提交前复核' })).toHaveLength(2));
       const notice = status === 'cancelled' ? '已取消这项操作，本次未执行。'
         : '此确认已失效，请重新发起。若此前已提交，请先核对业务状态，避免重复操作。';
@@ -1593,7 +1777,7 @@ describe('confirmation terminal cards', () => {
   );
   it('does not claim cancellation when the network result is unknown', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(confirmEnvelope())).mockRejectedValueOnce(new TypeError('network failure')));
-    renderChat(); sendMessage('发起操作');
+    renderChat(); await sendMessage('发起操作');
     fireEvent.click(await screen.findByRole('button', { name: '取消这项操作' }));
     await screen.findByText('网络异常');
     expect(useAIDockStore.getState().confirmationResults).toEqual({});
@@ -1604,7 +1788,6 @@ describe('confirmation terminal cards', () => {
 
 describe('confirmation response routing', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     runtimeMock.action.mockClear(); runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
@@ -1615,7 +1798,7 @@ describe('confirmation response routing', () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((resolve) => { resolveRequest = resolve; })));
     renderChat();
     if (kind === 'action') fireEvent.click(screen.getByRole('button', { name: '取消这项操作' }));
-    else sendMessage('确认 response-confirm-1');
+    else await sendMessage('确认 response-confirm-1');
     await waitFor(() => expect(kind === 'action' ? runtimeMock.action : runtimeMock.handle).toHaveBeenCalledTimes(1));
     vi.mocked(crypto.randomUUID).mockReturnValue('22222222-2222-4222-8222-222222222222');
     fireEvent.click(screen.getByRole('button', { name: '新对话' }));
@@ -1628,7 +1811,7 @@ describe('confirmation response routing', () => {
   it.each(['确认 response-confirm-1', '确认'])(
     'uses only an explicit local reference to retire a text confirmation: %s', async (message) => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(envelope({ status: 'confirmation_invalidated', data: { action_outcome: 'confirmation_invalidated', result: null } }))));
-      renderChat(); sendMessage(message);
+      renderChat(); await sendMessage(message);
       await screen.findByText('确认已失效');
       expect(runtimeMock.action).not.toHaveBeenCalled();
       expect(runtimeMock.handle).toHaveBeenCalledTimes(1);

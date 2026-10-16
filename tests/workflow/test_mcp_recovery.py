@@ -228,7 +228,7 @@ def output_contract() -> OutputContract:
         schema={
             "type": "object",
             "required": ["synthetic"],
-            "properties": {"synthetic": {"const": True}},
+            "properties": {"synthetic": {"type": "boolean", "const": True}},
             "additionalProperties": False,
         },
         model_fields=("synthetic",),
@@ -237,6 +237,10 @@ def output_contract() -> OutputContract:
         approval_evidence="isolated-test-only",
         postcondition=lambda data: data == {"synthetic": True},
     )
+
+
+def read_output_contract() -> OutputContract:
+    return replace(output_contract(), persistence_fields=("synthetic",))
 
 
 class SyntheticSubmitPrecondition:
@@ -298,7 +302,10 @@ async def harness(
             gates = PostgreSQLHumanGate(store.sessions)
             workflows = PostgreSQLWorkflowStore(store)
             tasks = PostgreSQLTaskStore(store.sessions)
-            contracts = {name: output_contract() for name in INPUT_SCHEMAS}
+            contracts = {
+                name: output_contract() if name in WRITE_TOOLS else read_output_contract()
+                for name in INPUT_SCHEMAS
+            }
             contracts.update(output_contracts or {})
             specs, mappings = catalog(profile, contracts)
             for spec in specs:

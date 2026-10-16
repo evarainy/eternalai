@@ -99,7 +99,10 @@ def catalog(
     capabilities, bindings = [], []
     for tool, schema in INPUT_SCHEMAS.items():
         policy = contracts.get(tool)
-        business_output = dict(policy.schema) if policy else {"not": {}}
+        business_output = (
+            policy.public_result_schema() if tool not in WRITE_TOOLS
+            else dict(policy.schema)
+        ) if policy else {"not": {}}
         outer_id = f"business.{profile.service_config_id}.{tool}"
         for internal in [False, True] if tool in WRITE_TOOLS else [False]:
             capability_id = (

@@ -1,0 +1,287 @@
+{
+  "schema_version": "decision_license_sources.v1",
+  "lock_sha256": "dc05fe0b9f02bdd4b8208a3f30d485a47243b4ffe58d2cc2608f06803a09dba9",
+  "scope": "index_metadata_not_wheel_notice_or_legal_approval",
+  "packages": [
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5",
+      "source_url": "https://pypi.org/pypi/annotated-doc/0.0.5/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "source_url": "https://pypi.org/pypi/anyio/4.15.1/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "source_url": "https://pypi.org/pypi/certifi/2026.7.22/json",
+      "declared_license": "MPL-2.0",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "click",
+      "version": "8.5.0",
+      "source_url": "https://pypi.org/pypi/click/8.5.0/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "filelock",
+      "version": "4.0.12",
+      "source_url": "https://pypi.org/pypi/filelock/4.0.12/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "fsspec",
+      "version": "2026.9.0",
+      "source_url": "https://pypi.org/pypi/fsspec/2026.9.0/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "source_url": "https://pypi.org/pypi/h11/0.16.0/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "hf-xet",
+      "version": "1.7.0",
+      "source_url": "https://pypi.org/pypi/hf-xet/1.7.0/json",
+      "declared_license": "Apache-2.0",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "source_url": "https://pypi.org/pypi/httpcore/1.0.9/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "source_url": "https://pypi.org/pypi/httpx/0.28.1/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "huggingface-hub",
+      "version": "1.33.0",
+      "source_url": "https://pypi.org/pypi/huggingface-hub/1.33.0/json",
+      "declared_license": "Apache-2.0",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "source_url": "https://pypi.org/pypi/idna/3.20/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "jinja2",
+      "version": "3.1.6",
+      "source_url": "https://pypi.org/pypi/jinja2/3.1.6/json",
+      "declared_license": null,
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "laya",
+      "version": "0.4.1",
+      "source_url": "https://pypi.org/pypi/laya/0.4.1/json",
+      "declared_license": "Apache-2.0",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "source_url": "https://pypi.org/pypi/markdown-it-py/4.2.0/json",
+      "declared_license": null,
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "markupsafe",
+      "version": "3.0.4",
+      "source_url": "https://pypi.org/pypi/markupsafe/3.0.4/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "source_url": "https://pypi.org/pypi/mdurl/0.1.2/json",
+      "declared_license": "",
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "mpmath",
+      "version": "1.3.0",
+      "source_url": "https://pypi.org/pypi/mpmath/1.3.0/json",
+      "declared_license": "BSD",
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "networkx",
+      "version": "3.7",
+      "source_url": "https://pypi.org/pypi/networkx/3.7/json",
+      "declared_license": "BSD-3-Clause",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.3",
+      "source_url": "https://pypi.org/pypi/numpy/2.5.3/json",
+      "declared_license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "license_file_count": 17,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "source_url": "https://pypi.org/pypi/packaging/26.3/json",
+      "declared_license": "Apache-2.0 OR BSD-2-Clause",
+      "license_file_count": 3,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "source_url": "https://pypi.org/pypi/pygments/2.21.0/json",
+      "declared_license": "BSD-2-Clause",
+      "license_file_count": 2,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3",
+      "source_url": "https://pypi.org/pypi/pyyaml/6.0.3/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "regex",
+      "version": "2026.9.29",
+      "source_url": "https://pypi.org/pypi/regex/2026.9.29/json",
+      "declared_license": "Apache-2.0 AND CNRI-Python",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "source_url": "https://pypi.org/pypi/rich/15.0.0/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "safetensors",
+      "version": "0.8.0",
+      "source_url": "https://pypi.org/pypi/safetensors/0.8.0/json",
+      "declared_license": null,
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0",
+      "source_url": "https://pypi.org/pypi/setuptools/84.0.0/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "shellingham",
+      "version": "1.5.4",
+      "source_url": "https://pypi.org/pypi/shellingham/1.5.4/json",
+      "declared_license": "ISC License",
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "sympy",
+      "version": "1.14.0",
+      "source_url": "https://pypi.org/pypi/sympy/1.14.0/json",
+      "declared_license": "BSD",
+      "license_file_count": 2,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "tokenizers",
+      "version": "0.23.2",
+      "source_url": "https://pypi.org/pypi/tokenizers/0.23.2/json",
+      "declared_license": null,
+      "license_file_count": 0,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "torch",
+      "version": "2.14.1+cpu",
+      "source_url": "https://pypi.org/pypi/torch/2.14.1/json",
+      "declared_license": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+      "license_file_count": 95,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1",
+      "source_url": "https://pypi.org/pypi/tqdm/4.70.1/json",
+      "declared_license": "MPL-2.0 AND MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "transformers",
+      "version": "5.19.0",
+      "source_url": "https://pypi.org/pypi/transformers/5.19.0/json",
+      "declared_license": "Apache 2.0 License",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "typer",
+      "version": "0.27.3",
+      "source_url": "https://pypi.org/pypi/typer/0.27.3/json",
+      "declared_license": "MIT",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "source_url": "https://pypi.org/pypi/typing-extensions/4.16.0/json",
+      "declared_license": "PSF-2.0",
+      "license_file_count": 1,
+      "status": "index_metadata_only"
+    }
+  ]
+}

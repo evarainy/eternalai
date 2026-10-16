@@ -1,0 +1,37 @@
+x-browser-image: &browser-image
+  image: eternalai-browser-v42:local
+  build:
+    context: ../../..
+    dockerfile: infra/docker/browser-runtime/Dockerfile
+  init: true
+  user: pwuser
+  stdin_open: true
+  tty: true
+  read_only: true
+  tmpfs:
+    - /tmp:rw,size=512m,mode=1777
+  restart: "no"
+  networks:
+    - task-postgres
+
+services:
+  browser-synthetic-api:
+    <<: *browser-image
+    profiles: [operator-browser-runtime]
+    entrypoint: ["python", "-m", "scripts.run_browser_synthetic_api"]
+    command: ["--enable"]
+    expose: ["8000"]
+
+  browser-worker:
+    <<: *browser-image
+    profiles: [operator-browser-runtime]
+    shm_size: 2gb
+    command:
+      - --enable
+      - --factory
+      - app.infra.browser.synthetic_operator:worker_components
+
+networks:
+  task-postgres:
+    external: true
+    name: eternalai_browser_v42_test_default

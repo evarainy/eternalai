@@ -1,0 +1,82 @@
+{
+  "schema_version": "browser_publication.v1",
+  "version": "synthetic_v1",
+  "skill": {
+    "schema_version": "browser_skill.v1",
+    "skill_id": "open_todo",
+    "version": "synthetic_v1",
+    "site_id": "ecology9_synthetic_site",
+    "site_digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad",
+    "verifier_id": "ecology9_synthetic_verifier",
+    "verifier_digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9",
+    "parameters": [],
+    "steps": [
+      {
+        "step_id": "step_1",
+        "operation": "click",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_confirmed_todo"
+        },
+        "value_ref": null,
+        "url_ref": null,
+        "effect": "may_write",
+        "option_ref": null
+      },
+      {
+        "step_id": "step_2",
+        "operation": "read",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_todo_detail"
+        },
+        "value_ref": null,
+        "url_ref": null,
+        "effect": "read_only",
+        "option_ref": null
+      }
+    ],
+    "digest": "41b0bbf9166e578bbbe78a7e128dfad6181249b3461f3f849715861faff6f2d3"
+  },
+  "site": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "site",
+    "dependency_id": "ecology9_synthetic_site",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_site_v1",
+    "digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad"
+  },
+  "verifier": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "verifier",
+    "dependency_id": "ecology9_synthetic_verifier",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_business_key_verifier_v1",
+    "digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9"
+  },
+  "descriptor": {
+    "schema_version": "browser_descriptor.v1",
+    "capability_id": "synthetic_open_todo",
+    "version": "synthetic_v1",
+    "skill_id": "open_todo",
+    "skill_version": "synthetic_v1",
+    "skill_digest": "41b0bbf9166e578bbbe78a7e128dfad6181249b3461f3f849715861faff6f2d3",
+    "target_system": "oa",
+    "visibility": "public",
+    "http_api_preferred": true,
+    "execution_state": "synthetic_contract_only",
+    "deferred_capabilities": [
+      "real_site_adapter",
+      "real_verifier",
+      "capability_integration",
+      "registered_cloud_source"
+    ],
+    "digest": "de17743acfd816d0593c9de5744e554956c26326d56157ec03eab82c54af199f"
+  },
+  "dependency_digest": "328992010ed9740bff2501f08b647e6191587a36a665c74a62d170f545b6983a",
+  "digest": "9e06c37609d697e7af88174a54795ad03b7ec10cae253aec4672b09a838dfc50"
+}

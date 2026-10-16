@@ -1,0 +1,86 @@
+{
+  "schema_version": "browser_publication.v1",
+  "version": "synthetic_v1",
+  "skill": {
+    "schema_version": "browser_skill.v1",
+    "skill_id": "search_contact",
+    "version": "synthetic_v1",
+    "site_id": "ecology9_synthetic_site",
+    "site_digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad",
+    "verifier_id": "ecology9_synthetic_verifier",
+    "verifier_digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9",
+    "parameters": [
+      "contact_query"
+    ],
+    "steps": [
+      {
+        "step_id": "step_1",
+        "operation": "fill",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_contact_query"
+        },
+        "value_ref": {
+          "name": "contact_query"
+        },
+        "url_ref": null,
+        "effect": "may_write",
+        "option_ref": null
+      },
+      {
+        "step_id": "step_2",
+        "operation": "read",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_contact_results"
+        },
+        "value_ref": null,
+        "url_ref": null,
+        "effect": "read_only",
+        "option_ref": null
+      }
+    ],
+    "digest": "b8186bdc34ec32104ec83e2706d4844dd6cf5bdf8decdd66bce668f490b55f20"
+  },
+  "site": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "site",
+    "dependency_id": "ecology9_synthetic_site",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_site_v1",
+    "digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad"
+  },
+  "verifier": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "verifier",
+    "dependency_id": "ecology9_synthetic_verifier",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_business_key_verifier_v1",
+    "digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9"
+  },
+  "descriptor": {
+    "schema_version": "browser_descriptor.v1",
+    "capability_id": "synthetic_search_contact",
+    "version": "synthetic_v1",
+    "skill_id": "search_contact",
+    "skill_version": "synthetic_v1",
+    "skill_digest": "b8186bdc34ec32104ec83e2706d4844dd6cf5bdf8decdd66bce668f490b55f20",
+    "target_system": "oa",
+    "visibility": "public",
+    "http_api_preferred": true,
+    "execution_state": "synthetic_contract_only",
+    "deferred_capabilities": [
+      "real_site_adapter",
+      "real_verifier",
+      "capability_integration",
+      "registered_cloud_source"
+    ],
+    "digest": "33e17f493f6bdf99c65fde33c89e04f738f8c8facab35c426eb1e02965eeaa87"
+  },
+  "dependency_digest": "d54ab902619b108b34eabf3f857193517853b0ff4f27593e0e0a370ca482c72c",
+  "digest": "2e18c5d58f9c0717bc33a2d3879eea32d5c537c77f7e1a30f04859b48b2921aa"
+}

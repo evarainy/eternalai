@@ -377,7 +377,7 @@ def _exercise_tenant_mutation(db, operation, local_exists):
                     expires_at=datetime.now(UTC) + timedelta(hours=1),
                 ),
                 tenant_id=tenant,
-            )
+             expected_write=run(store.claim_write(run(store.snapshot(TARGET_AI_USER_ID,'oa',tenant_id=tenant)))))
         )
     service = build_admin_registry_service(
         capability_registry=cast(CapabilityRegistryPort, object()),
@@ -498,7 +498,7 @@ def test_binding_audit_reads_local_tenant_only(dispatch_db, tenant, roles, expec
                 expires_at=datetime.now(UTC) + timedelta(hours=1),
             ),
             tenant_id="synthetic-TA",
-        )
+         expected_write=run(store.claim_write(run(store.snapshot(TARGET_AI_USER_ID,'oa',tenant_id='synthetic-TA')))))
     )
     service = build_admin_registry_service(
         capability_registry=cast(CapabilityRegistryPort, object()),

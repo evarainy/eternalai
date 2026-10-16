@@ -33,6 +33,7 @@ export type ActionResponseEnvelopeStatus = typeof ActionResponseEnvelopeStatus[k
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ActionResponseEnvelopeStatus = {
+  running: 'running',
   completed: 'completed',
   blocked: 'blocked',
   waiting_user: 'waiting_user',
@@ -117,6 +118,19 @@ export interface ConfirmUserAction {
   response_id: string;
 }
 
+/**
+ * A reference only; authenticated ownership is rechecked on every reply.
+ */
+export interface DFormCollectionReference {
+  /** @pattern ^[A-Za-z0-9_-]{1,96}$ */
+  task_id: string;
+  /**
+   * @minimum 1
+   * @maximum 32
+   */
+  version: number;
+}
+
 export interface HTTPValidationError {
   detail?: ValidationError[];
 }
@@ -134,9 +148,15 @@ export const HandleRequestChannel = {
 
 export type HandleRequestClientCapabilities = { [key: string]: unknown };
 
+export type HandleRequestClientRequestId = string | null;
+
+export type HandleRequestDFormCollection = DFormCollectionReference | null;
+
 export interface HandleRequest {
   channel: HandleRequestChannel;
   client_capabilities?: HandleRequestClientCapabilities;
+  client_request_id?: HandleRequestClientRequestId;
+  d_form_collection?: HandleRequestDFormCollection;
   message: string;
   session_id: string;
 }
@@ -168,6 +188,7 @@ export type ResponseEnvelopeStatus = typeof ResponseEnvelopeStatus[keyof typeof 
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ResponseEnvelopeStatus = {
+  running: 'running',
   completed: 'completed',
   blocked: 'blocked',
   waiting_user: 'waiting_user',

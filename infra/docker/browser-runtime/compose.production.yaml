@@ -1,0 +1,125 @@
+# Formal API and execution containers share only existing external authorities.
+# No public port, container build, dependency download or second execution chain.
+name: eternalai-browser-runtime
+
+x-runtime: &runtime
+  image: ${BROWSER_RUNTIME_IMAGE:?Set an imported, reviewed browser image reference}
+  pull_policy: never
+  init: true
+  user: pwuser
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+    - seccomp:${BROWSER_SECCOMP_PROFILE:?Set the reviewed local Chromium seccomp profile}
+  stop_grace_period: ${BROWSER_STOP_GRACE_PERIOD:-120s}
+  restart: "no"
+  networks:
+    - operator-intranet
+  dns:
+    - ${BROWSER_INTERNAL_DNS:?Set the approved internal DNS resolver}
+  environment:
+    PYTHONPATH: /opt/eternalai:/run/browser-operator
+    ENV: production
+    PHASE0_MOCK_MODE: "false"
+    OA_READ_ADAPTER_MODE: live
+    OA_SOURCE_PROFILE_ID: ${OA_SOURCE_PROFILE_ID:?Set the approved profile ID}
+    OA_TENANT_ID: ${OA_TENANT_ID:?Set the approved tenant ID}
+    OA_BASE_URL: ${OA_BASE_URL:?Set the internal OA origin}
+    OA_CREDENTIAL_TTL_S: ${OA_CREDENTIAL_TTL_S:?Set the credential TTL}
+    OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR: /run/browser-operator/oa/pending-workflows
+    OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR: /run/browser-operator/oa/system-messages
+    SESSION_COOKIE_TTL_S: ${SESSION_COOKIE_TTL_S:?Set the session TTL}
+    SESSION_COOKIE_SECURE: "true"
+    CSRF_ALLOWED_ORIGINS: ${CSRF_ALLOWED_ORIGINS:?Set the approved HTTPS origins}
+    LLM_BASE_URL: ${LLM_BASE_URL:?Set the internal vLLM origin}
+    LLM_MODEL: ${LLM_MODEL:?Set the approved local main model}
+    BROWSER_ENABLED: "true"
+    BROWSER_TRANSPORT: playwright
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+  secrets:
+    - database-url
+    - redis-url
+    - credential-encryption-key-b64
+    - identity-hmac-key-b64
+    - session-signing-key-b64
+    - session-binding-key-b64
+
+x-operator-bundle: &operator-bundle
+  type: bind
+  source: ${BROWSER_OPERATOR_BUNDLE_ROOT:?Set the reviewed operator bundle directory}
+  target: /run/browser-operator
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-browser-artifacts: &browser-artifacts
+  type: bind
+  source: ${BROWSER_ARTIFACT_ROOT:?Set the authorized shared persistent spool directory}
+  target: /var/lib/eternalai/browser-artifacts
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  browser-api:
+    <<: *runtime
+    pids_limit: ${BROWSER_API_PIDS_LIMIT:?Set a measured API process limit}
+    mem_limit: ${BROWSER_API_MEMORY_LIMIT:?Set a measured API memory limit}
+    cpus: ${BROWSER_API_CPU_LIMIT:?Set a measured API CPU limit}
+    tmpfs:
+      - /tmp:rw,size=${BROWSER_API_TMPFS_SIZE:?Set a measured API temporary-file limit},mode=1777
+    expose: ["8000"]
+    command:
+      - --enable
+      - --factory
+      - ${BROWSER_OPERATOR_FACTORY:?Set the reviewed local module:function factory}
+      - --role
+      - api
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    volumes:
+      - *operator-bundle
+      - *browser-artifacts
+
+  browser-worker:
+    <<: *runtime
+    pids_limit: ${BROWSER_PIDS_LIMIT:?Set a measured worker process limit}
+    mem_limit: ${BROWSER_MEMORY_LIMIT:?Set a measured worker memory limit}
+    cpus: ${BROWSER_CPU_LIMIT:?Set a measured worker CPU limit}
+    shm_size: ${BROWSER_SHM_SIZE:?Set a measured Chromium shared-memory size}
+    tmpfs:
+      - /tmp:rw,size=${BROWSER_TMPFS_SIZE:?Set a measured worker temporary-file limit},mode=1777
+    command:
+      - --enable
+      - --factory
+      - ${BROWSER_OPERATOR_FACTORY:?Set the reviewed local module:function factory}
+      - --role
+      - worker
+    volumes:
+      - *operator-bundle
+      - <<: *browser-artifacts
+        read_only: false
+
+networks:
+  operator-intranet:
+    external: true
+    name: ${BROWSER_INTRANET_NETWORK:?Set the operator-controlled internal network}
+
+secrets:
+  database-url:
+    file: ${BROWSER_DATABASE_URL_SECRET_FILE:?Set the operator-owned database URL secret file}
+  redis-url:
+    file: ${BROWSER_REDIS_URL_SECRET_FILE:?Set the operator-owned Redis URL secret file}
+  credential-encryption-key-b64:
+    file: ${BROWSER_CREDENTIAL_ENCRYPTION_SECRET_FILE:?Set the operator-owned encryption key file}
+  identity-hmac-key-b64:
+    file: ${BROWSER_IDENTITY_HMAC_SECRET_FILE:?Set the operator-owned identity key file}
+  session-signing-key-b64:
+    file: ${BROWSER_SESSION_SIGNING_SECRET_FILE:?Set the operator-owned signing key file}
+  session-binding-key-b64:
+    file: ${BROWSER_SESSION_BINDING_SECRET_FILE:?Set the operator-owned binding key file}
