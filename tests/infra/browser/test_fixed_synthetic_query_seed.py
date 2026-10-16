@@ -125,6 +125,7 @@ def _query_world() -> tuple[World, TargetRef, TargetRef]:
     })
     decoy = Node(selector=selector)
     w.region = Node(selector=source.region.region_selector, children=[decoy, w.row])
+    w.observer._regions = {source.region.region_id: source.region}
     decoy.parent = w.region
     w.row.parent = w.region
     w.controls = {decoy_ref.target_id: decoy, real_ref.target_id: w.row}

@@ -62,7 +62,7 @@ def test_exploration_route_is_bounded_to_a_validated_read_catalog() -> None:
     )
     values = source.site_plan().model_dump(mode="python")
     values.update(
-        primitive_rules=[rule.model_dump(mode="python") for rule in source.site.steps],
+        primitive_rules=tuple(rule.model_dump(mode="python") for rule in source.site.steps),
         exploration=exploration.model_dump(mode="python"),
     )
     plan = RegisteredSitePlan.model_validate(values)

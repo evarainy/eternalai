@@ -24,6 +24,9 @@ COPY app/ ./app/
 COPY services/decision/__init__.py services/decision/manifest.py ./services/decision/
 COPY scripts/run_browser_registered_server.py ./scripts/run_browser_registered_server.py
 COPY scripts/run_browser_production.py ./scripts/run_browser_production.py
+# D form configuration imports the bounded smoke package at module load.
+COPY scripts/sanitize_oa_contract_pack.py ./scripts/sanitize_oa_contract_pack.py
+COPY scripts/smoke/ ./scripts/smoke/
 
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       org.eternalai.browser.uv-lock-sha256="${UV_LOCK_SHA256}"

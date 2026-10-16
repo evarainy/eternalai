@@ -32,6 +32,8 @@ app/execution_fabric/mock_adapters/u8/*
 app/infra/*
 !app/infra/adapters/
 app/infra/adapters/*
+!app/infra/adapters/browser/
+app/infra/adapters/browser/*
 !app/infra/adapters/business_mcp/
 app/infra/adapters/business_mcp/*
 !app/infra/adapters/oa/
@@ -100,6 +102,8 @@ app/runtime/*
 app/workflow/*
 !scripts/
 scripts/*
+!scripts/smoke/
+scripts/smoke/*
 !services/
 services/*
 !services/decision/
@@ -110,6 +114,7 @@ services/decision/*
 !app/admin/d_form.py
 !app/admin/evidence.py
 !app/admin/registry.py
+!app/application.py
 !app/api/__init__.py
 !app/api/v1/__init__.py
 !app/api/v1/admin.py
@@ -164,6 +169,10 @@ services/decision/*
 !app/infra/adapters/business_mcp/__init__.py
 !app/infra/adapters/business_mcp/adapter.py
 !app/infra/adapters/business_mcp/catalog.py
+!app/infra/adapters/browser/__init__.py
+!app/infra/adapters/browser/adapter.py
+!app/infra/adapters/business_mcp/fixed_query_contracts.py
+!app/infra/adapters/business_mcp/fixed_read_profile.py
 !app/infra/adapters/business_mcp/reads.py
 !app/infra/adapters/business_mcp/writes.py
 !app/infra/adapters/oa/adapter.py
@@ -183,6 +192,14 @@ services/decision/*
 !app/infra/browser/chat_inputs.py
 !app/infra/browser/composition.py
 !app/infra/browser/decision_adapters.py
+!app/infra/browser/d_form_authority.py
+!app/infra/browser/d_form_bootstrap.py
+!app/infra/browser/d_form_cli.py
+!app/infra/browser/d_form_configuration.py
+!app/infra/browser/d_form_execution.py
+!app/infra/browser/d_form_installation.py
+!app/infra/browser/d_form_manifest.py
+!app/infra/browser/d_form_owned_browser.py
 !app/infra/browser/deployment_manifest.py
 !app/infra/browser/dom_snapshot.js
 !app/infra/browser/fixed_synthetic_seed.py
@@ -193,6 +210,7 @@ services/decision/*
 !app/infra/browser/local_resource_lifecycle.py
 !app/infra/browser/managed_chromium.js
 !app/infra/browser/multi_installation.py
+!app/infra/browser/oa_browser_login.py
 !app/infra/browser/playwright_actions.py
 !app/infra/browser/playwright_dom_rules.py
 !app/infra/browser/playwright_observer.py
@@ -215,6 +233,7 @@ services/decision/*
 !app/infra/identity/mock_identity_mapping.py
 !app/infra/identity/postgresql.py
 !app/infra/identity/unconfigured.py
+!app/infra/fixed_txt.py
 !app/infra/job_queue/__init__.py
 !app/infra/job_queue/in_memory.py
 !app/infra/llm/json_structured_output.py
@@ -239,6 +258,7 @@ services/decision/*
 !app/infra/organization_directory/validation.py
 !app/infra/persistence/browser/__init__.py
 !app/infra/persistence/browser/authorization.py
+!app/infra/persistence/browser/chat_handoff.py
 !app/infra/persistence/browser/credential_vault.py
 !app/infra/persistence/browser/crypto.py
 !app/infra/persistence/browser/file_artifacts.py
@@ -274,6 +294,7 @@ services/decision/*
 !app/mcp/__init__.py
 !app/mcp/connections.py
 !app/mcp/contracts.py
+!app/mcp/diagnostics.py
 !app/mcp/models.py
 !app/mcp/oauth.py
 !app/mcp/operations.py
@@ -285,6 +306,8 @@ services/decision/*
 !app/ports/adapter.py
 !app/ports/agent_orchestration.py
 !app/ports/auth.py
+!app/ports/browser_fill_stop.py
+!app/ports/browser_gateway.py
 !app/ports/browser_chat.py
 !app/ports/browser_profile_store.py
 !app/ports/browser_publication_store.py
@@ -298,6 +321,7 @@ services/decision/*
 !app/ports/credential_vault.py
 !app/ports/error_codes.py
 !app/ports/evaluation.py
+!app/ports/fixed_document.py
 !app/ports/human_gate.py
 !app/ports/identity_mapping.py
 !app/ports/job_queue.py
@@ -325,6 +349,8 @@ services/decision/*
 !app/ports/workflow_engine.py
 !app/ports/workflow_store.py
 !app/runtime/intent_router.py
+!app/runtime/d_form_collection.py
+!app/runtime/document_qa.py
 !app/runtime/models.py
 !app/runtime/response_projection.py
 !app/runtime/runtime.py
@@ -337,6 +363,17 @@ services/decision/*
 !pyproject.toml
 !scripts/run_browser_registered_server.py
 !scripts/run_browser_production.py
+!scripts/sanitize_oa_contract_pack.py
+!scripts/smoke/__init__.py
+!scripts/smoke/capabilities.py
+!scripts/smoke/environment.py
+!scripts/smoke/errors.py
+!scripts/smoke/freshness.py
+!scripts/smoke/full_chain_contract.py
+!scripts/smoke/har.py
+!scripts/smoke/live.py
+!scripts/smoke/runner.py
+!scripts/smoke/trace_contract.py
 !services/decision/__init__.py
 !services/decision/manifest.py
 !uv.lock

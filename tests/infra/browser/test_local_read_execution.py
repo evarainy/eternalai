@@ -410,6 +410,8 @@ def _open_with_simulated_transport(
 
     async def renew(claim, **kwargs):
         await boundary("lease_renew")
+        await check_auth(claim.auth)
+        await check_binding(claim.binding)
         return replace(claim, lease_revision=claim.lease_revision + 1)
 
     async def launch(claim, session, given_source, *, guard, subject_guard, storage_state):

@@ -228,7 +228,7 @@ def output_contract() -> OutputContract:
         schema={
             "type": "object",
             "required": ["synthetic"],
-            "properties": {"synthetic": {"const": True}},
+            "properties": {"synthetic": {"type": "boolean", "const": True}},
             "additionalProperties": False,
         },
         model_fields=("synthetic",),

@@ -409,10 +409,12 @@ def test_once_real_entry_preserves_single_attempt_guard_and_receipt(
     monkeypatch.setattr(once, "open_synthetic_operator", operator)
     monkeypatch.setattr(once, "execute_once", execute)
     assert asyncio.run(once._run("0.01", private_stdin=private_stdin)) is True
-    construct_budget.assert_called_once_with("0.01")
+    construct_budget.assert_called_once_with(
+        "0.01", identity_attempt_id=None, full_run=False,
+    )
     receipt.assert_called_once_with("trial.run.json")
     assert opened == [(bundle, {"jev_key": key, "enabled": True, "input_mode": "structured",
-                                "attempt_guard": budget.reserve})]
+                                "attempt_guard": budget.reserve, "full_run": False})]
     result = capsys.readouterr()
     assert result.err == ""
     assert json.loads(result.out) == {"jev_request_count": 1, "max_jev_requests": 1,
