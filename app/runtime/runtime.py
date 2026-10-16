@@ -255,7 +255,8 @@ class RuntimeImpl:
         d_form_collection_store: DFormCollectionStorePort | None = None,
         d_form_category_source: Callable[
             [SessionMemoryKey, CapabilitySpec], Awaitable[CategoryEvidence | None]
-        ] | None = None,
+        ]
+        | None = None,
         document_qa: DocumentQAService | None = None,
     ) -> None:
         self._task_store = task_store
@@ -300,15 +301,23 @@ class RuntimeImpl:
         ] = {}
 
     async def handle_user_message(
-        self, channel: Literal["web", "cli", "api", "mock"], principal: Principal,
-        session_id: str, message: str, client_capabilities: dict[str, Any],
+        self,
+        channel: Literal["web", "cli", "api", "mock"],
+        principal: Principal,
+        session_id: str,
+        message: str,
+        client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
         scope, handoff = browser_request_scope.get(), self._browser_handoff
         document_request = _DocumentRequest()
         if scope is None or handoff is None:
             try:
                 return await self._handle_user_message(
-                    channel, principal, session_id, message, client_capabilities,
+                    channel,
+                    principal,
+                    session_id,
+                    message,
+                    client_capabilities,
                     document_request=document_request,
                 )
             except asyncio.CancelledError:
@@ -318,7 +327,8 @@ class RuntimeImpl:
             except Exception:
                 if document_request.context is not None:
                     return await self._fail_document_request(
-                        document_request, "document_internal_error",
+                        document_request,
+                        "document_internal_error",
                     )
                 raise
         if not scope.matches(principal, session_id):
@@ -331,7 +341,8 @@ class RuntimeImpl:
                 document_request.deadline = request_budget.when()
                 async with handoff.try_request_route(scope) as acquired:
                     replay = await self._lookup_browser_request(
-                        scope, allow_collection_resume=acquired,
+                        scope,
+                        allow_collection_resume=acquired,
                     )
                     if replay is not None:
                         settled = True
@@ -342,7 +353,11 @@ class RuntimeImpl:
                         settled = True
                         return self._browser_unconfirmed_response(scope, timeout=False)
                     result = await self._handle_user_message(
-                        channel, principal, session_id, message, client_capabilities,
+                        channel,
+                        principal,
+                        session_id,
+                        message,
+                        client_capabilities,
                         document_request=document_request,
                     )
             settled = True
@@ -369,16 +384,25 @@ class RuntimeImpl:
             if document_request.context is not None:
                 settled = True
                 return await self._fail_document_request(
-                    document_request, "document_internal_error",
+                    document_request,
+                    "document_internal_error",
                 )
             if error.code == "request_key_conflict":
                 message = "原请求标识与本次内容不一致，请使用原内容检查。"
                 return ResponseEnvelope(
-                    response_id=str(uuid4()), task_id=scope.attempt.task_id or str(uuid4()),
-                    session_id=session_id, status="failed", message=message, fallback_text=message,
+                    response_id=str(uuid4()),
+                    task_id=scope.attempt.task_id or str(uuid4()),
+                    session_id=session_id,
+                    status="failed",
+                    message=message,
+                    fallback_text=message,
                     ui=UIComponent(component_type="none", action="none"),
-                    data={"error_code": "adapter_payload_invalid",
-                          **BrowserGatewayDiagnostic("admission", "request_key_conflict").attributes()},
+                    data={
+                        "error_code": "adapter_payload_invalid",
+                        **BrowserGatewayDiagnostic(
+                            "admission", "request_key_conflict"
+                        ).attributes(),
+                    },
                     trace_id=scope.attempt.trace_id or str(uuid4()),
                 )
             return self._browser_unconfirmed_response(scope, timeout=False)
@@ -386,14 +410,18 @@ class RuntimeImpl:
             if document_request.context is not None:
                 settled = True
                 return await self._fail_document_request(
-                    document_request, "document_internal_error",
+                    document_request,
+                    "document_internal_error",
                 )
             try:
                 exception_type = type(error).__name__
                 logging.getLogger(__name__).warning(
                     "browser_fallback_diagnostic stage=ordinary_admission exception_type=%s",
-                    exception_type if exception_type.isascii() and exception_type.isidentifier()
-                    and len(exception_type) <= 64 else "UnknownException",
+                    exception_type
+                    if exception_type.isascii()
+                    and exception_type.isidentifier()
+                    and len(exception_type) <= 64
+                    else "UnknownException",
                 )
             except Exception:
                 pass  # Diagnostic failure must preserve the original failure path.
@@ -406,26 +434,35 @@ class RuntimeImpl:
                 await self._close_browser_intent(scope)
 
     def install_browser_handoff(
-        self, handoff: BrowserIntentHandoffPort, submission: BrowserOrdinarySubmissionPort,
-        *, configured_d_form_model: str | None = None,
+        self,
+        handoff: BrowserIntentHandoffPort,
+        submission: BrowserOrdinarySubmissionPort,
+        *,
+        configured_d_form_model: str | None = None,
     ) -> None:
         if self._browser_handoff is not None:
             raise ValueError("browser_handoff_already_installed")
-        self._intent_router.install_browser_checks(
-            configured_d_form_model=configured_d_form_model
-        )
+        self._intent_router.install_browser_checks(configured_d_form_model=configured_d_form_model)
         self._browser_handoff = handoff
         self._browser_submission = submission
 
     async def _lookup_browser_request(
-        self, scope: BrowserRequestScope, *, allow_collection_resume: bool = False,
+        self,
+        scope: BrowserRequestScope,
+        *,
+        allow_collection_resume: bool = False,
     ) -> ResponseEnvelope | None:
-        if (self._browser_submission is None or scope.attempt.message is None
-                or scope.attempt.channel is None):
+        if (
+            self._browser_submission is None
+            or scope.attempt.message is None
+            or scope.attempt.channel is None
+        ):
             raise ValueError("browser_request_lookup_invalid")
         response = await self._browser_submission.lookup_ordinary_request(
-            principal=scope.verified.principal, bound_session=scope.bound_session,
-            client_request_id=scope.client_request_id, message=scope.attempt.message,
+            principal=scope.verified.principal,
+            bound_session=scope.bound_session,
+            client_request_id=scope.client_request_id,
+            message=scope.attempt.message,
             channel=scope.attempt.channel,
         )
         if response is not None and response.status == "running":
@@ -433,8 +470,10 @@ class RuntimeImpl:
         if response is None and self._d_form_collection_store is not None:
             principal = scope.verified.principal
             snapshot = await self._d_form_collection_store.find_d_form_collection_request(
-                tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id,
-                session_id=scope.bound_session, request_id=scope.client_request_id,
+                tenant_id=principal.org_ctx.tenant_id,
+                ai_user_id=principal.ai_user_id,
+                session_id=scope.bound_session,
+                request_id=scope.client_request_id,
                 request_digest=d_form_request_digest(scope.attempt.message, scope.attempt.channel),
             )
             if snapshot is not None:
@@ -442,11 +481,16 @@ class RuntimeImpl:
                 reference = d_form_collection_reference.get()
                 # Only the winning reply can recover its immutable handoff attempt,
                 # under the same distributed request lock and the same request key.
-                if (allow_collection_resume and record.consumed and snapshot.handoff is None
-                        and snapshot.task_status == "running" and reference is not None
-                        and reference.task_id == record.task_id
-                        and reference.version == record.version - 1
-                        and record.request_id == scope.client_request_id):
+                if (
+                    allow_collection_resume
+                    and record.consumed
+                    and snapshot.handoff is None
+                    and snapshot.task_status == "running"
+                    and reference is not None
+                    and reference.task_id == record.task_id
+                    and reference.version == record.version - 1
+                    and record.request_id == scope.client_request_id
+                ):
                     return None
                 response = self._d_form_collection_response(snapshot, scope.bound_session)
                 if snapshot.handoff is not None and response.status == "running":
@@ -454,7 +498,9 @@ class RuntimeImpl:
         return response
 
     def _d_form_collection_response(
-        self, snapshot: DFormCollectionSnapshot, session_id: str,
+        self,
+        snapshot: DFormCollectionSnapshot,
+        session_id: str,
         options: tuple[str, ...] | None = None,
     ) -> ResponseEnvelope:
         record, handoff = snapshot.record, snapshot.handoff
@@ -462,53 +508,92 @@ class RuntimeImpl:
             kind = handoff.get("admission_state")
             data: dict[str, Any] = {"kind": kind, "task_id": handoff.get("canonical_task_id")}
             if kind == "accepted":
-                data.update(run_id=handoff.get("canonical_run_id"),
-                            state_revision=handoff.get("state_revision"))
+                data.update(
+                    run_id=handoff.get("canonical_run_id"),
+                    state_revision=handoff.get("state_revision"),
+                )
             if kind in {"accepted", "pending"}:
                 text = "该收集任务已交接；请继续读取原浏览器任务。"
                 return ResponseEnvelope(
-                    response_id=str(uuid4()), task_id=handoff["canonical_task_id"],
-                    session_id=session_id, status="running", message=text, fallback_text=text,
-                    ui=UIComponent(component_type="none", action="none"), data=data,
+                    response_id=str(uuid4()),
+                    task_id=handoff["canonical_task_id"],
+                    session_id=session_id,
+                    status="running",
+                    message=text,
+                    fallback_text=text,
+                    ui=UIComponent(component_type="none", action="none"),
+                    data=data,
                     trace_id=handoff["canonical_trace_id"],
                 )
         expired = not record.consumed and record.expires_at <= self._utc_clock()
         closed = snapshot.task_status not in {"waiting_user", "running"}
         text = (
-            "此补参记录已过期，请重新发起报修。" if expired else
-            "原收集任务已结束，请核对原请求状态。" if closed else
-            "原参数已交接，结果尚待确认；请保留原请求标识。" if record.consumed else
-            question(record.arguments, category_source_available=options is not None)
+            "此补参记录已过期，请重新发起报修。"
+            if expired
+            else "原收集任务已结束，请核对原请求状态。"
+            if closed
+            else "原参数已交接，结果尚待确认；请保留原请求标识。"
+            if record.consumed
+            else question(record.arguments, category_source_available=options is not None)
         )
         return ResponseEnvelope(
-            response_id=str(uuid4()), task_id=record.task_id, session_id=session_id,
-            status=("failed" if closed else "blocked" if expired else
-                    "running" if record.consumed else "waiting_user"),
-            message=text, fallback_text=text, ui=UIComponent(component_type="none", action="none"),
-            data={"kind": "d_form_collection", "outcome": "collection_expired" if expired else
-                  "collection_closed" if closed else
-                  "handoff_pending" if record.consumed else "waiting_user",
-                  "d_form_collection": None if expired or closed or record.consumed else
-                  {"task_id": record.task_id, "version": record.version},
-                  "collected_fields": list(record.arguments),
-                  "missing_fields": list(missing_fields(record.arguments)),
-                  "category_source_available": options is not None,
-                  "category_source_unavailable": (
-                      "category" not in record.arguments and options is None),
-                  "category_options": list(options) if options is not None else [],
-                  "expires_at": record.expires_at.isoformat()}, trace_id=record.trace_id,
+            response_id=str(uuid4()),
+            task_id=record.task_id,
+            session_id=session_id,
+            status=(
+                "failed"
+                if closed
+                else "blocked"
+                if expired
+                else "running"
+                if record.consumed
+                else "waiting_user"
+            ),
+            message=text,
+            fallback_text=text,
+            ui=UIComponent(component_type="none", action="none"),
+            data={
+                "kind": "d_form_collection",
+                "outcome": "collection_expired"
+                if expired
+                else "collection_closed"
+                if closed
+                else "handoff_pending"
+                if record.consumed
+                else "waiting_user",
+                "d_form_collection": None
+                if expired or closed or record.consumed
+                else {"task_id": record.task_id, "version": record.version},
+                "collected_fields": list(record.arguments),
+                "missing_fields": list(missing_fields(record.arguments)),
+                "category_source_available": options is not None,
+                "category_source_unavailable": (
+                    "category" not in record.arguments and options is None
+                ),
+                "category_options": list(options) if options is not None else [],
+                "expires_at": record.expires_at.isoformat(),
+            },
+            trace_id=record.trace_id,
         )
 
     async def _d_form_category_options(
-        self, owner: SessionMemoryKey, capability: CapabilitySpec,
+        self,
+        owner: SessionMemoryKey,
+        capability: CapabilitySpec,
     ) -> tuple[str, ...] | None:
         if self._d_form_category_source is None:
             return None
         try:
             async with asyncio.timeout(5):
                 evidence = await self._d_form_category_source(owner, capability)
-            return None if evidence is None else evidence.choices(
-                owner, capability_fingerprint(capability), self._utc_clock(),
+            return (
+                None
+                if evidence is None
+                else evidence.choices(
+                    owner,
+                    capability_fingerprint(capability),
+                    self._utc_clock(),
+                )
             )
         except Exception:
             logging.getLogger(__name__).warning("d_form_collection_category_source_unavailable")
@@ -539,28 +624,45 @@ class RuntimeImpl:
         return scope.attempt.finalization_deadline
 
     @staticmethod
-    def _browser_unconfirmed_response(scope: BrowserRequestScope, *, timeout: bool) -> ResponseEnvelope:
+    def _browser_unconfirmed_response(
+        scope: BrowserRequestScope, *, timeout: bool
+    ) -> ResponseEnvelope:
         admission = scope.attempt.admission
         if admission is not None:
             message = "浏览器请求已接纳，交办审计暂未确认；请继续读取原任务。"
             return ResponseEnvelope(
-                response_id=str(uuid4()), task_id=admission.task_id, session_id=scope.bound_session,
-                status="running", message=message, fallback_text=message,
-                ui=UIComponent(component_type="none", action="none"), data=admission.data(),
-                trace_id=admission.trace_id, trace_summary="handoff_unavailable",
+                response_id=str(uuid4()),
+                task_id=admission.task_id,
+                session_id=scope.bound_session,
+                status="running",
+                message=message,
+                fallback_text=message,
+                ui=UIComponent(component_type="none", action="none"),
+                data=admission.data(),
+                trace_id=admission.trace_id,
+                trace_summary="handoff_unavailable",
             )
         diagnostic = BrowserGatewayDiagnostic(
-            "admission", "admission_timeout" if timeout else "admission_uncertain",
+            "admission",
+            "admission_timeout" if timeout else "admission_uncertain",
         )
         message = "提交结果尚未确认；重查时请保留原请求。"
         return ResponseEnvelope(
-            response_id=str(uuid4()), task_id=scope.attempt.task_id or str(uuid4()),
-            session_id=scope.bound_session, status="running", message=message, fallback_text=message,
+            response_id=str(uuid4()),
+            task_id=scope.attempt.task_id or str(uuid4()),
+            session_id=scope.bound_session,
+            status="running",
+            message=message,
+            fallback_text=message,
             ui=UIComponent(component_type="none", action="none"),
-            data={"kind": "unconfirmed", "client_request_id": scope.client_request_id,
-                  "error_code": "adapter_timeout" if timeout else "adapter_error",
-                  **diagnostic.attributes()},
-            trace_id=scope.attempt.trace_id or str(uuid4()), trace_summary=diagnostic.reason,
+            data={
+                "kind": "unconfirmed",
+                "client_request_id": scope.client_request_id,
+                "error_code": "adapter_timeout" if timeout else "adapter_error",
+                **diagnostic.attributes(),
+            },
+            trace_id=scope.attempt.trace_id or str(uuid4()),
+            trace_summary=diagnostic.reason,
         )
 
     async def _close_browser_intent(self, scope: BrowserRequestScope) -> None:
@@ -571,17 +673,22 @@ class RuntimeImpl:
                 outcome = await self._browser_handoff.fail_if_open(scope, "adapter_error")
                 if outcome not in {"failed", "handed_off"}:
                     if outcome == "absent" and scope.attempt.task_id is not None:
-                        logging.getLogger(__name__).warning("browser_intent_finalization_unconfirmed")
+                        logging.getLogger(__name__).warning(
+                            "browser_intent_finalization_unconfirmed"
+                        )
                     return
                 # The committed DB result controls this; cancellation is not browser-stop proof.
                 assert scope.attempt.task_id is not None and scope.attempt.trace_id is not None
                 await self._trace_port.finalize_task_trace(
-                    scope.attempt.trace_id, scope.attempt.task_id, scope.bound_session,
+                    scope.attempt.trace_id,
+                    scope.attempt.task_id,
+                    scope.bound_session,
                     tenant_id=scope.verified.principal.org_ctx.tenant_id,
                     ai_user_id=scope.verified.principal.ai_user_id,
                     status="ok" if outcome == "handed_off" else "failed",
                     error_code=None if outcome == "handed_off" else "adapter_error",
                 )
+
         closing = asyncio.create_task(bounded())
         try:
             await asyncio.shield(closing)
@@ -611,25 +718,35 @@ class RuntimeImpl:
         reference = d_form_collection_reference.get()
         scope = browser_request_scope.get()
         if reference is not None:
-            if (self._d_form_collection_store is None or scope is None
-                    or not scope.matches(principal, session_id) or scope.attempt.message is None):
+            if (
+                self._d_form_collection_store is None
+                or scope is None
+                or not scope.matches(principal, session_id)
+                or scope.attempt.message is None
+            ):
                 raise DFormCollectionError("collection_not_found")
             collection = await self._d_form_collection_store.get_d_form_collection(
-                tenant_id=memory_key.tenant_id, ai_user_id=ai_user_id,
-                session_id=session_id, task_id=reference.task_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=ai_user_id,
+                session_id=session_id,
+                task_id=reference.task_id,
             )
             if collection is None:
                 raise DFormCollectionError("collection_not_found")
             record = collection.record
-            if (collection.handoff is not None
-                    or collection.task_status not in {"waiting_user", "running"}):
+            if collection.handoff is not None or collection.task_status not in {
+                "waiting_user",
+                "running",
+            }:
                 return self._d_form_collection_response(collection, session_id)
             if record.consumed:
-                if (collection.task_status != "running"
-                        or record.request_id != scope.client_request_id
-                        or record.version != reference.version + 1
-                        or record.request_digest != d_form_request_digest(
-                            scope.attempt.message, channel)):
+                if (
+                    collection.task_status != "running"
+                    or record.request_id != scope.client_request_id
+                    or record.version != reference.version + 1
+                    or record.request_digest
+                    != d_form_request_digest(scope.attempt.message, channel)
+                ):
                     return self._d_form_collection_response(collection, session_id)
             else:
                 if record.expires_at <= self._utc_clock():
@@ -726,33 +843,50 @@ class RuntimeImpl:
                 )
             )
             await self._trace_port.start_task_trace(
-                trace_id, task_id, session_id,
-                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
+                trace_id,
+                task_id,
+                session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
             )
             await self._trace_port.record_step(
-                trace_id, task_id, session_id,
-                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
-                event_type="task_created", status="ok",
+                trace_id,
+                task_id,
+                session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
+                event_type="task_created",
+                status="ok",
             )
 
         # An explicit document question does not enter business intent selection.
         # Existing collection/confirmation state keeps ownership of its replies.
         document_message = message.lstrip()
         if (
-            document_message.startswith("请问") and collection is None and pending is None
-            and self._document_qa is not None and document_request is not None
+            document_message.startswith("请问")
+            and collection is None
+            and pending is None
+            and self._document_qa is not None
+            and document_request is not None
             and self._document_qa.permits(
-                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
             )
         ):
             document_request.context = (
-                response_id, task_id, session_id, trace_id, memory_key,
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                memory_key,
             )
             _record_chat_stage(trace_id, "document_route", "ok", reason="explicit_prefix")
             result = await self._document_qa.answer(
                 question=document_message[2:].lstrip(" ：:，,\t\r\n"),
-                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
-                deadline=document_request.deadline, trace_id=trace_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
+                deadline=document_request.deadline,
+                trace_id=trace_id,
             )
             return await self._finish_document_qa(document_request, result)
 
@@ -781,22 +915,30 @@ class RuntimeImpl:
                     memory_key=memory_key,
                 )
             visible_capabilities, active_count = visibility
-        _record_chat_stage(trace_id, "catalog", "ok", reason=(
-            "visible_present" if visible_capabilities else "visible_empty"))
+        _record_chat_stage(
+            trace_id,
+            "catalog",
+            "ok",
+            reason=("visible_present" if visible_capabilities else "visible_empty"),
+        )
         category_options: tuple[str, ...] | None = None
         collection_parse: dict[str, Any] = {}
         if collection is not None:
             current = tuple(
-                item for item in visible_capabilities if item.capability_id == D_FORM_ID
+                item
+                for item in visible_capabilities
+                if item.capability_id == D_FORM_ID
                 and item.version == collection.record.capability_version
                 and capability_fingerprint(item) == collection.record.capability_fingerprint
             )
             if len(current) != 1:
                 raise DFormCollectionError("collection_version_conflict")
             category_options = await self._d_form_category_options(memory_key, current[0])
-            collection_parse = {"d_form_arguments": dict(collection.record.arguments),
-                                "d_form_consumed": collection.record.consumed,
-                                "d_form_category_options": category_options}
+            collection_parse = {
+                "d_form_arguments": dict(collection.record.arguments),
+                "d_form_consumed": collection.record.consumed,
+                "d_form_category_options": category_options,
+            }
         intent_result = await self._intent_router.parse(
             message,
             trace_metadata={
@@ -808,31 +950,49 @@ class RuntimeImpl:
             **collection_parse,
         )
         _record_chat_stage(
-            trace_id, "intent",
-            "failed" if intent_result.failure_reason else
-            "blocked" if intent_result.match is None else "ok",
-            reason=intent_result.failure_reason or (
-                "match_capability" if intent_result.match == "capability" else
-                "match_none" if intent_result.match == "none" else
-                intent_result.candidate_selection.outcome
-                if intent_result.candidate_selection else "unparsed"),
-            capability_id=(intent_result.capability_ref.capability_id
-                           if intent_result.capability_ref else None),
+            trace_id,
+            "intent",
+            "failed"
+            if intent_result.failure_reason
+            else "blocked"
+            if intent_result.match is None
+            else "ok",
+            reason=intent_result.failure_reason
+            or (
+                "match_capability"
+                if intent_result.match == "capability"
+                else "match_none"
+                if intent_result.match == "none"
+                else intent_result.candidate_selection.outcome
+                if intent_result.candidate_selection
+                else "unparsed"
+            ),
+            capability_id=(
+                intent_result.capability_ref.capability_id if intent_result.capability_ref else None
+            ),
         )
-        if (collection is not None and not collection.record.consumed
-                and (intent_result.failure_reason is not None
-                     or intent_result.match != "capability")):
+        if (
+            collection is not None
+            and not collection.record.consumed
+            and (intent_result.failure_reason is not None or intent_result.match != "capability")
+        ):
             # An unparseable reply cannot discard already collected parameters.
             assert self._d_form_collection_store is not None and scope is not None
             assert scope.attempt.message is not None
             retained_record = collection.record
-            retained = retained_record.model_copy(update={
-                "version": retained_record.version + 1, "request_id": scope.client_request_id,
-                "request_digest": d_form_request_digest(scope.attempt.message, channel),
-            })
+            retained = retained_record.model_copy(
+                update={
+                    "version": retained_record.version + 1,
+                    "request_id": scope.client_request_id,
+                    "request_digest": d_form_request_digest(scope.attempt.message, channel),
+                }
+            )
             snapshot = await self._d_form_collection_store.save_d_form_collection(
-                retained, tenant_id=memory_key.tenant_id, ai_user_id=ai_user_id,
-                session_id=session_id, expected_version=retained_record.version,
+                retained,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=ai_user_id,
+                session_id=session_id,
+                expected_version=retained_record.version,
             )
             logging.getLogger(__name__).warning("d_form_collection_reply_unparsed")
             envelope = self._d_form_collection_response(snapshot, session_id, category_options)
@@ -908,16 +1068,28 @@ class RuntimeImpl:
                 reason=intent_result.failure_reason or "schema_invalid",
                 memory_key=memory_key,
                 error_code=(
-                    "adapter_timeout" if intent_result.provider_error_code == "timeout" else
-                    "adapter_error" if intent_result.failure_reason == "provider_error" else
-                    "adapter_payload_invalid"
-                ) if browser_request_scope.get() is not None and self._browser_handoff is not None else "internal_error",
-                diagnostic=(BrowserGatewayDiagnostic(
-                    "llm" if intent_result.failure_reason == "provider_error" else "input",
-                    "llm_timeout" if intent_result.provider_error_code == "timeout" else
-                    "model_mismatch" if intent_result.provider_error_code == "model_not_available" else
-                    "llm_unavailable" if intent_result.failure_reason == "provider_error" else "input_invalid",
-                ) if browser_request_scope.get() is not None and self._browser_handoff is not None else None),
+                    "adapter_timeout"
+                    if intent_result.provider_error_code == "timeout"
+                    else "adapter_error"
+                    if intent_result.failure_reason == "provider_error"
+                    else "adapter_payload_invalid"
+                )
+                if browser_request_scope.get() is not None and self._browser_handoff is not None
+                else "internal_error",
+                diagnostic=(
+                    BrowserGatewayDiagnostic(
+                        "llm" if intent_result.failure_reason == "provider_error" else "input",
+                        "llm_timeout"
+                        if intent_result.provider_error_code == "timeout"
+                        else "model_mismatch"
+                        if intent_result.provider_error_code == "model_not_available"
+                        else "llm_unavailable"
+                        if intent_result.failure_reason == "provider_error"
+                        else "input_invalid",
+                    )
+                    if browser_request_scope.get() is not None and self._browser_handoff is not None
+                    else None
+                ),
             )
 
         if intent_result.match == "none" or capability_ref is None:
@@ -1032,34 +1204,54 @@ class RuntimeImpl:
             != collection.record.capability_fingerprint
         ):
             raise DFormCollectionError("collection_version_conflict")
-        if (selected_capability.capability_id == D_FORM_ID
-                and self._d_form_collection_store is not None
-                and scope is not None and scope.matches(principal, session_id)
-                and scope.attempt.message is not None
-                and set(capability_ref.arguments) <= {"category", "position", "description"}):
+        if (
+            selected_capability.capability_id == D_FORM_ID
+            and self._d_form_collection_store is not None
+            and scope is not None
+            and scope.matches(principal, session_id)
+            and scope.attempt.message is not None
+            and set(capability_ref.arguments) <= {"category", "position", "description"}
+        ):
             if collection is None:
                 category_options = await self._d_form_category_options(
-                    memory_key, selected_capability,
+                    memory_key,
+                    selected_capability,
                 )
             previous = collection.record if collection is not None else None
             _record_chat_stage(
-                trace_id, "d_form_collection", "start", capability_id=D_FORM_ID,
-                reason=("continuation_category_supplied" if "category" in capability_ref.arguments
-                        else "continuation_category_missing") if previous is not None
-                else ("initial_category_supplied" if "category" in capability_ref.arguments
-                      else "initial_category_missing"),
+                trace_id,
+                "d_form_collection",
+                "start",
+                capability_id=D_FORM_ID,
+                reason=(
+                    "continuation_category_supplied"
+                    if "category" in capability_ref.arguments
+                    else "continuation_category_missing"
+                )
+                if previous is not None
+                else (
+                    "initial_category_supplied"
+                    if "category" in capability_ref.arguments
+                    else "initial_category_missing"
+                ),
             )
             arguments = collect_arguments(
-                capability_ref.arguments, message, previous, category_options,
+                capability_ref.arguments,
+                message,
+                previous,
+                category_options,
             )
             if "category" not in arguments and category_options is not None:
                 matches = tuple(item for item in category_options if item in message)
                 if len(matches) == 1:
                     arguments["category"] = matches[0]
             _record_chat_stage(
-                trace_id, "d_form_category", "ok" if "category" in arguments else "blocked",
+                trace_id,
+                "d_form_category",
+                "ok" if "category" in arguments else "blocked",
                 capability_id=D_FORM_ID,
-                reason="category_options_available" if category_options is not None
+                reason="category_options_available"
+                if category_options is not None
                 else "category_options_unavailable",
             )
             if previous is not None and previous.consumed:
@@ -1068,29 +1260,37 @@ class RuntimeImpl:
                 arguments = dict(previous.arguments)
             elif missing_fields(arguments) or previous is not None:
                 collected = DFormCollectionRecord(
-                    task_id=task_id, trace_id=trace_id,
+                    task_id=task_id,
+                    trace_id=trace_id,
                     capability_version=selected_capability.version,
                     capability_fingerprint=capability_fingerprint(selected_capability),
                     version=previous.version + 1 if previous is not None else 1,
-                    expires_at=previous.expires_at if previous is not None else
-                    self._utc_clock() + timedelta(seconds=COLLECTION_TTL_SECONDS),
-                    arguments=arguments, request_id=scope.client_request_id,
+                    expires_at=previous.expires_at
+                    if previous is not None
+                    else self._utc_clock() + timedelta(seconds=COLLECTION_TTL_SECONDS),
+                    arguments=arguments,
+                    request_id=scope.client_request_id,
                     request_digest=d_form_request_digest(scope.attempt.message, channel),
                     consumed=not missing_fields(arguments),
                 )
                 snapshot = await self._d_form_collection_store.save_d_form_collection(
-                    collected, tenant_id=memory_key.tenant_id, ai_user_id=ai_user_id,
+                    collected,
+                    tenant_id=memory_key.tenant_id,
+                    ai_user_id=ai_user_id,
                     session_id=session_id,
                     expected_version=previous.version if previous is not None else None,
                 )
                 _record_chat_stage(
-                    trace_id, "d_form_collection", "ok" if collected.consumed else "blocked",
+                    trace_id,
+                    "d_form_collection",
+                    "ok" if collected.consumed else "blocked",
                     capability_id=D_FORM_ID,
                     reason="ready" if collected.consumed else "waiting_user",
                 )
                 logging.getLogger(__name__).info(
                     "d_form_collection stage=%s version=%s missing=%s",
-                    "handoff" if collected.consumed else "waiting_user", collected.version,
+                    "handoff" if collected.consumed else "waiting_user",
+                    collected.version,
                     ",".join(missing_fields(arguments)),
                 )
                 if not collected.consumed:
@@ -1136,15 +1336,19 @@ class RuntimeImpl:
                 )
                 binding_manifest = (
                     await self._human_gate_port.get_task_binding(task_id)
-                    if collection is not None and collection.record.consumed else None
+                    if collection is not None and collection.record.consumed
+                    else None
                 )
                 if binding_manifest is not None:
                     await self._human_gate_port.assert_task_bindings(
-                        task_id, resolved_bindings.bindings, exact=True,
+                        task_id,
+                        resolved_bindings.bindings,
+                        exact=True,
                     )
                 else:
                     binding_manifest = build_task_version_binding_manifest(
-                        task_id=task_id, bindings=resolved_bindings.bindings,
+                        task_id=task_id,
+                        bindings=resolved_bindings.bindings,
                         locked_at=datetime.now(UTC),
                     )
                 _assert_manifest_projection_source(
@@ -1197,28 +1401,45 @@ class RuntimeImpl:
                 trace_id=trace_id,
             )
         _record_chat_stage(
-            trace_id, "execution",
+            trace_id,
+            "execution",
             "ok" if exec_result.status in {"completed", "running"} else "failed",
             reason=exec_result.error_code or exec_result.status,
             capability_id=selected_capability.capability_id,
         )
         if exec_result.status == "running":
             return await self._finish_browser_admission(
-                principal, session_id, task_id, trace_id, selected_capability, exec_result,
+                principal,
+                session_id,
+                task_id,
+                trace_id,
+                selected_capability,
+                exec_result,
             )
-        if (scope is not None and exec_result.browser_diagnostic is not None
-                and exec_result.browser_diagnostic.reason in {"admission_timeout", "admission_uncertain"}):
+        if (
+            scope is not None
+            and exec_result.browser_diagnostic is not None
+            and exec_result.browser_diagnostic.reason
+            in {"admission_timeout", "admission_uncertain"}
+        ):
             recovered = await self._recover_browser_request(scope)
             if recovered is not None:
                 await self._close_browser_intent(scope)
                 return recovered
             await self._close_browser_intent(scope)
-            return self._browser_unconfirmed_response(scope, timeout=exec_result.status == "timeout")
+            return self._browser_unconfirmed_response(
+                scope, timeout=exec_result.status == "timeout"
+            )
         if exec_result.browser_diagnostic is not None:
             await self._trace_port.record_step(
-                trace_id, task_id, session_id, tenant_id=memory_key.tenant_id,
-                ai_user_id=memory_key.ai_user_id, event_type="gateway_post_recorded",
-                status="failed", capability_id=selected_capability.capability_id,
+                trace_id,
+                task_id,
+                session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
+                event_type="gateway_post_recorded",
+                status="failed",
+                capability_id=selected_capability.capability_id,
                 error_code=exec_result.error_code,
                 attributes=exec_result.browser_diagnostic.attributes(),
             )
@@ -1383,13 +1604,22 @@ class RuntimeImpl:
                 projection_snapshot=projection_snapshot,
             )
         if exec_result.browser_diagnostic is not None:
-            envelope = envelope.model_copy(update={"data": {
-                "error_code": exec_result.error_code,
-                **exec_result.browser_diagnostic.attributes(),
-            }})
-            if exec_result.browser_diagnostic.reason in {"admission_timeout", "admission_uncertain"}:
+            envelope = envelope.model_copy(
+                update={
+                    "data": {
+                        "error_code": exec_result.error_code,
+                        **exec_result.browser_diagnostic.attributes(),
+                    }
+                }
+            )
+            if exec_result.browser_diagnostic.reason in {
+                "admission_timeout",
+                "admission_uncertain",
+            }:
                 message = "提交结果尚未确认；重查时请保留原请求。"
-                envelope = envelope.model_copy(update={"message": message, "fallback_text": message})
+                envelope = envelope.model_copy(
+                    update={"message": message, "fallback_text": message}
+                )
         envelope = _append_partial_candidate_notice(envelope, selection)
         await self._trace_port.record_step(
             trace_id,
@@ -1452,19 +1682,28 @@ class RuntimeImpl:
         return envelope
 
     async def _finish_browser_admission(
-        self, principal: Principal, session_id: str, task_id: str, trace_id: str,
-        capability: CapabilitySpec, result: ExecutionResult,
+        self,
+        principal: Principal,
+        session_id: str,
+        task_id: str,
+        trace_id: str,
+        capability: CapabilitySpec,
+        result: ExecutionResult,
     ) -> ResponseEnvelope:
         scope, admission = browser_request_scope.get(), result.browser_admission
-        if (scope is None or self._browser_handoff is None
-                or type(admission) is not BrowserGatewayAdmission
-                or not scope.matches(principal, session_id)
-                or admission.owner.tenant_id != principal.org_ctx.tenant_id
-                or admission.owner.user_id != principal.ai_user_id
-                or admission.owner.session_id != session_id):
+        if (
+            scope is None
+            or self._browser_handoff is None
+            or type(admission) is not BrowserGatewayAdmission
+            or not scope.matches(principal, session_id)
+            or admission.owner.tenant_id != principal.org_ctx.tenant_id
+            or admission.owner.user_id != principal.ai_user_id
+            or admission.owner.session_id != session_id
+        ):
             raise ValueError("browser_admission_context_invalid")
-        invocation = BrowserGatewayInvocation(scope, capability.capability_id, capability.version,
-                                              task_id, trace_id)
+        invocation = BrowserGatewayInvocation(
+            scope, capability.capability_id, capability.version, task_id, trace_id
+        )
         scope.attempt.admission = admission
         diagnostic = None
         try:
@@ -1474,8 +1713,11 @@ class RuntimeImpl:
                 exception_type = type(error).__name__
                 logging.getLogger(__name__).warning(
                     "browser_fallback_diagnostic stage=intent_handoff exception_type=%s",
-                    exception_type if exception_type.isascii() and exception_type.isidentifier()
-                    and len(exception_type) <= 64 else "UnknownException",
+                    exception_type
+                    if exception_type.isascii()
+                    and exception_type.isidentifier()
+                    and len(exception_type) <= 64
+                    else "UnknownException",
                 )
             except Exception:
                 pass  # Diagnostic failure must preserve the original failure path.
@@ -1484,23 +1726,48 @@ class RuntimeImpl:
             return self._browser_unconfirmed_response(scope, timeout=False)
         try:
             await self._trace_port.record_step(
-                trace_id, task_id, session_id, tenant_id=admission.owner.tenant_id,
-                ai_user_id=admission.owner.user_id, event_type="response_envelope_created", status="ok",
+                trace_id,
+                task_id,
+                session_id,
+                tenant_id=admission.owner.tenant_id,
+                ai_user_id=admission.owner.user_id,
+                event_type="response_envelope_created",
+                status="ok",
                 capability_id=capability.capability_id,
-                attributes={"phase": "admission_only", "canonical_task_id": admission.task_id,
-                            "canonical_run_id": admission.run_id, "admission_state": admission.kind},
+                attributes={
+                    "phase": "admission_only",
+                    "canonical_task_id": admission.task_id,
+                    "canonical_run_id": admission.run_id,
+                    "admission_state": admission.kind,
+                },
             )
             await self._trace_port.finalize_task_trace(
-                trace_id, task_id, session_id, tenant_id=admission.owner.tenant_id,
-                ai_user_id=admission.owner.user_id, status="ok", capability_id=capability.capability_id,
+                trace_id,
+                task_id,
+                session_id,
+                tenant_id=admission.owner.tenant_id,
+                ai_user_id=admission.owner.user_id,
+                status="ok",
+                capability_id=capability.capability_id,
             )
         except Exception:
             diagnostic = "audit_unavailable"
-        message = "浏览器任务已接纳，正在处理。" if admission.kind == "accepted" else "浏览器请求正在准备。"
+        message = (
+            "浏览器任务已接纳，正在处理。"
+            if admission.kind == "accepted"
+            else "浏览器请求正在准备。"
+        )
         return ResponseEnvelope(
-            response_id=str(uuid4()), task_id=admission.task_id, session_id=session_id, status="running",
-            message=message, fallback_text=message, ui=UIComponent(component_type="none", action="none"),
-            data=admission.data(), trace_id=admission.trace_id, trace_summary=diagnostic,
+            response_id=str(uuid4()),
+            task_id=admission.task_id,
+            session_id=session_id,
+            status="running",
+            message=message,
+            fallback_text=message,
+            ui=UIComponent(component_type="none", action="none"),
+            data=admission.data(),
+            trace_id=admission.trace_id,
+            trace_summary=diagnostic,
         )
 
     async def handle_user_action(
@@ -2113,9 +2380,11 @@ class RuntimeImpl:
                 pending.task_id,
                 session_id,
                 "此确认已处理，本次没有再次执行。"
-                if handled else "结构化操作未被受理，本次未执行。",
+                if handled
+                else "结构化操作未被受理，本次未执行。",
                 "This confirmation was already handled; no additional execution was started."
-                if handled else "The structured action was not accepted; nothing was executed.",
+                if handled
+                else "The structured action was not accepted; nothing was executed.",
                 pending.trace_id,
             ), outcome
         except OrchestrationContractError:
@@ -2169,12 +2438,18 @@ class RuntimeImpl:
             state = result.output["state"]
             presend_failure = isinstance(result, GovernedConfirmationFailureResult)
             claim.state = (
-                "cancelled" if state == "CANCELLED" else
-                "confirmation_invalidated" if state == "EXPIRED" or presend_failure else "completed"
+                "cancelled"
+                if state == "CANCELLED"
+                else "confirmation_invalidated"
+                if state == "EXPIRED" or presend_failure
+                else "completed"
             )
             claim.error_code = (
-                None if state == "CANCELLED" else
-                "confirm_required" if state == "EXPIRED" else result.error_code
+                None
+                if state == "CANCELLED"
+                else "confirm_required"
+                if state == "EXPIRED"
+                else result.error_code
             )
             claim.governed_terminal = result
             if state in {"CANCELLED", "EXPIRED"}:
@@ -2194,16 +2469,32 @@ class RuntimeImpl:
     async def _record_governed_response(self, pending: _PendingWorkflow) -> None:
         assert pending.owner is not None
         event = TraceEvent(
-            trace_id=pending.trace_id, task_id=pending.task_id,
-            session_id=pending.owner.session_id, tenant_id=pending.owner.tenant_id,
+            trace_id=pending.trace_id,
+            task_id=pending.task_id,
+            session_id=pending.owner.session_id,
+            tenant_id=pending.owner.tenant_id,
             ai_user_id=pending.owner.ai_user_id,
-            event_type="response_envelope_created", status="ok",
+            event_type="response_envelope_created",
+            status="ok",
         )
-        key = "mcp-response:" + sha256(canonical_object({
-            "owner": [pending.owner.tenant_id, pending.owner.ai_user_id, pending.owner.session_id],
-            "task": pending.task_id, "trace": pending.trace_id,
-            "action": pending.action_digest, "gate": pending.gate_request_id,
-        }).encode("utf-8")).hexdigest()
+        key = (
+            "mcp-response:"
+            + sha256(
+                canonical_object(
+                    {
+                        "owner": [
+                            pending.owner.tenant_id,
+                            pending.owner.ai_user_id,
+                            pending.owner.session_id,
+                        ],
+                        "task": pending.task_id,
+                        "trace": pending.trace_id,
+                        "action": pending.action_digest,
+                        "gate": pending.gate_request_id,
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         await self._trace_port.record_event_once(event, key)
 
     def _archive_confirmation(
@@ -2373,8 +2664,12 @@ class RuntimeImpl:
             ].governed_terminal = terminal
         try:
             return await self._complete_resumed_workflow(
-                pending_key=pending_key, pending=pending, session_id=session_id,
-                memory_key=memory_key, response_id=response_id, exec_result=exec_result,
+                pending_key=pending_key,
+                pending=pending,
+                session_id=session_id,
+                memory_key=memory_key,
+                response_id=response_id,
+                exec_result=exec_result,
             )
         except GovernedFinalizationError:
             raise
@@ -2549,7 +2844,9 @@ class RuntimeImpl:
                 self._pending_workflows.get(pending_key) is pending
                 if isinstance(governed_result, GovernedTerminalResult)
                 else self._compare_and_swap_pending_workflow(
-                    pending_key, expected=pending, replacement=None,
+                    pending_key,
+                    expected=pending,
+                    replacement=None,
                 )
             )
         if not owns_pending:
@@ -2560,7 +2857,9 @@ class RuntimeImpl:
             self._retain_governed_terminal(pending_key, pending, governed_result)
             if claim.state in {"cancelled", "confirmation_invalidated"}:
                 envelope = self._confirmation_terminal_envelope(
-                    task_id=pending.task_id, trace_id=pending.trace_id, session_id=session_id,
+                    task_id=pending.task_id,
+                    trace_id=pending.trace_id,
+                    session_id=session_id,
                     status=(
                         "cancelled" if claim.state == "cancelled" else "confirmation_invalidated"
                     ),
@@ -2846,9 +3145,14 @@ class RuntimeImpl:
             status="failed",
         )
         if diagnostic is not None:
-            envelope = envelope.model_copy(update={"data": {
-                "error_code": error_code, **diagnostic.attributes(),
-            }})
+            envelope = envelope.model_copy(
+                update={
+                    "data": {
+                        "error_code": error_code,
+                        **diagnostic.attributes(),
+                    }
+                }
+            )
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -2889,10 +3193,13 @@ class RuntimeImpl:
         return envelope
 
     async def _fail_document_request(
-        self, request: _DocumentRequest, reason: str,
+        self,
+        request: _DocumentRequest,
+        reason: str,
     ) -> ResponseEnvelope:
         result = document_failure(
-            reason, "adapter_timeout" if reason == "document_timeout" else "internal_error",
+            reason,
+            "adapter_timeout" if reason == "document_timeout" else "internal_error",
         )
         try:
             async with asyncio.timeout(5):
@@ -2904,54 +3211,98 @@ class RuntimeImpl:
         assert request.context is not None
         response_id, task_id, session_id, trace_id, _ = request.context
         return self._response_builder.build_message(
-            response_id, task_id, session_id, result.message, result.message, trace_id,
-            status="failed", data={"error_code": result.error_code},
+            response_id,
+            task_id,
+            session_id,
+            result.message,
+            result.message,
+            trace_id,
+            status="failed",
+            data={"error_code": result.error_code},
         )
 
     async def _finish_document_qa(
-        self, request: _DocumentRequest, result: DocumentQAResult,
+        self,
+        request: _DocumentRequest,
+        result: DocumentQAResult,
     ) -> ResponseEnvelope:
         assert request.context is not None
         response_id, task_id, session_id, trace_id, memory_key = request.context
         envelope = self._response_builder.build_message(
-            response_id, task_id, session_id, result.message, result.message, trace_id,
+            response_id,
+            task_id,
+            session_id,
+            result.message,
+            result.message,
+            trace_id,
             status="failed" if result.outcome == "failed" else "completed",
-            data={"kind": "fixed_document_qa", "outcome": result.outcome,
-                  "error_code": result.error_code},
+            data={
+                "kind": "fixed_document_qa",
+                "outcome": result.outcome,
+                "error_code": result.error_code,
+            },
         )
         if result.outcome != "failed" and (
             envelope.message != result.message or envelope.status != "completed"
         ):
             result = document_failure("document_answer_invalid", "adapter_payload_invalid")
             envelope = self._response_builder.build_message(
-                response_id, task_id, session_id, result.message, result.message, trace_id,
-                status="failed", data={"error_code": result.error_code},
+                response_id,
+                task_id,
+                session_id,
+                result.message,
+                result.message,
+                trace_id,
+                status="failed",
+                data={"error_code": result.error_code},
             )
         failed = result.outcome == "failed"
         await self._task_store.update_status(
-            task_id, "failed" if failed else "completed", result.error_code,
+            task_id,
+            "failed" if failed else "completed",
+            result.error_code,
         )
         await self._trace_port.record_step(
-            trace_id, task_id, session_id,
-            tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
-            event_type="response_envelope_created", status="ok",
-            attributes={"kind": "fixed_document_qa", "outcome": result.outcome,
-                        "reason": result.reason, "document_version": result.version},
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            event_type="response_envelope_created",
+            status="ok",
+            attributes={
+                "kind": "fixed_document_qa",
+                "outcome": result.outcome,
+                "reason": result.reason,
+                "document_version": result.version,
+            },
         )
         await self._trace_port.record_step(
-            trace_id, task_id, session_id,
-            tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="task_failed" if failed else "task_completed",
-            status="failed" if failed else "ok", error_code=result.error_code,
+            status="failed" if failed else "ok",
+            error_code=result.error_code,
         )
         await self._record_terminal_evaluation(
-            trace_id=trace_id, task_id=task_id, session_id=session_id, memory_key=memory_key,
-            business_status="failed" if failed else "completed", error_code=result.error_code,
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            memory_key=memory_key,
+            business_status="failed" if failed else "completed",
+            error_code=result.error_code,
         )
         await self._trace_port.finalize_task_trace(
-            trace_id, task_id, session_id,
-            tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
-            status="failed" if failed else "ok", error_code=result.error_code,
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            status="failed" if failed else "ok",
+            error_code=result.error_code,
         )
         return envelope
 

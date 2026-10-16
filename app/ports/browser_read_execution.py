@@ -20,8 +20,8 @@ from app.browser_skill.models import (
 from app.browser_skill.repair import FormalRepairObservation, RepairFailureReason
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
-from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
 from app.ports.browser_fill_stop import FillStopReport
+from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
 from app.ports.browser_run_store import (
     DispatchFailureCode,
     ProtectedRunEnvelope,
@@ -33,8 +33,18 @@ from app.ports.browser_run_store import (
 
 
 class BrowserReadExecutionError(RuntimeError):
-    def __init__(self, code: Literal["unsupported", "denied", "stale", "cancelled", "timeout",
-                                       "invalid_response", "unavailable"]) -> None:
+    def __init__(
+        self,
+        code: Literal[
+            "unsupported",
+            "denied",
+            "stale",
+            "cancelled",
+            "timeout",
+            "invalid_response",
+            "unavailable",
+        ],
+    ) -> None:
         super().__init__("browser read execution refused")
         self.code = code
 
@@ -53,41 +63,60 @@ class BrowserWorkerCheckpoint(Protocol):
         ...
 
     async def attach_lease(
-        self, *, provider_key: str, provider_manifest_digest: bytes, lease_epoch: int,
+        self,
+        *,
+        provider_key: str,
+        provider_manifest_digest: bytes,
+        lease_epoch: int,
     ) -> RunSnapshot: ...
 
     async def start_execution(self) -> RunSnapshot: ...
 
     async def record_step(
-        self, command: ActionCommand, rule: SiteStepRule, scope: ScopeStamp,
-        receipt: DispatchReceipt, policy_digest: str, sequence: int,
+        self,
+        command: ActionCommand,
+        rule: SiteStepRule,
+        scope: ScopeStamp,
+        receipt: DispatchReceipt,
+        policy_digest: str,
+        sequence: int,
     ) -> RunTeachingStep:
         """Persist one acknowledged, registered step before the next browser send."""
         ...
 
     async def record_failed_step(
-        self, rule: SiteStepRule, scope: ScopeStamp, policy_digest: str,
-        sequence: int, reason: RepairFailureReason,
+        self,
+        rule: SiteStepRule,
+        scope: ScopeStamp,
+        policy_digest: str,
+        sequence: int,
+        reason: RepairFailureReason,
         observations: tuple[FormalRepairObservation, ...],
     ) -> None:
         """Persist a sanitized, definitely pre-send target failure."""
         ...
 
     async def reserve_write_dispatch(
-        self, command: ActionCommand, rule: SiteStepRule,
-        spec: ReadSpec, sequence: int,
+        self,
+        command: ActionCommand,
+        rule: SiteStepRule,
+        spec: ReadSpec,
+        sequence: int,
     ) -> None:
         """Consume the exact persisted confirmation and reserve this send."""
         ...
 
     async def record_traversal_terminal(
-        self, pages: tuple[PageEvidence, ...], sequence: int,
+        self,
+        pages: tuple[PageEvidence, ...],
+        sequence: int,
     ) -> None:
         """Persist verified terminal collection coverage before a later send."""
         ...
 
     async def assert_write_reservation(
-        self, command: ActionCommand,
+        self,
+        command: ActionCommand,
     ) -> None:
         """Recheck the durable exact send reservation immediately before IO."""
         ...
@@ -108,8 +137,10 @@ class BrowserReadOutcome:
             if (
                 not isinstance(self.result, ProtectedRunEnvelope)
                 or self.result.cipher_version != "aes256gcm-browser-result-v1"
-                or any(type(v) is not bytes or len(v) != 32
-                       for v in (self.result_digest, self.evidence_digest))
+                or any(
+                    type(v) is not bytes or len(v) != 32
+                    for v in (self.result_digest, self.evidence_digest)
+                )
             ):
                 raise ValueError("browser_read_result_invalid")
         elif any(v is not None for v in values):
@@ -133,21 +164,31 @@ class BrowserCaptureResolution:
     def __post_init__(self) -> None:
         if self.status == "found":
             if (
-                self.context is None or self.generation is None
-                or type(self.evidence) is not bytes or not self.evidence
+                self.context is None
+                or self.generation is None
+                or type(self.evidence) is not bytes
+                or not self.evidence
                 or type(self.expected_profile_revision) is not int
                 or self.expected_profile_revision < 0
             ):
                 raise ValueError("browser_capture_resolution_invalid")
-        elif any(v is not None for v in (
-            self.context, self.generation, self.evidence, self.expected_profile_revision,
-        )):
+        elif any(
+            v is not None
+            for v in (
+                self.context,
+                self.generation,
+                self.evidence,
+                self.expected_profile_revision,
+            )
+        ):
             raise ValueError("browser_capture_resolution_invalid")
 
 
 class BrowserReadExecutionPort(Protocol):
     async def execute(
-        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
+        self,
+        run: RunSnapshot,
+        checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserReadOutcome:
         """Actual installed execution/verification; encrypt only its verified projection."""
         ...
@@ -157,13 +198,17 @@ class BrowserReadExecutionPort(Protocol):
         ...
 
     async def lookup_capture(
-        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
+        self,
+        run: RunSnapshot,
+        checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserCaptureResolution:
         """Authoritative native provider lookup for the persisted capture_operation_id."""
         ...
 
     async def send_capture(
-        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
+        self,
+        run: RunSnapshot,
+        checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserCaptureResolution:
         """Only once, after sent was committed; native operation ID must be honored."""
         ...

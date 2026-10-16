@@ -13,8 +13,8 @@ from pydantic import Field
 from app.browser_skill.models import BrowserOwner, Contract, Digest, OpaqueId
 from app.browser_skill.run_contracts import BrowserRunView
 from app.ports.auth import Principal
-from app.ports.browser_run_store import ProtectedRunEnvelope, RunSnapshot
 from app.ports.browser_fill_stop import FillStopReport
+from app.ports.browser_run_store import ProtectedRunEnvelope, RunSnapshot
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.credential_vault import BrowserBindingFact
 from app.ports.response_envelope import ResponseEnvelope
@@ -47,7 +47,9 @@ class BrowserChatInputIdentity:
 
 class BrowserChatCipherPort(Protocol):
     def encrypt_input(
-        self, identity: BrowserChatInputIdentity, value: Mapping[str, object],
+        self,
+        identity: BrowserChatInputIdentity,
+        value: Mapping[str, object],
     ) -> ProtectedRunEnvelope: ...
 
     def decrypt_result(self, run: RunSnapshot) -> dict[str, Any]: ...
@@ -55,7 +57,10 @@ class BrowserChatCipherPort(Protocol):
 
 class BrowserChatParserPort(Protocol):
     async def parse(
-        self, principal: Principal, message: str, capability: CapabilitySpec,
+        self,
+        principal: Principal,
+        message: str,
+        capability: CapabilitySpec,
     ) -> dict[str, Any]:
         """Trusted parser for this frozen READ_ONLY capability; no browser dispatch."""
         ...
@@ -63,7 +68,10 @@ class BrowserChatParserPort(Protocol):
 
 class BrowserChatBindingResolverPort(Protocol):
     async def resolve(
-        self, principal: Principal, bound_session: str, capability: CapabilitySpec,
+        self,
+        principal: Principal,
+        bound_session: str,
+        capability: CapabilitySpec,
     ) -> BrowserBindingFact:
         """Read the current exact binding; ambiguity must fail closed, never choose a default."""
         ...
@@ -98,21 +106,37 @@ class BrowserRunAccessPort(Protocol):
     """Current-authority Run reads, decisions and artifacts for authenticated adapters."""
 
     async def get(
-        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
     ) -> BrowserRunResponse: ...
 
     async def cancel(
-        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
     ) -> BrowserRunResponse: ...
 
     async def decide_write(
-        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
         decision: Literal["confirmed", "rejected"],
     ) -> BrowserRunResponse: ...
 
     async def read_artifact(
-        self, principal: Principal, bound_session: str, task_id: str,
-        run_id: str, reference: str,
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
+        reference: str,
     ) -> tuple[str, bytes]: ...
 
 
@@ -125,8 +149,14 @@ class BrowserSubmissionPort(BrowserRunAccessPort, Protocol):
     """
 
     async def submit(
-        self, *, principal: Principal, bound_session: str, skill_id: str,
-        skill_version: str, arguments: dict[str, Any], client_request_id: str,
+        self,
+        *,
+        principal: Principal,
+        bound_session: str,
+        skill_id: str,
+        skill_version: str,
+        arguments: dict[str, Any],
+        client_request_id: str,
     ) -> ResponseEnvelope: ...
 
 
@@ -138,16 +168,27 @@ class BrowserOrdinarySubmissionPort(BrowserSubmissionPort, Protocol):
     """
 
     async def submit(
-        self, *, principal: Principal, bound_session: str, skill_id: str,
-        skill_version: str, arguments: dict[str, Any], client_request_id: str,
+        self,
+        *,
+        principal: Principal,
+        bound_session: str,
+        skill_id: str,
+        skill_version: str,
+        arguments: dict[str, Any],
+        client_request_id: str,
         request_message: str | None = None,
         request_channel: Literal["web", "cli", "api", "mock"] | None = None,
         on_admitted: Callable[[ResponseEnvelope], None] | None = None,
     ) -> ResponseEnvelope: ...
 
     async def lookup_ordinary_request(
-        self, *, principal: Principal, bound_session: str, client_request_id: str,
-        message: str, channel: Literal["web", "cli", "api", "mock"],
+        self,
+        *,
+        principal: Principal,
+        bound_session: str,
+        client_request_id: str,
+        message: str,
+        channel: Literal["web", "cli", "api", "mock"],
     ) -> ResponseEnvelope | None:
         """Owned MAC lookup; may close an expired original pre-Run claim.
 
@@ -168,7 +209,13 @@ class BrowserChatPort(BrowserRunAccessPort, Protocol):
         ...
 
     async def start(
-        self, *, channel: Literal["web", "cli", "api", "mock"], principal: Principal,
-        bound_session: str, message: str, client_capabilities: dict[str, Any],
-        client_request_id: str, skill_id: str,
+        self,
+        *,
+        channel: Literal["web", "cli", "api", "mock"],
+        principal: Principal,
+        bound_session: str,
+        message: str,
+        client_capabilities: dict[str, Any],
+        client_request_id: str,
+        skill_id: str,
     ) -> ResponseEnvelope: ...

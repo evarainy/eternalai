@@ -318,7 +318,7 @@ describe('ChatPage request boundary', () => {
     expect(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const [url, options] = fetchMock.mock.calls[0];
+    const [url, options] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/v1/runtime/handle');
     expect(JSON.parse(options.body)).toMatchObject({
       channel: 'web', message: '查询虚构记录 DEMO-731', client_request_id: SESSION_A,
@@ -349,7 +349,7 @@ describe('ChatPage request boundary', () => {
     await waitFor(() => expect(client.getQueryState(identityQueryKey(2))?.status).toBe('success'));
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).message).toBe('查询虚构记录 DEMO-842');
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).message).toBe('查询虚构记录 DEMO-842');
   });
 
   it('discards an old-owner ordinary Chat admission after an auth generation change', async () => {
@@ -361,7 +361,7 @@ describe('ChatPage request boundary', () => {
     await waitFor(() => expect(client.getQueryState(identityQueryKey(1))?.status).toBe('success'));
     await sendMessage('查询虚构记录 DEMO-731');
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    const signal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
     identityMock.readMe.mockResolvedValue(browserMe('owner_b'));
     act(() => { useAuthStore.setState({ generation: 2, status: 'authenticated' }); });
     expect(signal.aborted).toBe(true);

@@ -96,23 +96,31 @@ def business_context_success_schema() -> dict[str, Any]:
                     "jqPrefix": {"type": ["string", "null"]},
                 },
                 "required": [
-                    "departmentId", "departmentName", "departmentType",
-                    "allOrganizations", "jyId", "jqPrefix",
+                    "departmentId",
+                    "departmentName",
+                    "departmentType",
+                    "allOrganizations",
+                    "jyId",
+                    "jqPrefix",
                 ],
             },
         },
         "required": [
-            "userId", "displayName", "clientId", "adapterClientId",
-            "resource", "timezone", "capabilities", "organization",
+            "userId",
+            "displayName",
+            "clientId",
+            "adapterClientId",
+            "resource",
+            "timezone",
+            "capabilities",
+            "organization",
         ],
     }
 
 
 def _fixed_read_display_schema(public_schema: dict[str, Any]) -> dict[str, Any]:
     """Drop one validator-only keyword from this profile's display schema."""
-    public_schema["anyOf"][0]["properties"].get("capabilities", {}).pop(
-        "contains", None
-    )
+    public_schema["anyOf"][0]["properties"].get("capabilities", {}).pop("contains", None)
     return public_schema
 
 
@@ -139,27 +147,67 @@ class _FixedReadOutputContract(OutputContract):
                         error = next(Draft202012Validator(self.schema).iter_errors(data), None)
                         if error is not None:
                             fields = {
-                                "userId", "displayName", "clientId", "adapterClientId",
-                                "resource", "timezone", "capabilities", "organization",
-                                "departmentId", "departmentName", "departmentType",
-                                "allOrganizations", "jyId", "jqPrefix",
+                                "userId",
+                                "displayName",
+                                "clientId",
+                                "adapterClientId",
+                                "resource",
+                                "timezone",
+                                "capabilities",
+                                "organization",
+                                "departmentId",
+                                "departmentName",
+                                "departmentType",
+                                "allOrganizations",
+                                "jyId",
+                                "jqPrefix",
                             }
-                            field = next((p.lower() for p in reversed(
-                                tuple(error.absolute_schema_path)) if p in fields), "root")
-                            keyword = error.validator if error.validator in {
-                                "required", "type", "const", "pattern", "minLength", "contains",
-                            } else "other"
+                            field = next(
+                                (
+                                    p.lower()
+                                    for p in reversed(tuple(error.absolute_schema_path))
+                                    if p in fields
+                                ),
+                                "root",
+                            )
+                            keyword = (
+                                error.validator
+                                if error.validator
+                                in {
+                                    "required",
+                                    "type",
+                                    "const",
+                                    "pattern",
+                                    "minLength",
+                                    "contains",
+                                }
+                                else "other"
+                            )
                             if keyword == "required" and isinstance(error.instance, dict):
-                                field = next((p.lower() for p in error.validator_value
-                                              if p in fields and p not in error.instance), field)
+                                field = next(
+                                    (
+                                        p.lower()
+                                        for p in error.validator_value
+                                        if p in fields and p not in error.instance
+                                    ),
+                                    field,
+                                )
                             stage += f"_{field}_{keyword.lower()}"
                             if field == "departmentid" and keyword == "type":
                                 actual = error.instance
-                                kind = {str: "string", bool: "boolean", dict: "object",
-                                        list: "array"}.get(type(actual), "other")
+                                kind = {
+                                    str: "string",
+                                    bool: "boolean",
+                                    dict: "object",
+                                    list: "array",
+                                }.get(type(actual), "other")
                                 stage += f"_{kind}"
                                 if isinstance(actual, str):
-                                    stage += "_digits" if actual and actual.isascii() and actual.isdecimal() else "_other"
+                                    stage += (
+                                        "_digits"
+                                        if actual and actual.isascii() and actual.isdecimal()
+                                        else "_other"
+                                    )
             record_mcp_event(stage, "failed", tool=TOOL, error_code="mcp_output_invalid")
             raise
 
@@ -187,9 +235,7 @@ class FixedReadApproval(BaseModel):
         default_factory=business_context_success_schema, repr=False
     )
     # Labels and field names are approved configuration, not upstream captions.
-    display_fields: dict[str, str] = Field(
-        default_factory=fixed_read_display_fields
-    )
+    display_fields: dict[str, str] = Field(default_factory=fixed_read_display_fields)
 
     @model_validator(mode="after")
     def binding_mode_has_one_authority(self) -> FixedReadApproval:
@@ -240,39 +286,81 @@ _QUERY_PRESENTATION = {
 # keys keep their original name. Paths use "." for objects and "[]" for items;
 # a path entry wins over a bare field-name entry.
 _QUERY_COMMON_LABELS = {
-    "personId": "人员ID", "number": "人员编号", "name": "姓名",
-    "jyId": "监狱ID", "jqId": "监区ID", "page": "页码", "pageSize": "每页条数",
-    "hasMore": "是否还有结果", "source": "来源", "recordId": "记录ID",
-    "status": "状态", "reason": "原因", "artifactId": "单据ID",
-    "submittedAt": "提交时间", "reviewUrl": "查看链接", "ruleId": "规则ID",
-    "effectiveFrom": "生效日期", "limit": "条数上限",
+    "personId": "人员ID",
+    "number": "人员编号",
+    "name": "姓名",
+    "jyId": "监狱ID",
+    "jqId": "监区ID",
+    "page": "页码",
+    "pageSize": "每页条数",
+    "hasMore": "是否还有结果",
+    "source": "来源",
+    "recordId": "记录ID",
+    "status": "状态",
+    "reason": "原因",
+    "artifactId": "单据ID",
+    "submittedAt": "提交时间",
+    "reviewUrl": "查看链接",
+    "ruleId": "规则ID",
+    "effectiveFrom": "生效日期",
+    "limit": "条数上限",
 }
 _TALK_TASKS_FIELD_LABELS = {
-    "weekStart": "本周开始日期", "deadline": "截止时间", "required": "要求次数",
-    "valid": "已计次数", "remaining": "剩余次数", "state": "状态", "version": "版本",
-    "assigneeId": "领取人ID", "prepared": "是否已保存准备提纲",
-    "preparationArtifactId": "准备单据ID", "everOverdue": "是否曾逾期",
-    "ruleSnapshot": "规则快照", "ruleVersion": "规则版本", "classification": "分类",
-    "minimum": "最低次数", "talkTypeCodes": "谈话类型代码",
-    "eligibleOfficerIds": "可领取民警ID", "allowSharedRecord": "是否允许共用记录",
-    "effectiveTo": "失效日期", "enabled": "是否启用", "lifecyclePolicy": "生命周期策略",
-    "sourceIds": "来源ID", "total": "总数", "rules": "规则",
-    "latestConfig": "最新配置", "currentVersion": "当前版本", "currentStatus": "当前状态",
-    "scheduledVersions": "计划生效版本", "sourceReadiness": "来源就绪情况",
-    "unknownDateRecordCount": "日期不明记录数", "configurationStatus": "配置状态",
-    "schedulerEnabled": "是否启用自动调度", "timezone": "时区",
+    "weekStart": "本周开始日期",
+    "deadline": "截止时间",
+    "required": "要求次数",
+    "valid": "已计次数",
+    "remaining": "剩余次数",
+    "state": "状态",
+    "version": "版本",
+    "assigneeId": "领取人ID",
+    "prepared": "是否已保存准备提纲",
+    "preparationArtifactId": "准备单据ID",
+    "everOverdue": "是否曾逾期",
+    "ruleSnapshot": "规则快照",
+    "ruleVersion": "规则版本",
+    "classification": "分类",
+    "minimum": "最低次数",
+    "talkTypeCodes": "谈话类型代码",
+    "eligibleOfficerIds": "可领取民警ID",
+    "allowSharedRecord": "是否允许共用记录",
+    "effectiveTo": "失效日期",
+    "enabled": "是否启用",
+    "lifecyclePolicy": "生命周期策略",
+    "sourceIds": "来源ID",
+    "total": "总数",
+    "rules": "规则",
+    "latestConfig": "最新配置",
+    "currentVersion": "当前版本",
+    "currentStatus": "当前状态",
+    "scheduledVersions": "计划生效版本",
+    "sourceReadiness": "来源就绪情况",
+    "unknownDateRecordCount": "日期不明记录数",
+    "configurationStatus": "配置状态",
+    "schedulerEnabled": "是否启用自动调度",
+    "timezone": "时区",
 }
 # Relative to a talk_tasks_list result; talk_context_get nests it under "tasks".
 _TALK_TASKS_PATH_LABELS = {
-    "tasks": "任务列表", "tasks[].id": "任务ID", "tasks[].reason": "不适用原因",
-    "rules[].id": "规则ID", "rules[].version": "最新版本", "rules[].config": "当前配置",
+    "tasks": "任务列表",
+    "tasks[].id": "任务ID",
+    "tasks[].reason": "不适用原因",
+    "rules[].id": "规则ID",
+    "rules[].version": "最新版本",
+    "rules[].config": "当前配置",
     "rules[].scheduledVersions[].config": "配置",
 }
 _QUERY_STATUS_LABELS = {
-    "AVAILABLE": "可用", "EMPTY": "无记录", "FORBIDDEN": "无权限",
-    "UNAVAILABLE": "暂不可用", "TRUNCATED": "部分结果",
-    "DRAFT": "草稿", "CONFIRMED": "已确认", "DONE": "已完成",
-    "PENDING": "待处理", "PENDING_EFFECTIVE": "待生效",
+    "AVAILABLE": "可用",
+    "EMPTY": "无记录",
+    "FORBIDDEN": "无权限",
+    "UNAVAILABLE": "暂不可用",
+    "TRUNCATED": "部分结果",
+    "DRAFT": "草稿",
+    "CONFIRMED": "已确认",
+    "DONE": "已完成",
+    "PENDING": "待处理",
+    "PENDING_EFFECTIVE": "待生效",
 }
 _TALK_TASKS_ENUMS: dict[str, Mapping[str, str]] = {
     "sourceReadiness[].status": _QUERY_STATUS_LABELS,
@@ -292,59 +380,135 @@ _QUERY_LABELS: dict[str, dict[str, str]] = {
         **_QUERY_COMMON_LABELS,
         **_TALK_TASKS_FIELD_LABELS,
         **_nested_paths("tasks", _TALK_TASKS_PATH_LABELS),
-        "person": "人员信息", "custodyStatus": "在押状态", "educationCode": "文化程度码",
-        "admissionDate": "入监日期", "purpose": "目的", "scenario": "场景",
-        "sources": "资料来源", "backgroundSources": "背景资料来源", "records": "记录",
-        "recordedAt": "记录日期", "text": "谈话文本", "truncated": "是否截断",
-        "reasonField": "理由字段", "recognitionReasonCode": "认定原因码",
-        "recordedReason": "认定理由", "dictionaryOptions": "字典选项",
-        "thsx": "谈话事项", "thdd": "谈话地点", "thxg": "谈话效果", "sbt": "备注",
-        "thnrzt": "谈话内容主题", "code": "代码", "label": "名称",
-        "metadata": "字典状态", "officerOptions": "民警选项",
-        "officerOptions.options": "民警列表", "userId": "民警用户ID",
-        "departmentName": "部门名称", "currentUserId": "当前用户ID",
-        "savedArtifacts": "已保存单据", "kind": "单据类型", "clientId": "客户端ID",
-        "payload": "单据参数", "canonicalPayload": "规范参数文本",
-        "payloadHash": "参数摘要", "operation": "操作", "expiresAt": "过期时间",
-        "reviewPath": "查看路径", "result": "结果", "tasks": "谈话任务",
+        "person": "人员信息",
+        "custodyStatus": "在押状态",
+        "educationCode": "文化程度码",
+        "admissionDate": "入监日期",
+        "purpose": "目的",
+        "scenario": "场景",
+        "sources": "资料来源",
+        "backgroundSources": "背景资料来源",
+        "records": "记录",
+        "recordedAt": "记录日期",
+        "text": "谈话文本",
+        "truncated": "是否截断",
+        "reasonField": "理由字段",
+        "recognitionReasonCode": "认定原因码",
+        "recordedReason": "认定理由",
+        "dictionaryOptions": "字典选项",
+        "thsx": "谈话事项",
+        "thdd": "谈话地点",
+        "thxg": "谈话效果",
+        "sbt": "备注",
+        "thnrzt": "谈话内容主题",
+        "code": "代码",
+        "label": "名称",
+        "metadata": "字典状态",
+        "officerOptions": "民警选项",
+        "officerOptions.options": "民警列表",
+        "userId": "民警用户ID",
+        "departmentName": "部门名称",
+        "currentUserId": "当前用户ID",
+        "savedArtifacts": "已保存单据",
+        "kind": "单据类型",
+        "clientId": "客户端ID",
+        "payload": "单据参数",
+        "canonicalPayload": "规范参数文本",
+        "payloadHash": "参数摘要",
+        "operation": "操作",
+        "expiresAt": "过期时间",
+        "reviewPath": "查看路径",
+        "result": "结果",
+        "tasks": "谈话任务",
     },
     "talk_record_get": {
         **_QUERY_COMMON_LABELS,
-        "record": "谈话记录", "record.ID": "记录ID", "JBXX_ID": "人员ID",
-        "JY_ID": "监狱ID", "JQ_ID": "监区ID", "TH_RQ": "谈话日期", "THDD": "谈话地点",
-        "THMJ_ID": "谈话民警ID", "THSX": "谈话事项", "THXG": "谈话效果",
-        "THNR": "谈话内容", "SBT": "备注", "QTDCYCS": "其他次数", "SFWC": "完成标志",
-        "C_SCBZ": "删除标志", "provenance": "提交溯源", "actorId": "操作人ID",
-        "claimOwnerId": "领取人ID", "taskId": "任务ID", "originalActualNotes": "原始纪要",
-        "originalPersonId": "原人员ID", "originalJyId": "原监狱ID",
-        "originalJqId": "原监区ID", "countingSource": "计次来源",
-        "taskAllocations": "任务计次分配", "TASK_ID": "任务ID", "RULE_ID": "规则ID",
-        "WEEK_START": "周开始时间", "STATE": "状态", "VALID_COUNT": "已计次数",
-        "REMAINING_COUNT": "剩余次数", "EVER_OVERDUE": "是否曾逾期",
+        "record": "谈话记录",
+        "record.ID": "记录ID",
+        "JBXX_ID": "人员ID",
+        "JY_ID": "监狱ID",
+        "JQ_ID": "监区ID",
+        "TH_RQ": "谈话日期",
+        "THDD": "谈话地点",
+        "THMJ_ID": "谈话民警ID",
+        "THSX": "谈话事项",
+        "THXG": "谈话效果",
+        "THNR": "谈话内容",
+        "SBT": "备注",
+        "QTDCYCS": "其他次数",
+        "SFWC": "完成标志",
+        "C_SCBZ": "删除标志",
+        "provenance": "提交溯源",
+        "actorId": "操作人ID",
+        "claimOwnerId": "领取人ID",
+        "taskId": "任务ID",
+        "originalActualNotes": "原始纪要",
+        "originalPersonId": "原人员ID",
+        "originalJyId": "原监狱ID",
+        "originalJqId": "原监区ID",
+        "countingSource": "计次来源",
+        "taskAllocations": "任务计次分配",
+        "TASK_ID": "任务ID",
+        "RULE_ID": "规则ID",
+        "WEEK_START": "周开始时间",
+        "STATE": "状态",
+        "VALID_COUNT": "已计次数",
+        "REMAINING_COUNT": "剩余次数",
+        "EVER_OVERDUE": "是否曾逾期",
         "taskAllocationsStatus": "任务计次分配状态",
     },
     "talk_tasks_list": {
-        **_QUERY_COMMON_LABELS, **_TALK_TASKS_FIELD_LABELS, **_TALK_TASKS_PATH_LABELS,
+        **_QUERY_COMMON_LABELS,
+        **_TALK_TASKS_FIELD_LABELS,
+        **_TALK_TASKS_PATH_LABELS,
     },
     "clothing_options_get": {
         **_QUERY_COMMON_LABELS,
-        "templates": "模板", "templates[].ID": "模板ID", "NAME": "名称",
-        "BATCH_MONTHS": "发放月份", "warehouses": "仓库", "warehouses[].ID": "仓库ID",
-        "TYPE": "类型", "UNIT_ID": "单位ID", "JY_ID": "监狱ID", "JQ_ID": "监区ID",
-        "standards": "发放标准", "standards[].ID": "标准ID", "GENDER": "性别",
-        "FIRST_MONTHS": "首次月份", "FIRST_QTY": "首次数量", "CYCLE_YEARS": "周期年数",
-        "CYCLE_QTY": "周期数量", "MIN_HOLDING": "最低持有量", "STATUS": "状态",
-        "inventory": "库存", "WAREHOUSE_ID": "仓库ID", "CATEGORY_ID": "类别ID",
-        "AVAILABLE": "可用数量", "history": "历史发放", "BATCH_MONTH": "发放月份",
-        "ROW_COUNT": "记录数", "QUANTITY": "数量", "sources": "来源",
-        "mode": "发放模式", "shortagePolicy": "缺货处理", "oldLedgerEffect": "旧台账说明",
+        "templates": "模板",
+        "templates[].ID": "模板ID",
+        "NAME": "名称",
+        "BATCH_MONTHS": "发放月份",
+        "warehouses": "仓库",
+        "warehouses[].ID": "仓库ID",
+        "TYPE": "类型",
+        "UNIT_ID": "单位ID",
+        "JY_ID": "监狱ID",
+        "JQ_ID": "监区ID",
+        "standards": "发放标准",
+        "standards[].ID": "标准ID",
+        "GENDER": "性别",
+        "FIRST_MONTHS": "首次月份",
+        "FIRST_QTY": "首次数量",
+        "CYCLE_YEARS": "周期年数",
+        "CYCLE_QTY": "周期数量",
+        "MIN_HOLDING": "最低持有量",
+        "STATUS": "状态",
+        "inventory": "库存",
+        "WAREHOUSE_ID": "仓库ID",
+        "CATEGORY_ID": "类别ID",
+        "AVAILABLE": "可用数量",
+        "history": "历史发放",
+        "BATCH_MONTH": "发放月份",
+        "ROW_COUNT": "记录数",
+        "QUANTITY": "数量",
+        "sources": "来源",
+        "mode": "发放模式",
+        "shortagePolicy": "缺货处理",
+        "oldLedgerEffect": "旧台账说明",
     },
     "clothing_result_get": {
         **_QUERY_COMMON_LABELS,
-        "receipt": "回执", "batchNo": "发放批次号", "rosterIds": "发放名册ID",
-        "stockOutIds": "出库单ID", "quantity": "发放总件数", "submittedBy": "提交人ID",
-        "physicalHandover": "实物交接", "currentStockOutStatuses": "当前出库状态",
-        "currentStockOutStatuses[].ID": "出库单ID", "STATUS": "状态", "C_SCBZ": "删除标志",
+        "receipt": "回执",
+        "batchNo": "发放批次号",
+        "rosterIds": "发放名册ID",
+        "stockOutIds": "出库单ID",
+        "quantity": "发放总件数",
+        "submittedBy": "提交人ID",
+        "physicalHandover": "实物交接",
+        "currentStockOutStatuses": "当前出库状态",
+        "currentStockOutStatuses[].ID": "出库单ID",
+        "STATUS": "状态",
+        "C_SCBZ": "删除标志",
     },
 }
 # Known codes are translated only at these exact paths; raw STATUS/STATE,
@@ -463,7 +627,7 @@ def _approved_query_public_schema(
                 prefix = "#/$defs/"
                 if not isinstance(reference, str) or not reference.startswith(prefix):
                     raise McpFailure("mcp_output_contract_invalid")
-                name = reference[len(prefix):]
+                name = reference[len(prefix) :]
                 target = definitions.get(name)
                 if name in references or not isinstance(target, Mapping):
                     raise McpFailure("mcp_output_contract_invalid")
@@ -522,9 +686,12 @@ def _approved_query_reads(
         binding = next(item for item in bindings if item.capability_id == capability_id)
         name, description, intent = _QUERY_PRESENTATION[tool]
         policy: list[Any] = [
-            approval.version, approval.approval_evidence,
-            contract.version, contract.approval_evidence,
-            service.service_config_id, tool,
+            approval.version,
+            approval.approval_evidence,
+            contract.version,
+            contract.approval_evidence,
+            service.service_config_id,
+            tool,
         ]
         if projection is not None:
             # Any change to validation, public schema or a frozen path rule
@@ -626,9 +793,7 @@ class FixedReadProfile(IdentityAssertionPort):
         init=False, default=None, repr=False, compare=False
     )
     _owner_ready: bool = dataclass_field(init=False, default=False, repr=False, compare=False)
-    _owner_lock: Lock = dataclass_field(
-        init=False, default_factory=Lock, repr=False, compare=False
-    )
+    _owner_lock: Lock = dataclass_field(init=False, default_factory=Lock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.version = self.approval.version
@@ -657,10 +822,7 @@ class FixedReadProfile(IdentityAssertionPort):
         """A single explicit Apps authorization may select the local owner once."""
         if self.approval.local_owner_source != "authenticated_session":
             return
-        if (
-            not self.service.enabled
-            or service_config_id != self.service.service_config_id
-        ):
+        if not self.service.enabled or service_config_id != self.service.service_config_id:
             raise McpFailure("mcp_service_unavailable")
         owner = FixedReadLocalOwner.from_session(session)
         if (
@@ -672,9 +834,7 @@ class FixedReadProfile(IdentityAssertionPort):
         with self._owner_lock:
             if self._bound_owner is None:
                 self._bound_owner = owner
-                record_mcp_event(
-                    "fixed_owner_bound", "success", profile=self.service, tool=TOOL
-                )
+                record_mcp_event("fixed_owner_bound", "success", profile=self.service, tool=TOOL)
             elif self._bound_owner != owner:
                 raise McpFailure("mcp_service_unavailable")
             self._owner_ready = False
@@ -783,7 +943,8 @@ class FixedReadProfile(IdentityAssertionPort):
                 reason = "mcp_candidate_owner_not_ready"
             elif (
                 owner.tenant_id != request_context.tenant_id
-                or owner.user_id != ai_user_id or ai_user_id != session.principal.ai_user_id
+                or owner.user_id != ai_user_id
+                or ai_user_id != session.principal.ai_user_id
                 or session.principal.org_ctx.tenant_id != request_context.tenant_id
             ):
                 reason = "mcp_candidate_owner_scope_mismatch"
@@ -796,8 +957,11 @@ class FixedReadProfile(IdentityAssertionPort):
             else:
                 reason = "mcp_candidate_denied"
             record_mcp_event(
-                "candidate_visibility", "failed", profile=self.service,
-                tool=tool or TOOL, error_code=reason,
+                "candidate_visibility",
+                "failed",
+                profile=self.service,
+                tool=tool or TOOL,
+                error_code=reason,
             )
         return allowed
 
@@ -834,13 +998,18 @@ class FixedReadProfile(IdentityAssertionPort):
             or token_metadata.get("issuer") != self.service.issuer
             or token_metadata.get("identity_probe_version") != self.version
             or token_metadata.get("service_config_version") != self.service.service_config_version
-            or type(connection_id) is not str or not connection_id
-            or type(binding_epoch) is not int or binding_epoch < 1
-            or type(fingerprint) is not str or len(fingerprint) != 64
+            or type(connection_id) is not str
+            or not connection_id
+            or type(binding_epoch) is not int
+            or binding_epoch < 1
+            or type(fingerprint) is not str
+            or len(fingerprint) != 64
             or any(char not in "0123456789abcdef" for char in fingerprint)
-            or type(registration_id) is not str or not registration_id
+            or type(registration_id) is not str
+            or not registration_id
             or registration_id != token_metadata.get("probe_registration_id")
-            or type(client_id) is not str or not client_id
+            or type(client_id) is not str
+            or not client_id
         ):
             return None
         return digest(
@@ -902,20 +1071,19 @@ class FixedReadProfile(IdentityAssertionPort):
             connection_id=transaction.owner.connection_id,
             tls_context=self.tls_context,
         )
-        record_mcp_event(
-            "identity_probe_received", "success", profile=service, tool=TOOL
-        )
+        record_mcp_event("identity_probe_received", "success", profile=service, tool=TOOL)
         validated = self.output_contract.validate(result)
         # The deployed service derives this opaque ID from the OAuth client.
-        expected_client_id = "oauth_" + sha256(
-            (validated["adapterClientId"] + "\n" + transaction.client_id).encode("utf-8")
-        ).hexdigest()
+        expected_client_id = (
+            "oauth_"
+            + sha256(
+                (validated["adapterClientId"] + "\n" + transaction.client_id).encode("utf-8")
+            ).hexdigest()
+        )
         if validated["clientId"] != expected_client_id:
             raise McpFailure("mcp_identity_probe_denied")
         subject = validated["userId"]
-        record_mcp_event(
-            "identity_probe_validated", "success", profile=service, tool=TOOL
-        )
+        record_mcp_event("identity_probe_validated", "success", profile=service, tool=TOOL)
         # Subject mismatch keeps the encrypted grant pending; it never activates
         # a connection and never uses this response as a later Chat answer.
         await revalidate()
@@ -1071,7 +1239,9 @@ def load_fixed_read_profile(
             prepared if prepared is not None and prepared.service == service else None
         )
         profile = build_fixed_read_profile(
-            service, approval, prepared=matching_preparation,
+            service,
+            approval,
+            prepared=matching_preparation,
             read_contracts=read_contracts,
         )
         if tls_contexts is not None:
@@ -1108,8 +1278,7 @@ class FixedReadCapabilityRegistry:
             },
         }
         self._protected_ids = {
-            f"business.{profile.service.service_config_id}.{tool}"
-            for tool in (TOOL, *QUERY_TOOLS)
+            f"business.{profile.service.service_config_id}.{tool}" for tool in (TOOL, *QUERY_TOOLS)
         }
 
     def _validate(self, capability: CapabilitySpec, expected: CapabilitySpec) -> None:
@@ -1162,10 +1331,7 @@ class FixedReadCapabilityRegistry:
                 if not self._profile.service.enabled:
                     raise McpFailure("mcp_service_unavailable")
                 await self._store.configure(self._profile.service)
-                if (
-                    await self._store.mapping(capability_id, current.version)
-                    != binding
-                ):
+                if await self._store.mapping(capability_id, current.version) != binding:
                     raise McpFailure("mcp_capability_unprepared")
         return await self._delegate.update(capability_id, patch)
 

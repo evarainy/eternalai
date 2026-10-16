@@ -40,8 +40,8 @@ from app.infra.browser.d_form_installation import (
 )
 from app.infra.browser.d_form_manifest import build_fill_stop_manifest, source_digest
 from app.infra.browser.d_form_owned_browser import (
-    OwnedOALoginContract,
     _D_FORM_LOG_CODES,
+    OwnedOALoginContract,
     log_d_form_stage,
     owned_provider_digest,
     validate_owned_paths,
@@ -101,21 +101,43 @@ def _log_cleanup_failure(step: str, error: Exception, began: float) -> None:
         code = _management_error_code(error)
         safe_code = code if type(code) is str and code in _D_FORM_LOG_CODES else "error"
         name = type(error).__name__
-        safe_name = name if name in {
-            "DFormManagementError", "BrowserLeaseError", "BrowserAuthorizationError",
-            "BrowserRunStoreError", "BrowserReadExecutionError", "ProgrammingError",
-            "DBAPIError", "OperationalError", "IntegrityError", "SQLAlchemyError",
-            "TimeoutError", "ValueError", "TypeError", "OSError",
-        } else "UnknownException"
+        safe_name = (
+            name
+            if name
+            in {
+                "DFormManagementError",
+                "BrowserLeaseError",
+                "BrowserAuthorizationError",
+                "BrowserRunStoreError",
+                "BrowserReadExecutionError",
+                "ProgrammingError",
+                "DBAPIError",
+                "OperationalError",
+                "IntegrityError",
+                "SQLAlchemyError",
+                "TimeoutError",
+                "ValueError",
+                "TypeError",
+                "OSError",
+            }
+            else "UnknownException"
+        )
         sqlstate = "none"
         if isinstance(error, SQLAlchemyError):
             value = getattr(getattr(error, "orig", None), "sqlstate", None)
-            if (type(value) is str and len(value) == 5
-                    and all(char in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" for char in value)):
+            if (
+                type(value) is str
+                and len(value) == 5
+                and all(char in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" for char in value)
+            ):
                 sqlstate = value
         logging.getLogger("uvicorn.error.d_form").error(
-            "d_form_cleanup_failure step=%s exception_type=%s error_code=%s sqlstate=%s elapsed_ms=%d",
-            step, safe_name, safe_code, sqlstate,
+            "d_form_cleanup_failure step=%s exception_type=%s "
+            "error_code=%s sqlstate=%s elapsed_ms=%d",
+            step,
+            safe_name,
+            safe_code,
+            sqlstate,
             max(0, int((time.monotonic() - began) * 1000)),
         )
     except Exception:
@@ -133,8 +155,10 @@ def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadines
     if config.authorization_mode == "fixed_owner":
         from app.infra.browser.d_form_fixed_approval import APPROVED_FIXED_SOURCE_DIGEST
 
-        if (loaded.settings.source_tenant_id != "default"
-                or source_digest() != APPROVED_FIXED_SOURCE_DIGEST):
+        if (
+            loaded.settings.source_tenant_id != "default"
+            or source_digest() != APPROVED_FIXED_SOURCE_DIGEST
+        ):
             raise DFormConfigurationError("d_form_authorization_missing")
     try:
         build_fill_stop_manifest(origin=config.origin)
@@ -143,8 +167,10 @@ def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadines
     if (
         config.pool is not None
         and config.chromium_sha256 is not None
-        and config.pool.manifest_digest != pool_manifest_digest(
-            config.origin, config.chromium_sha256,
+        and config.pool.manifest_digest
+        != pool_manifest_digest(
+            config.origin,
+            config.chromium_sha256,
         ).hex()
     ):
         raise DFormConfigurationError("d_form_pool_mismatch")
@@ -161,11 +187,18 @@ def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadines
             )
         except Exception:
             raise DFormConfigurationError("d_form_pool_mismatch") from None
-    if (config.chromium is not None and config.chromium_sha256 is not None
-            and config.owned_runs_root is not None):
+    if (
+        config.chromium is not None
+        and config.chromium_sha256 is not None
+        and config.owned_runs_root is not None
+    ):
         try:
-            validate_owned_paths(config.chromium, config.owned_runs_root,
-                                 config.chromium_sha256, config.receipts_root)
+            validate_owned_paths(
+                config.chromium,
+                config.owned_runs_root,
+                config.chromium_sha256,
+                config.receipts_root,
+            )
         except Exception:
             raise DFormConfigurationError("d_form_config_invalid") from None
     if config.login_controls is not None:
@@ -208,9 +241,14 @@ def _login_contract(loaded: LoadedDFormConfiguration) -> OwnedOALoginContract | 
     try:
         return OwnedOALoginContract(
             login_path=controls.login_path,
-            login_id=controls.login_id, password=controls.password, submit=controls.submit,
-            stops={name: value for name in ("captcha", "mfa", "sso", "warning")
-                   if (value := getattr(controls, name)) is not None},
+            login_id=controls.login_id,
+            password=controls.password,
+            submit=controls.submit,
+            stops={
+                name: value
+                for name in ("captcha", "mfa", "sso", "warning")
+                if (value := getattr(controls, name)) is not None
+            },
         )
     except Exception:
         raise DFormConfigurationError("d_form_login_contract_missing") from None
@@ -288,7 +326,10 @@ class DFormManagement:
         )
 
     async def _caller(
-        self, principal: Principal, *, handoff: bool = False,
+        self,
+        principal: Principal,
+        *,
+        handoff: bool = False,
         session_id: str | None = None,
     ) -> DFormActor | DFormRequestActor:
         began = time.monotonic()
@@ -297,23 +338,29 @@ class DFormManagement:
             binding = self.fixed_binding
             captured = authenticated_session.get()
             if (
-                captured is None or captured.principal != principal
+                captured is None
+                or captured.principal != principal
                 or principal.org_ctx.tenant_id != binding.tenant_id
                 or principal.ai_user_id != binding.ai_user_id
                 or principal.org_ctx.directory_user_id is None
                 or type(captured.fingerprint) is not bytes
                 or len(captured.fingerprint) != 32
             ):
-                log_d_form_stage("management_caller", "failed", "d_form_authorization_denied", began)
+                log_d_form_stage(
+                    "management_caller", "failed", "d_form_authorization_denied", began
+                )
                 raise DFormManagementError("d_form_authorization_denied")
             log_d_form_stage("management_caller", "success", "OK", began)
             log_d_form_stage("management_binding", "started", "OK", began)
             try:
                 bound = self.components.session_binder.bind(
-                    principal, session_id or f"admin-v1:{principal.ai_user_id}",
+                    principal,
+                    session_id or f"admin-v1:{principal.ai_user_id}",
                 )
             except Exception as error:
-                log_d_form_stage("management_binding", "failed", _management_error_code(error), began)
+                log_d_form_stage(
+                    "management_binding", "failed", _management_error_code(error), began
+                )
                 raise DFormManagementError("d_form_authorization_denied") from None
             log_d_form_stage("management_binding", "success", "OK", began)
             log_d_form_stage("management_grant", "started", "OK", began)
@@ -324,7 +371,9 @@ class DFormManagement:
                         user_id=binding.ai_user_id,
                         session_id=bound,
                     ),
-                    self.grants.skill_id, "read", self.grants.digest,
+                    self.grants.skill_id,
+                    "read",
+                    self.grants.digest,
                 ):
                     raise DFormManagementError("d_form_authorization_denied")
             except Exception as error:
@@ -332,7 +381,10 @@ class DFormManagement:
                 raise
             log_d_form_stage("management_grant", "success", "OK", began)
             return DFormRequestActor(
-                principal, captured.fingerprint, captured.expires_at, bound,
+                principal,
+                captured.fingerprint,
+                captured.expires_at,
+                bound,
             )
         actor = self.cleanup_actor if handoff else self.business
         if not self._matches_caller(principal, actor):
@@ -377,7 +429,9 @@ class DFormManagement:
             raise DFormManagementError("d_form_authorization_denied")
         if self.vertical is None or self.grants is None or self.targets is None:
             return DFormManagementState(
-                structure_valid=True, gaps=self.gaps, publication="unavailable",
+                structure_valid=True,
+                gaps=self.gaps,
+                publication="unavailable",
                 fixed_activation=self.loaded.config.authorization_mode == "fixed_owner",
             )
         # Read metadata only, through existing authenticated management policy.
@@ -399,18 +453,19 @@ class DFormManagement:
         )
         if not is_business:
             return DFormManagementState(
-                structure_valid=True, gaps=tuple(dict.fromkeys(gaps)),
-                choices=tuple(choices), available_operations=tuple(operations),
-                publication=publication, handoff_preview=handoff_preview,
+                structure_valid=True,
+                gaps=tuple(dict.fromkeys(gaps)),
+                choices=tuple(choices),
+                available_operations=tuple(operations),
+                publication=publication,
+                handoff_preview=handoff_preview,
                 fixed_activation=self.fixed_binding is not None,
             )
         actor = await self._caller(principal)
         stage = "management_grant"
         try:
             log_d_form_stage(stage, "started", "OK", began)
-            if not await grants.check(
-                actor.owner, grants.skill_id, "read", grants.digest
-            ):
+            if not await grants.check(actor.owner, grants.skill_id, "read", grants.digest):
                 raise DFormManagementError("d_form_authorization_denied")
             log_d_form_stage(stage, "success", "OK", began)
             stage = "management_read"
@@ -450,10 +505,14 @@ class DFormManagement:
                 log_d_form_stage(stage, "started", "OK", began)
                 operations_to_check = (
                     (("prepare", "prepare"), ("activate", "activate"))
-                    if self.fixed_binding is not None else
-                    (("prepare", "prepare"), ("validate", "execute"),
-                     ("request_review", "activate"),
-                     ("confirm_review", "activate"), ("activate", "activate"))
+                    if self.fixed_binding is not None
+                    else (
+                        ("prepare", "prepare"),
+                        ("validate", "execute"),
+                        ("request_review", "activate"),
+                        ("confirm_review", "activate"),
+                        ("activate", "activate"),
+                    )
                 )
                 for operation, grant in operations_to_check:
                     if await grants.check(
@@ -462,11 +521,17 @@ class DFormManagement:
                         cast(PublicationOperation, grant),
                         grants.digest,
                     ):
-                        if self.fixed_binding is not None and operation == "activate" and not callable(
-                            getattr(vertical.publications, "activate_fixed_initial", None)
+                        if (
+                            self.fixed_binding is not None
+                            and operation == "activate"
+                            and not callable(
+                                getattr(vertical.publications, "activate_fixed_initial", None)
+                            )
                         ):
                             gaps.append("d_form_authorization_missing")
-                        elif operation != "validate" or self.loaded.config.login_controls is not None:
+                        elif (
+                            operation != "validate" or self.loaded.config.login_controls is not None
+                        ):
                             operations.append(cast(DFormManagementOperation, operation))
                 log_d_form_stage(stage, "success", "OK", began)
         except Exception as error:
@@ -490,7 +555,8 @@ class DFormManagement:
     ) -> DFormManagementState:
         began = time.monotonic()
         stage = {"prepare": "management_prepare", "activate": "management_activate"}.get(
-            command.operation, "management_operation",
+            command.operation,
+            "management_operation",
         )
         log_d_form_stage(stage, "started", "OK", began)
         try:
@@ -522,28 +588,40 @@ class DFormManagement:
         if self.vertical is None or self.grants is None or self.targets is None:
             raise DFormManagementError("d_form_authorization_missing")
         if self.fixed_binding is not None and command.operation in {
-            "validate", "request_review", "confirm_review", "confirm_handoff",
+            "validate",
+            "request_review",
+            "confirm_review",
+            "confirm_handoff",
         }:
             raise DFormManagementError("d_form_authorization_denied")
         vertical, grants = self.vertical, self.grants
         if command.operation == "close_owned_browser":
             actor = await self._caller(
-                principal, handoff=True, session_id=command.session_id,
+                principal,
+                handoff=True,
+                session_id=command.session_id,
             )
-            if (command.selection != "installed_binding" or command.parameters is not None
-                    or command.handoff_confirmation is not None or command.request_id is not None
-                    or command.task_id is None or command.run_id is None
-                    or command.session_id is None
-                    or self.components.session_binder.bind(principal, command.session_id)
-                    != actor.bound_session or (
-                        self.business is None and self.fixed_binding is None
-                    )
-                    or self.cleanup is None or type(vertical.execution) is not DFormRuntime):
+            if (
+                command.selection != "installed_binding"
+                or command.parameters is not None
+                or command.handoff_confirmation is not None
+                or command.request_id is not None
+                or command.task_id is None
+                or command.run_id is None
+                or command.session_id is None
+                or self.components.session_binder.bind(principal, command.session_id)
+                != actor.bound_session
+                or (self.business is None and self.fixed_binding is None)
+                or self.cleanup is None
+                or type(vertical.execution) is not DFormRuntime
+            ):
                 raise DFormManagementError("d_form_authorization_denied")
             cleanup_step = "get_for_cleanup"
             try:
                 run = await vertical.runs.get_for_cleanup(
-                    actor.owner, command.task_id, command.run_id,
+                    actor.owner,
+                    command.task_id,
+                    command.run_id,
                 )
                 cleanup_step = "authorize_run"
                 async with self.components.browser_session_factory() as session:
@@ -564,8 +642,10 @@ class DFormManagement:
         if (
             command.selection != "installed_binding"
             or command.handoff_confirmation is not None
-            or self.fixed_binding is None and command.session_id is None
-            or command.session_id is not None and (
+            or self.fixed_binding is None
+            and command.session_id is None
+            or command.session_id is not None
+            and (
                 self.components.session_binder.bind(principal, command.session_id)
                 != actor.bound_session
             )
@@ -589,9 +669,13 @@ class DFormManagement:
         if command.operation == "prepare":
             if (
                 command.parameters is not None
-                or self.fixed_binding is not None and any(
-                    item is not None for item in (
-                        command.task_id, command.run_id, command.request_id,
+                or self.fixed_binding is not None
+                and any(
+                    item is not None
+                    for item in (
+                        command.task_id,
+                        command.run_id,
+                        command.request_id,
                     )
                 )
             ):
@@ -600,13 +684,21 @@ class DFormManagement:
             try:
                 await vertical.prepare_seed(actor.owner)
             except Exception as error:
-                log_d_form_stage("publication_prepare", "failed", _management_error_code(error), began)
+                log_d_form_stage(
+                    "publication_prepare", "failed", _management_error_code(error), began
+                )
                 raise
             log_d_form_stage("publication_prepare", "success", "OK", began)
         elif self.fixed_binding is not None and command.operation == "activate":
-            if any(item is not None for item in (
-                command.parameters, command.task_id, command.run_id, command.request_id,
-            )):
+            if any(
+                item is not None
+                for item in (
+                    command.parameters,
+                    command.task_id,
+                    command.run_id,
+                    command.request_id,
+                )
+            ):
                 raise DFormManagementError("d_form_authorization_denied")
             activate = getattr(vertical.publications, "activate_fixed_initial", None)
             if not callable(activate):
@@ -615,7 +707,9 @@ class DFormManagement:
             try:
                 await activate(actor.owner, vertical._seed)
             except Exception as error:
-                log_d_form_stage("publication_activate", "failed", _management_error_code(error), began)
+                log_d_form_stage(
+                    "publication_activate", "failed", _management_error_code(error), began
+                )
                 raise
             log_d_form_stage("publication_activate", "success", "OK", began)
         elif command.operation == "validate":
@@ -669,7 +763,9 @@ class DFormManagement:
                         actor.owner, task_id=task_id, run_id=run_id, approval_ref=request_id
                     )
                 except Exception as error:
-                    log_d_form_stage("publication_activate", "failed", _management_error_code(error), began)
+                    log_d_form_stage(
+                        "publication_activate", "failed", _management_error_code(error), began
+                    )
                     raise
                 log_d_form_stage("publication_activate", "success", "OK", began)
             else:
@@ -716,8 +812,11 @@ async def open_installation(
     selector, keys, pool = config.binding, config.keys, config.pool
     assert selector is not None and keys is not None and pool is not None
     if not fixed_owner and (
-        business is None or publisher is None or cleanup_actor is None
-        or config.publication_actor is None or config.cleanup_actor is None
+        business is None
+        or publisher is None
+        or cleanup_actor is None
+        or config.publication_actor is None
+        or config.cleanup_actor is None
         or business.owner.user_id != selector.user_id
         or cleanup_actor.owner.user_id == business.owner.user_id
     ):
@@ -745,7 +844,8 @@ async def open_installation(
                 .one_or_none()
             )
             if (
-                row is None or row["binding_subject_digest"] is None
+                row is None
+                or row["binding_subject_digest"] is None
                 or row["binding_subject_verified_at"] is None
                 or len(row["binding_subject_digest"]) != 32
             ):
@@ -762,8 +862,9 @@ async def open_installation(
                 if row["binding_state"] != "active":
                     log_d_form_stage("binding", "failed", "browser_binding_inactive", began)
                 elif row["binding_revision"] != binding.binding_revision:
-                    log_d_form_stage("binding", "failed",
-                                     "browser_binding_revision_mismatch", began)
+                    log_d_form_stage(
+                        "binding", "failed", "browser_binding_revision_mismatch", began
+                    )
                 PostgreSQLBrowserBindingReader.check_row(row, binding)
                 if not fixed_owner:
                     assert business is not None and publisher is not None
@@ -781,21 +882,31 @@ async def open_installation(
     manifest = build_fill_stop_manifest(origin=config.origin)
     if fixed_owner:
         grants: DFormPublicationGrants | FixedDFormPublicationGrants = FixedDFormPublicationGrants(
-            components.browser_session_factory, components.session_binder,
-            binding, manifest.skill.skill_id, manifest.digest,
+            components.browser_session_factory,
+            components.session_binder,
+            binding,
+            manifest.skill.skill_id,
+            manifest.digest,
         )
     else:
         assert business is not None and publisher is not None
         assert config.publication_actor is not None
         grants = DFormPublicationGrants(
-            components.browser_session_factory, components.session_binder,
-            business, publisher, binding, manifest.skill.skill_id,
-            manifest.digest, frozenset(config.publication_actor.operations),
+            components.browser_session_factory,
+            components.session_binder,
+            business,
+            publisher,
+            binding,
+            manifest.skill.skill_id,
+            manifest.digest,
+            frozenset(config.publication_actor.operations),
         )
     targets = OwnedDFormTargetAuthority(components.browser_session_factory, binding)
     if fixed_owner:
         cleanup: PostgreSQLLocalCleanupGrant | FixedDFormCleanupGrant = FixedDFormCleanupGrant(
-            components.browser_session_factory, binding, manifest.digest,
+            components.browser_session_factory,
+            binding,
+            manifest.digest,
         )
     else:
         assert cleanup_actor is not None and config.cleanup_actor is not None
@@ -805,7 +916,10 @@ async def open_installation(
             verified_actor=cleanup_actor.verified,
             bound_session=cleanup_actor.bound_session,
             binding=BrowserBindingKey(
-                binding.tenant_id, binding.ai_user_id, "oa", binding.binding_id,
+                binding.tenant_id,
+                binding.ai_user_id,
+                "oa",
+                binding.binding_id,
             ),
             publication_digest=manifest.digest,
             required_role=cleanup_actor.required_role,
@@ -825,8 +939,10 @@ async def open_installation(
                 targets,
                 BrowserClaimProofContext(decode_key(environment, keys.proof_context)),
                 pool.provider_key,
-                chromium=config.chromium, chromium_sha256=config.chromium_sha256,
-                owned_runs_root=config.owned_runs_root, login_contract=_login_contract(loaded),
+                chromium=config.chromium,
+                chromium_sha256=config.chromium_sha256,
+                owned_runs_root=config.owned_runs_root,
+                login_contract=_login_contract(loaded),
             ),
             provider_pools=BrowserProviderPoolRegistry(
                 (

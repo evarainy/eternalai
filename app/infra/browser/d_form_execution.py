@@ -3,6 +3,7 @@
 Native browser bindings and approved values stay in local memory/stdin. The
 supervisor owns its worker/driver and a new Job; explicit close releases the window.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,12 +47,18 @@ from app.infra.persistence.browser.crypto import BrowserClaimProofContext
 from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.browser_fill_stop import FillStopChecks, FillStopCode, FillStopReport
 from app.ports.browser_read_execution import (
-    BrowserCaptureResolution, BrowserReadExecutionError, BrowserReadOutcome, BrowserWorkerCheckpoint,
+    BrowserCaptureResolution,
+    BrowserReadExecutionError,
+    BrowserReadOutcome,
+    BrowserWorkerCheckpoint,
 )
 from app.ports.browser_run_store import RunCleanup, RunSnapshot
 from app.ports.browser_store import (
-    BrowserLeaseClaim, BrowserLeaseError, BrowserLeaseStorePort,
-    BrowserProviderExpectation, BrowserProviderFact,
+    BrowserLeaseClaim,
+    BrowserLeaseError,
+    BrowserLeaseStorePort,
+    BrowserProviderExpectation,
+    BrowserProviderFact,
 )
 from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
 
@@ -64,6 +71,7 @@ _D_SETTLE_SECONDS = 30
 @dataclass(frozen=True, slots=True, repr=False)
 class DFormTarget:
     """Host-resolved exact Run/subject/target; never deserialized from HTTP."""
+
     owner: BrowserOwner
     task_id: str
     run_id: str
@@ -128,21 +136,34 @@ class _State:
 
 class DFormRuntime:
     """No scheduling loop; execute is invoked once by BrowserReadWorker."""
+
     def __init__(self, manifest: BrowserPublicationManifest, options: DFormOptions) -> None:
-        if (manifest.execution_mode != MODE
-                or manifest != build_fill_stop_manifest(origin=manifest.site.source.origin)
-                or not all(p.is_absolute() and p.is_file() for p in (options.python, options.playwright_node))
-                or not options.receipts_root.is_absolute() or not options.receipts_root.is_dir()
-                or options.receipts_root.resolve().is_relative_to(Path(__file__).resolve().parents[3])
-                or not callable(getattr(options.targets, "resolve_binding", None))
-                or options.chromium is None or options.chromium_sha256 is None
-                or options.owned_runs_root is None):
+        if (
+            manifest.execution_mode != MODE
+            or manifest != build_fill_stop_manifest(origin=manifest.site.source.origin)
+            or not all(
+                p.is_absolute() and p.is_file() for p in (options.python, options.playwright_node)
+            )
+            or not options.receipts_root.is_absolute()
+            or not options.receipts_root.is_dir()
+            or options.receipts_root.resolve().is_relative_to(Path(__file__).resolve().parents[3])
+            or not callable(getattr(options.targets, "resolve_binding", None))
+            or options.chromium is None
+            or options.chromium_sha256 is None
+            or options.owned_runs_root is None
+        ):
             raise ValueError("browser_fill_stop_installation_invalid")
         self.manifest, self.options = manifest, options
-        validate_owned_paths(options.chromium, options.owned_runs_root,
-                             options.chromium_sha256, options.receipts_root)
+        validate_owned_paths(
+            options.chromium,
+            options.owned_runs_root,
+            options.chromium_sha256,
+            options.receipts_root,
+        )
         self.manifest_digest = owned_provider_digest(
-            manifest.digest, source_digest(), options.chromium_sha256,
+            manifest.digest,
+            source_digest(),
+            options.chromium_sha256,
         )
         self._states: dict[str, _State] = {}
         self._leases: BrowserLeaseStorePort | None = None
@@ -153,7 +174,8 @@ class DFormRuntime:
         self._login_vault: Callable[[RunSnapshot], RunBoundOACredentialVault] | None = None
 
     def install_login_vault(
-        self, factory: Callable[[RunSnapshot], RunBoundOACredentialVault],
+        self,
+        factory: Callable[[RunSnapshot], RunBoundOACredentialVault],
     ) -> None:
         """Private host seam; no resource, credential read or login at installation."""
         if self._login_vault is not None or not callable(factory):
@@ -171,18 +193,28 @@ class DFormRuntime:
             await self._renew_login_claim(state, run)
 
     async def _renew_login_claim(self, state: _State, run: RunSnapshot) -> None:
-        if (self._leases is None or state.claim is None or state.released
-                or state.cancelled or state.claim.lease_epoch != run.lease_epoch
-                or state.claim.auth.authorization_run_id != run.run_id
-                or state.claim.auth.owner != run.owner
-                or state.claim.binding.binding_id != run.admission.binding_id
-                or state.claim.binding.binding_revision != run.admission.binding_revision
-                or state.claim.provider_key != self.options.provider_key):
+        if (
+            self._leases is None
+            or state.claim is None
+            or state.released
+            or state.cancelled
+            or state.claim.lease_epoch != run.lease_epoch
+            or state.claim.auth.authorization_run_id != run.run_id
+            or state.claim.auth.owner != run.owner
+            or state.claim.binding.binding_id != run.admission.binding_id
+            or state.claim.binding.binding_revision != run.admission.binding_revision
+            or state.claim.provider_key != self.options.provider_key
+        ):
             raise BrowserLeaseError("browser_login_lease_stale")
         state.claim = await self._leases.renew(state.claim, ttl_seconds=120)
 
-    def install(self, *, cipher: BrowserPayloadCipher, result_key: bytes,
-                publication: Callable[[RunSnapshot], Awaitable[None]]) -> None:
+    def install(
+        self,
+        *,
+        cipher: BrowserPayloadCipher,
+        result_key: bytes,
+        publication: Callable[[RunSnapshot], Awaitable[None]],
+    ) -> None:
         if self._cipher is not None or type(result_key) is not bytes or len(result_key) != 32:
             raise ValueError("browser_fill_stop_installation_invalid")
         self._cipher, self._result_key, self._assert_publication = cipher, result_key, publication
@@ -194,8 +226,11 @@ class DFormRuntime:
 
     def _state(self, run: RunSnapshot) -> _State:
         state = self._states.get(run.run_id)
-        if (state is None or state.run.admission != run.admission
-                or state.run.worker_epoch != run.worker_epoch):
+        if (
+            state is None
+            or state.run.admission != run.admission
+            or state.run.worker_epoch != run.worker_epoch
+        ):
             raise BrowserReadExecutionError("stale")
         return state
 
@@ -208,25 +243,48 @@ class DFormRuntime:
         data = state.target.native
         process = psutil.Process(cast(int, data["pid"]))
         profile = cast(str, data["profile"])
-        if (process.create_time() != data["created"]
-                or Path(process.exe()).resolve() != Path(cast(str, data["executable"])).resolve()
-                or Path(profile).resolve().parent != Path(cast(str, data["profile_root"])).resolve()
-                or "--user-data-dir=" + profile not in process.cmdline()
-                or not any(c.status == psutil.CONN_LISTEN and c.laddr.ip == "127.0.0.1"
-                           and c.laddr.port == data["port"] for c in process.net_connections(kind="tcp"))):
+        if (
+            process.create_time() != data["created"]
+            or Path(process.exe()).resolve() != Path(cast(str, data["executable"])).resolve()
+            or Path(profile).resolve().parent != Path(cast(str, data["profile_root"])).resolve()
+            or "--user-data-dir=" + profile not in process.cmdline()
+            or not any(
+                c.status == psutil.CONN_LISTEN
+                and c.laddr.ip == "127.0.0.1"
+                and c.laddr.port == data["port"]
+                for c in process.net_connections(kind="tcp")
+            )
+        ):
             raise BrowserReadExecutionError("denied")
 
     def _target(self, run: RunSnapshot, target: DFormTarget) -> None:
         binding = target.binding
         origin = urlsplit(self.manifest.site.source.origin)
-        if (target.owner != run.owner or target.task_id != run.task_id or target.run_id != run.run_id
-                or binding.tenant_id != run.owner.tenant_id or binding.ai_user_id != run.owner.user_id
-                or binding.binding_id != run.admission.binding_id
-                or binding.binding_revision != run.admission.binding_revision
-                or binding.target_system != run.admission.target_system
-                or set(target.native) != {"pid", "created", "executable", "profile", "profile_root",
-                                         "port", "context_id", "target_id", "host", "scheme"}
-                or target.native["host"] != origin.hostname or target.native["scheme"] != origin.scheme):
+        if (
+            target.owner != run.owner
+            or target.task_id != run.task_id
+            or target.run_id != run.run_id
+            or binding.tenant_id != run.owner.tenant_id
+            or binding.ai_user_id != run.owner.user_id
+            or binding.binding_id != run.admission.binding_id
+            or binding.binding_revision != run.admission.binding_revision
+            or binding.target_system != run.admission.target_system
+            or set(target.native)
+            != {
+                "pid",
+                "created",
+                "executable",
+                "profile",
+                "profile_root",
+                "port",
+                "context_id",
+                "target_id",
+                "host",
+                "scheme",
+            }
+            or target.native["host"] != origin.hostname
+            or target.native["scheme"] != origin.scheme
+        ):
             raise BrowserReadExecutionError("denied")
         # Importing Flow would import browser libraries in the API process.
         for name in ("pid", "port"):
@@ -252,15 +310,21 @@ class DFormRuntime:
             try:
                 executable = Path(child.exe()).resolve()
                 parent = child.parent() if executable == console else None
-                parent_executable = (Path(parent.exe()).resolve() if parent is not None
-                    and parent.create_time() <= child.create_time() else None)
+                parent_executable = (
+                    Path(parent.exe()).resolve()
+                    if parent is not None and parent.create_time() <= child.create_time()
+                    else None
+                )
                 if not process_executable_allowed(executable, parent_executable, allowed, console):
                     if not state.inventory_denial_logged:
                         log_d_form_stage("process_inventory", "failed", "denied", state.began)
                         state.inventory_denial_logged = True
                     raise BrowserReadExecutionError("denied")
-                if (executable in python_paths and executable != self.options.python.resolve()
-                        and child.pid not in state.owned):
+                if (
+                    executable in python_paths
+                    and executable != self.options.python.resolve()
+                    and child.pid not in state.owned
+                ):
                     log_d_form_stage("process_python_base", "success", "OK", state.began)
                 if executable == console and child.pid not in state.owned:
                     log_d_form_stage("process_console_host", "success", "OK", state.began)
@@ -290,13 +354,18 @@ class DFormRuntime:
             count = 0
             while line := await state.process.stdout.readline():
                 count += 1
-                item = validate(line.decode("utf-8", errors="strict")) if len(line) <= 2048 else None
+                item = (
+                    validate(line.decode("utf-8", errors="strict")) if len(line) <= 2048 else None
+                )
                 if count > 32 or item is None:
                     state.output_invalid = True
                     continue
-                log_d_form_stage(f"worker_{item['stage']}",
-                                 "success" if item["status"] == "PASS" else "failed",
-                                 item["error_code"], state.began)
+                log_d_form_stage(
+                    f"worker_{item['stage']}",
+                    "success" if item["status"] == "PASS" else "failed",
+                    item["error_code"],
+                    state.began,
+                )
                 state.stages[item["stage"]] = item
                 if item["stage"] == 3 and item["status"] == "PASS":
                     state.connected = True
@@ -304,7 +373,11 @@ class DFormRuntime:
             state.output_invalid = True
 
     async def _fence(
-        self, state: _State, checkpoint: BrowserWorkerCheckpoint, *, trace_control: bool = False,
+        self,
+        state: _State,
+        checkpoint: BrowserWorkerCheckpoint,
+        *,
+        trace_control: bool = False,
     ) -> None:
         step = "control_fence_lock"
 
@@ -343,7 +416,6 @@ class DFormRuntime:
             log_d_form_fence_failure(step, error, state.began)
             raise
 
-
     async def _signal(self, state: _State) -> None:
         state.cancelled = True
         if state.process is None or state.process.returncode is not None:
@@ -364,7 +436,11 @@ class DFormRuntime:
         deadline = time.monotonic() + 40
         # D's event/30-second supervisor barrier owns any helper reclamation.
         # This adapter never force-kills an unknown process or attached Chrome.
-        while state.process is not None and state.process.returncode is None and time.monotonic() < deadline:
+        while (
+            state.process is not None
+            and state.process.returncode is None
+            and time.monotonic() < deadline
+        ):
             try:
                 self._inventory(state)
                 await self._signal(state)
@@ -385,42 +461,73 @@ class DFormRuntime:
             if path.is_symlink() or path.stat().st_size > 16384:
                 raise ValueError
             raw = json.loads(path.read_text(encoding="utf-8"))
-            if (type(raw) is not dict or raw.get("mode") != "FILL_STOP"
-                    or raw.get("model_requests") != 0 or type(raw.get("model_requests")) is not int
-                    or raw.get("submit_actions") != 0 or type(raw.get("submit_actions")) is not int
-                    or raw.get("recording_enabled") is not False or raw.get("reporter_displayed") is not False
-                    or raw.get("browser_left_open") is not True or raw.get("error_code") not in CODES):
+            if (
+                type(raw) is not dict
+                or raw.get("mode") != "FILL_STOP"
+                or raw.get("model_requests") != 0
+                or type(raw.get("model_requests")) is not int
+                or raw.get("submit_actions") != 0
+                or type(raw.get("submit_actions")) is not int
+                or raw.get("recording_enabled") is not False
+                or raw.get("reporter_displayed") is not False
+                or raw.get("browser_left_open") is not True
+                or raw.get("error_code") not in CODES
+            ):
                 raise ValueError
             attempts, completed = raw["action_attempts"], raw["actions_completed"]
-            if (type(attempts) is not int or type(completed) is not int
-                    or not 0 <= completed <= attempts <= 4):
+            if (
+                type(attempts) is not int
+                or type(completed) is not int
+                or not 0 <= completed <= attempts <= 4
+            ):
                 raise ValueError
             values = raw["checks"]
-            if type(values) is not dict or not set(values) <= {"CATEGORY", "POSITION", "DESCRIPTION"}:
+            if type(values) is not dict or not set(values) <= {
+                "CATEGORY",
+                "POSITION",
+                "DESCRIPTION",
+            }:
                 raise ValueError
             if any(type(value) is not bool for value in values.values()):
                 raise ValueError
-            checks = FillStopChecks(category=values.get("CATEGORY"), position=values.get("POSITION"),
-                                    description=values.get("DESCRIPTION"))
+            checks = FillStopChecks(
+                category=values.get("CATEGORY"),
+                position=values.get("POSITION"),
+                description=values.get("DESCRIPTION"),
+            )
             executed = raw["executed_actions"]
             counts = raw["event_counts"]
             required = {"CATEGORY_SELECT", "POSITION_INPUT", "DESCRIPTION_INPUT"}
-            if (type(executed) is not list or type(counts) is not dict
-                    or len(executed) != completed or len(set(executed)) != completed
-                    or not set(executed) <= required | {"CATEGORY_OPEN"}
-                    or set(counts) != set(executed)
-                    or any(type(v) is not int or not 1 <= v <= 100 for v in counts.values())):
+            if (
+                type(executed) is not list
+                or type(counts) is not dict
+                or len(executed) != completed
+                or len(set(executed)) != completed
+                or not set(executed) <= required | {"CATEGORY_OPEN"}
+                or set(counts) != set(executed)
+                or any(type(v) is not int or not 1 <= v <= 100 for v in counts.values())
+            ):
                 raise ValueError
             verification = "mismatch" if False in checks.model_dump().values() else "incomplete"
             error = code or cast(FillStopCode, raw["error_code"])
             status = "cancelled" if error == "CANCELLED" else "failed"
-            if (code is None and raw["passed"] is True and error == "OK"
-                    and state.process is not None and state.process.returncode == 0
-                    and not state.output_invalid and state.connected
-                    and state.acquired_evidence is not None and state.attachment_cleanup_proven
-                    and all(state.stages.get(i, {}).get("status") == "PASS" for i in (1, 3, 4, 5, 6, 7, 8))
-                    and all(v is True for v in checks.model_dump().values())
-                    and required <= set(executed) and attempts == completed):
+            if (
+                code is None
+                and raw["passed"] is True
+                and error == "OK"
+                and state.process is not None
+                and state.process.returncode == 0
+                and not state.output_invalid
+                and state.connected
+                and state.acquired_evidence is not None
+                and state.attachment_cleanup_proven
+                and all(
+                    state.stages.get(i, {}).get("status") == "PASS" for i in (1, 3, 4, 5, 6, 7, 8)
+                )
+                and all(v is True for v in checks.model_dump().values())
+                and required <= set(executed)
+                and attempts == completed
+            ):
                 verification, status = "verified", "filled_stopped"
             elif error == "OK":
                 error = "RECEIPT_INVALID"
@@ -428,25 +535,45 @@ class DFormRuntime:
             error = code or "RECEIPT_INVALID"
             checks, attempts, completed = FillStopChecks(), 0, 0
             verification, status = "unknown", "unknown"
-        if (state.output_invalid or state.process is None or state.process.returncode is None
-                or 8 not in state.stages):
+        if (
+            state.output_invalid
+            or state.process is None
+            or state.process.returncode is None
+            or 8 not in state.stages
+        ):
             verification, status = "unknown", "unknown"
-        return FillStopReport(execution_status=status, verification=verification, field_checks=checks,
-                              actions_attempted=attempts, actions_completed=completed,
-                              seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
-                              error_code=error, cleanup_confirmed=(state.attachment_cleanup_proven
-                                  and state.owned_resource_cleanup_proven))
+        return FillStopReport(
+            execution_status=status,
+            verification=verification,
+            field_checks=checks,
+            actions_attempted=attempts,
+            actions_completed=completed,
+            seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
+            error_code=error,
+            cleanup_confirmed=(
+                state.attachment_cleanup_proven and state.owned_resource_cleanup_proven
+            ),
+        )
 
-    async def execute(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> BrowserReadOutcome:
+    async def execute(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> BrowserReadOutcome:
         began = time.monotonic()
         current_stage = "precondition"
         log_d_form_stage(current_stage, "started", "OK", began)
-        if (os.name != "nt" or self._cipher is None or self._result_key is None
-                or self._leases is None or self._assert_publication is None
-                or self._login_vault is None or self.options.login_contract is None
-                or run.admission.publication_digest.hex() != self.manifest.digest
-                or run.run_id in self._states or len(self._states) >= 128
-                or source_digest() != self.manifest.site.source.fixture_digest):
+        if (
+            os.name != "nt"
+            or self._cipher is None
+            or self._result_key is None
+            or self._leases is None
+            or self._assert_publication is None
+            or self._login_vault is None
+            or self.options.login_contract is None
+            or run.admission.publication_digest.hex() != self.manifest.digest
+            or run.run_id in self._states
+            or len(self._states) >= 128
+            or source_digest() != self.manifest.site.source.fixture_digest
+        ):
             log_d_form_stage(current_stage, "failed", "denied", began)
             raise BrowserReadExecutionError("denied")
         import psutil
@@ -462,9 +589,13 @@ class DFormRuntime:
             log_d_form_stage(current_stage, "failed", getattr(error, "code", "error"), began)
             raise
         log_d_form_stage(current_stage, "success", "OK", began)
-        state = _State(run, binding, None,
-                       self.options.receipts_root / (uuid4().hex + ".json"),
-                       "Local\\EAI_D_CANCEL_" + uuid4().hex)
+        state = _State(
+            run,
+            binding,
+            None,
+            self.options.receipts_root / (uuid4().hex + ".json"),
+            "Local\\EAI_D_CANCEL_" + uuid4().hex,
+        )
         self._states[run.run_id] = state
         output: asyncio.Task[None] | None = None
         failure: FillStopCode | None = None
@@ -475,28 +606,50 @@ class DFormRuntime:
             if remaining < _D_WINDOW_SECONDS + _D_SETTLE_SECONDS:
                 log_d_form_stage("precondition", "failed", "AUTH_WINDOW_INSUFFICIENT", began)
                 state.report = FillStopReport(
-                    execution_status="failed", verification="incomplete",
-                    field_checks=FillStopChecks(), actions_attempted=0, actions_completed=0,
+                    execution_status="failed",
+                    verification="incomplete",
+                    field_checks=FillStopChecks(),
+                    actions_attempted=0,
+                    actions_completed=0,
                     seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
-                    error_code="LOGIN_REQUIRED", cleanup_confirmed=False,
+                    error_code="LOGIN_REQUIRED",
+                    cleanup_confirmed=False,
                 )
                 await checkpoint.record_fill_stop(state.report)
                 return BrowserReadOutcome("not_sent", "incomplete", dispatch_failure_code="denied")
             private = self._cipher.decrypt_input(run.admission)
             arguments = private.get("arguments")
-            if (type(arguments) is not dict or set(arguments) != set(FIELDS)
-                    or any(type(v) is not str or not 0 < len(v.strip()) <= 500 or "\x00" in v
-                           for v in arguments.values())
-                    or len(arguments["category"]) > 100 or len(arguments["category"].splitlines()) != 1):
+            if (
+                type(arguments) is not dict
+                or set(arguments) != set(FIELDS)
+                or any(
+                    type(v) is not str or not 0 < len(v.strip()) <= 500 or "\x00" in v
+                    for v in arguments.values()
+                )
+                or len(arguments["category"]) > 100
+                or len(arguments["category"].splitlines()) != 1
+            ):
                 raise BrowserReadExecutionError("denied")
             current_stage = "lease"
             log_d_form_stage(current_stage, "started", "OK", began)
-            state.claim = await self._leases.reserve(BrowserAuthFact(
-                run.owner, None, run.admission.auth_fingerprint, run.admission.auth_expires_at,
-                run.run_id, "verified-session-v1"), binding, self.options.provider_key,
-                ttl_seconds=120)
-            state.run = await checkpoint.attach_lease(provider_key=self.options.provider_key,
-                provider_manifest_digest=self.manifest_digest, lease_epoch=state.claim.lease_epoch)
+            state.claim = await self._leases.reserve(
+                BrowserAuthFact(
+                    run.owner,
+                    None,
+                    run.admission.auth_fingerprint,
+                    run.admission.auth_expires_at,
+                    run.run_id,
+                    "verified-session-v1",
+                ),
+                binding,
+                self.options.provider_key,
+                ttl_seconds=120,
+            )
+            state.run = await checkpoint.attach_lease(
+                provider_key=self.options.provider_key,
+                provider_manifest_digest=self.manifest_digest,
+                lease_epoch=state.claim.lease_epoch,
+            )
             state.run = await checkpoint.start_execution()
             state.run = await checkpoint.reserve_fill_stop()
             state.claim = await self._leases.start_acquisition(state.claim)
@@ -506,12 +659,16 @@ class DFormRuntime:
             log_d_form_stage(current_stage, "success", "OK", began)
             current_stage = "page"
             state.owned_browser = OwnedDFormBrowser(
-                chromium=self.options.chromium, chromium_sha256=self.options.chromium_sha256,
-                root=self.options.owned_runs_root, node=self.options.playwright_node,
-                origin=self.manifest.site.source.origin, contract=self.options.login_contract,
+                chromium=self.options.chromium,
+                chromium_sha256=self.options.chromium_sha256,
+                root=self.options.owned_runs_root,
+                node=self.options.playwright_node,
+                origin=self.manifest.site.source.origin,
+                contract=self.options.login_contract,
             )
             fence_flight: asyncio.Task[None] | None = None
             merge_login_fences = True
+
             async def fence() -> None:
                 nonlocal fence_flight
                 if not merge_login_fences:
@@ -532,17 +689,25 @@ class DFormRuntime:
                 # bounded by the last DB-renewed worker, lease and session deadlines.
                 now = datetime.now(UTC)
                 worker_deadline = state.run.worker_deadline
-                if (state.cancelled or state.released or state.fence_failed
-                        or state.run.cancel_requested or state.claim is None
-                        or state.claim.deadline <= now
-                        or worker_deadline is None or worker_deadline <= now
-                        or state.run.admission.auth_expires_at <= now
-                        or time.monotonic() - state.began > _D_WINDOW_SECONDS):
+                if (
+                    state.cancelled
+                    or state.released
+                    or state.fence_failed
+                    or state.run.cancel_requested
+                    or state.claim is None
+                    or state.claim.deadline <= now
+                    or worker_deadline is None
+                    or worker_deadline <= now
+                    or state.run.admission.auth_expires_at <= now
+                    or time.monotonic() - state.began > _D_WINDOW_SECONDS
+                ):
                     raise BrowserReadExecutionError("stale")
 
             try:
                 await state.owned_browser.create_and_login(
-                    self._login_vault(state.run), fence, control_fence=fence,
+                    self._login_vault(state.run),
+                    fence,
+                    control_fence=fence,
                     local_check=local_check,
                 )
             finally:
@@ -560,37 +725,67 @@ class DFormRuntime:
             state.target = DFormTarget(run.owner, run.task_id, run.run_id, binding, dict(native))
             self._target(state.run, state.target)
             self._native(state)
-            state.resource_ref = canonical_json({
-                "run": run.run_id, "task": run.task_id, "owner": run.owner.model_dump(mode="json"),
-                "native": dict(native), "job": state.owned_browser.job.job_ref,
-                "binding_id": binding.binding_id, "binding_revision": binding.binding_revision,
-                "lease_epoch": state.claim.lease_epoch, "operation_id": state.claim.operation_id,
-                "holder_id": state.claim.holder_id, "chromium_sha256": self.options.chromium_sha256,
-                "ownership": "created_by_this_runtime",
-            }).encode()
+            state.resource_ref = canonical_json(
+                {
+                    "run": run.run_id,
+                    "task": run.task_id,
+                    "owner": run.owner.model_dump(mode="json"),
+                    "native": dict(native),
+                    "job": state.owned_browser.job.job_ref,
+                    "binding_id": binding.binding_id,
+                    "binding_revision": binding.binding_revision,
+                    "lease_epoch": state.claim.lease_epoch,
+                    "operation_id": state.claim.operation_id,
+                    "holder_id": state.claim.holder_id,
+                    "chromium_sha256": self.options.chromium_sha256,
+                    "ownership": "created_by_this_runtime",
+                }
+            ).encode()
             await fence()
             state.acquired_evidence = self.options.proof_context.digest(
-                "d-form-acquired.v1", state.resource_ref,
+                "d-form-acquired.v1",
+                state.resource_ref,
             )
             state.claim = await self._leases.record_acquired(state.claim, state.acquired_evidence)
             await fence()
             origin = urlsplit(self.manifest.site.source.origin)
-            request = {"mode": "FILL_STOP", "binding": {**native,
-                       "source_port": origin.port or (443 if origin.scheme == "https" else 80)},
-                       "inputs": arguments, "local_gate": False}
+            request = {
+                "mode": "FILL_STOP",
+                "binding": {
+                    **native,
+                    "source_port": origin.port or (443 if origin.scheme == "https" else 80),
+                },
+                "inputs": arguments,
+                "local_gate": False,
+            }
             payload = canonical_json(request).encode("utf-8")
             if len(payload) > 32768:
                 raise BrowserReadExecutionError("denied")
-            env = {key: os.environ[key] for key in ("SystemRoot", "WINDIR", "COMSPEC", "PATH", "TEMP", "TMP")
-                   if key in os.environ}
-            env.update(PYTHON_DOTENV_DISABLED="1", OTEL_SDK_DISABLED="true", ANONYMIZED_TELEMETRY="false")
+            env = {
+                key: os.environ[key]
+                for key in ("SystemRoot", "WINDIR", "COMSPEC", "PATH", "TEMP", "TMP")
+                if key in os.environ
+            }
+            env.update(
+                PYTHON_DOTENV_DISABLED="1", OTEL_SDK_DISABLED="true", ANONYMIZED_TELEMETRY="false"
+            )
             current_stage = "fill"
             log_d_form_stage(current_stage, "started", "OK", began)
-            state.process = await asyncio.create_subprocess_exec(str(self.options.python), "-B",
-                str(Path(__file__).with_name("d_form_cli.py")), "--receipt", str(state.receipt_path),
-                "--cancel-event", state.event_name, stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                env=env, limit=2048, creationflags=subprocess.CREATE_NO_WINDOW)
+            state.process = await asyncio.create_subprocess_exec(
+                str(self.options.python),
+                "-B",
+                str(Path(__file__).with_name("d_form_cli.py")),
+                "--receipt",
+                str(state.receipt_path),
+                "--cancel-event",
+                state.event_name,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=env,
+                limit=2048,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
             root = psutil.Process(state.process.pid)
             if Path(root.exe()).resolve() != self.options.python.resolve():
                 raise BrowserReadExecutionError("denied")
@@ -630,88 +825,150 @@ class DFormRuntime:
             if state.connected and state.acquired_evidence is None:
                 await self._fence(state, checkpoint)
             state.stopped = self._exited(state)
-            state.attachment_cleanup_proven = (state.stopped and not state.output_invalid
+            state.attachment_cleanup_proven = (
+                state.stopped
+                and not state.output_invalid
                 and state.stages.get(7, {}).get("status") == "PASS"
-                and state.process.returncode in (0, 2))
+                and state.process.returncode in (0, 2)
+            )
             current_stage = "receipt"
             log_d_form_stage(current_stage, "started", "OK", began)
             state.report = self._report(state, failure)
-            log_d_form_stage(current_stage,
-                             "success" if state.report.verification == "verified" else "failed",
-                             state.report.error_code, began)
+            log_d_form_stage(
+                current_stage,
+                "success" if state.report.verification == "verified" else "failed",
+                state.report.error_code,
+                began,
+            )
             await checkpoint.record_fill_stop(state.report)
             state.run = await checkpoint.refresh(allow_cancel=True)
             if state.report.verification != "verified":
-                effect = "unknown" if (state.report.execution_status == "unknown"
-                    or state.report.actions_attempted != state.report.actions_completed) else (
-                    "acknowledged" if state.report.actions_completed else "not_sent")
-                return BrowserReadOutcome(effect, "mismatch" if state.report.verification == "mismatch" else "incomplete",
-                                          dispatch_failure_code="timeout" if failure == "EXECUTION_TIMEOUT" else "invalid_response")
-            value = {"mode": "FILL_STOP", "execution_status": "filled_stopped",
-                     "field_checks": state.report.field_checks.model_dump(),
-                     "actions_completed": state.report.actions_completed,
-                     "submit_actions": 0, "model_requests": 0, "seconds": state.report.seconds}
-            evidence = self.options.proof_context.digest("d-form-verification.v1", canonical_json({
-                "resource": hashlib.sha256(state.resource_ref).hexdigest(),
-                "report": state.report.model_dump(mode="json"), "stages": state.stages,
-                "worker_epoch": state.run.worker_epoch, "lease_epoch": state.run.lease_epoch,
-            }).encode())
-            digest = hmac.digest(self._result_key, b"d-form-result-v1\x00" + run.run_id.encode()
-                                 + b"\x00" + canonical_json(value).encode(), hashlib.sha256)
-            envelope = self._cipher.encrypt_result(run.admission, value, evidence_digest=evidence, result_digest=digest)
-            state.outcome = BrowserReadOutcome("acknowledged", "verified", envelope, digest, evidence)
+                effect = (
+                    "unknown"
+                    if (
+                        state.report.execution_status == "unknown"
+                        or state.report.actions_attempted != state.report.actions_completed
+                    )
+                    else ("acknowledged" if state.report.actions_completed else "not_sent")
+                )
+                return BrowserReadOutcome(
+                    effect,
+                    "mismatch" if state.report.verification == "mismatch" else "incomplete",
+                    dispatch_failure_code="timeout"
+                    if failure == "EXECUTION_TIMEOUT"
+                    else "invalid_response",
+                )
+            value = {
+                "mode": "FILL_STOP",
+                "execution_status": "filled_stopped",
+                "field_checks": state.report.field_checks.model_dump(),
+                "actions_completed": state.report.actions_completed,
+                "submit_actions": 0,
+                "model_requests": 0,
+                "seconds": state.report.seconds,
+            }
+            evidence = self.options.proof_context.digest(
+                "d-form-verification.v1",
+                canonical_json(
+                    {
+                        "resource": hashlib.sha256(state.resource_ref).hexdigest(),
+                        "report": state.report.model_dump(mode="json"),
+                        "stages": state.stages,
+                        "worker_epoch": state.run.worker_epoch,
+                        "lease_epoch": state.run.lease_epoch,
+                    }
+                ).encode(),
+            )
+            digest = hmac.digest(
+                self._result_key,
+                b"d-form-result-v1\x00"
+                + run.run_id.encode()
+                + b"\x00"
+                + canonical_json(value).encode(),
+                hashlib.sha256,
+            )
+            envelope = self._cipher.encrypt_result(
+                run.admission, value, evidence_digest=evidence, result_digest=digest
+            )
+            state.outcome = BrowserReadOutcome(
+                "acknowledged", "verified", envelope, digest, evidence
+            )
             return state.outcome
         except asyncio.CancelledError:
             log_d_form_stage("cancel", "cancelled", "CANCELLED", began)
             await self._stop(state)
             raise
         except (BrowserReadExecutionError, BrowserLeaseError, psutil.Error) as error:
-            failed_stage = (state.owned_browser.current_stage
-                            if (state.owned_browser is not None
-                                and current_stage in {"page", "portal"})
-                            else current_stage)
+            failed_stage = (
+                state.owned_browser.current_stage
+                if (state.owned_browser is not None and current_stage in {"page", "portal"})
+                else current_stage
+            )
             log_d_form_stage(failed_stage, "failed", getattr(error, "code", "error"), began)
             await self._stop(state)
             if not state.input_sent:
-                if (state.owned_browser is not None
-                        and state.owned_browser.preparation_error in CODES):
+                if (
+                    state.owned_browser is not None
+                    and state.owned_browser.preparation_error in CODES
+                ):
                     state.report = FillStopReport(
-                        execution_status="failed", verification="incomplete",
-                        field_checks=FillStopChecks(), actions_attempted=0, actions_completed=0,
+                        execution_status="failed",
+                        verification="incomplete",
+                        field_checks=FillStopChecks(),
+                        actions_attempted=0,
+                        actions_completed=0,
                         seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
                         error_code=cast(FillStopCode, state.owned_browser.preparation_error),
                         cleanup_confirmed=False,
                     )
                     await checkpoint.record_fill_stop(state.report)
-                    return BrowserReadOutcome("not_sent", "incomplete",
-                                              dispatch_failure_code="invalid_response")
+                    return BrowserReadOutcome(
+                        "not_sent", "incomplete", dispatch_failure_code="invalid_response"
+                    )
                 raise BrowserReadExecutionError("denied") from None
-            if output is not None and state.process is not None and state.process.returncode is not None:
+            if (
+                output is not None
+                and state.process is not None
+                and state.process.returncode is not None
+            ):
                 try:
                     await asyncio.wait_for(asyncio.shield(output), 2)
                 except Exception:
                     state.output_invalid = True
-            state.attachment_cleanup_proven = (self._exited(state) and not state.output_invalid
+            state.attachment_cleanup_proven = (
+                self._exited(state)
+                and not state.output_invalid
                 and state.stages.get(7, {}).get("status") == "PASS"
-                and state.process is not None and state.process.returncode in (0, 2))
+                and state.process is not None
+                and state.process.returncode in (0, 2)
+            )
             cancelled = isinstance(error, BrowserReadExecutionError) and error.code == "cancelled"
             state.report = self._report(state, "CANCELLED" if cancelled else "AUTHORITY_LOST")
             if cancelled:
                 await checkpoint.record_fill_stop(state.report)
-                effect = "unknown" if (state.report.execution_status == "unknown"
-                    or state.report.actions_attempted != state.report.actions_completed) else (
-                    "acknowledged" if state.report.actions_completed else "not_sent")
+                effect = (
+                    "unknown"
+                    if (
+                        state.report.execution_status == "unknown"
+                        or state.report.actions_attempted != state.report.actions_completed
+                    )
+                    else ("acknowledged" if state.report.actions_completed else "not_sent")
+                )
                 return BrowserReadOutcome(effect, "incomplete", dispatch_failure_code="cancelled")
             return BrowserReadOutcome("unknown", None, dispatch_failure_code="denied")
         except Exception as error:
-            failed_stage = (state.owned_browser.current_stage
-                            if (state.owned_browser is not None
-                                and current_stage in {"page", "portal"})
-                            else current_stage)
+            failed_stage = (
+                state.owned_browser.current_stage
+                if (state.owned_browser is not None and current_stage in {"page", "portal"})
+                else current_stage
+            )
             log_d_form_stage(failed_stage, "failed", getattr(error, "code", "error"), began)
             await self._stop(state)
-            return BrowserReadOutcome("unknown" if state.input_sent else "not_sent", None,
-                                      dispatch_failure_code="invalid_response")
+            return BrowserReadOutcome(
+                "unknown" if state.input_sent else "not_sent",
+                None,
+                dispatch_failure_code="invalid_response",
+            )
         finally:
             if state.process is not None and state.process.stdin is not None:
                 state.process.stdin.close()
@@ -722,23 +979,33 @@ class DFormRuntime:
     async def check_verified_candidate(self, candidate: RunSnapshot) -> None:
         state = self._state(candidate)
         outcome = state.outcome
-        if (outcome is None or candidate.verification != "verified" or state.report is None
-                or state.report.verification != "verified" or not state.attachment_cleanup_proven
-                or candidate.worker_id != state.run.worker_id
-                or candidate.provider_key != self.options.provider_key
-                or candidate.lease_epoch != state.run.lease_epoch
-                or candidate.provider_manifest_digest != self.manifest_digest
-                or candidate.protected_result != outcome.result or candidate.result_digest != outcome.result_digest
-                or candidate.verification_evidence_digest != outcome.evidence_digest):
+        if (
+            outcome is None
+            or candidate.verification != "verified"
+            or state.report is None
+            or state.report.verification != "verified"
+            or not state.attachment_cleanup_proven
+            or candidate.worker_id != state.run.worker_id
+            or candidate.provider_key != self.options.provider_key
+            or candidate.lease_epoch != state.run.lease_epoch
+            or candidate.provider_manifest_digest != self.manifest_digest
+            or candidate.protected_result != outcome.result
+            or candidate.result_digest != outcome.result_digest
+            or candidate.verification_evidence_digest != outcome.evidence_digest
+        ):
             raise BrowserReadExecutionError("denied")
 
     def verified_persisted(self, run: RunSnapshot) -> None:
         self._state(run).outcome = None
 
-    async def lookup_capture(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> BrowserCaptureResolution:
+    async def lookup_capture(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> BrowserCaptureResolution:
         return BrowserCaptureResolution("unsupported")
 
-    async def send_capture(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> BrowserCaptureResolution:
+    async def send_capture(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> BrowserCaptureResolution:
         return BrowserCaptureResolution("unsupported")
 
     async def stop(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> None:
@@ -754,8 +1021,11 @@ class DFormRuntime:
         async with state.cleanup_lock:
             if state.run.admission != run.admission:
                 raise BrowserReadExecutionError("stale")
-            if (run.status in {"completed", "failed", "cancelled"}
-                    and state.owned_browser is not None and state.claim is not None):
+            if (
+                run.status in {"completed", "failed", "cancelled"}
+                and state.owned_browser is not None
+                and state.claim is not None
+            ):
                 if state.process is not None and state.process.returncode is None:
                     await self._stop(state)
                 return await self._close_owned_state(run, state)
@@ -768,13 +1038,20 @@ class DFormRuntime:
             return "released"
         if state.process is not None and state.process.returncode is None:
             await self._stop(state)
-        state.attachment_cleanup_proven = (self._exited(state) and not state.output_invalid
+        state.attachment_cleanup_proven = (
+            self._exited(state)
+            and not state.output_invalid
             and (state.owned_browser is None or state.owned_browser.attachment_cleanup_proven)
-            and (state.process is None or not state.input_sent
-                 or state.stages.get(7, {}).get("status") == "PASS"
-                 and state.process.returncode in (0, 2)))
-        state.cleanup_proven = (state.attachment_cleanup_proven
-                                and state.owned_resource_cleanup_proven)
+            and (
+                state.process is None
+                or not state.input_sent
+                or state.stages.get(7, {}).get("status") == "PASS"
+                and state.process.returncode in (0, 2)
+            )
+        )
+        state.cleanup_proven = (
+            state.attachment_cleanup_proven and state.owned_resource_cleanup_proven
+        )
         if state.claim is None:
             absent = state.owned_browser is None and state.process is None
             return "released" if absent else "quarantined"
@@ -789,14 +1066,17 @@ class DFormRuntime:
                 state.claim = await self._leases.quarantine(state.claim)
                 state.lease_quarantined = True
             return "quarantined"
-        state.release_evidence = self.options.proof_context.digest("d-form-released.v1", state.resource_ref)
+        state.release_evidence = self.options.proof_context.digest(
+            "d-form-released.v1", state.resource_ref
+        )
         if not await self._leases.cleanup(state.claim, state.release_evidence):
             return "quarantined"
         state.released = True
         return "released"
 
     def install_cleanup_authority(
-        self, authorize: Callable[[RunSnapshot], Awaitable[None]],
+        self,
+        authorize: Callable[[RunSnapshot], Awaitable[None]],
     ) -> None:
         if self._cleanup_authorize is not None or not callable(authorize):
             raise ValueError("browser_fill_stop_installation_invalid")
@@ -814,9 +1094,13 @@ class DFormRuntime:
             raise BrowserReadExecutionError("stale")
         if state.released:
             return "released"
-        if (run.status not in {"completed", "failed", "cancelled"}
-                or self._cleanup_authorize is None or state.owned_browser is None
-                or state.claim is None or not self._exited(state)):
+        if (
+            run.status not in {"completed", "failed", "cancelled"}
+            or self._cleanup_authorize is None
+            or state.owned_browser is None
+            or state.claim is None
+            or not self._exited(state)
+        ):
             raise BrowserReadExecutionError("denied")
         stage = "cleanup_owned"
         try:
@@ -824,16 +1108,20 @@ class DFormRuntime:
             if not state.owned_resource_cleanup_proven:
                 await state.owned_browser.close_owned()
                 state.owned_resource_cleanup_proven = (
-                    state.owned_browser.owned_resource_cleanup_proven)
+                    state.owned_browser.owned_resource_cleanup_proven
+                )
                 log_d_form_stage(stage, "success", "OK", state.began)
             if state.resource_ref is None:
                 # Actual Job/root close proof, no fabricated native/context record.
-                state.resource_ref = canonical_json({
-                    "run": run.run_id, "task": run.task_id,
-                    "owner": run.owner.model_dump(mode="json"),
-                    "binding_revision": state.binding.binding_revision,
-                    "closed_creation": state.owned_browser.closed_job_identity,
-                }).encode()
+                state.resource_ref = canonical_json(
+                    {
+                        "run": run.run_id,
+                        "task": run.task_id,
+                        "owner": run.owner.model_dump(mode="json"),
+                        "binding_revision": state.binding.binding_revision,
+                        "closed_creation": state.owned_browser.closed_job_identity,
+                    }
+                ).encode()
             await self._cleanup_authorize(run)
             stage = "cleanup_release"
             result = await self._cleanup_state(run, state)
@@ -851,16 +1139,24 @@ class DFormRuntime:
 
     async def check_cancel(self, run: RunSnapshot) -> None:
         state = self._state(run)
-        if (not state.cancelled or not self._exited(state)
-                or state.owned_browser is not None
-                and not state.owned_browser.attachment_cleanup_proven):
+        if (
+            not state.cancelled
+            or not self._exited(state)
+            or state.owned_browser is not None
+            and not state.owned_browser.attachment_cleanup_proven
+        ):
             raise BrowserReadExecutionError("denied")
 
     def _claim_state(self, claim: BrowserLeaseClaim, resource: bytes | None) -> _State:
         state = self._states.get(claim.auth.authorization_run_id or "")
-        if (state is None or state.claim is None or state.run.owner != claim.auth.owner
-                or state.claim != claim
-                or resource is not None and resource != state.resource_ref):
+        if (
+            state is None
+            or state.claim is None
+            or state.run.owner != claim.auth.owner
+            or state.claim != claim
+            or resource is not None
+            and resource != state.resource_ref
+        ):
             raise BrowserLeaseError("browser_fill_stop_claim_mismatch")
         return state
 
@@ -871,20 +1167,38 @@ class DFormRuntime:
         state.owned_browser.check_identity()
         self._native(state)
 
-    async def verify(self, expected: BrowserProviderExpectation, evidence: bytes) -> BrowserProviderFact:
+    async def verify(
+        self, expected: BrowserProviderExpectation, evidence: bytes
+    ) -> BrowserProviderFact:
         state = self._claim_state(expected.claim, expected.resource_ref)
-        if (expected.manifest_digest != self.manifest_digest or expected.challenge !=
-                self.options.proof_context.challenge(expected.claim, self.manifest_digest)):
+        if (
+            expected.manifest_digest != self.manifest_digest
+            or expected.challenge
+            != self.options.proof_context.challenge(expected.claim, self.manifest_digest)
+        ):
             raise BrowserLeaseError("browser_fill_stop_proof_mismatch")
         outcome: Literal["acquired", "released"]
-        if state.acquired_evidence is not None and hmac.compare_digest(evidence, state.acquired_evidence):
+        if state.acquired_evidence is not None and hmac.compare_digest(
+            evidence, state.acquired_evidence
+        ):
             await self.check_subject(expected.claim, state.resource_ref)
             outcome = "acquired"
-        elif (state.release_evidence is not None and hmac.compare_digest(evidence, state.release_evidence)
-              and state.cleanup_proven and self._exited(state)):
+        elif (
+            state.release_evidence is not None
+            and hmac.compare_digest(evidence, state.release_evidence)
+            and state.cleanup_proven
+            and self._exited(state)
+        ):
             outcome = "released"
         else:
             raise BrowserLeaseError("browser_fill_stop_proof_unknown")
-        return BrowserProviderFact(expected.claim.provider_key, expected.claim.operation_id,
-            expected.claim.holder_id, expected.claim.lease_epoch, expected.challenge,
-            self.manifest_digest, cast(bytes, state.resource_ref), outcome)
+        return BrowserProviderFact(
+            expected.claim.provider_key,
+            expected.claim.operation_id,
+            expected.claim.holder_id,
+            expected.claim.lease_epoch,
+            expected.challenge,
+            self.manifest_digest,
+            cast(bytes, state.resource_ref),
+            outcome,
+        )

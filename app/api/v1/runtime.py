@@ -38,7 +38,9 @@ class _PrivateHandleRoute(APIRoute):
                 response = await original(request)
             except RequestValidationError:
                 raise HTTPException(
-                    422, {"code": "runtime_request_input_invalid"}, headers=_PRIVATE_HEADERS,
+                    422,
+                    {"code": "runtime_request_input_invalid"},
+                    headers=_PRIVATE_HEADERS,
                 ) from None
             except HTTPException as error:
                 error.headers = {**(error.headers or {}), **_PRIVATE_HEADERS}
@@ -105,8 +107,7 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
         {
             "status": "failed",
             "message": (
-                "操作响应未通过安全校验，无法确认本次操作结果。"
-                "请先核对业务状态，避免重复提交。"
+                "操作响应未通过安全校验，无法确认本次操作结果。请先核对业务状态，避免重复提交。"
             ),
             "fallback_text": (
                 "Action response validation failed; verify the business state and "
@@ -207,13 +208,14 @@ def make_router(
                     headers={"Cache-Control": "no-store"},
                 )
             selected_skill = body.client_capabilities.get(
-                "browser_skill_id", browser_chat.skill_id,
+                "browser_skill_id",
+                browser_chat.skill_id,
             )
             selector = getattr(browser_chat, "can_select_skill", None)
-            if (type(selected_skill) is not str or (
+            if type(selected_skill) is not str or (
                 selected_skill != browser_chat.skill_id
                 and (not callable(selector) or selector(selected_skill) is not True)
-            )):
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail={"code": "browser_skill_not_configured"},
@@ -246,18 +248,24 @@ def make_router(
             try:
                 scope = BrowserRequestScope(captured, session_id, body.client_request_id)
             except ValueError:
-                raise HTTPException(status_code=422, detail={"code": "adapter_payload_invalid"}) from None
+                raise HTTPException(
+                    status_code=422, detail={"code": "adapter_payload_invalid"}
+                ) from None
         token = browser_request_scope.set(scope)
         collection_token = d_form_collection_reference.set(body.d_form_collection)
         try:
             return await bound_runtime.handle_user_message(
-                channel=body.channel, principal=principal, session_id=session_id,
-                message=body.message, client_capabilities=body.client_capabilities,
+                channel=body.channel,
+                principal=principal,
+                session_id=session_id,
+                message=body.message,
+                client_capabilities=body.client_capabilities,
             )
         except DFormCollectionError as error:
             raise HTTPException(
                 404 if error.code == "collection_not_found" else 409,
-                {"code": error.code}, headers=_PRIVATE_HEADERS,
+                {"code": error.code},
+                headers=_PRIVATE_HEADERS,
             ) from None
         finally:
             d_form_collection_reference.reset(collection_token)

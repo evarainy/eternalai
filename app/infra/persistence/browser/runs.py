@@ -53,7 +53,6 @@ from app.browser_skill.trajectory import (
     TrajectoryEvent,
 )
 from app.browser_skill.verifier import IndependentVerifier
-from app.ports.browser_fill_stop import FillStopReport
 from app.browser_skill.write_workflow import (
     BrowserWritePreparation,
     _owner_digest,
@@ -64,6 +63,7 @@ from app.infra.persistence.task_store.transactional import (
     lock_owned_task,
     transition_owned_task,
 )
+from app.ports.browser_fill_stop import FillStopReport
 from app.ports.browser_run_store import (
     MAX_RUN_REVISION,
     BrowserRunAuthorityPort,
@@ -104,10 +104,14 @@ _TEACHING_PLAN_VERSION = "browser.teaching_plan_record.v1"
 _MAX_STEP_AUDITS = 126
 _ACTIVE = {"running", "waiting_user"}
 _CLAIM_BATCH = 16
-_CLAIM_SKIPPABLE = frozenset({
-    "browser_claim_candidate_ineligible", "browser_claim_candidate_busy",
-    "browser_run_not_found", "browser_run_stale",
-})
+_CLAIM_SKIPPABLE = frozenset(
+    {
+        "browser_claim_candidate_ineligible",
+        "browser_claim_candidate_busy",
+        "browser_run_not_found",
+        "browser_run_stale",
+    }
+)
 _CAPTURE_TERMINAL = {"not_requested", "promoted", "failed", "quarantined"}
 _CAPTURE_TRANSITIONS = {
     "not_requested": {"prepared"},
@@ -238,9 +242,8 @@ class PostgreSQLBrowserRunStore:
         digest_keys: Mapping[str, bytes],
         active_digest_key_id: str,
         claim_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None,
-        claim_ready_in_session: Callable[
-            [AsyncSession, RunSnapshot], Awaitable[bool]
-        ] | None = None,
+        claim_ready_in_session: Callable[[AsyncSession, RunSnapshot], Awaitable[bool]]
+        | None = None,
     ) -> None:
         if (
             authority is None
@@ -266,7 +269,8 @@ class PostgreSQLBrowserRunStore:
         self._claim_scans: dict[tuple[str, str, str], _ClaimScan] = {}
 
     def install_replay_source_reader(
-        self, reader: Callable[[AsyncSession, RunSnapshot], Awaitable[None]],
+        self,
+        reader: Callable[[AsyncSession, RunSnapshot], Awaitable[None]],
     ) -> None:
         """One exact installed source's read authority; never an execution fallback."""
         if self._replay_source_reader is not None or not callable(reader):
@@ -384,8 +388,12 @@ class PostgreSQLBrowserRunStore:
         )
 
     async def lookup_request(
-        self, owner: BrowserOwner, client_request_id: str, semantic_input: bytes,
-        *, settle_expired: bool = False,
+        self,
+        owner: BrowserOwner,
+        client_request_id: str,
+        semantic_input: bytes,
+        *,
+        settle_expired: bool = False,
     ) -> CanonicalRequest | None:
         checked_run_id(client_request_id)
         if type(semantic_input) is not bytes or not 1 <= len(semantic_input) <= 1_048_576:
@@ -395,33 +403,55 @@ class PostgreSQLBrowserRunStore:
             if settle_expired:
                 row = await self._request_row(session, owner, client_request_id)
             else:
-                result = await session.execute(text(
-                    f"SELECT * FROM tasks WHERE {_OWNER} AND client_request_id=:client_request_id"
-                    " FOR SHARE",
-                ), {**_owner(owner), "client_request_id": client_request_id})
+                result = await session.execute(
+                    text(
+                        f"SELECT * FROM tasks WHERE {_OWNER} "
+                        "AND client_request_id=:client_request_id"
+                        " FOR SHARE",
+                    ),
+                    {**_owner(owner), "client_request_id": client_request_id},
+                )
                 row = result.mappings().one_or_none()
             if row is None:
                 return None
             digest = self._digest(
-                owner, client_request_id, semantic_input, cast(str, row["request_digest_key_id"]),
+                owner,
+                client_request_id,
+                semantic_input,
+                cast(str, row["request_digest_key_id"]),
             )
-            if (row["request_schema_version"] != _REQUEST_VERSION
-                    or not hmac.compare_digest(digest, cast(bytes, row["request_digest"]))):
+            if row["request_schema_version"] != _REQUEST_VERSION or not hmac.compare_digest(
+                digest, cast(bytes, row["request_digest"])
+            ):
                 raise BrowserRunStoreError("request_key_conflict")
             run = await self._task_run(session, owner, cast(str, row["task_id"]))
             if run is not None:
                 await self._authority.check_run(session, run, "read")
-            elif (settle_expired and row["status"] == "created" and (
-                row["processing_deadline"] is None
-                or cast(datetime, row["processing_deadline"]) <= await self._now(session)
-            )):
+            elif (
+                settle_expired
+                and row["status"] == "created"
+                and (
+                    row["processing_deadline"] is None
+                    or cast(datetime, row["processing_deadline"]) <= await self._now(session)
+                )
+            ):
                 # Close only this locked, MAC-matched original claim. No new
                 # processing owner, parsing or Run allocation is permitted.
-                row = (await session.execute(text(
-                    "UPDATE tasks SET status='failed',error_code='browser_request_abandoned',"
-                    "processing_owner=NULL,processing_deadline=NULL"
-                    f" WHERE {_TASK} AND status='created' RETURNING *",
-                ), _identity(owner, cast(str, row["task_id"])))).mappings().one()
+                row = (
+                    (
+                        await session.execute(
+                            text(
+                                "UPDATE tasks SET status='failed',"
+                                "error_code='browser_request_abandoned',"
+                                "processing_owner=NULL,processing_deadline=NULL"
+                                f" WHERE {_TASK} AND status='created' RETURNING *",
+                            ),
+                            _identity(owner, cast(str, row["task_id"])),
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
             return self._request(owner, row, parse_winner=False, run=run)
 
     async def get_or_create_request(
@@ -564,7 +594,9 @@ class PostgreSQLBrowserRunStore:
         return await self._accept(request, admission, teaching_plan=None)
 
     async def accept_teaching(
-        self, request: CanonicalRequest, admission: RunAdmission,
+        self,
+        request: CanonicalRequest,
+        admission: RunAdmission,
         plan: TeachingPlan,
     ) -> CommitFact:
         """Admit a prepared candidate and its signed plan in one transaction."""
@@ -573,8 +605,11 @@ class PostgreSQLBrowserRunStore:
         return await self._accept(request, admission, teaching_plan=plan)
 
     async def _accept(
-        self, request: CanonicalRequest, admission: RunAdmission,
-        *, teaching_plan: TeachingPlan | None,
+        self,
+        request: CanonicalRequest,
+        admission: RunAdmission,
+        *,
+        teaching_plan: TeachingPlan | None,
     ) -> CommitFact:
         if request.owner != admission.owner or request.task_id != admission.task_id:
             raise BrowserRunStoreError("browser_request_owner_mismatch")
@@ -587,7 +622,10 @@ class PostgreSQLBrowserRunStore:
                 await self._authority.check_admission(session, request, admission)
             else:
                 await self._authority.check_teaching_admission(
-                    session, request, admission, teaching_plan,
+                    session,
+                    request,
+                    admission,
+                    teaching_plan,
                 )
             if admission.auth_expires_at <= await self._now(session):
                 raise BrowserRunStoreError("browser_run_authorization_expired")
@@ -619,28 +657,45 @@ class PostgreSQLBrowserRunStore:
             )
             if teaching_plan is not None:
                 run = await self._read_run(
-                    session, admission.owner, admission.task_id, admission.run_id,
+                    session,
+                    admission.owner,
+                    admission.task_id,
+                    admission.run_id,
                 )
                 manifest = await self._frozen_publication(session, run)
-                state = (await session.execute(text(
-                    "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
-                    " AND publication_digest=:digest"
-                ), {"tenant": admission.owner.tenant_id,
-                    "digest": admission.publication_digest})).scalar_one_or_none()
+                state = (
+                    await session.execute(
+                        text(
+                            "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
+                            " AND publication_digest=:digest"
+                        ),
+                        {
+                            "tenant": admission.owner.tenant_id,
+                            "digest": admission.publication_digest,
+                        },
+                    )
+                ).scalar_one_or_none()
                 if state != "prepared":
                     raise BrowserRunStoreError("browser_teaching_candidate_not_prepared")
                 plan_data: dict[str, object] = {
                     "plan": teaching_plan.model_dump(mode="json"),
                 }
                 await self._append_write_event(
-                    session, run, kind=_TEACHING_PLAN_VERSION,
+                    session,
+                    run,
+                    kind=_TEACHING_PLAN_VERSION,
                     event_id=self._write_event_id("teaching-plan", run.run_id),
                     data=plan_data,
                     revision_delta=0,
                 )
-                if await self._teaching_plan_in_session(
-                    session, run, manifest,
-                ) != teaching_plan:
+                if (
+                    await self._teaching_plan_in_session(
+                        session,
+                        run,
+                        manifest,
+                    )
+                    != teaching_plan
+                ):
                     raise BrowserRunStoreError("browser_teaching_plan_mismatch")
             updated = await transition_owned_task(
                 session,
@@ -703,7 +758,10 @@ class PostgreSQLBrowserRunStore:
         return run
 
     async def get_for_cleanup(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> RunSnapshot:
         """Recover exact historical identity under independent service authority.
 
@@ -725,8 +783,10 @@ class PostgreSQLBrowserRunStore:
             if task is None:
                 raise BrowserRunStoreError("browser_run_not_found")
             current = await self._read_run(session, owner, task_id, run_id, lock=True)
-            if (current.admission != before.admission
-                    or current.state_revision != before.state_revision):
+            if (
+                current.admission != before.admission
+                or current.state_revision != before.state_revision
+            ):
                 raise BrowserRunStoreError("browser_run_stale")
             await self._authority.authorize_cleanup(session, current)
         return current
@@ -748,7 +808,11 @@ class PostgreSQLBrowserRunStore:
             for row in candidates:
                 try:
                     result = await self._claim_candidate(
-                        owner, row["task_id"], row["run_id"], worker_id, ttl,
+                        owner,
+                        row["task_id"],
+                        row["run_id"],
+                        worker_id,
+                        ttl,
                     )
                 except BrowserRunStoreError as exc:
                     if exc.code not in _CLAIM_SKIPPABLE:
@@ -770,28 +834,51 @@ class PostgreSQLBrowserRunStore:
         )
         async with self._transaction() as session:
             if scan.upper is None:
-                last = (await session.execute(text(
-                    "SELECT created_at,run_id FROM browser_runs WHERE " + eligible
-                    + " ORDER BY created_at DESC,run_id DESC LIMIT 1",
-                ), _owner(owner))).mappings().one_or_none()
+                last = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT created_at,run_id FROM browser_runs WHERE "
+                                + eligible
+                                + " ORDER BY created_at DESC,run_id DESC LIMIT 1",
+                            ),
+                            _owner(owner),
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if last is None:
                     key = (owner.tenant_id, owner.user_id, owner.session_id)
                     self._claim_scans.pop(key, None)
                     return []
                 scan.upper = (last["created_at"], last["run_id"])
             params = {
-                **_owner(owner), "upper_time": scan.upper[0], "upper_id": scan.upper[1],
+                **_owner(owner),
+                "upper_time": scan.upper[0],
+                "upper_id": scan.upper[1],
                 "limit": _CLAIM_BATCH,
             }
             after_clause = ""
             if scan.after is not None:
                 params.update(after_time=scan.after[0], after_id=scan.after[1])
                 after_clause = " AND (created_at,run_id)>(:after_time,:after_id)"
-            rows = list((await session.execute(text(
-                "SELECT task_id,run_id,created_at FROM browser_runs WHERE " + eligible
-                + " AND (created_at,run_id)<=(:upper_time,:upper_id)" + after_clause
-                + " ORDER BY created_at,run_id LIMIT :limit",
-            ), params)).mappings().all())
+            rows = list(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT task_id,run_id,created_at FROM browser_runs WHERE "
+                            + eligible
+                            + " AND (created_at,run_id)<=(:upper_time,:upper_id)"
+                            + after_clause
+                            + " ORDER BY created_at,run_id LIMIT :limit",
+                        ),
+                        params,
+                    )
+                )
+                .mappings()
+                .all()
+            )
         if not rows:
             # Do not wrap in this pass: a cycle is finite even during continuous
             # arrivals. The next scheduler pass starts a fresh bounded cycle.
@@ -799,8 +886,12 @@ class PostgreSQLBrowserRunStore:
         return rows
 
     async def _claim_candidate(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
-        worker_id: str, ttl: timedelta,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+        worker_id: str,
+        ttl: timedelta,
     ) -> RunSnapshot | None:
         async with self._transaction() as session:
             before = await self._read_run(session, owner, task_id, run_id)
@@ -814,17 +905,21 @@ class PostgreSQLBrowserRunStore:
             # Exact protected admission is checked before acquiring earlier locks.
             # This action uses nonblocking credential -> lease -> session locks.
             await self._authority.before_run_lock(session, before, "claim")
-            task = (await session.execute(text(
-                f"SELECT status FROM tasks WHERE {_TASK} FOR UPDATE SKIP LOCKED",
-            ), _identity(owner, task_id))).scalar_one_or_none()
+            task = (
+                await session.execute(
+                    text(
+                        f"SELECT status FROM tasks WHERE {_TASK} FOR UPDATE SKIP LOCKED",
+                    ),
+                    _identity(owner, task_id),
+                )
+            ).scalar_one_or_none()
             if task is None:
                 raise BrowserRunStoreError("browser_claim_candidate_busy")
             row = (
                 (
                     await session.execute(
                         text(
-                            f"SELECT * FROM browser_runs WHERE {_RUN}"
-                            " FOR UPDATE SKIP LOCKED",
+                            f"SELECT * FROM browser_runs WHERE {_RUN} FOR UPDATE SKIP LOCKED",
                         ),
                         _identity(owner, task_id, run_id),
                     )
@@ -839,7 +934,8 @@ class PostgreSQLBrowserRunStore:
             if (
                 current.admission != before.admission
                 or current.state_revision != before.state_revision
-                or current.status not in _ACTIVE or task != current.status
+                or current.status not in _ACTIVE
+                or task != current.status
                 or (current.worker_deadline is not None and current.worker_deadline > now)
             ):
                 raise BrowserRunStoreError("browser_run_stale")
@@ -875,7 +971,10 @@ class PostgreSQLBrowserRunStore:
         before = read_candidate
         if before is None:
             before = await self._read_run(
-                session, expected.owner, expected.task_id, expected.run_id,
+                session,
+                expected.owner,
+                expected.task_id,
+                expected.run_id,
             )
         elif before != expected:
             raise BrowserRunStoreError("browser_run_stale")
@@ -955,13 +1054,19 @@ class PostgreSQLBrowserRunStore:
         return _snapshot(row)
 
     async def refresh_worker(
-        self, previous: RunSnapshot, *, ttl_seconds: int = 60,
+        self,
+        previous: RunSnapshot,
+        *,
+        ttl_seconds: int = 60,
     ) -> RunSnapshot:
         """Keep read/renew in one transaction; no authority is reused across calls."""
         _ttl(ttl_seconds)
         async with self._transaction() as session:
             candidate = await self._read_run(
-                session, previous.owner, previous.task_id, previous.run_id,
+                session,
+                previous.owner,
+                previous.task_id,
+                previous.run_id,
             )
             if (
                 candidate.worker_id != previous.worker_id
@@ -976,25 +1081,33 @@ class PostgreSQLBrowserRunStore:
             if current.state_revision >= MAX_RUN_REVISION:
                 raise BrowserRunStoreError("browser_run_revision_exhausted")
             row = (
-                await session.execute(
-                    text(
-                        "UPDATE browser_runs SET worker_deadline="
-                        "clock_timestamp() + :ttl_seconds * INTERVAL '1 second',"
-                        "state_revision=state_revision+1,updated_at=clock_timestamp()"
-                        f" WHERE {_RUN} AND state_revision=:expected_revision"
-                        " AND worker_id=:expected_worker_id AND worker_epoch=:expected_worker_epoch"
-                        " AND worker_deadline=:expected_worker_deadline"
-                        " AND status IN ('running','waiting_user')"
-                        " AND worker_deadline > clock_timestamp()"
-                        " AND auth_expires_at > clock_timestamp() RETURNING *"
-                    ),
-                    {**_identity(current.owner, current.task_id, current.run_id),
-                     "ttl_seconds": ttl_seconds, "expected_revision": current.state_revision,
-                     "expected_worker_id": current.worker_id,
-                     "expected_worker_epoch": current.worker_epoch,
-                     "expected_worker_deadline": current.worker_deadline},
+                (
+                    await session.execute(
+                        text(
+                            "UPDATE browser_runs SET worker_deadline="
+                            "clock_timestamp() + :ttl_seconds * INTERVAL '1 second',"
+                            "state_revision=state_revision+1,updated_at=clock_timestamp()"
+                            f" WHERE {_RUN} AND state_revision=:expected_revision"
+                            " AND worker_id=:expected_worker_id "
+                            "AND worker_epoch=:expected_worker_epoch"
+                            " AND worker_deadline=:expected_worker_deadline"
+                            " AND status IN ('running','waiting_user')"
+                            " AND worker_deadline > clock_timestamp()"
+                            " AND auth_expires_at > clock_timestamp() RETURNING *"
+                        ),
+                        {
+                            **_identity(current.owner, current.task_id, current.run_id),
+                            "ttl_seconds": ttl_seconds,
+                            "expected_revision": current.state_revision,
+                            "expected_worker_id": current.worker_id,
+                            "expected_worker_epoch": current.worker_epoch,
+                            "expected_worker_deadline": current.worker_deadline,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 # The row remains locked; classify expiry without hiding a CAS
                 # failure or returning an unrenewed snapshot as success.
@@ -1063,13 +1176,23 @@ class PostgreSQLBrowserRunStore:
         return result
 
     async def _frozen_publication(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
     ) -> BrowserPublicationManifest:
-        row = (await session.execute(text(
-            "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
-            " AND publication_digest=:digest"
-        ), {"tenant": run.owner.tenant_id,
-            "digest": run.admission.publication_digest})).mappings().one_or_none()
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
+                        " AND publication_digest=:digest"
+                    ),
+                    {"tenant": run.owner.tenant_id, "digest": run.admission.publication_digest},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise BrowserRunStoreError("browser_step_publication_unavailable")
         try:
@@ -1093,13 +1216,24 @@ class PostgreSQLBrowserRunStore:
         return manifest
 
     async def _audited_steps(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
     ) -> tuple[RunTeachingStep, ...]:
-        rows = (await session.execute(text(
-            "SELECT payload FROM task_events WHERE task_id=:task"
-            " AND event_type='browser_run_step' AND payload->>'run_id'=:run"
-            " ORDER BY (payload->>'sequence')::integer"
-        ), {"task": run.task_id, "run": run.run_id})).mappings().all()
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT payload FROM task_events WHERE task_id=:task"
+                        " AND event_type='browser_run_step' AND payload->>'run_id'=:run"
+                        " ORDER BY (payload->>'sequence')::integer"
+                    ),
+                    {"task": run.task_id, "run": run.run_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
         if len(rows) > _MAX_STEP_AUDITS:
             raise BrowserRunStoreError("browser_step_audit_overflow")
         result: list[RunTeachingStep] = []
@@ -1111,7 +1245,8 @@ class PostgreSQLBrowserRunStore:
             key_id = payload.get("key_id")
             mac = payload.get("mac")
             if (
-                type(key_id) is not str or type(mac) is not str
+                type(key_id) is not str
+                or type(mac) is not str
                 or payload.get("schema_version") != _STEP_AUDIT_VERSION
                 or payload.get("run_id") != run.run_id
                 or payload.get("sequence") != sequence
@@ -1133,7 +1268,9 @@ class PostgreSQLBrowserRunStore:
     @staticmethod
     def _check_step_route(
         manifest: BrowserPublicationManifest,
-        step_ids: tuple[str, ...], *, complete: bool,
+        step_ids: tuple[str, ...],
+        *,
+        complete: bool,
         terminal_after: int | None = None,
     ) -> None:
         """Match the frozen sequence, allowing only its registered page advance to repeat."""
@@ -1150,7 +1287,8 @@ class PostgreSQLBrowserRunStore:
         expected = manifest.skill.steps
         traversal = manifest.site.traversal
         if terminal_after is not None and (
-            traversal is None or type(terminal_after) is not int
+            traversal is None
+            or type(terminal_after) is not int
             or not 0 <= terminal_after <= len(step_ids)
         ):
             raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
@@ -1172,7 +1310,8 @@ class PostgreSQLBrowserRunStore:
                     cursor += 1
             elif (
                 expected[cursor].step_id == advance_id
-                and terminal_after == index and cursor + 1 < len(expected)
+                and terminal_after == index
+                and cursor + 1 < len(expected)
                 and step_id == expected[cursor + 1].step_id
             ):
                 used_terminal = True
@@ -1181,13 +1320,21 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
         if complete and not (
             cursor == len(expected)
-            or (cursor == len(expected) - 1 and terminal_after == len(step_ids)
-                and expected[cursor].step_id == advance_id)
+            or (
+                cursor == len(expected) - 1
+                and terminal_after == len(step_ids)
+                and expected[cursor].step_id == advance_id
+            )
         ):
             raise BrowserRunStoreError("browser_step_audit_incomplete")
-        if terminal_after is not None and not used_terminal and not (
-            cursor == len(expected) - 1 and terminal_after == len(step_ids)
-            and expected[cursor].step_id == advance_id
+        if (
+            terminal_after is not None
+            and not used_terminal
+            and not (
+                cursor == len(expected) - 1
+                and terminal_after == len(step_ids)
+                and expected[cursor].step_id == advance_id
+            )
         ):
             raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
 
@@ -1200,47 +1347,65 @@ class PostgreSQLBrowserRunStore:
 
     @staticmethod
     def _primitive_rule(
-        manifest: BrowserPublicationManifest, primitive_id: str,
+        manifest: BrowserPublicationManifest,
+        primitive_id: str,
     ) -> SiteStepRule | None:
-        return next((item for item in manifest.site.primitive_rules
-                     if item.step.step_id == primitive_id), None)
+        return next(
+            (item for item in manifest.site.primitive_rules if item.step.step_id == primitive_id),
+            None,
+        )
 
     def _step_mac(self, data: dict[str, object], key_id: str) -> str:
         key = self._digest_keys.get(key_id)
         if key is None:
             raise BrowserRunStoreError("browser_step_audit_key_unavailable")
-        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True, allow_nan=False).encode("ascii")
-        return hmac.new(key, b"browser-run-step-audit-v1\x00" + encoded,
-                        hashlib.sha256).hexdigest()
+        encoded = json.dumps(
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+        ).encode("ascii")
+        return hmac.new(key, b"browser-run-step-audit-v1\x00" + encoded, hashlib.sha256).hexdigest()
 
     def _proposal_mac(self, data: dict[str, object], key_id: str) -> str:
         key = self._digest_keys.get(key_id)
         if key is None:
             raise BrowserRunStoreError("browser_repair_proposal_key_unavailable")
-        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True, allow_nan=False).encode("ascii")
-        return hmac.new(key, b"browser-run-locator-proposal-v1\x00" + encoded,
-                        hashlib.sha256).hexdigest()
+        encoded = json.dumps(
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+        ).encode("ascii")
+        return hmac.new(
+            key, b"browser-run-locator-proposal-v1\x00" + encoded, hashlib.sha256
+        ).hexdigest()
 
     def _traversal_mac(self, data: dict[str, object], key_id: str) -> str:
         key = self._digest_keys.get(key_id)
         if key is None:
             raise BrowserRunStoreError("browser_traversal_audit_key_unavailable")
-        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True, allow_nan=False).encode("ascii")
-        return hmac.new(key, b"browser-traversal-terminal-v1\x00" + encoded,
-                        hashlib.sha256).hexdigest()
+        encoded = json.dumps(
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+        ).encode("ascii")
+        return hmac.new(
+            key, b"browser-traversal-terminal-v1\x00" + encoded, hashlib.sha256
+        ).hexdigest()
 
     async def _traversal_terminal_in_session(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
         manifest: BrowserPublicationManifest,
     ) -> int | None:
         event_id = self._write_event_id("traversal-terminal", run.run_id)
-        row = (await session.execute(text(
-            "SELECT event_type,payload FROM task_events WHERE task_id=:task"
-            " AND event_id=:event"
-        ), {"task": run.task_id, "event": event_id})).mappings().one_or_none()
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+                        " AND event_id=:event"
+                    ),
+                    {"task": run.task_id, "event": event_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             return None
         payload = row["payload"]
@@ -1250,7 +1415,8 @@ class PostgreSQLBrowserRunStore:
         key_id, mac = payload.get("key_id"), payload.get("mac")
         if (
             payload.get("schema_version") != _TRAVERSAL_TERMINAL_VERSION
-            or type(key_id) is not str or type(mac) is not str
+            or type(key_id) is not str
+            or type(mac) is not str
             or not hmac.compare_digest(mac, self._traversal_mac(unsigned, key_id))
             or payload.get("run_id") != run.run_id
             or payload.get("publication_digest") != manifest.digest
@@ -1268,23 +1434,32 @@ class PostgreSQLBrowserRunStore:
         return int(payload["sequence"])
 
     async def record_traversal_terminal(
-        self, claim: RunSnapshot, *, pages: tuple[PageEvidence, ...],
+        self,
+        claim: RunSnapshot,
+        *,
+        pages: tuple[PageEvidence, ...],
         sequence: int,
     ) -> RunSnapshot:
-        if (type(sequence) is not int or not 0 <= sequence <= _MAX_STEP_AUDITS
-                or type(pages) is not tuple):
+        if (
+            type(sequence) is not int
+            or not 0 <= sequence <= _MAX_STEP_AUDITS
+            or type(pages) is not tuple
+        ):
             raise BrowserRunStoreError("browser_traversal_audit_invalid")
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
-            if (current.phase != "running" or current.cancel_requested
-                    or current.verification is not None or current.effect == "unknown"
-                    or current.lease_epoch is None):
+            if (
+                current.phase != "running"
+                or current.cancel_requested
+                or current.verification is not None
+                or current.effect == "unknown"
+                or current.lease_epoch is None
+            ):
                 raise BrowserRunStoreError("browser_traversal_audit_stale")
             manifest = await self._frozen_publication(session, current)
             traversal = manifest.site.traversal
             digest = (
-                IndependentVerifier._page_chain(traversal, pages)
-                if traversal is not None else None
+                IndependentVerifier._page_chain(traversal, pages) if traversal is not None else None
             )
             if digest is None or not pages[-1].terminal_seen:
                 raise BrowserRunStoreError("browser_traversal_audit_incomplete")
@@ -1297,9 +1472,11 @@ class PostgreSQLBrowserRunStore:
                 position = expected.index(traversal.advance_step_id)
             except ValueError:
                 raise BrowserRunStoreError("browser_traversal_audit_sequence_conflict") from None
-            if (ids[:position] != expected[:position]
-                    or any(item != traversal.advance_step_id for item in ids[position:])
-                    or len(ids) - position >= traversal.max_pages):
+            if (
+                ids[:position] != expected[:position]
+                or any(item != traversal.advance_step_id for item in ids[position:])
+                or len(ids) - position >= traversal.max_pages
+            ):
                 raise BrowserRunStoreError("browser_traversal_audit_sequence_conflict")
             if await self._traversal_terminal_in_session(session, current, manifest) is not None:
                 raise BrowserRunStoreError("browser_traversal_audit_reused")
@@ -1316,7 +1493,8 @@ class PostgreSQLBrowserRunStore:
             }
             payload["mac"] = self._traversal_mac(payload, self._active_digest_key_id)
             await append_owned_event(
-                session, tenant_id=current.owner.tenant_id,
+                session,
+                tenant_id=current.owner.tenant_id,
                 ai_user_id=current.owner.user_id,
                 session_id=current.owner.session_id,
                 task_id=current.task_id,
@@ -1324,7 +1502,8 @@ class PostgreSQLBrowserRunStore:
                     event_id=self._write_event_id("traversal-terminal", current.run_id),
                     task_id=current.task_id,
                     event_type=_TRAVERSAL_TERMINAL_VERSION,
-                    timestamp=await self._now(session), payload=payload,
+                    timestamp=await self._now(session),
+                    payload=payload,
                 ),
             )
             return current
@@ -1333,23 +1512,35 @@ class PostgreSQLBrowserRunStore:
         key = self._digest_keys.get(key_id)
         if key is None:
             raise BrowserRunStoreError("browser_write_audit_key_unavailable")
-        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True, allow_nan=False).encode("ascii")
-        return hmac.new(key, b"browser-write-audit-v1\x00" + encoded,
-                        hashlib.sha256).hexdigest()
+        encoded = json.dumps(
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+        ).encode("ascii")
+        return hmac.new(key, b"browser-write-audit-v1\x00" + encoded, hashlib.sha256).hexdigest()
 
     @staticmethod
     def _write_event_id(kind: str, identity: str) -> str:
         return uuid5(NAMESPACE_URL, f"browser-{kind}-v1:{identity}").hex
 
     async def _write_event(
-        self, session: AsyncSession, run: RunSnapshot, kind: str,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
+        kind: str,
         event_id: str,
     ) -> dict[str, object] | None:
-        row = (await session.execute(text(
-            "SELECT event_type,payload FROM task_events WHERE task_id=:task"
-            " AND event_id=:event_id"
-        ), {"task": run.task_id, "event_id": event_id})).mappings().one_or_none()
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+                        " AND event_id=:event_id"
+                    ),
+                    {"task": run.task_id, "event_id": event_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             return None
         payload = row["payload"]
@@ -1359,7 +1550,8 @@ class PostgreSQLBrowserRunStore:
         key_id = payload.get("key_id")
         mac = payload.get("mac")
         if (
-            type(key_id) is not str or type(mac) is not str
+            type(key_id) is not str
+            or type(mac) is not str
             or not hmac.compare_digest(mac, self._write_mac(unsigned, key_id))
             or payload.get("run_id") != run.run_id
         ):
@@ -1367,36 +1559,60 @@ class PostgreSQLBrowserRunStore:
         return payload
 
     async def _append_write_event(
-        self, session: AsyncSession, run: RunSnapshot,
-        *, kind: str, event_id: str, data: dict[str, object],
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
+        *,
+        kind: str,
+        event_id: str,
+        data: dict[str, object],
         revision_delta: int = 1,
     ) -> None:
         if revision_delta not in {0, 1}:
             raise BrowserRunStoreError("browser_write_audit_revision_invalid")
         payload: dict[str, object] = {
-            "schema_version": kind, "run_id": run.run_id,
+            "schema_version": kind,
+            "run_id": run.run_id,
             "run_revision": run.state_revision + revision_delta,
-            "key_id": self._active_digest_key_id, **data,
+            "key_id": self._active_digest_key_id,
+            **data,
         }
         payload["mac"] = self._write_mac(payload, self._active_digest_key_id)
         await append_owned_event(
-            session, tenant_id=run.owner.tenant_id,
+            session,
+            tenant_id=run.owner.tenant_id,
             ai_user_id=run.owner.user_id,
-            session_id=run.owner.session_id, task_id=run.task_id,
+            session_id=run.owner.session_id,
+            task_id=run.task_id,
             event=TaskEventRecord(
-                event_id=event_id, task_id=run.task_id, event_type=kind,
-                timestamp=await self._now(session), payload=payload,
+                event_id=event_id,
+                task_id=run.task_id,
+                event_type=kind,
+                timestamp=await self._now(session),
+                payload=payload,
             ),
         )
 
     async def _gate_request(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
         preparation: BrowserWritePreparation,
-        *, confirmed: bool,
+        *,
+        confirmed: bool,
     ) -> None:
-        row = (await session.execute(text(
-            "SELECT * FROM human_gate_requests WHERE request_id=:request_id FOR SHARE"
-        ), {"request_id": preparation.request_id})).mappings().one_or_none()
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT * FROM human_gate_requests WHERE request_id=:request_id FOR SHARE"
+                    ),
+                    {"request_id": preparation.request_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise BrowserRunStoreError("browser_write_confirmation_missing")
         expected = preparation.gate_request(run.owner)
@@ -1417,7 +1633,9 @@ class PostgreSQLBrowserRunStore:
             raise BrowserRunStoreError("browser_write_confirmation_unapproved")
 
     async def _prepared_write(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
     ) -> BrowserWritePreparation:
         event_id = self._write_event_id("write-prepared", run.run_id)
         event = await self._write_event(session, run, _WRITE_PREPARED_VERSION, event_id)
@@ -1443,11 +1661,15 @@ class PostgreSQLBrowserRunStore:
         return preparation
 
     async def _teaching_plan_in_session(
-        self, session: AsyncSession, run: RunSnapshot,
+        self,
+        session: AsyncSession,
+        run: RunSnapshot,
         manifest: BrowserPublicationManifest,
     ) -> TeachingPlan | None:
         event = await self._write_event(
-            session, run, _TEACHING_PLAN_VERSION,
+            session,
+            run,
+            _TEACHING_PLAN_VERSION,
             self._write_event_id("teaching-plan", run.run_id),
         )
         if event is None:
@@ -1459,7 +1681,8 @@ class PostgreSQLBrowserRunStore:
         except (KeyError, ValueError):
             raise BrowserRunStoreError("browser_teaching_plan_invalid") from None
         if (
-            plan.task_id != run.task_id or plan.run_id != run.run_id
+            plan.task_id != run.task_id
+            or plan.run_id != run.run_id
             or plan.owner_digest != _owner_digest(run.owner)
             or plan.binding_id != run.admission.binding_id
             or plan.binding_revision != run.admission.binding_revision
@@ -1470,25 +1693,38 @@ class PostgreSQLBrowserRunStore:
             or plan.verifier_digest != manifest.verifier.digest
             or plan.sealed_input_digest != run.admission.input_digest.hex()
             or (plan.purpose == "teaching" and not manifest.site.primitive_rules)
-            or tuple(item.step_id for item in plan.steps) != tuple(
-                item.step_id for item in manifest.skill.steps
+            or tuple(item.step_id for item in plan.steps)
+            != tuple(item.step_id for item in manifest.skill.steps)
+            or (
+                plan.purpose == "initial_validation"
+                and (
+                    plan.source_publication_digest != manifest.digest
+                    or manifest.source_kind != "registered_site"
+                    or manifest.effect not in {"read_only", "controlled_write"}
+                    or manifest.rollback_source_digest is not None
+                )
             )
-            or (plan.purpose == "initial_validation" and (
-                plan.source_publication_digest != manifest.digest
-                or manifest.source_kind != "registered_site"
-                or manifest.effect not in {"read_only", "controlled_write"}
-                or manifest.rollback_source_digest is not None
-            ))
         ):
             raise BrowserRunStoreError("browser_teaching_plan_mismatch")
-        source_row = (await session.execute(text(
-            "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
-            " AND publication_digest=:digest"
-            " AND ((:initial AND state IN ('prepared','active','inactive'))"
-            " OR (NOT :initial AND state IN ('active','inactive')))"
-        ), {"tenant": run.owner.tenant_id,
-            "digest": bytes.fromhex(plan.source_publication_digest),
-            "initial": plan.purpose == "initial_validation"})).mappings().one_or_none()
+        source_row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
+                        " AND publication_digest=:digest"
+                        " AND ((:initial AND state IN ('prepared','active','inactive'))"
+                        " OR (NOT :initial AND state IN ('active','inactive')))"
+                    ),
+                    {
+                        "tenant": run.owner.tenant_id,
+                        "digest": bytes.fromhex(plan.source_publication_digest),
+                        "initial": plan.purpose == "initial_validation",
+                    },
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if source_row is None:
             raise BrowserRunStoreError("browser_teaching_source_unavailable")
         try:
@@ -1502,41 +1738,60 @@ class PostgreSQLBrowserRunStore:
         if plan.purpose == "initial_validation" and source != manifest:
             raise BrowserRunStoreError("browser_teaching_source_invalid")
         source_rules = {
-            item.step.step_id: item for item in (
-                *source.site.steps, *source.site.primitive_rules,
+            item.step.step_id: item
+            for item in (
+                *source.site.steps,
+                *source.site.primitive_rules,
             )
         }
-        by_id = {item.step.step_id: item for item in (
-            manifest.site.steps if plan.purpose == "initial_validation"
-            else manifest.site.primitive_rules or manifest.site.steps
-        )}
+        by_id = {
+            item.step.step_id: item
+            for item in (
+                manifest.site.steps
+                if plan.purpose == "initial_validation"
+                else manifest.site.primitive_rules or manifest.site.steps
+            )
+        }
         candidate_rules = {item.step.step_id: item for item in manifest.site.steps}
         for item in plan.steps:
             primitive = by_id.get(item.primitive_id)
             candidate = candidate_rules.get(item.step_id)
             if (
-                primitive is None or candidate is None
+                primitive is None
+                or candidate is None
                 or source_rules.get(item.primitive_id) != primitive
-                or (plan.purpose != "initial_validation"
-                    and self._primitive_id(manifest, item.step_id) != item.primitive_id)
-                or candidate != primitive.model_copy(update={
-                    "step": primitive.step.model_copy(update={"step_id": item.step_id}),
-                })
+                or (
+                    plan.purpose != "initial_validation"
+                    and self._primitive_id(manifest, item.step_id) != item.primitive_id
+                )
+                or candidate
+                != primitive.model_copy(
+                    update={
+                        "step": primitive.step.model_copy(update={"step_id": item.step_id}),
+                    }
+                )
                 or primitive.step.effect != primitive.effect.actual_effect
-                or (primitive.step.effect != "read_only" and not (
-                    plan.purpose == "initial_validation"
-                    and manifest.effect == "controlled_write"
-                    and primitive.step.effect == "may_write"
-                ))
-                or item.rule_digest != canonical_digest(
-                    "browser_site_step.v1", primitive.model_dump(mode="json"),
+                or (
+                    primitive.step.effect != "read_only"
+                    and not (
+                        plan.purpose == "initial_validation"
+                        and manifest.effect == "controlled_write"
+                        and primitive.step.effect == "may_write"
+                    )
+                )
+                or item.rule_digest
+                != canonical_digest(
+                    "browser_site_step.v1",
+                    primitive.model_dump(mode="json"),
                 )
             ):
                 raise BrowserRunStoreError("browser_teaching_primitive_mismatch")
         return plan
 
     async def record_teaching_plan(
-        self, claim: RunSnapshot, plan: TeachingPlan,
+        self,
+        claim: RunSnapshot,
+        plan: TeachingPlan,
     ) -> RunSnapshot:
         """Sign a trusted queued Run's exact approved primitive sequence."""
         if not isinstance(plan, TeachingPlan):
@@ -1544,13 +1799,19 @@ class PostgreSQLBrowserRunStore:
         async with self._transaction() as session:
             current = await self._locked(session, claim, "read", worker=False)
             if (
-                current.phase != "queued" or current.worker_id is not None
-                or current.lease_epoch is not None or current.cancel_requested
-                or current.effect != "not_sent" or current.verification is not None
+                current.phase != "queued"
+                or current.worker_id is not None
+                or current.lease_epoch is not None
+                or current.cancel_requested
+                or current.effect != "not_sent"
+                or current.verification is not None
                 or await self._write_event(
-                    session, current, _TEACHING_PLAN_VERSION,
+                    session,
+                    current,
+                    _TEACHING_PLAN_VERSION,
                     self._write_event_id("teaching-plan", current.run_id),
-                ) is not None
+                )
+                is not None
             ):
                 raise BrowserRunStoreError("browser_teaching_plan_stale")
             manifest = await self._frozen_publication(session, current)
@@ -1558,13 +1819,17 @@ class PostgreSQLBrowserRunStore:
             # authority unless the exact frozen rule and input are bound.
             payload: dict[str, object] = {"plan": plan.model_dump(mode="json")}
             await self._append_write_event(
-                session, current, kind=_TEACHING_PLAN_VERSION,
+                session,
+                current,
+                kind=_TEACHING_PLAN_VERSION,
                 event_id=self._write_event_id("teaching-plan", current.run_id),
                 data=payload,
             )
             try:
                 checked = await self._teaching_plan_in_session(
-                    session, current, manifest,
+                    session,
+                    current,
+                    manifest,
                 )
             except BrowserRunStoreError:
                 raise
@@ -1573,7 +1838,10 @@ class PostgreSQLBrowserRunStore:
             return await self._update(session, current, {"effect": current.effect})
 
     async def load_teaching_plan(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> TeachingPlan | None:
         async with self._transaction() as session:
             run = await self._read_run(session, owner, task_id, run_id)
@@ -1582,7 +1850,10 @@ class PostgreSQLBrowserRunStore:
             return await self._teaching_plan_in_session(session, run, manifest)
 
     async def load_traversal_terminal(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> int | None:
         async with self._transaction() as session:
             run = await self._read_run(session, owner, task_id, run_id)
@@ -1591,13 +1862,18 @@ class PostgreSQLBrowserRunStore:
             return await self._traversal_terminal_in_session(session, run, manifest)
 
     async def load_teaching_plan_in_session(
-        self, transaction: object, admission: RunAdmission,
+        self,
+        transaction: object,
+        admission: RunAdmission,
     ) -> TeachingPlan | None:
         """Read the exact Run's MAC plan inside an existing authority transaction."""
         if not isinstance(transaction, AsyncSession):
             raise BrowserRunStoreError("browser_teaching_transaction_invalid")
         run = await self._read_run(
-            transaction, admission.owner, admission.task_id, admission.run_id,
+            transaction,
+            admission.owner,
+            admission.task_id,
+            admission.run_id,
         )
         if run.admission != admission:
             raise BrowserRunStoreError("browser_teaching_admission_mismatch")
@@ -1605,13 +1881,17 @@ class PostgreSQLBrowserRunStore:
         return await self._teaching_plan_in_session(transaction, run, manifest)
 
     async def record_write_preparation(
-        self, claim: RunSnapshot, preparation: BrowserWritePreparation,
+        self,
+        claim: RunSnapshot,
+        preparation: BrowserWritePreparation,
     ) -> RunSnapshot:
         """Persist only a HumanGate-created exact preview on a queued Run."""
         async with self._transaction() as session:
             current = await self._locked(session, claim, "read", worker=False)
             existing = await self._write_event(
-                session, current, _WRITE_PREPARED_VERSION,
+                session,
+                current,
+                _WRITE_PREPARED_VERSION,
                 self._write_event_id("write-prepared", current.run_id),
             )
             if existing is not None:
@@ -1620,9 +1900,12 @@ class PostgreSQLBrowserRunStore:
                     raise BrowserRunStoreError("browser_write_preparation_mismatch")
                 return current
             if (
-                current.phase != "queued" or current.worker_id is not None
-                or current.lease_epoch is not None or current.cancel_requested
-                or current.effect != "not_sent" or current.verification is not None
+                current.phase != "queued"
+                or current.worker_id is not None
+                or current.lease_epoch is not None
+                or current.cancel_requested
+                or current.effect != "not_sent"
+                or current.verification is not None
             ):
                 raise BrowserRunStoreError("browser_write_preparation_stale")
             manifest = await self._frozen_publication(session, current)
@@ -1646,11 +1929,19 @@ class PostgreSQLBrowserRunStore:
                 or preparation.write_steps_digest != _write_steps_digest(manifest)
             ):
                 raise BrowserRunStoreError("browser_write_preparation_invalid")
-            binding_row = (await session.execute(text(
-                "SELECT bindings FROM task_version_binding_manifests"
-                " WHERE task_id=:task AND manifest_digest=:digest"
-            ), {"task": current.task_id,
-                "digest": preparation.binding_manifest_digest})).mappings().one_or_none()
+            binding_row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT bindings FROM task_version_binding_manifests"
+                            " WHERE task_id=:task AND manifest_digest=:digest"
+                        ),
+                        {"task": current.task_id, "digest": preparation.binding_manifest_digest},
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
             if binding_row is None or not any(
                 item.get("resource_type") == "skill"
                 and item.get("resource_id") == preparation.skill_id
@@ -1661,14 +1952,19 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_write_task_binding_invalid")
             await self._gate_request(session, current, preparation, confirmed=False)
             await self._append_write_event(
-                session, current, kind=_WRITE_PREPARED_VERSION,
+                session,
+                current,
+                kind=_WRITE_PREPARED_VERSION,
                 event_id=self._write_event_id("write-prepared", current.run_id),
                 data={"preparation": preparation.model_dump(mode="json")},
             )
             return await self._update(session, current, {"effect": current.effect})
 
     async def load_write_preparation(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> BrowserWritePreparation | None:
         """Resolve an uncertain post-accept request without creating a second gate."""
         async with self._transaction() as session:
@@ -1682,14 +1978,17 @@ class PostgreSQLBrowserRunStore:
                 raise
 
     async def write_confirmation_ready(
-        self, run: RunSnapshot,
+        self,
+        run: RunSnapshot,
     ) -> bool:
         """Claim readiness hint; reserve still rechecks everything under a fence."""
         async with self._transaction() as session:
             return await self.write_confirmation_ready_in_session(session, run)
 
     async def write_confirmation_ready_in_session(
-        self, transaction: object, run: RunSnapshot,
+        self,
+        transaction: object,
+        run: RunSnapshot,
     ) -> bool:
         """The same bounded hint in an existing claim transaction."""
         if not isinstance(transaction, AsyncSession):
@@ -1721,20 +2020,34 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_fill_stop_receipt_denied")
             checked = FillStopReport.model_validate_json(report.model_dump_json())
             event_id = self._write_event_id("fill-stop-receipt", current.run_id)
-            existing = await self._write_event(session, current, "browser.fill_stop.receipt.v1", event_id)
+            existing = await self._write_event(
+                session, current, "browser.fill_stop.receipt.v1", event_id
+            )
             if existing is not None:
                 if existing.get("report") != checked.model_dump(mode="json"):
                     raise BrowserRunStoreError("browser_fill_stop_receipt_conflict")
                 return
-            await self._append_write_event(session, current, kind="browser.fill_stop.receipt.v1",
-                event_id=event_id, revision_delta=0, data={"report": checked.model_dump(mode="json")})
+            await self._append_write_event(
+                session,
+                current,
+                kind="browser.fill_stop.receipt.v1",
+                event_id=event_id,
+                revision_delta=0,
+                data={"report": checked.model_dump(mode="json")},
+            )
 
-    async def load_fill_stop(self, owner: BrowserOwner, task_id: str, run_id: str) -> FillStopReport | None:
+    async def load_fill_stop(
+        self, owner: BrowserOwner, task_id: str, run_id: str
+    ) -> FillStopReport | None:
         async with self._transaction() as session:
             current = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, current, "read")
-            value = await self._write_event(session, current, "browser.fill_stop.receipt.v1",
-                                           self._write_event_id("fill-stop-receipt", current.run_id))
+            value = await self._write_event(
+                session,
+                current,
+                "browser.fill_stop.receipt.v1",
+                self._write_event_id("fill-stop-receipt", current.run_id),
+            )
             if value is None:
                 return None
             report = FillStopReport.model_validate_json(json.dumps(value.get("report")))
@@ -1745,20 +2058,26 @@ class PostgreSQLBrowserRunStore:
                 # The client accepts a successful finite receipt only after cleanup.
                 # Keep the immutable receipt and canonical business outcome intact.
                 return None
-            return report.model_copy(update={
-                "cleanup_confirmed": cleanup_confirmed,
-            })
+            return report.model_copy(
+                update={
+                    "cleanup_confirmed": cleanup_confirmed,
+                }
+            )
 
     async def reserve_fill_stop(self, claim: RunSnapshot) -> RunSnapshot:
         """One whole finite D flow; no fabricated v4.2 per-control receipts."""
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             manifest = await self._frozen_publication(session, current)
-            if (manifest.execution_mode != "d_form_fill_stop_v1"
-                    or manifest.effect != "controlled_write"
-                    or current.phase != "running" or current.cancel_requested
-                    or current.lease_epoch is None or current.effect != "not_sent"
-                    or current.verification is not None):
+            if (
+                manifest.execution_mode != "d_form_fill_stop_v1"
+                or manifest.effect != "controlled_write"
+                or current.phase != "running"
+                or current.cancel_requested
+                or current.lease_epoch is None
+                or current.effect != "not_sent"
+                or current.verification is not None
+            ):
                 raise BrowserRunStoreError("browser_fill_stop_dispatch_stale")
             preparation = await self._prepared_write(session, current)
             await self._gate_request(session, current, preparation, confirmed=True)
@@ -1766,43 +2085,74 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_fill_stop_dispatch_mismatch")
             consumed_id = self._write_event_id("write-consumed", preparation.request_id)
             send_id = self._write_event_id("fill-stop-send", current.run_id)
-            if (await self._write_event(session, current, _WRITE_CONSUMED_VERSION, consumed_id)
-                    is not None or await self._write_event(session, current, _WRITE_SEND_VERSION, send_id)
-                    is not None):
+            if (
+                await self._write_event(session, current, _WRITE_CONSUMED_VERSION, consumed_id)
+                is not None
+                or await self._write_event(session, current, _WRITE_SEND_VERSION, send_id)
+                is not None
+            ):
                 raise BrowserRunStoreError("browser_write_send_reused")
-            data = {"request_id": preparation.request_id,
-                    "action_digest": preparation.action_digest,
-                    "worker_epoch": current.worker_epoch, "lease_epoch": current.lease_epoch}
-            await self._append_write_event(session, current, kind=_WRITE_CONSUMED_VERSION,
-                                           event_id=consumed_id, data=data)
-            await self._append_write_event(session, current, kind=_WRITE_SEND_VERSION,
-                                           event_id=send_id, data={**data, "mode": "FILL_STOP",
-                                                                "write_steps_digest": preparation.write_steps_digest})
+            data = {
+                "request_id": preparation.request_id,
+                "action_digest": preparation.action_digest,
+                "worker_epoch": current.worker_epoch,
+                "lease_epoch": current.lease_epoch,
+            }
+            await self._append_write_event(
+                session, current, kind=_WRITE_CONSUMED_VERSION, event_id=consumed_id, data=data
+            )
+            await self._append_write_event(
+                session,
+                current,
+                kind=_WRITE_SEND_VERSION,
+                event_id=send_id,
+                data={
+                    **data,
+                    "mode": "FILL_STOP",
+                    "write_steps_digest": preparation.write_steps_digest,
+                },
+            )
             return await self._update(session, current, {"effect": current.effect})
 
     async def assert_fill_stop_reservation(self, claim: RunSnapshot) -> None:
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             manifest = await self._frozen_publication(session, current)
-            if (manifest.execution_mode != "d_form_fill_stop_v1"
-                    or current.phase != "running" or current.cancel_requested
-                    or current.lease_epoch is None or current.effect != "not_sent"):
+            if (
+                manifest.execution_mode != "d_form_fill_stop_v1"
+                or current.phase != "running"
+                or current.cancel_requested
+                or current.lease_epoch is None
+                or current.effect != "not_sent"
+            ):
                 raise BrowserRunStoreError("browser_fill_stop_dispatch_stale")
             preparation = await self._prepared_write(session, current)
             await self._gate_request(session, current, preparation, confirmed=True)
-            send = await self._write_event(session, current, _WRITE_SEND_VERSION,
-                                          self._write_event_id("fill-stop-send", current.run_id))
-            if (send is None or send.get("mode") != "FILL_STOP"
-                    or send.get("request_id") != preparation.request_id
-                    or send.get("action_digest") != preparation.action_digest
-                    or send.get("write_steps_digest") != preparation.write_steps_digest
-                    or send.get("worker_epoch") != current.worker_epoch
-                    or send.get("lease_epoch") != current.lease_epoch):
+            send = await self._write_event(
+                session,
+                current,
+                _WRITE_SEND_VERSION,
+                self._write_event_id("fill-stop-send", current.run_id),
+            )
+            if (
+                send is None
+                or send.get("mode") != "FILL_STOP"
+                or send.get("request_id") != preparation.request_id
+                or send.get("action_digest") != preparation.action_digest
+                or send.get("write_steps_digest") != preparation.write_steps_digest
+                or send.get("worker_epoch") != current.worker_epoch
+                or send.get("lease_epoch") != current.lease_epoch
+            ):
                 raise BrowserRunStoreError("browser_write_send_unreserved")
 
     async def reserve_write_dispatch(
-        self, claim: RunSnapshot, *, command: ActionCommand,
-        rule: SiteStepRule, spec: ReadSpec, sequence: int,
+        self,
+        claim: RunSnapshot,
+        *,
+        command: ActionCommand,
+        rule: SiteStepRule,
+        spec: ReadSpec,
+        sequence: int,
     ) -> RunSnapshot:
         """Atomically consume one HumanGate decision and reserve this send.
 
@@ -1814,8 +2164,10 @@ class PostgreSQLBrowserRunStore:
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             if (
-                current.phase != "running" or current.cancel_requested
-                or current.lease_epoch is None or current.effect == "unknown"
+                current.phase != "running"
+                or current.cancel_requested
+                or current.lease_epoch is None
+                or current.effect == "unknown"
                 or current.verification is not None
                 or command.binding.owner != current.owner
                 or command.binding.binding_id != current.admission.binding_id
@@ -1837,8 +2189,7 @@ class PostgreSQLBrowserRunStore:
                 or spec.binding != command.binding
                 or spec.business_key.object_type != preparation.object_type
                 or spec.business_key.key_digest != preparation.business_key_digest
-                or spec.business_key.confirmation_ref
-                != preparation.business_key_confirmation_ref
+                or spec.business_key.confirmation_ref != preparation.business_key_confirmation_ref
                 or preparation.write_steps_digest != _write_steps_digest(manifest)
             ):
                 raise BrowserRunStoreError("browser_write_dispatch_mismatch")
@@ -1847,27 +2198,35 @@ class PostgreSQLBrowserRunStore:
             if len(previous) != sequence - 1:
                 raise BrowserRunStoreError("browser_write_sequence_conflict")
             self._check_step_route(
-                manifest, tuple(item.event.step_id for item in previous)
-                + (command.step.step_id,), complete=False,
+                manifest,
+                tuple(item.event.step_id for item in previous) + (command.step.step_id,),
+                complete=False,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, current, manifest,
+                    session,
+                    current,
+                    manifest,
                 ),
             )
             consumed_id = self._write_event_id(
-                "write-consumed", preparation.request_id,
+                "write-consumed",
+                preparation.request_id,
             )
             consumed = await self._write_event(
-                session, current, _WRITE_CONSUMED_VERSION, consumed_id,
+                session,
+                current,
+                _WRITE_CONSUMED_VERSION,
+                consumed_id,
             )
             if consumed is None:
                 previous_writes = {
-                    item.event.step_id for item in previous
-                    if item.event.effect == "may_write"
+                    item.event.step_id for item in previous if item.event.effect == "may_write"
                 }
                 if previous_writes:
                     raise BrowserRunStoreError("browser_write_confirmation_not_consumed")
                 await self._append_write_event(
-                    session, current, kind=_WRITE_CONSUMED_VERSION,
+                    session,
+                    current,
+                    kind=_WRITE_CONSUMED_VERSION,
                     event_id=consumed_id,
                     data={
                         "request_id": preparation.request_id,
@@ -1884,14 +2243,23 @@ class PostgreSQLBrowserRunStore:
             ):
                 raise BrowserRunStoreError("browser_write_confirmation_reused")
             send_id = self._write_event_id(
-                "write-send", f"{current.run_id}:{sequence}",
+                "write-send",
+                f"{current.run_id}:{sequence}",
             )
-            if await self._write_event(
-                session, current, _WRITE_SEND_VERSION, send_id,
-            ) is not None:
+            if (
+                await self._write_event(
+                    session,
+                    current,
+                    _WRITE_SEND_VERSION,
+                    send_id,
+                )
+                is not None
+            ):
                 raise BrowserRunStoreError("browser_write_send_reused")
             await self._append_write_event(
-                session, current, kind=_WRITE_SEND_VERSION,
+                session,
+                current,
+                kind=_WRITE_SEND_VERSION,
                 event_id=send_id,
                 data={
                     "request_id": preparation.request_id,
@@ -1905,15 +2273,20 @@ class PostgreSQLBrowserRunStore:
             return await self._update(session, current, {"effect": current.effect})
 
     async def assert_write_reservation(
-        self, claim: RunSnapshot, *, command: ActionCommand,
+        self,
+        claim: RunSnapshot,
+        *,
+        command: ActionCommand,
         sequence: int,
     ) -> None:
         """Final DB side of the adapter's dispatch barrier; no permission cache."""
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             if (
-                current.phase != "running" or current.cancel_requested
-                or current.lease_epoch is None or current.effect == "unknown"
+                current.phase != "running"
+                or current.cancel_requested
+                or current.lease_epoch is None
+                or current.effect == "unknown"
                 or command.binding.owner != current.owner
                 or command.binding.authorization_run_id != current.run_id
                 or command.binding.lease_epoch != current.lease_epoch
@@ -1922,13 +2295,17 @@ class PostgreSQLBrowserRunStore:
             preparation = await self._prepared_write(session, current)
             await self._gate_request(session, current, preparation, confirmed=True)
             send = await self._write_event(
-                session, current, _WRITE_SEND_VERSION,
+                session,
+                current,
+                _WRITE_SEND_VERSION,
                 self._write_event_id(
-                    "write-send", f"{current.run_id}:{sequence}",
+                    "write-send",
+                    f"{current.run_id}:{sequence}",
                 ),
             )
             if (
-                send is None or send.get("schema_version") != _WRITE_SEND_VERSION
+                send is None
+                or send.get("schema_version") != _WRITE_SEND_VERSION
                 or send.get("request_id") != preparation.request_id
                 or send.get("action_digest") != preparation.action_digest
                 or send.get("step_id") != command.step.step_id
@@ -1942,22 +2319,35 @@ class PostgreSQLBrowserRunStore:
                 raise BrowserRunStoreError("browser_write_sequence_conflict")
             manifest = await self._frozen_publication(session, current)
             self._check_step_route(
-                manifest, tuple(item.event.step_id for item in previous)
-                + (command.step.step_id,), complete=False,
+                manifest,
+                tuple(item.event.step_id for item in previous) + (command.step.step_id,),
+                complete=False,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, current, manifest,
+                    session,
+                    current,
+                    manifest,
                 ),
             )
             barrier_id = self._write_event_id(
-                "write-barrier", f"{current.run_id}:{sequence}",
+                "write-barrier",
+                f"{current.run_id}:{sequence}",
             )
-            if await self._write_event(
-                session, current, _WRITE_BARRIER_VERSION, barrier_id,
-            ) is not None:
+            if (
+                await self._write_event(
+                    session,
+                    current,
+                    _WRITE_BARRIER_VERSION,
+                    barrier_id,
+                )
+                is not None
+            ):
                 raise BrowserRunStoreError("browser_write_barrier_reused")
             await self._append_write_event(
-                session, current, kind=_WRITE_BARRIER_VERSION,
-                event_id=barrier_id, revision_delta=0,
+                session,
+                current,
+                kind=_WRITE_BARRIER_VERSION,
+                event_id=barrier_id,
+                revision_delta=0,
                 data={
                     "sequence": sequence,
                     "step_id": command.step.step_id,
@@ -1973,50 +2363,73 @@ class PostgreSQLBrowserRunStore:
         owner = proof.binding.owner
         async with self._transaction() as session:
             replay = await self._read_run(
-                session, owner, proof.replay_task_id, proof.replay_run_id,
+                session,
+                owner,
+                proof.replay_task_id,
+                proof.replay_run_id,
             )
-            source_row = (await session.execute(text(
-                "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
-                " AND ai_user_id=:user AND session_id=:session"
-            ), {"run": proof.source_run_id, "tenant": owner.tenant_id,
-                "user": owner.user_id,
-                "session": owner.session_id})).mappings().one_or_none()
+            source_row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
+                            " AND ai_user_id=:user AND session_id=:session"
+                        ),
+                        {
+                            "run": proof.source_run_id,
+                            "tenant": owner.tenant_id,
+                            "user": owner.user_id,
+                            "session": owner.session_id,
+                        },
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
             if source_row is None:
                 raise BrowserRunStoreError("browser_replay_source_unavailable")
             source = _snapshot(source_row)
             await self._authority.check_run(session, replay, "read")
             await self._check_replay_source(session, source)
             if (
-                replay.status != "completed" or source.status != "completed"
+                replay.status != "completed"
+                or source.status != "completed"
                 or replay.verification != "verified"
                 or source.verification != "verified"
                 or replay.effect != "acknowledged"
                 or source.effect != "acknowledged"
                 or replay.verification_evidence_digest is None
                 or source.verification_evidence_digest is None
-                or replay.verification_evidence_digest.hex()
-                != proof.verifier_evidence_digest
-                or replay.admission.publication_digest.hex()
-                != proof.publication_digest
+                or replay.verification_evidence_digest.hex() != proof.verifier_evidence_digest
+                or replay.admission.publication_digest.hex() != proof.publication_digest
                 or replay.owner != source.owner
                 or replay.admission.binding_id != proof.binding.binding_id
                 or source.admission.binding_id != proof.binding.binding_id
-                or replay.admission.binding_revision
-                != proof.binding.binding_revision
-                or source.admission.binding_revision
-                != proof.binding.binding_revision
-                or replay.cancel_requested or source.cancel_requested
-                or replay.error_code is not None or source.error_code is not None
-                or replay.protected_result is None or source.protected_result is None
+                or replay.admission.binding_revision != proof.binding.binding_revision
+                or source.admission.binding_revision != proof.binding.binding_revision
+                or replay.cancel_requested
+                or source.cancel_requested
+                or replay.error_code is not None
+                or source.error_code is not None
+                or replay.protected_result is None
+                or source.protected_result is None
             ):
                 raise BrowserRunStoreError("browser_replay_proof_unverified")
             event_id = self._write_event_id("replay-proof", replay.run_id)
-            if await self._write_event(
-                session, replay, _REPLAY_PROOF_VERSION, event_id,
-            ) is not None:
+            if (
+                await self._write_event(
+                    session,
+                    replay,
+                    _REPLAY_PROOF_VERSION,
+                    event_id,
+                )
+                is not None
+            ):
                 raise BrowserRunStoreError("browser_replay_proof_reused")
             await self._append_write_event(
-                session, replay, kind=_REPLAY_PROOF_VERSION,
+                session,
+                replay,
+                kind=_REPLAY_PROOF_VERSION,
                 event_id=event_id,
                 revision_delta=0,
                 data={
@@ -2038,20 +2451,36 @@ class PostgreSQLBrowserRunStore:
             return True
 
     async def load_replay_proof_in_session(
-        self, transaction: object, owner: BrowserOwner, replay_digest: str,
+        self,
+        transaction: object,
+        owner: BrowserOwner,
+        replay_digest: str,
     ) -> TeachingReplayProof | None:
         """Reload a signed proof and both immutable verified Runs in one tx."""
         if not isinstance(transaction, AsyncSession):
             raise BrowserRunStoreError("browser_replay_transaction_invalid")
         session = transaction
-        rows = (await session.execute(text(
-            "SELECT e.event_type,e.payload FROM task_events e JOIN tasks t"
-            " ON t.task_id=e.task_id WHERE t.tenant_id=:tenant"
-            " AND t.ai_user_id=:user AND t.session_id=:session"
-            " AND e.event_type=:kind AND e.payload->>'digest'=:digest LIMIT 2"
-        ), {"tenant": owner.tenant_id, "user": owner.user_id,
-            "session": owner.session_id, "kind": _REPLAY_PROOF_VERSION,
-            "digest": replay_digest})).mappings().all()
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT e.event_type,e.payload FROM task_events e JOIN tasks t"
+                        " ON t.task_id=e.task_id WHERE t.tenant_id=:tenant"
+                        " AND t.ai_user_id=:user AND t.session_id=:session"
+                        " AND e.event_type=:kind AND e.payload->>'digest'=:digest LIMIT 2"
+                    ),
+                    {
+                        "tenant": owner.tenant_id,
+                        "user": owner.user_id,
+                        "session": owner.session_id,
+                        "kind": _REPLAY_PROOF_VERSION,
+                        "digest": replay_digest,
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
         if not rows:
             return None
         if len(rows) != 1:
@@ -2063,15 +2492,19 @@ class PostgreSQLBrowserRunStore:
         key_id = payload.get("key_id")
         mac = payload.get("mac")
         if (
-            type(key_id) is not str or type(mac) is not str
+            type(key_id) is not str
+            or type(mac) is not str
             or payload.get("schema_version") != _REPLAY_PROOF_VERSION
             or not hmac.compare_digest(mac, self._write_mac(unsigned, key_id))
         ):
             raise BrowserRunStoreError("browser_replay_proof_invalid")
         try:
-            binding = ScopeBinding.model_validate({
-                "owner": owner, **payload["binding"],
-            })
+            binding = ScopeBinding.model_validate(
+                {
+                    "owner": owner,
+                    **payload["binding"],
+                }
+            )
             proof = TeachingReplayProof(
                 binding=binding,
                 draft_digest=payload["draft_digest"],
@@ -2086,13 +2519,29 @@ class PostgreSQLBrowserRunStore:
         except (KeyError, TypeError, ValueError):
             raise BrowserRunStoreError("browser_replay_proof_invalid") from None
         replay = await self._read_run(
-            session, owner, proof.replay_task_id, proof.replay_run_id,
+            session,
+            owner,
+            proof.replay_task_id,
+            proof.replay_run_id,
         )
-        source_row = (await session.execute(text(
-            "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
-            " AND ai_user_id=:user AND session_id=:session"
-        ), {"run": proof.source_run_id, "tenant": owner.tenant_id,
-            "user": owner.user_id, "session": owner.session_id})).mappings().one_or_none()
+        source_row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
+                        " AND ai_user_id=:user AND session_id=:session"
+                    ),
+                    {
+                        "run": proof.source_run_id,
+                        "tenant": owner.tenant_id,
+                        "user": owner.user_id,
+                        "session": owner.session_id,
+                    },
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if source_row is None:
             raise BrowserRunStoreError("browser_replay_source_unavailable")
         source = _snapshot(source_row)
@@ -2100,35 +2549,39 @@ class PostgreSQLBrowserRunStore:
         await self._check_replay_source(session, source)
         if (
             proof.digest != replay_digest
-            or replay.status != "completed" or source.status != "completed"
+            or replay.status != "completed"
+            or source.status != "completed"
             or replay.verification != "verified"
             or source.verification != "verified"
             or replay.effect != "acknowledged"
             or source.effect != "acknowledged"
             or replay.verification_evidence_digest is None
-            or replay.verification_evidence_digest.hex()
-            != proof.verifier_evidence_digest
-            or replay.admission.publication_digest.hex()
-            != proof.publication_digest
+            or replay.verification_evidence_digest.hex() != proof.verifier_evidence_digest
+            or replay.admission.publication_digest.hex() != proof.publication_digest
             or replay.admission.input_digest.hex() != payload.get("input_digest")
-            or source.admission.input_digest.hex()
-            != payload.get("source_input_digest")
+            or source.admission.input_digest.hex() != payload.get("source_input_digest")
             or replay.admission.binding_id != proof.binding.binding_id
             or source.admission.binding_id != proof.binding.binding_id
-            or replay.admission.binding_revision
-            != proof.binding.binding_revision
-            or source.admission.binding_revision
-            != proof.binding.binding_revision
-            or replay.cancel_requested or source.cancel_requested
-            or replay.error_code is not None or source.error_code is not None
+            or replay.admission.binding_revision != proof.binding.binding_revision
+            or source.admission.binding_revision != proof.binding.binding_revision
+            or replay.cancel_requested
+            or source.cancel_requested
+            or replay.error_code is not None
+            or source.error_code is not None
         ):
             raise BrowserRunStoreError("browser_replay_proof_stale")
         return proof
 
     async def record_step(
-        self, claim: RunSnapshot, *, command: ActionCommand,
-        rule: SiteStepRule, scope: ScopeStamp, receipt: DispatchReceipt,
-        policy_digest: str, sequence: int,
+        self,
+        claim: RunSnapshot,
+        *,
+        command: ActionCommand,
+        rule: SiteStepRule,
+        scope: ScopeStamp,
+        receipt: DispatchReceipt,
+        policy_digest: str,
+        sequence: int,
     ) -> tuple[RunSnapshot, RunTeachingStep]:
         """Fence and sign one Executor receipt in the existing Task event journal.
 
@@ -2142,7 +2595,8 @@ class PostgreSQLBrowserRunStore:
         except ValueError:
             raise BrowserRunStoreError("browser_step_receipt_invalid") from None
         if (
-            receipt.state != "acknowledged" or receipt.evidence_digest is None
+            receipt.state != "acknowledged"
+            or receipt.evidence_digest is None
             or command.step != rule.step
             or command.step.effect != rule.effect.actual_effect
             or command.step.effect not in {"read_only", "may_write"}
@@ -2158,20 +2612,35 @@ class PostgreSQLBrowserRunStore:
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             if (
-                current.phase != "running" or current.cancel_requested
-                or current.effect == "unknown" or current.verification is not None
+                current.phase != "running"
+                or current.cancel_requested
+                or current.effect == "unknown"
+                or current.verification is not None
                 or current.lease_epoch is None
             ):
                 raise BrowserRunStoreError("browser_step_audit_stale")
             manifest = await self._frozen_publication(session, current)
-            publication_state = (await session.execute(text(
-                "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
-                " AND publication_digest=:digest"
-            ), {"tenant": current.owner.tenant_id,
-                "digest": current.admission.publication_digest})).scalar_one_or_none()
-            if publication_state == "prepared" and await self._teaching_plan_in_session(
-                session, current, manifest,
-            ) is None:
+            publication_state = (
+                await session.execute(
+                    text(
+                        "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
+                        " AND publication_digest=:digest"
+                    ),
+                    {
+                        "tenant": current.owner.tenant_id,
+                        "digest": current.admission.publication_digest,
+                    },
+                )
+            ).scalar_one_or_none()
+            if (
+                publication_state == "prepared"
+                and await self._teaching_plan_in_session(
+                    session,
+                    current,
+                    manifest,
+                )
+                is None
+            ):
                 raise BrowserRunStoreError("browser_teaching_plan_required")
             rules = {item.step.step_id: item for item in manifest.site.steps}
             expected_steps = {item.step_id: item for item in manifest.skill.steps}
@@ -2192,21 +2661,28 @@ class PostgreSQLBrowserRunStore:
             if len(previous) != sequence - 1:
                 raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
             self._check_step_route(
-                manifest, tuple(item.event.step_id for item in previous)
-                + (command.step.step_id,), complete=False,
+                manifest,
+                tuple(item.event.step_id for item in previous) + (command.step.step_id,),
+                complete=False,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, current, manifest,
+                    session,
+                    current,
+                    manifest,
                 ),
             )
             if command.step.effect == "may_write":
                 send = await self._write_event(
-                    session, current, _WRITE_SEND_VERSION,
+                    session,
+                    current,
+                    _WRITE_SEND_VERSION,
                     self._write_event_id(
-                        "write-send", f"{current.run_id}:{sequence}",
+                        "write-send",
+                        f"{current.run_id}:{sequence}",
                     ),
                 )
                 if (
-                    send is None or send.get("schema_version") != _WRITE_SEND_VERSION
+                    send is None
+                    or send.get("schema_version") != _WRITE_SEND_VERSION
                     or send.get("sequence") != sequence
                     or send.get("step_id") != command.step.step_id
                     or send.get("worker_epoch") != current.worker_epoch
@@ -2214,9 +2690,12 @@ class PostgreSQLBrowserRunStore:
                 ):
                     raise BrowserRunStoreError("browser_write_send_unreserved")
                 barrier = await self._write_event(
-                    session, current, _WRITE_BARRIER_VERSION,
+                    session,
+                    current,
+                    _WRITE_BARRIER_VERSION,
                     self._write_event_id(
-                        "write-barrier", f"{current.run_id}:{sequence}",
+                        "write-barrier",
+                        f"{current.run_id}:{sequence}",
                     ),
                 )
                 if (
@@ -2230,25 +2709,32 @@ class PostgreSQLBrowserRunStore:
                     raise BrowserRunStoreError("browser_write_barrier_missing")
             event = TrajectoryEvent(
                 sequence=sequence,
-                event_id=uuid5(NAMESPACE_URL,
-                               f"browser-run-step-v1:{current.run_id}:{sequence}").hex,
-                step_id=command.step.step_id, scope=scope,
-                target=command.target, option=command.option,
-                operation=command.step.operation, effect=command.step.effect,
+                event_id=uuid5(
+                    NAMESPACE_URL, f"browser-run-step-v1:{current.run_id}:{sequence}"
+                ).hex,
+                step_id=command.step.step_id,
+                scope=scope,
+                target=command.target,
+                option=command.option,
+                operation=command.step.operation,
+                effect=command.step.effect,
                 effect_proof=rule.effect,
                 value_ref=command.step.value_ref,
                 url_ref=command.step.url_ref,
                 option_ref=command.step.option_ref,
-                policy_digest=policy_digest, approved_labels=(),
+                policy_digest=policy_digest,
+                approved_labels=(),
             )
             step = RunTeachingStep(
-                run_id=current.run_id, skill_version=manifest.skill.version,
+                run_id=current.run_id,
+                skill_version=manifest.skill.version,
                 skill_digest=manifest.skill.digest,
                 binding=BindingRevisions.from_binding(command.binding),
                 primitive_id=primitive_id,
                 event=event,
                 rule_digest=canonical_digest(
-                    "browser_site_step.v1", primitive_rule.model_dump(mode="json"),
+                    "browser_site_step.v1",
+                    primitive_rule.model_dump(mode="json"),
                 ),
                 dispatch_state="acknowledged",
                 dispatch_evidence_digest=receipt.evidence_digest,
@@ -2263,13 +2749,16 @@ class PostgreSQLBrowserRunStore:
             }
             payload["mac"] = self._step_mac(payload, self._active_digest_key_id)
             await append_owned_event(
-                session, tenant_id=current.owner.tenant_id,
+                session,
+                tenant_id=current.owner.tenant_id,
                 ai_user_id=current.owner.user_id,
                 session_id=current.owner.session_id,
                 task_id=current.task_id,
                 event=TaskEventRecord(
-                    event_id=event.event_id, task_id=current.task_id,
-                    event_type="browser_run_step", timestamp=await self._now(session),
+                    event_id=event.event_id,
+                    task_id=current.task_id,
+                    event_type="browser_run_step",
+                    timestamp=await self._now(session),
                     payload=payload,
                 ),
             )
@@ -2277,36 +2766,52 @@ class PostgreSQLBrowserRunStore:
             return updated, step
 
     async def record_failed_step(
-        self, claim: RunSnapshot, *, rule: SiteStepRule, scope: ScopeStamp,
-        policy_digest: str, sequence: int, reason: RepairFailureReason,
+        self,
+        claim: RunSnapshot,
+        *,
+        rule: SiteStepRule,
+        scope: ScopeStamp,
+        policy_digest: str,
+        sequence: int,
+        reason: RepairFailureReason,
         observations: tuple[FormalRepairObservation, ...],
     ) -> tuple[RunSnapshot, FormalFailedStep]:
         """Commit a value-free pre-send failure from the installed Executor only."""
         if (
-            type(sequence) is not int or not 1 <= sequence <= _MAX_STEP_AUDITS
+            type(sequence) is not int
+            or not 1 <= sequence <= _MAX_STEP_AUDITS
             or reason not in {"target_stale", "locator_not_found", "ambiguous_target"}
             or scope.region_id != rule.observation.region_id
-            or type(observations) is not tuple or len(observations) > 32
-            or any(not isinstance(item, FormalRepairObservation)
-                   or item.scope.region_id != scope.region_id
-                   or item.replacement == rule.step.locator for item in observations)
+            or type(observations) is not tuple
+            or len(observations) > 32
+            or any(
+                not isinstance(item, FormalRepairObservation)
+                or item.scope.region_id != scope.region_id
+                or item.replacement == rule.step.locator
+                for item in observations
+            )
             or len({item.replacement for item in observations}) != len(observations)
         ):
             raise BrowserRunStoreError("browser_failed_step_audit_invalid")
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
             if (
-                current.phase != "running" or current.cancel_requested
-                or current.effect == "unknown" or current.verification is not None
+                current.phase != "running"
+                or current.cancel_requested
+                or current.effect == "unknown"
+                or current.verification is not None
                 or current.lease_epoch is None
             ):
                 raise BrowserRunStoreError("browser_failed_step_audit_stale")
             manifest = await self._frozen_publication(session, current)
-            registered = next((item for item in manifest.site.steps
-                               if item.step.step_id == rule.step.step_id), None)
+            registered = next(
+                (item for item in manifest.site.steps if item.step.step_id == rule.step.step_id),
+                None,
+            )
             if (
                 manifest.source_kind != "registered_site"
-                or registered != rule or manifest.site.policy.digest != policy_digest
+                or registered != rule
+                or manifest.site.policy.digest != policy_digest
                 or rule.step.effect != rule.effect.actual_effect
             ):
                 raise BrowserRunStoreError("browser_failed_step_audit_publication_mismatch")
@@ -2314,24 +2819,35 @@ class PostgreSQLBrowserRunStore:
             if len(previous) != sequence - 1:
                 raise BrowserRunStoreError("browser_failed_step_audit_sequence_conflict")
             self._check_step_route(
-                manifest, tuple(item.event.step_id for item in previous)
-                + (rule.step.step_id,), complete=False,
+                manifest,
+                tuple(item.event.step_id for item in previous) + (rule.step.step_id,),
+                complete=False,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, current, manifest,
+                    session,
+                    current,
+                    manifest,
                 ),
             )
-            existing = (await session.execute(text(
-                "SELECT 1 FROM task_events WHERE task_id=:task"
-                " AND event_type='browser_run_failed_step'"
-                " AND payload->>'run_id'=:run LIMIT 1"
-            ), {"task": current.task_id, "run": current.run_id})).scalar_one_or_none()
+            existing = (
+                await session.execute(
+                    text(
+                        "SELECT 1 FROM task_events WHERE task_id=:task"
+                        " AND event_type='browser_run_failed_step'"
+                        " AND payload->>'run_id'=:run LIMIT 1"
+                    ),
+                    {"task": current.task_id, "run": current.run_id},
+                )
+            ).scalar_one_or_none()
             if existing is not None:
                 raise BrowserRunStoreError("browser_failed_step_audit_duplicate")
             if rule.step.effect == "may_write":
                 send = await self._write_event(
-                    session, current, _WRITE_SEND_VERSION,
+                    session,
+                    current,
+                    _WRITE_SEND_VERSION,
                     self._write_event_id(
-                        "write-send", f"{current.run_id}:{sequence}",
+                        "write-send",
+                        f"{current.run_id}:{sequence}",
                     ),
                 )
                 if send is not None:
@@ -2352,16 +2868,19 @@ class PostgreSQLBrowserRunStore:
                 "reason": reason,
                 "dispatch_state": "not_sent",
                 "observations": [
-                    {"replacement": item.replacement.model_dump(mode="json"),
-                     "scope": item.scope.model_dump(mode="json"),
-                     "target_digest": item.target_digest}
+                    {
+                        "replacement": item.replacement.model_dump(mode="json"),
+                        "scope": item.scope.model_dump(mode="json"),
+                        "target_digest": item.target_digest,
+                    }
                     for item in observations
                 ],
                 "key_id": self._active_digest_key_id,
             }
             payload["mac"] = self._step_mac(payload, self._active_digest_key_id)
             await append_owned_event(
-                session, tenant_id=current.owner.tenant_id,
+                session,
+                tenant_id=current.owner.tenant_id,
                 ai_user_id=current.owner.user_id,
                 session_id=current.owner.session_id,
                 task_id=current.task_id,
@@ -2370,25 +2889,38 @@ class PostgreSQLBrowserRunStore:
                         NAMESPACE_URL,
                         f"browser-run-failed-step-v1:{current.run_id}:{sequence}",
                     ).hex,
-                    task_id=current.task_id, event_type="browser_run_failed_step",
-                    timestamp=await self._now(session), payload=payload,
+                    task_id=current.task_id,
+                    event_type="browser_run_failed_step",
+                    timestamp=await self._now(session),
+                    payload=payload,
                 ),
             )
             updated = await self._update(session, current, {"effect": current.effect})
             binding = ScopeBinding(
-                owner=current.owner, binding_id=current.admission.binding_id,
+                owner=current.owner,
+                binding_id=current.admission.binding_id,
                 binding_revision=current.admission.binding_revision,
                 authorization_run_id=current.run_id,
                 evidence_version=current.admission.auth_evidence_version,
                 lease_epoch=current.lease_epoch,
             )
             return updated, FormalFailedStep(
-                binding, current.run_id, manifest.digest, rule.step.step_id,
-                reason, "not_sent", str(payload["mac"]), observations,
+                binding,
+                current.run_id,
+                manifest.digest,
+                rule.step.step_id,
+                reason,
+                "not_sent",
+                str(payload["mac"]),
+                observations,
             )
 
     async def read_failed_step(
-        self, owner: BrowserOwner, task_id: str, run_id: str, step_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+        step_id: str,
     ) -> FormalFailedStep | None:
         """Read only an authenticated terminal failure with its exact MAC."""
         checked_run_id(step_id)
@@ -2396,19 +2928,30 @@ class PostgreSQLBrowserRunStore:
             run = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, run, "read")
             if (
-                run.status != "failed" or run.verification == "verified"
-                or run.effect == "unknown" or run.cancel_requested
+                run.status != "failed"
+                or run.verification == "verified"
+                or run.effect == "unknown"
+                or run.cancel_requested
                 or run.lease_epoch is None
             ):
                 return None
             manifest = await self._frozen_publication(session, run)
             if manifest.source_kind != "registered_site":
                 return None
-            rows = (await session.execute(text(
-                "SELECT payload FROM task_events WHERE task_id=:task"
-                " AND event_type='browser_run_failed_step'"
-                " AND payload->>'run_id'=:run"
-            ), {"task": task_id, "run": run_id})).mappings().all()
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT payload FROM task_events WHERE task_id=:task"
+                            " AND event_type='browser_run_failed_step'"
+                            " AND payload->>'run_id'=:run"
+                        ),
+                        {"task": task_id, "run": run_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
             if not rows:
                 return None
             if len(rows) != 1 or not isinstance(rows[0]["payload"], dict):
@@ -2417,7 +2960,8 @@ class PostgreSQLBrowserRunStore:
             unsigned = {key: value for key, value in payload.items() if key != "mac"}
             key_id, mac = payload.get("key_id"), payload.get("mac")
             if (
-                type(key_id) is not str or type(mac) is not str
+                type(key_id) is not str
+                or type(mac) is not str
                 or payload.get("schema_version") != _FAILED_STEP_AUDIT_VERSION
                 or payload.get("run_id") != run_id
                 or payload.get("publication_digest") != manifest.digest
@@ -2431,15 +2975,19 @@ class PostgreSQLBrowserRunStore:
                 or payload.get("worker_epoch") != run.worker_epoch
                 or payload.get("dispatch_state") != "not_sent"
                 or payload.get("policy_digest") != manifest.site.policy.digest
-                or payload.get("reason") not in {
-                    "target_stale", "locator_not_found", "ambiguous_target",
+                or payload.get("reason")
+                not in {
+                    "target_stale",
+                    "locator_not_found",
+                    "ambiguous_target",
                 }
                 or not hmac.compare_digest(mac, self._step_mac(unsigned, key_id))
             ):
                 raise BrowserRunStoreError("browser_failed_step_audit_invalid")
             audited_step_id = payload["step_id"]
-            rule = next((item for item in manifest.site.steps
-                         if item.step.step_id == audited_step_id), None)
+            rule = next(
+                (item for item in manifest.site.steps if item.step.step_id == audited_step_id), None
+            )
             try:
                 scope = ScopeStamp.model_validate(payload["scope"])
             except (KeyError, ValueError):
@@ -2448,32 +2996,41 @@ class PostgreSQLBrowserRunStore:
             if type(raw_observations) is not list or len(raw_observations) > 32:
                 raise BrowserRunStoreError("browser_failed_step_audit_invalid")
             try:
-                observations = tuple(FormalRepairObservation(
-                    LocatorHint.model_validate(item["replacement"]),
-                    ScopeStamp.model_validate(item["scope"]),
-                    item["target_digest"],
-                ) for item in raw_observations)
+                observations = tuple(
+                    FormalRepairObservation(
+                        LocatorHint.model_validate(item["replacement"]),
+                        ScopeStamp.model_validate(item["scope"]),
+                        item["target_digest"],
+                    )
+                    for item in raw_observations
+                )
             except (KeyError, TypeError, ValueError):
                 raise BrowserRunStoreError("browser_failed_step_audit_invalid") from None
             previous = await self._audited_steps(session, run)
             if (
-                rule is None or scope.region_id != rule.observation.region_id
+                rule is None
+                or scope.region_id != rule.observation.region_id
                 or len(previous) != payload["sequence"] - 1
-                or any(item.scope.region_id != scope.region_id
-                       or item.replacement == rule.step.locator
-                       for item in observations)
+                or any(
+                    item.scope.region_id != scope.region_id or item.replacement == rule.step.locator
+                    for item in observations
+                )
                 or len({item.replacement for item in observations}) != len(observations)
             ):
                 raise BrowserRunStoreError("browser_failed_step_audit_invalid")
             self._check_step_route(
-                manifest, tuple(item.event.step_id for item in previous)
-                + (audited_step_id,), complete=False,
+                manifest,
+                tuple(item.event.step_id for item in previous) + (audited_step_id,),
+                complete=False,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, run, manifest,
+                    session,
+                    run,
+                    manifest,
                 ),
             )
             binding = ScopeBinding(
-                owner=run.owner, binding_id=run.admission.binding_id,
+                owner=run.owner,
+                binding_id=run.admission.binding_id,
                 binding_revision=run.admission.binding_revision,
                 authorization_run_id=run_id,
                 evidence_version=run.admission.auth_evidence_version,
@@ -2482,25 +3039,36 @@ class PostgreSQLBrowserRunStore:
             if audited_step_id != step_id:
                 return None
             return FormalFailedStep(
-                binding, run_id, manifest.digest, audited_step_id,
-                payload["reason"], "not_sent", mac, observations,
+                binding,
+                run_id,
+                manifest.digest,
+                audited_step_id,
+                payload["reason"],
+                "not_sent",
+                mac,
+                observations,
             )
 
     async def record_locator_proposal(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
         proposal: FormalLocatorProposal,
     ) -> None:
         try:
-            checked = FormalLocatorProposal.model_validate_json(
-                proposal.model_dump_json()
-            )
+            checked = FormalLocatorProposal.model_validate_json(proposal.model_dump_json())
         except ValueError:
             raise BrowserRunStoreError("browser_repair_proposal_invalid") from None
         failure = await self.read_failed_step(
-            owner, task_id, run_id, checked.step_id,
+            owner,
+            task_id,
+            run_id,
+            checked.step_id,
         )
         if (
-            failure is None or checked.failed_run_id != run_id
+            failure is None
+            or checked.failed_run_id != run_id
             or checked.publication_digest != failure.publication_digest
             or checked.failure_evidence_digest != failure.evidence_digest
             or not any(
@@ -2514,41 +3082,66 @@ class PostgreSQLBrowserRunStore:
             run = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, run, "read")
             if (
-                run.status != "failed" or run.effect == "unknown"
-                or run.cancel_requested or run.verification == "verified"
+                run.status != "failed"
+                or run.effect == "unknown"
+                or run.cancel_requested
+                or run.verification == "verified"
                 or run.admission.publication_digest.hex() != checked.publication_digest
             ):
                 raise BrowserRunStoreError("browser_repair_proposal_stale")
             manifest = await self._frozen_publication(session, run)
             plan = await self._teaching_plan_in_session(session, run, manifest)
-            step = next((item for item in manifest.skill.steps
-                         if item.step_id == checked.step_id), None)
+            step = next(
+                (item for item in manifest.skill.steps if item.step_id == checked.step_id), None
+            )
             if (
-                step is None or checked.original_step_digest != canonical_digest(
-                    "browser_skill_step.v1", step.model_dump(mode="json"),
-                ) or checked.primitive_id != self._primitive_id(
-                    manifest, checked.step_id,
+                step is None
+                or checked.original_step_digest
+                != canonical_digest(
+                    "browser_skill_step.v1",
+                    step.model_dump(mode="json"),
+                )
+                or checked.primitive_id
+                != self._primitive_id(
+                    manifest,
+                    checked.step_id,
                 )
                 or (
                     checked.source_kind == "published_skill"
-                    and (plan is not None or checked.draft_digest != manifest.digest
-                         or checked.source_digest != manifest.digest)
+                    and (
+                        plan is not None
+                        or checked.draft_digest != manifest.digest
+                        or checked.source_digest != manifest.digest
+                    )
                 )
                 or (
                     checked.source_kind == "teaching_draft"
-                    and (plan is None or plan.purpose != "teaching"
-                         or plan.publication_digest != manifest.digest
-                         or checked.source_digest != plan.source_publication_digest)
+                    and (
+                        plan is None
+                        or plan.purpose != "teaching"
+                        or plan.publication_digest != manifest.digest
+                        or checked.source_digest != plan.source_publication_digest
+                    )
                 )
             ):
                 raise BrowserRunStoreError("browser_repair_proposal_invalid")
             event_id = uuid5(
-                NAMESPACE_URL, f"browser-run-locator-proposal-v1:{checked.proposal_id}",
+                NAMESPACE_URL,
+                f"browser-run-locator-proposal-v1:{checked.proposal_id}",
             ).hex
-            existing = (await session.execute(text(
-                "SELECT event_type,payload FROM task_events WHERE task_id=:task"
-                " AND event_id=:event"
-            ), {"task": task_id, "event": event_id})).mappings().one_or_none()
+            existing = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+                            " AND event_id=:event"
+                        ),
+                        {"task": task_id, "event": event_id},
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
             if existing is not None:
                 old = existing["payload"]
                 if (
@@ -2560,7 +3153,8 @@ class PostgreSQLBrowserRunStore:
                     or type(old.get("key_id")) is not str
                     or type(old.get("mac")) is not str
                     or not hmac.compare_digest(
-                        old["mac"], self._proposal_mac(
+                        old["mac"],
+                        self._proposal_mac(
                             {key: value for key, value in old.items() if key != "mac"},
                             old["key_id"],
                         ),
@@ -2576,26 +3170,43 @@ class PostgreSQLBrowserRunStore:
             }
             payload["mac"] = self._proposal_mac(payload, self._active_digest_key_id)
             await append_owned_event(
-                session, tenant_id=owner.tenant_id, ai_user_id=owner.user_id,
-                session_id=owner.session_id, task_id=task_id,
+                session,
+                tenant_id=owner.tenant_id,
+                ai_user_id=owner.user_id,
+                session_id=owner.session_id,
+                task_id=task_id,
                 event=TaskEventRecord(
-                    event_id=event_id, task_id=task_id,
+                    event_id=event_id,
+                    task_id=task_id,
                     event_type="browser_locator_proposal",
-                    timestamp=await self._now(session), payload=payload,
+                    timestamp=await self._now(session),
+                    payload=payload,
                 ),
             )
 
     async def read_locator_proposals(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> tuple[FormalLocatorProposal, ...]:
         async with self._transaction() as session:
             run = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, run, "read")
-            rows = (await session.execute(text(
-                "SELECT payload FROM task_events WHERE task_id=:task"
-                " AND event_type='browser_locator_proposal'"
-                " AND payload->>'run_id'=:run ORDER BY event_id"
-            ), {"task": task_id, "run": run_id})).mappings().all()
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT payload FROM task_events WHERE task_id=:task"
+                            " AND event_type='browser_locator_proposal'"
+                            " AND payload->>'run_id'=:run ORDER BY event_id"
+                        ),
+                        {"task": task_id, "run": run_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
         if len(rows) > 32:
             raise BrowserRunStoreError("browser_repair_proposal_overflow")
         proposals: list[FormalLocatorProposal] = []
@@ -2607,9 +3218,11 @@ class PostgreSQLBrowserRunStore:
             if (
                 payload.get("schema_version") != _LOCATOR_PROPOSAL_AUDIT_VERSION
                 or payload.get("run_id") != run_id
-                or type(key_id) is not str or type(mac) is not str
+                or type(key_id) is not str
+                or type(mac) is not str
                 or not hmac.compare_digest(
-                    mac, self._proposal_mac(
+                    mac,
+                    self._proposal_mac(
                         {key: value for key, value in payload.items() if key != "mac"},
                         key_id,
                     ),
@@ -2621,10 +3234,14 @@ class PostgreSQLBrowserRunStore:
             except (KeyError, ValueError):
                 raise BrowserRunStoreError("browser_repair_proposal_invalid") from None
             evidence = await self.read_failed_step(
-                owner, task_id, run_id, proposal.step_id,
+                owner,
+                task_id,
+                run_id,
+                proposal.step_id,
             )
             if (
-                evidence is None or proposal.failed_run_id != run_id
+                evidence is None
+                or proposal.failed_run_id != run_id
                 or proposal.publication_digest != evidence.publication_digest
                 or proposal.failure_evidence_digest != evidence.evidence_digest
                 or not any(
@@ -2638,31 +3255,38 @@ class PostgreSQLBrowserRunStore:
         return tuple(proposals)
 
     async def read_teaching_steps(
-        self, owner: BrowserOwner, task_id: str, run_id: str,
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
     ) -> tuple[RunTeachingStep, ...]:
         """Owner-scoped, MAC-checked facts from a completed verified Run only."""
         async with self._transaction() as session:
             run = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, run, "read")
             if (
-                run.status != "completed" or run.verification != "verified"
+                run.status != "completed"
+                or run.verification != "verified"
                 or run.verification_evidence_digest is None
-                or run.effect != "acknowledged" or run.cancel_requested
+                or run.effect != "acknowledged"
+                or run.cancel_requested
             ):
                 raise BrowserRunStoreError("browser_step_source_unverified")
             manifest = await self._frozen_publication(session, run)
             if any(
-                rule.step.effect != "read_only"
-                or rule.effect.actual_effect != "read_only"
+                rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only"
                 for rule in manifest.site.steps
             ):
                 raise BrowserRunStoreError("browser_step_source_not_read_only")
             result = await self._audited_steps(session, run)
             self._check_step_route(
-                manifest, tuple(step.event.step_id for step in result),
+                manifest,
+                tuple(step.event.step_id for step in result),
                 complete=True,
                 terminal_after=await self._traversal_terminal_in_session(
-                    session, run, manifest,
+                    session,
+                    run,
+                    manifest,
                 ),
             )
             rules = {rule.step.step_id: rule for rule in manifest.site.steps}
@@ -2684,16 +3308,17 @@ class PostgreSQLBrowserRunStore:
                     or step.event.scope.region_id != rule.observation.region_id
                     or step.event.effect_proof != rule.effect
                     or step.event.policy_digest != manifest.site.policy.digest
-                    or step.rule_digest != canonical_digest(
-                        "browser_site_step.v1", primitive.model_dump(mode="json"),
+                    or step.rule_digest
+                    != canonical_digest(
+                        "browser_site_step.v1",
+                        primitive.model_dump(mode="json"),
                     )
                     or step.skill_digest != manifest.skill.digest
                     or step.skill_version != manifest.skill.version
                     or step.binding.binding_id != run.admission.binding_id
                     or step.binding.binding_revision != run.admission.binding_revision
                     or step.binding.authorization_run_id != run_id
-                    or step.binding.evidence_version
-                    != run.admission.auth_evidence_version
+                    or step.binding.evidence_version != run.admission.auth_evidence_version
                     or step.binding.lease_epoch != run.lease_epoch
                 ):
                     raise BrowserRunStoreError("browser_step_audit_invalid")
@@ -2946,7 +3571,12 @@ class PostgreSQLBrowserRunStore:
         async with self._transaction() as session:
             # This is independent recovery authority, allowed after user auth expiry/revocation.
             current = await self._locked(
-                session, claim, "cleanup", worker=False, terminal_ok=True, cleanup_outcome=cleanup,
+                session,
+                claim,
+                "cleanup",
+                worker=False,
+                terminal_ok=True,
+                cleanup_outcome=cleanup,
             )
             if current.cleanup in {"released", "terminated"}:
                 if current.cleanup == cleanup:

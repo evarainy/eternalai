@@ -33,8 +33,12 @@ class ExecutionResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     trace_id: str
-    browser_admission: BrowserGatewayAdmission | None = Field(default=None, exclude=True, repr=False)
-    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(default=None, exclude=True, repr=False)
+    browser_admission: BrowserGatewayAdmission | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(
+        default=None, exclude=True, repr=False
+    )
 
     @field_validator("browser_admission", mode="before")
     @classmethod
@@ -53,7 +57,9 @@ class ExecutionResult(BaseModel):
     mcp_outcome: McpValidatedOutcome | None = Field(default=None, exclude=True, repr=False)
     mcp_read: McpValidatedRead | None = Field(default=None, exclude=True, repr=False)
     postcondition_input: OverviewEvaluationInput | None = Field(
-        default=None, exclude=True, repr=False,
+        default=None,
+        exclude=True,
+        repr=False,
     )
 
     @field_validator("postcondition_input", mode="before")

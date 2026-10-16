@@ -39,8 +39,9 @@ from app.version_binding import capability_version_bindings
 
 
 def canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def publication_digest(domain: str, payload: dict[str, object]) -> str:
@@ -111,8 +112,10 @@ class BrowserSiteDefinition(Contract):
     @model_validator(mode="after")
     def integrity(self) -> Self:
         canonical_origin(self.source.origin)
-        if (len(set(self.navigation_origins)) != len(self.navigation_origins)
-                or self.source.origin not in self.navigation_origins):
+        if (
+            len(set(self.navigation_origins)) != len(self.navigation_origins)
+            or self.source.origin not in self.navigation_origins
+        ):
             raise ValueError("browser_publication_source_mismatch")
         for origin in self.navigation_origins:
             canonical_origin(origin)
@@ -121,23 +124,31 @@ class BrowserSiteDefinition(Contract):
         if self.primitive_rules:
             by_id = {rule.step.step_id: rule for rule in self.primitive_rules}
             mapping = {item.step_id: item.primitive_id for item in self.step_primitives}
-            if (len(by_id) != len(self.primitive_rules)
-                    or len(mapping) != len(self.step_primitives)
-                    or (mapping and set(mapping) != {
-                        rule.step.step_id for rule in self.steps
-                    })
-                    or any(
-                        by_id.get(mapping.get(rule.step.step_id, rule.step.step_id))
-                        != rule.model_copy(update={"step": rule.step.model_copy(
-                            update={"step_id": mapping.get(
-                                rule.step.step_id, rule.step.step_id,
-                            )},
-                        )})
-                        for rule in self.steps
+            if (
+                len(by_id) != len(self.primitive_rules)
+                or len(mapping) != len(self.step_primitives)
+                or (mapping and set(mapping) != {rule.step.step_id for rule in self.steps})
+                or any(
+                    by_id.get(mapping.get(rule.step.step_id, rule.step.step_id))
+                    != rule.model_copy(
+                        update={
+                            "step": rule.step.model_copy(
+                                update={
+                                    "step_id": mapping.get(
+                                        rule.step.step_id,
+                                        rule.step.step_id,
+                                    )
+                                },
+                            )
+                        }
                     )
-                    or any(rule.step.effect != "read_only"
-                           or rule.effect.actual_effect != "read_only"
-                           for rule in self.primitive_rules)):
+                    for rule in self.steps
+                )
+                or any(
+                    rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only"
+                    for rule in self.primitive_rules
+                )
+            ):
                 raise ValueError("browser_publication_primitive_catalog_invalid")
         elif self.step_primitives:
             raise ValueError("browser_publication_primitive_catalog_invalid")
@@ -152,30 +163,33 @@ class BrowserSiteDefinition(Contract):
             or not any(
                 rule.step.step_id == self.traversal.advance_step_id
                 and rule.observation.region_id == self.traversal.region_id
-                and rule.step.operation in (
-                    {"read"} if self.traversal.advance_mode == "scroll"
-                    else {"click", "navigate"}
-                )
+                and rule.step.operation
+                in ({"read"} if self.traversal.advance_mode == "scroll" else {"click", "navigate"})
                 and rule.step.effect == "read_only"
                 and rule.effect.actual_effect == "read_only"
-                and (self.traversal.advance_mode != "scroll"
-                     or rule.step.locator.kind != "business_key")
+                and (
+                    self.traversal.advance_mode != "scroll"
+                    or rule.step.locator.kind != "business_key"
+                )
                 for rule in self.steps
             )
         ):
             raise ValueError("browser_publication_traversal_invalid")
         if self.exploration is not None:
             explorer = self.exploration
-            if (self.traversal is not None or self.step_primitives
-                    or not self.primitive_rules
-                    or self.steps != self.primitive_rules
-                    or any(
-                        rule.step.operation not in {"read", "click"}
-                        or rule.step.effect != "read_only"
-                        or rule.effect.actual_effect != "read_only"
-                        or rule.observation.region_id not in explorer.allowed_regions
-                        for rule in self.steps
-                    )):
+            if (
+                self.traversal is not None
+                or self.step_primitives
+                or not self.primitive_rules
+                or self.steps != self.primitive_rules
+                or any(
+                    rule.step.operation not in {"read", "click"}
+                    or rule.step.effect != "read_only"
+                    or rule.effect.actual_effect != "read_only"
+                    or rule.observation.region_id not in explorer.allowed_regions
+                    for rule in self.steps
+                )
+            ):
                 raise ValueError("browser_publication_exploration_invalid")
         _integrity(self, self.schema_version, self.digest)
         return self
@@ -186,9 +200,9 @@ class BrowserVerifierDefinition(Contract):
     verifier_id: OpaqueId
     version: OpaqueId
     digest: Digest
-    contract: Literal["independent_confirmed_key_v1", "independent_query_detail_v1", "d_form_fields_v1"] = (
-        "independent_confirmed_key_v1"
-    )
+    contract: Literal[
+        "independent_confirmed_key_v1", "independent_query_detail_v1", "d_form_fields_v1"
+    ] = "independent_confirmed_key_v1"
     read_rule: ReadRule
     require_complete_coverage: Literal[True] = True
     require_exact_owner: Literal[True] = True
@@ -197,7 +211,8 @@ class BrowserVerifierDefinition(Contract):
     @model_validator(mode="after")
     def integrity(self) -> Self:
         if (self.contract in {"independent_query_detail_v1", "d_form_fields_v1"}) != isinstance(
-            self.read_rule, RegisteredQueryReadRule,
+            self.read_rule,
+            RegisteredQueryReadRule,
         ):
             raise ValueError("browser_publication_verifier_mode_mismatch")
         _integrity(self, self.schema_version, self.digest)
@@ -252,9 +267,13 @@ class BrowserPublicationManifest(Contract):
     def site_plan(self) -> RegisteredSitePlan:
         values = self.site.model_dump(exclude={"schema_version", "version", "digest"})
         return RegisteredSitePlan(
-            **values, site_digest=self.site.digest, skill_id=self.skill.skill_id,
-            skill_version=self.skill.version, skill_digest=self.skill.digest,
-            verifier_id=self.verifier.verifier_id, verifier_digest=self.verifier.digest,
+            **values,
+            site_digest=self.site.digest,
+            skill_id=self.skill.skill_id,
+            skill_version=self.skill.version,
+            skill_digest=self.skill.digest,
+            verifier_id=self.verifier.verifier_id,
+            verifier_digest=self.verifier.digest,
         )
 
     @model_validator(mode="after")
@@ -262,51 +281,64 @@ class BrowserPublicationManifest(Contract):
         capability = self.capability
         if canonical_json(capability.model_dump(mode="json")) != self.capability_snapshot_json:
             raise ValueError("browser_publication_capability_snapshot_invalid")
-        registered_target = (
-            self.source_kind == "registered_site"
-            and capability.target_system in {"oa", "u8", "hikvision_ivms"}
-        )
+        registered_target = self.source_kind == "registered_site" and capability.target_system in {
+            "oa",
+            "u8",
+            "hikvision_ivms",
+        }
         synthetic_target = (
-            self.source_kind == "registered_synthetic_fixture"
-            and capability.target_system == "oa"
+            self.source_kind == "registered_synthetic_fixture" and capability.target_system == "oa"
         )
         if self.rollback_source_digest is not None and (
-            self.source_kind != "registered_site"
-            or self.rollback_source_digest == self.digest
+            self.source_kind != "registered_site" or self.rollback_source_digest == self.digest
         ):
             raise ValueError("browser_publication_rollback_source_invalid")
         has_write = any(rule.step.effect == "may_write" for rule in self.site.steps)
         if self.execution_mode == "d_form_fill_stop_v1" and (
-            self.source_kind != "registered_site" or self.effect != "controlled_write"
+            self.source_kind != "registered_site"
+            or self.effect != "controlled_write"
             or self.verifier.contract != "d_form_fields_v1"
             or self.skill.parameters != ("bound_form", "category", "position", "description")
-            or set(capability.input_schema.get("properties", {})) != {"category", "position", "description"}
-            or set(capability.input_schema.get("required", [])) != {"category", "position", "description"}
+            or set(capability.input_schema.get("properties", {}))
+            != {"category", "position", "description"}
+            or set(capability.input_schema.get("required", []))
+            != {"category", "position", "description"}
             or capability.input_schema.get("additionalProperties") is not False
             or tuple((step.step_id, step.operation, step.effect) for step in self.skill.steps)
-            != (("category", "select_option", "may_write"),
-                ("position", "fill", "may_write"), ("description", "fill", "may_write"))
+            != (
+                ("category", "select_option", "may_write"),
+                ("position", "fill", "may_write"),
+                ("description", "fill", "may_write"),
+            )
             or self.site.read_rule.key_ref.name != "bound_form"
-            or self.site.traversal is not None or self.site.exploration is not None
+            or self.site.traversal is not None
+            or self.site.exploration is not None
         ):
             raise ValueError("browser_fill_stop_contract_invalid")
-        if self.verifier.contract == "d_form_fields_v1" and self.execution_mode != "d_form_fill_stop_v1":
+        if (
+            self.verifier.contract == "d_form_fields_v1"
+            and self.execution_mode != "d_form_fill_stop_v1"
+        ):
             raise ValueError("browser_fill_stop_contract_invalid")
-        if ((self.effect == "controlled_write") != has_write
-                or (has_write and self.source_kind != "registered_site")):
+        if (self.effect == "controlled_write") != has_write or (
+            has_write and self.source_kind != "registered_site"
+        ):
             raise ValueError("browser_publication_effect_denied")
-        if (capability.status != "active"
-                or capability.type != ("action" if has_write else "query")
-                or not (registered_target or synthetic_target)
-                or capability.execution_identity != "user_delegated"
-                or capability.binding_required is not True):
+        if (
+            capability.status != "active"
+            or capability.type != ("action" if has_write else "query")
+            or not (registered_target or synthetic_target)
+            or capability.execution_identity != "user_delegated"
+            or capability.binding_required is not True
+        ):
             raise ValueError("browser_publication_capability_denied")
         if self.capability_bindings != capability_version_bindings(capability):
             raise ValueError("browser_publication_capability_binding_mismatch")
         if canonical_json(capability.output_schema) != self.output.output_schema_json:
             raise ValueError("browser_publication_output_schema_mismatch")
-        if (self.site.read_rule != self.verifier.read_rule
-                or self.output.field_ids != tuple(f.field_id for f in self.site.read_rule.fields)):
+        if self.site.read_rule != self.verifier.read_rule or self.output.field_ids != tuple(
+            f.field_id for f in self.site.read_rule.fields
+        ):
             raise ValueError("browser_publication_verifier_output_mismatch")
         if isinstance(self.site.read_rule, RegisteredQueryReadRule) and (
             self.site.read_rule.output_schema_json != self.output.output_schema_json
@@ -320,7 +352,9 @@ class BrowserPublicationManifest(Contract):
 
 
 def rollback_version_manifest(
-    source: BrowserPublicationManifest, *, skill_version: str,
+    source: BrowserPublicationManifest,
+    *,
+    skill_version: str,
     site_version: str,
 ) -> BrowserPublicationManifest:
     """Copy audited old content into a new immutable version with provenance.
@@ -329,9 +363,11 @@ def rollback_version_manifest(
     current head under lock, then require a fresh replay and HumanGate review.
     """
     source = BrowserPublicationManifest.model_validate_json(source.model_dump_json())
-    if (source.source_kind != "registered_site"
-            or skill_version == source.skill.version
-            or site_version == source.site.version):
+    if (
+        source.source_kind != "registered_site"
+        or skill_version == source.skill.version
+        or site_version == source.site.version
+    ):
         raise ValueError("browser_publication_rollback_version_invalid")
     site = source.site.model_dump(mode="json")
     site["version"] = site_version
@@ -341,10 +377,13 @@ def rollback_version_manifest(
     skill["digest"] = publication_digest("browser_skill.v1", skill)
     candidate = source.model_dump(mode="json")
     candidate.update(
-        site=site, skill=skill, rollback_source_digest=source.digest,
+        site=site,
+        skill=skill,
+        rollback_source_digest=source.digest,
     )
     candidate["digest"] = publication_digest(
-        "browser_publication.durable.v1", candidate,
+        "browser_publication.durable.v1",
+        candidate,
     )
     # JSON-mode dumps contain arrays; use the strict JSON validation boundary.
     return BrowserPublicationManifest.model_validate_json(canonical_json(candidate))

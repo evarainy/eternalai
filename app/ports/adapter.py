@@ -65,8 +65,12 @@ class AdapterResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     raw_payload_ref: str | None = None
-    browser_admission: BrowserGatewayAdmission | None = Field(default=None, exclude=True, repr=False)
-    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(default=None, exclude=True, repr=False)
+    browser_admission: BrowserGatewayAdmission | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    browser_diagnostic: BrowserGatewayDiagnostic | None = Field(
+        default=None, exclude=True, repr=False
+    )
 
     @field_validator("browser_admission", mode="before")
     @classmethod

@@ -572,6 +572,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | D v30 最终填写与自动释放 | 已移除 Chat 后重复本机确认并接入终态 Job 关闭/租约释放，但尚未取得用户最终填写与清理实测结果 | `P2-CHAT-BROWSER-READ-001`（用户真实验收及模型可用性） | `P2-CHAT-BROWSER-READ-001` | 用户在获准环境验证字段填写后停止、Chat 核验结果、成功/失败终态自动释放及下一次调用；不保存或提交 | `docs/dev/chat_browser_mcp_handoff.md`；候选 PR 与脱敏现场证据 |
 | 六查询完整真实覆盖 | 已有人员查询成功，不能据此证明全部六工具、分页与受限/空态均已实测 | `P2-CHAT-BROWSER-READ-001`（正式服务、用户授权与适用业务对象） | `P2-CHAT-BROWSER-READ-001` | 在获准查询范围逐项完成真实验收；写工具继续关闭 | `app/infra/adapters/business_mcp/fixed_query_contracts.py`；候选 PR |
 | 跨机组合装配 | 当前演示组合启动器、任务 JSON、CA/服务配置、日志处理器及 pins 在仓库外；源码原始字节摘要也受换行影响 | `P2-CHAT-BROWSER-READ-001`（目标环境配置与对应装载授权） | 待用户确定后续范围 | 目标机器按其实际源码/路径/配置完成装配和授权，真实只读及 D 填写后停止验收；不复制凭证或原机进程状态 | `docs/dev/chat_browser_mcp_handoff.md` 新电脑接续 |
+| Git 集成的后端类型与最终 required CI | Ruff/前端类型已作机械兼容处理，但本地 Linux 目标 mypy 仍报 20 文件、494 项错误，涉及脚本缺失标注、Windows API 与类型兼容；未把它降级为忽略项 | `P2-CHAT-BROWSER-READ-001`（类型收口与前置浏览器候选证据） | 待用户确定后续范围 | 按原检查合同完成类型修复、必要静审及最终 required CI；不禁用检查、不弱化断言 | 草稿 PR checks 与验证段；本地静态结果；`docs/dev/chat_browser_mcp_handoff.md` |
 
 ## 6. P2 不做什么
 

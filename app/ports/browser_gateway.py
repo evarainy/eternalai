@@ -14,17 +14,37 @@ from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated
 from app.ports.error_codes import ErrorCode
 from app.ports.response_envelope import ResponseEnvelope
 
-
 BrowserDiagnosticStage: TypeAlias = Literal[
-    "context", "input", "publication", "binding", "admission", "handoff", "llm",
+    "context",
+    "input",
+    "publication",
+    "binding",
+    "admission",
+    "handoff",
+    "llm",
 ]
 BrowserDiagnosticReason: TypeAlias = Literal[
-    "context_mismatch", "input_invalid", "input_missing", "capability_unavailable",
-    "publication_stale", "identity_unbound", "identity_expired", "identity_revoked",
-    "target_denied", "readonly_required", "policy_denied", "request_key_conflict",
-    "admission_timeout", "admission_uncertain", "provider_unavailable",
-    "handoff_unavailable", "audit_unavailable", "unknown_exception",
-    "llm_timeout", "llm_unavailable", "model_mismatch",
+    "context_mismatch",
+    "input_invalid",
+    "input_missing",
+    "capability_unavailable",
+    "publication_stale",
+    "identity_unbound",
+    "identity_expired",
+    "identity_revoked",
+    "target_denied",
+    "readonly_required",
+    "policy_denied",
+    "request_key_conflict",
+    "admission_timeout",
+    "admission_uncertain",
+    "provider_unavailable",
+    "handoff_unavailable",
+    "audit_unavailable",
+    "unknown_exception",
+    "llm_timeout",
+    "llm_unavailable",
+    "model_mismatch",
 ]
 
 
@@ -34,7 +54,9 @@ class BrowserGatewayDiagnostic:
     reason: BrowserDiagnosticReason
 
     def __post_init__(self) -> None:
-        if self.stage not in get_args(BrowserDiagnosticStage) or self.reason not in get_args(BrowserDiagnosticReason):
+        if self.stage not in get_args(BrowserDiagnosticStage) or self.reason not in get_args(
+            BrowserDiagnosticReason
+        ):
             raise ValueError("browser_diagnostic_invalid")
 
     def attributes(self) -> dict[str, str]:
@@ -66,29 +88,55 @@ class BrowserRequestScope:
             raise ValueError("browser_context_invalid")
 
     def matches(self, principal: Principal, session_id: str) -> bool:
-        return (authenticated_session.get() == self.verified
-                and principal == self.verified.principal and session_id == self.bound_session)
+        return (
+            authenticated_session.get() == self.verified
+            and principal == self.verified.principal
+            and session_id == self.bound_session
+        )
 
     def capture_admission(self, response: ResponseEnvelope) -> BrowserGatewayAdmission:
         principal = self.verified.principal
-        owner = BrowserOwner(tenant_id=principal.org_ctx.tenant_id,
-                             user_id=principal.ai_user_id, session_id=self.bound_session)
+        owner = BrowserOwner(
+            tenant_id=principal.org_ctx.tenant_id,
+            user_id=principal.ai_user_id,
+            session_id=self.bound_session,
+        )
         data = response.data
-        if (not self.matches(principal, self.bound_session) or response.status != "running"
-                or response.schema_version != "phase0.sdui.v1" or response.session_id != self.bound_session
-                or type(data) is not dict or data.get("task_id") != response.task_id):
+        if (
+            not self.matches(principal, self.bound_session)
+            or response.status != "running"
+            or response.schema_version != "phase0.sdui.v1"
+            or response.session_id != self.bound_session
+            or type(data) is not dict
+            or data.get("task_id") != response.task_id
+        ):
             raise ValueError("browser_admission_invalid")
-        if data.get("kind") == "accepted" and set(data) == {"kind", "task_id", "run_id", "state_revision"}:
-            admission = BrowserGatewayAdmission(owner, response.task_id, response.trace_id,
-                                                "accepted", data["run_id"], data["state_revision"])
+        if data.get("kind") == "accepted" and set(data) == {
+            "kind",
+            "task_id",
+            "run_id",
+            "state_revision",
+        }:
+            admission = BrowserGatewayAdmission(
+                owner,
+                response.task_id,
+                response.trace_id,
+                "accepted",
+                data["run_id"],
+                data["state_revision"],
+            )
         elif data.get("kind") == "pending" and set(data) == {"kind", "task_id"}:
-            admission = BrowserGatewayAdmission(owner, response.task_id, response.trace_id, "pending")
+            admission = BrowserGatewayAdmission(
+                owner, response.task_id, response.trace_id, "pending"
+            )
         else:
             raise ValueError("browser_admission_invalid")
         previous = self.attempt.admission
         if previous is not None and (
-            previous.task_id != admission.task_id or previous.trace_id != admission.trace_id
-            or previous.run_id is not None and previous.run_id != admission.run_id
+            previous.task_id != admission.task_id
+            or previous.trace_id != admission.trace_id
+            or previous.run_id is not None
+            and previous.run_id != admission.run_id
         ):
             raise ValueError("browser_admission_changed")
         self.attempt.admission = admission
@@ -96,7 +144,8 @@ class BrowserRequestScope:
 
 
 browser_request_scope: ContextVar[BrowserRequestScope | None] = ContextVar(
-    "browser_gateway_request_scope", default=None,
+    "browser_gateway_request_scope",
+    default=None,
 )
 
 
@@ -111,8 +160,11 @@ class BrowserGatewayInvocation:
     @property
     def owner(self) -> BrowserOwner:
         principal = self.scope.verified.principal
-        return BrowserOwner(tenant_id=principal.org_ctx.tenant_id,
-                            user_id=principal.ai_user_id, session_id=self.scope.bound_session)
+        return BrowserOwner(
+            tenant_id=principal.org_ctx.tenant_id,
+            user_id=principal.ai_user_id,
+            session_id=self.scope.bound_session,
+        )
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -129,10 +181,12 @@ class BrowserGatewayAdmission:
             if re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value) is None:
                 raise ValueError("browser_admission_invalid")
         if self.kind == "accepted":
-            if (type(self.run_id) is not str
-                    or re.fullmatch(r"[A-Za-z0-9_-]{1,96}", self.run_id) is None
-                    or type(self.state_revision) is not int
-                    or not 0 <= self.state_revision <= 9007199254740991):
+            if (
+                type(self.run_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,96}", self.run_id) is None
+                or type(self.state_revision) is not int
+                or not 0 <= self.state_revision <= 9007199254740991
+            ):
                 raise ValueError("browser_admission_invalid")
         elif self.kind != "pending" or self.run_id is not None or self.state_revision is not None:
             raise ValueError("browser_admission_invalid")
@@ -152,17 +206,32 @@ class BrowserGatewayRegistration:
     capability_version: str
     skill_id: str
     skill_version: str
-    source_kind: Literal["registered_synthetic_fixture", "registered_site"] = "registered_synthetic_fixture"
+    source_kind: Literal["registered_synthetic_fixture", "registered_site"] = (
+        "registered_synthetic_fixture"
+    )
     target_system: Literal["oa"] = "oa"
     effect: Literal["read_only", "fill_stop"] = "read_only"
 
     def __post_init__(self) -> None:
-        if ((self.source_kind, self.effect) not in {
-                    ("registered_synthetic_fixture", "read_only"),
-                    ("registered_site", "fill_stop"),
-                } or self.target_system != "oa" or any(not v or v != v.strip() for v in (
-                    self.tenant_id, self.user_id, self.capability_id, self.capability_version,
-                    self.skill_id, self.skill_version))):
+        if (
+            (self.source_kind, self.effect)
+            not in {
+                ("registered_synthetic_fixture", "read_only"),
+                ("registered_site", "fill_stop"),
+            }
+            or self.target_system != "oa"
+            or any(
+                not v or v != v.strip()
+                for v in (
+                    self.tenant_id,
+                    self.user_id,
+                    self.capability_id,
+                    self.capability_version,
+                    self.skill_id,
+                    self.skill_version,
+                )
+            )
+        ):
             raise ValueError("browser_registration_invalid")
 
 
@@ -177,9 +246,13 @@ class BrowserIntentHandoffPort(Protocol):
         ...
 
     async def commit(
-        self, invocation: BrowserGatewayInvocation, admission: BrowserGatewayAdmission,
+        self,
+        invocation: BrowserGatewayInvocation,
+        admission: BrowserGatewayAdmission,
     ) -> None: ...
 
     async def fail_if_open(
-        self, scope: BrowserRequestScope, error_code: ErrorCode,
+        self,
+        scope: BrowserRequestScope,
+        error_code: ErrorCode,
     ) -> Literal["failed", "handed_off", "terminal", "absent"]: ...
