@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncContextManager, Literal, Protocol, TypeAlias
 
@@ -13,6 +14,7 @@ from app.ports.auth import (
     CredentialSnapshot,
     CredentialWriteStamp,
     LoginCredential,
+    OASessionCredential,
     Principal,
 )
 
@@ -51,6 +53,14 @@ class PasswordBindingCredential(BaseModel):
 
     login_id: SecretStr
     password: SecretStr
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialBindingVerification:
+    """Identity and fresh OA session from the same non-persisting verification."""
+
+    principal: Principal = field(repr=False)
+    session_credential: OASessionCredential = field(repr=False)
 
 
 class CredentialBindingView(BaseModel):
@@ -139,9 +149,10 @@ class CredentialBindingStorePort(Protocol):
 
     async def activate_browser_binding(
         self, credential: PasswordBindingCredential, *, verified: Principal,
+        session_credential: OASessionCredential,
         captured_session: AuthenticatedSessionContext, expected_write: CredentialWriteStamp,
     ) -> BrowserBindingActivationView:
-        """Atomically store verified password and subject under live session/CAS checks."""
+        """Store the verified password, subject and fresh OA session in one CAS."""
         ...
 
     def poll_lock(
@@ -168,7 +179,9 @@ class CredentialBindingStorePort(Protocol):
 
 
 class CredentialBindingVerifierPort(Protocol):
-    async def verify_for_binding(self, credential: LoginCredential) -> Principal: ...
+    async def verify_for_binding(
+        self, credential: LoginCredential,
+    ) -> CredentialBindingVerification: ...
 
 
 class CredentialPollingStorePort(Protocol):
@@ -268,6 +281,7 @@ __all__ = (
     "CredentialAcquisitionFailureCode",
     "CredentialBindingStorePort",
     "CredentialBindingVerifierPort",
+    "CredentialBindingVerification",
     "CredentialBindingView",
     "CredentialCountedFailureCode",
     "CredentialPollingStorePort",

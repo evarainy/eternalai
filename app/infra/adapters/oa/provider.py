@@ -67,8 +67,15 @@ _CHAT_STAGE_REASONS = frozenset({
     'not_configured', 'over_budget', 'payload_invalid', 'payload_received', 'permission_denied',
     'policy_denied', 'provider_error', 'provider_returned', 'rate_limited', 'ready',
     'request_error', 'response_received', 'running', 'schema_invalid',
+    'split_key_format', 'split_key_missing', 'split_key_type',
     'structured_output_error', 'timeout', 'unknown', 'unparsed', 'upstream_permission_denied',
     'visible_empty', 'visible_present', 'waiting_user'
+})
+# Temporary split diagnostic; accepted only on provider_transport/failed/pending workflows.
+_SPLIT_DATA_SHAPE_REASONS = frozenset({
+    'split_data_absent', 'split_data_identity_expired', 'split_data_key_invalid',
+    'split_data_key_missing', 'split_data_key_valid', 'split_data_nonobject',
+    'split_data_permission_denied', 'split_data_unknown'
 })
 _CHAT_STAGE_CAPABILITIES = frozenset({
     'oa.list_pending_workflows', 'oa.list_system_messages'
@@ -94,7 +101,11 @@ def _record_chat_stage(
             capability_id if type(capability_id) is str
             and capability_id in _CHAT_STAGE_CAPABILITIES else "none" if capability_id is None
             else "other",
-            reason if type(reason) is str and reason in _CHAT_STAGE_REASONS
+            reason if type(reason) is str and (
+                reason in _CHAT_STAGE_REASONS
+                or (reason in _SPLIT_DATA_SHAPE_REASONS and node == "provider_transport"
+                    and outcome == "failed"
+                    and capability_id == "oa.list_pending_workflows"))
             else "none" if reason is None else "unknown",
             http_status if type(http_status) is int and 100 <= http_status <= 599 else "null",
             elapsed_ms if type(elapsed_ms) is int and 0 <= elapsed_ms <= 86_400_000
@@ -1377,17 +1388,63 @@ def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
     raise OALiveRequestError("OA response processing failed")
 
 
-def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
-    sessionkey = payload.get("sessionkey")
-    if (
-        not isinstance(sessionkey, str)
-        or len(sessionkey) != _PENDING_WORKFLOW_SESSION_KEY_LENGTH
-        or sessionkey != sessionkey.strip()
-        or any(
+def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> bool:
+    return (
+        isinstance(sessionkey, str)
+        and len(sessionkey) == _PENDING_WORKFLOW_SESSION_KEY_LENGTH
+        and sessionkey == sessionkey.strip()
+        and not any(
             ord(character) < 0x20 or ord(character) == 0x7F
             for character in sessionkey
         )
-    ):
+    )
+
+
+def _split_data_shape(payload: Mapping[str, Any]) -> str:
+    """Classify only the known ``data`` field; never values, lengths or keysets."""
+
+    data: Any = None
+    try:
+        if "data" not in payload:
+            return "split_data_absent"
+        data = payload.get("data")
+        if not isinstance(data, Mapping):
+            return "split_data_nonobject"
+        try:
+            _raise_for_business_error(data)
+        except OALiveIdentityExpired:
+            return "split_data_identity_expired"
+        except OALivePermissionDenied:
+            return "split_data_permission_denied"
+        if "sessionkey" not in data:
+            return "split_data_key_missing"
+        if _is_valid_pending_workflow_sessionkey(data.get("sessionkey")):
+            return "split_data_key_valid"
+        return "split_data_key_invalid"
+    except Exception:
+        return "split_data_unknown"
+    finally:
+        data = None
+
+
+def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
+    sessionkey = payload.get("sessionkey")
+    if not _is_valid_pending_workflow_sessionkey(sessionkey):
+        # One closed category only; never the value, its length or the payload.
+        _record_oa_stage(
+            "provider_transport", "failed",
+            reason=(
+                "split_key_missing" if "sessionkey" not in payload
+                else "split_key_type" if not isinstance(sessionkey, str)
+                else "split_key_format"
+            ),
+        )
+        if "sessionkey" not in payload:
+            # Temporary diagnostic: one extra closed shape category, no new behavior.
+            _record_oa_stage(
+                "provider_transport", "failed", reason=_split_data_shape(payload)
+            )
+        sessionkey = None
         raise OALivePayloadInvalid(
             "OA pending-workflow split response session key is invalid"
         )

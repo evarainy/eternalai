@@ -1,3 +1,3 @@
 """One human-approved D source fingerprint; changing it needs a new approval."""
 
-APPROVED_FIXED_SOURCE_DIGEST = "243e7bb38aca346fabdb920189319e1bbe8e660e07065f4a5072516e7292f78d"
+APPROVED_FIXED_SOURCE_DIGEST = "5b19ca6674ac706355f6c9b8a8b809499d10e76928c778b2d1d159681aab41ea"

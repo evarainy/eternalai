@@ -106,6 +106,8 @@ class DocumentQAService:
             return DocumentQAResult("unrelated")
         if not self._configuration_valid:
             return document_failure("document_configuration_invalid")
+        if not question.strip():
+            return DocumentQAResult("clarify", "请在“请问”后补充你想查询的文档问题。")
         if len(question) > 2048:
             return document_failure("question_too_large", "adapter_payload_invalid")
         loop = asyncio.get_running_loop()
@@ -144,7 +146,7 @@ class DocumentQAService:
                                for n, line in enumerate(lines, 1)],
         }, ensure_ascii=False)
         # Includes line-number overhead; a conservative bound, not a tokenizer claim.
-        if len(payload.encode("utf-8")) > 65536:
+        if len(payload.encode("utf-8")) > 262144:
             return document_failure("document_too_large")
         _LOGGER.info("document_qa trace=%s stage=model outcome=start", trace_id)
         completion = await self._llm.complete(
@@ -174,7 +176,7 @@ class DocumentQAService:
             messages = {
                 "insufficient": "指定文档中未找到足以回答这个问题的依据。",
                 "clarify": "请说明你想了解指定文档的哪个问题，或补充问题中的具体对象。",
-                "unrelated": "",
+                "unrelated": "这个问题不属于指定文档的问答范围，请去掉“请问”前缀使用原 Chat 功能。",
             }
             return DocumentQAResult(
                 result.outcome, messages[result.outcome], version=snapshot.version,

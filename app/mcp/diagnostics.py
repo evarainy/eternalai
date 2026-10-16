@@ -63,3 +63,53 @@ def record_mcp_event(
         round((monotonic() - started_at) * 1000) if started_at is not None else 0,
         outbound_count,
     )
+
+
+CatalogDriftReason = Literal[
+    "tool_missing",
+    "tool_duplicate",
+    "input_schema_mismatch",
+    "raw_annotations_missing",
+    "raw_annotations_mismatch",
+    "sdk_annotations_missing",
+    "sdk_annotations_mismatch",
+    "unclassified",
+]
+
+
+def record_mcp_catalog_drift(
+    reason: CatalogDriftReason,
+    *,
+    profile: ServiceConfig,
+    tool: str,
+    match_count: int,
+    input_expected: str,
+    input_actual: str,
+    safety_expected: str,
+    raw_actual: str | None,
+    sdk_actual: str | None,
+    sdk_shape: str = "",
+    trace_id: str = "",
+) -> None:
+    # Temporary drift evidence: closed reason, counts, presence flags, SHA-256
+    # digests and the fixed-position SDK annotation key-state code only. Never
+    # pass schemas, annotations, titles or descriptions.
+    _LOGGER.info(
+        "mcp_catalog_drift_detail service=%s version=%s tool=%s reason=%s match_count=%s "
+        "input_expected=%s input_actual=%s safety_expected=%s raw_present=%s raw_actual=%s "
+        "sdk_present=%s sdk_actual=%s sdk_shape=%s trace=%s",
+        profile.service_config_id,
+        profile.service_config_version,
+        tool,
+        reason,
+        match_count,
+        input_expected,
+        input_actual,
+        safety_expected,
+        raw_actual is not None,
+        raw_actual or "",
+        sdk_actual is not None,
+        sdk_actual or "",
+        sdk_shape,
+        trace_id or _TRACE_ID.get(),
+    )

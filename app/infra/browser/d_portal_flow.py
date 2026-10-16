@@ -3,7 +3,7 @@ import asyncio
 import time
 from dataclasses import replace
 
-from .d_form_flow import FIELDS, FIND, Flow, Stop, need, origin
+from .d_form_flow import DEMO_EXTRA_GUARDS_DISABLED, FIELDS, FIND, Flow, Stop, need
 
 MODAL='[role="dialog"],[role="alertdialog"],.modal,.el-dialog,.ant-modal,.layui-layer,.k-window'
 CLOSE='.el-dialog__headerbtn,.ant-modal-close,.layui-layer-close,.k-i-close,.k-svg-i-x,[aria-label="Close"],[aria-label="关闭"],[title="关闭"],[title="Close"]'
@@ -45,21 +45,101 @@ class PortalFlow(Flow):
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
         self.menu_pending=False
+        # One-shot fixed portal entry after verified login; independent of menu_pending.
+        self.entry_attempted=False;self.entry_open=False;self.entry_released=False
+        self.entry_frame=None;self.entry_target=None;self.entry_request=None
+        self.entry_navigations=0;self.entry_reason=None
+        # CDP facts of the original main frame (ids stay private, never logged).
+        self.entry_frame_id=None;self.entry_loader_before=None;self.entry_loader=None
+        self.entry_controlled=False;self.entry_settled=False;self.entry_superseded=False
+        self.entry_document_reason=None
         self.summary.update(popup_closed=False,menu_opened=False,form_ready=False)
         self.summary['timings'].update(popup_locate=0.0,popup_click=0.0,popup_disappear=0.0,menu_ready=0.0)
 
     def page_changed(self,code,frame=None,page=None):
+        # Once the entry baseline is confirmed, the original main frame is
+        # classified only by its CDP document events below, so Playwright's
+        # generic framenavigated never writes a sticky violation first. Child
+        # frames, pages, close, dialogs, downloads and origins stay as before.
+        if (self.entry_controlled and not self.entry_superseded
+                and code=='PAGE_MAIN_FRAME_NAV' and page is None and frame is not None
+                and frame is self.entry_frame):
+            return
         # Only a dispatched, exact approved menu may change the page/frame set.
         # Origins, context ownership, PID, unknown dialogs and downloads remain
         # guarded during this bounded transition. No permissive retry exists.
         expected={'PAGE_MAIN_FRAME_NAV','PAGE_CHILD_FRAME_NAV','PAGE_CONTEXT_EVENT'}
         if self.menu_pending and code in expected:
             if page is not None:
-                if page.context is not self.context or len(self.context.pages)>2:
+                if (page.context is not self.context
+                        or (not DEMO_EXTRA_GUARDS_DISABLED and len(self.context.pages)>2)):
                     return super().page_changed('PAGE_CONTEXT_SET_CHANGED',page=page)
                 self.watch(page)
             return
         return super().page_changed(code,frame=frame,page=page)
+
+    def egress_phase(self):
+        # connect() and the one-shot entry both run in CONNECT; split them here.
+        if self.phase=='CONNECT' and self.entry_attempted:
+            return 'PORTAL_ENTERED' if self.entry_settled else 'PORTAL_ENTRY'
+        return self.phase
+
+    def document_rejected(self,reason):
+        if self.entry_document_reason is None:self.entry_document_reason=reason
+        # A rejected fixed navigation is an actual target/document failure,
+        # independent of the temporary passive-event demo policy.
+        self.flag('PAGE_MAIN_FRAME_NAV')
+        Flow.page_changed(self,'PAGE_MAIN_FRAME_NAV',frame=self.entry_frame)
+
+    def document_committed(self,event):
+        # Page.frameNavigated: a committed document, never a same-document change.
+        # Only the released fixed GET's first commit on the original main frame,
+        # with a new loader, before entry settles, becomes the confirmed document.
+        frame=event.get('frame') if type(event) is dict else None
+        if type(frame) is not dict:frame={}
+        if self.entry_frame_id is None or self.entry_superseded or frame.get('parentId') is not None:return
+        if self.menu_pending:self.entry_superseded=True;return  # Original menu policy.
+        self.entry_navigations+=1
+        if (self.entry_released and not self.entry_settled and self.entry_navigations==1
+                and frame.get('id')==self.entry_frame_id and event.get('type')=='Navigation'
+                and type(frame.get('loaderId')) is str and frame['loaderId']!=self.entry_loader_before
+                and frame.get('url')==self.entry_target):
+            self.entry_loader=frame['loaderId'];return
+        if self.entry_loader is not None or self.entry_navigations>1:reason='PORTAL_ENTRY_NEW_DOCUMENT'
+        elif self.entry_released and frame.get('url')!=self.entry_target:reason='PORTAL_ENTRY_TARGET_CHANGED'
+        else:reason='PORTAL_ENTRY_UNCONFIRMED_DOCUMENT'
+        self.document_rejected(reason)
+
+    def document_changed(self,event):
+        # Page.navigatedWithinDocument: same document by protocol definition. It is
+        # accepted only on the confirmed entry document with an unchanged target.
+        if type(event) is not dict:event={}
+        frame_id=event.get('frameId')
+        if self.entry_frame_id is None or self.entry_superseded:return
+        if type(frame_id) is str and frame_id!=self.entry_frame_id:return  # Child frames: original policy.
+        if self.menu_pending:self.entry_superseded=True;return  # Original menu policy.
+        url=event.get('url')
+        if (self.entry_loader is not None and frame_id==self.entry_frame_id
+                and type(url) is str and url.partition('#')[0]==self.entry_target):return
+        self.document_rejected('PORTAL_ENTRY_UNCONFIRMED_DOCUMENT' if self.entry_loader is None
+                               else 'PORTAL_ENTRY_TARGET_CHANGED')
+
+    def tree_origins(self,tree,locked,target_role='BOUND_TARGET'):
+        # Locked observations (check/sources) of the controlled main frame must
+        # still show the confirmed document and target; otherwise no action runs.
+        if locked:self.document_check(tree)
+        return super().tree_origins(tree,locked,target_role)
+
+    def document_check(self,tree):
+        frame=tree.get('frame') if type(tree) is dict else None
+        if type(frame) is not dict:frame={}
+        if (not self.entry_controlled or self.entry_superseded or self.menu_pending
+                or frame.get('id')!=self.entry_frame_id):return
+        if self.entry_loader is None:reason='PORTAL_ENTRY_UNCONFIRMED_DOCUMENT'
+        elif frame.get('loaderId')!=self.entry_loader:reason='PORTAL_ENTRY_NEW_DOCUMENT'
+        elif frame.get('url')!=self.entry_target:reason='PORTAL_ENTRY_TARGET_CHANGED'
+        else:return
+        self.document_rejected(reason);raise Stop(self.violation)
 
     def watch(self,page):
         self.event(page,'framenavigated',lambda frame,p=page:self.page_changed(
@@ -76,19 +156,22 @@ class PortalFlow(Flow):
         need(self.violation is None,self.violation or 'PAGE_CHANGED')
         need(not self.cancel.is_set(),'CANCELLED')
         need(not page.is_closed(),'PAGE_TARGET_CLOSED')
-        need(1<=len(self.context.pages)<=2,'PAGE_CONTEXT_SET_CHANGED')
-        if stable:need(set(self.context.pages)==self.pages,'PAGE_CONTEXT_SET_CHANGED')
+        need(page.context is self.context and page in self.context.pages,'CONFIG_FAILED')
+        if not DEMO_EXTRA_GUARDS_DISABLED:
+            need(1<=len(self.context.pages)<=2,'PAGE_CONTEXT_SET_CHANGED')
+            if stable:need(set(self.context.pages)==self.pages,'PAGE_CONTEXT_SET_CHANGED')
         info=(await cdp.send('Target.getTargetInfo'))['targetInfo']
         need(info.get('browserContextId')==self.binding.context_id,'CONFIG_FAILED')
         self.binding=replace(self.binding,target_id=info['targetId'])
         await self.maximize()
         tree=(await cdp.send('Page.getFrameTree'))['frameTree']
         self.tree_origins(tree,locked=True)
-        if stable:
+        if stable and not DEMO_EXTRA_GUARDS_DISABLED:
             need({f['frame']['id'] for f in self.walk(tree)}==self.frame_ids,'PAGE_FRAME_SET_CHANGED')
         for frame in page.frames:
-            if frame.url=='about:blank':continue
-            need(origin(frame.url) in self.allowed,'EGRESS_BLOCKED')
+            if not self.scan_frame(frame,page):
+                continue
+            self.allowed_origin(frame.url,'frame')
             need(await frame.locator('input[type="password"]').count()==0,'LOGIN_REQUIRED')
         return info,tree
 
@@ -141,19 +224,22 @@ class PortalFlow(Flow):
     async def open_menu(self):
         await self.check();candidates=[]
         for frame in self.page.frames:
-            if frame.url=='about:blank':continue
+            if not self.scan_frame(frame,self.page):
+                continue
             await self.sources(self.page,self.cdp)
             for candidate in await frame.get_by_text('运维管理',exact=True).element_handles():
-                if await candidate.is_visible():candidates.append(candidate)
+                if await candidate.is_visible():
+                    candidates.append((frame,candidate))
         need(len(candidates)==1,'CONTROL_MISSING' if not candidates else 'CONTROL_AMBIGUOUS')
-        target=candidates[0]
+        target_frame,target=candidates[0]
         await self.check()
+        self.allowed_origin(target_frame.url,'frame')
         need(await target.evaluate('''e=>e.isConnected&&e.getClientRects().length>0
             &&(e.innerText||'').trim()==='运维管理'&&!e.closest('form')
             &&!e.querySelector('input,textarea,select,[contenteditable="true"]')'''),'CONTROL_CHANGED')
         need(await target.evaluate(SAFE_TYPES),'CONTROL_CHANGED')
         href=await target.evaluate('e=>e.closest("a")?.href||""')
-        if href and not href.startswith('javascript:'):need(origin(href) in self.allowed,'EGRESS_BLOCKED')
+        if href and not href.startswith('javascript:'):self.allowed_origin(href,'href')
         # Probe belongs to a document that may unload after this authorized click;
         # completion is proven by the unique native-owned form, not old handles.
         self.summary['action_attempts']+=1;stamp=time.perf_counter();self.menu_pending=True
@@ -164,13 +250,17 @@ class PortalFlow(Flow):
                 need(self.violation is None,self.violation or 'PAGE_CHANGED')
                 found=[]
                 for page in self.context.pages:
+                    if (DEMO_EXTRA_GUARDS_DISABLED and page is not self.page
+                            and not self.source_in_scope(page.url)):
+                        continue
                     if page not in cdps:
                         cdps[page]=await self.context.new_cdp_session(page);self.sessions.append(cdps[page])
                     cdp=cdps[page]
                     info,tree=await self.sources(page,cdp,stable=False)
                     counts={name:0 for name in FIELDS}
                     for frame in page.frames:
-                        if frame.url=='about:blank':continue
+                        if not self.scan_frame(frame,page):
+                            continue
                         for name in FIELDS:
                             await self.sources(page,cdp,stable=False)
                             array=await frame.evaluate_handle(FIND,name)

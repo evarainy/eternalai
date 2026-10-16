@@ -83,12 +83,13 @@ class CredentialBindingService:
                 )
                 stamp = await self._store.claim_write(snapshot)
                 if target_system == "oa":
-                    verified = await self._verifier.verify_for_binding(
+                    verification = await self._verifier.verify_for_binding(
                         LoginCredential(
                             loginid=credential.login_id,
                             userpassword=credential.password,
                         )
                     )
+                    verified = verification.principal
                     if (verified.org_ctx.tenant_id, verified.ai_user_id) != (
                         principal.org_ctx.tenant_id,
                         principal.ai_user_id,
@@ -142,9 +143,10 @@ class CredentialBindingService:
                         or snapshot.binding_revision != request.binding_revision):
                     _raise_binding_failed()
                 stamp = await self._store.claim_write(snapshot)
-                verified = await self._verifier.verify_for_binding(LoginCredential(
+                verification = await self._verifier.verify_for_binding(LoginCredential(
                     loginid=request.login_id, userpassword=request.password,
                 ))
+                verified = verification.principal
                 subject = verified.org_ctx.directory_user_id
                 if ((verified.org_ctx.tenant_id, verified.ai_user_id) != (
                         principal.org_ctx.tenant_id, principal.ai_user_id)
@@ -157,7 +159,8 @@ class CredentialBindingService:
                     _raise_binding_failed()
                 return await self._store.activate_browser_binding(
                     PasswordBindingCredential(login_id=request.login_id, password=request.password),
-                    verified=verified, captured_session=captured, expected_write=stamp,
+                    verified=verified, session_credential=verification.session_credential,
+                    captured_session=captured, expected_write=stamp,
                 )
         except HTTPException:
             raise

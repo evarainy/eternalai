@@ -19,6 +19,44 @@ CANCEL_GRACE=30
 EVENT_PATTERN=re.compile(r'Local\\EAI_D_CANCEL_[0-9a-f]{32}\Z')
 
 
+def python_executables(configured_python: Path) -> frozenset[Path]:
+    """Recognize this Windows venv's launcher and its own base interpreter."""
+    configured=configured_python.resolve()
+    allowed={configured}
+    if sys.platform=='win32' and configured==Path(sys.executable).resolve():
+        base=getattr(sys,'_base_executable',None)
+        if isinstance(base,str) and base:
+            path=Path(base)
+            if path.is_absolute() and path.is_file():
+                allowed.add(path.resolve())
+    return frozenset(allowed)
+
+
+def system_console_executable() -> Path | None:
+    """Resolve Windows' console host without trusting PATH or a file basename."""
+    if sys.platform!='win32':
+        return None
+    import ctypes
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.GetSystemDirectoryW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint]
+    kernel.GetSystemDirectoryW.restype=ctypes.c_uint
+    buffer=ctypes.create_unicode_buffer(32768)
+    size=kernel.GetSystemDirectoryW(buffer,len(buffer))
+    if not 0<size<len(buffer):
+        return None
+    path=(Path(buffer.value)/'conhost.exe').resolve()
+    return path if path.is_absolute() and path.is_file() else None
+
+
+def process_executable_allowed(
+    executable: Path, parent_executable: Path | None,
+    allowed: frozenset[Path], console: Path | None,
+) -> bool:
+    """Called only for descendants of this execution's verified root process."""
+    return executable in allowed or (
+        console is not None and executable==console and parent_executable in allowed)
+
+
 def windows_events():
     import ctypes
     kernel=ctypes.WinDLL('kernel32',use_last_error=True)
@@ -152,7 +190,8 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
     import psutil
     spec=importlib.util.find_spec('playwright')
     node=Path(spec.origin).parent/'driver'/('node.exe' if sys.platform=='win32' else 'node')
-    allowed_executables={Path(sys.executable).resolve(),node.resolve()}
+    allowed_executables=python_executables(Path(sys.executable))|{node.resolve()}
+    console=system_console_executable()
     def remember():
         if child is None or child.poll() is not None:return
         try:
@@ -161,7 +200,14 @@ def supervisor(receipt_path, request_bytes, cancel_event_name=None):
             for process in parent.children(recursive=True):
                 try:
                     executable=Path(process.exe()).resolve()
-                    if executable in allowed_executables:owned[process.pid]=(process.create_time(),executable)
+                    direct_parent=process.parent() if executable==console else None
+                    parent_executable=(
+                        Path(direct_parent.exe()).resolve() if direct_parent is not None
+                        and direct_parent.create_time()<=process.create_time() else None)
+                    if process_executable_allowed(
+                        executable,parent_executable,allowed_executables,console,
+                    ):
+                        owned[process.pid]=(process.create_time(),executable)
                 except psutil.NoSuchProcess:pass
         except psutil.NoSuchProcess:pass
     def reclaim():

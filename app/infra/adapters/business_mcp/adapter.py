@@ -7,8 +7,15 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
+from app.infra.adapters.business_mcp.fixed_query_contracts import (
+    approved_fixed_query_projection,
+    record_fixed_query_failure,
+)
 from app.infra.adapters.business_mcp.writes import validate_bound_task
-from app.infra.sdui.response_projection import project_response_data
+from app.infra.sdui.response_projection import (
+    project_approved_response_data,
+    project_response_data,
+)
 from app.mcp.contracts import SUBMIT_TOOLS, WRITE_TOOLS, OutputContract, validate_input
 from app.mcp.diagnostics import McpLogRefs, mcp_trace_scope, record_mcp_event
 from app.mcp.models import McpFailure, ServiceConfig, digest
@@ -22,6 +29,7 @@ from app.ports.mcp import (
     McpValidatedRead,
 )
 from app.ports.mcp_store import McpStorePort
+from app.ports.response_projection_contract import ApprovedResponseProjectionError
 from app.ports.workflow_store import GovernedWorkflowAuthorization, WorkflowStorePort
 
 
@@ -120,6 +128,15 @@ class BusinessMcpAdapter:
         policy = self.contracts.get((mapping.service_config_id, tool))
         if policy is None or policy.version != mapping.output_contract_version:
             return AdapterResult(status="error", error_code="mcp_contract_unconfirmed")
+        try:
+            # Exact factory rules for this service/tool only; resolved before sending.
+            projection = (
+                None
+                if write
+                else approved_fixed_query_projection(mapping.service_config_id, tool, policy)
+            )
+        except McpFailure:
+            return AdapterResult(status="error", error_code="mcp_contract_unconfirmed")
         called = False
         started = monotonic()
         profile = self.profiles.get(context.service_config_id)
@@ -214,17 +231,38 @@ class BusinessMcpAdapter:
                     )
                 else:
                     raise McpFailure("mcp_postcondition_unconfirmed", may_have_sent=True)
-            # Runtime's current response serves both model and UI: expose their intersection only.
-            model_data, ui_data = (
-                policy.project(validated, "model"),
-                policy.project(validated, "ui"),
-            )
-            public_data: dict[str, Any] | None = {
-                k: v for k, v in model_data.items() if k in ui_data
-            }
-            if tool == "business_context_get":
+            if write:
+                # Preserve the governed write outcome path.
+                model_data, ui_data = (
+                    policy.project(validated, "model"),
+                    policy.project(validated, "ui"),
+                )
+                public_data: dict[str, Any] | None = {
+                    k: v for k, v in model_data.items() if k in ui_data
+                }
+            else:
+                # Every read uses the same recursive, credential-aware public
+                # projection before Runtime or a formatter can see its data.
                 public_schema = policy.public_result_schema()
-                public_data = project_response_data(policy.public_result(validated), public_schema)
+                if projection is not None:
+                    try:
+                        public_data = project_approved_response_data(
+                            policy.public_result(validated), public_schema, projection
+                        )
+                    except ApprovedResponseProjectionError as rejected:
+                        projection_failure = rejected
+                        record_fixed_query_failure(
+                            "fixed_query_projection",
+                            lambda: f"projection_rejected:{projection_failure.reason}",
+                            profile=profile,
+                            tool=tool,
+                            **refs,
+                        )
+                        raise McpFailure("mcp_output_projection_invalid") from None
+                else:
+                    public_data = project_response_data(
+                        policy.public_result(validated), public_schema
+                    )
                 if public_data is None:
                     raise McpFailure("mcp_output_projection_invalid")
             record_mcp_event(

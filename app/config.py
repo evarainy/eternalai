@@ -247,7 +247,7 @@ class FixedDocumentSettings:
     @property
     def valid(self) -> bool:
         return bool(self.tenant_id and self.ai_user_id and self.topic.strip()) and (
-            type(self.max_bytes) is int and 1 <= self.max_bytes <= 32768
+            type(self.max_bytes) is int and 1 <= self.max_bytes <= 131072
             and len(self.topic) <= 256
         )
 

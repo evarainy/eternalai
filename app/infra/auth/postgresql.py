@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -261,27 +262,58 @@ class PostgreSQLCredentialStore:
         encrypted_payload = self._cipher.encrypt(
             nonce, payload, _v2_aad(expected_write.snapshot, "session")
         )
-        mutation = ""
+        verified_subject_digest: bytes | None = None
         if reactivate_revoked_session:
-            mutation = (
-                ", revoked_at=NULL, binding_revision=binding_revision+1,"
-                "binding_state='unverified',binding_subject_digest=NULL,"
-                "binding_subject_verified_at=NULL"
-            )
+            subject = credential.oa_user_id.get_secret_value()
+            if subject and len(subject) <= 256 and subject == subject.strip():
+                from app.infra.browser.local_resource_lifecycle import registered_subject_digest
+
+                verified_subject_digest = registered_subject_digest("oa", subject)
         async with self._write_session(tenant_id, ai_user_id, target_system) as session:
             current = (
                 await session.execute(
                     text(
-                        f"SELECT binding_state FROM oa_session_credentials WHERE"
+                        "SELECT binding_state,binding_revision,revoked_at,"
+                        "binding_subject_digest,binding_subject_verified_at,"
+                        "clock_timestamp() AS db_now FROM oa_session_credentials WHERE"
                         f" {_WRITE_WHERE} FOR UPDATE"
                     ),
                     _stamp_params(expected_write),
                 )
-            ).scalar_one_or_none()
+            ).mappings().one_or_none()
             if current is None:
                 raise StaleCredentialWrite("credential write fenced")
-            if current == "active" and not reactivate_revoked_session:
+            if current["binding_state"] == "active" and not reactivate_revoked_session:
                 raise CredentialStoreError("browser_subject_verifier_unavailable")
+            verified_at = current["binding_subject_verified_at"]
+            db_now = current["db_now"]
+            preserve_verified_binding = (
+                reactivate_revoked_session
+                and current["binding_state"] == "active"
+                and current["revoked_at"] is None
+                and type(db_now) is datetime
+                and db_now.tzinfo is not None
+                and db_now.utcoffset() is not None
+                and type(verified_at) is datetime
+                and verified_at.tzinfo is not None
+                and verified_at.utcoffset() is not None
+                and verified_at <= db_now
+                and verified_subject_digest is not None
+                and type(current["binding_subject_digest"]) is bytes
+                and len(current["binding_subject_digest"]) == 32
+                and current["binding_subject_digest"] == verified_subject_digest
+                and bool(credential.cookies)
+                and credential.expires_at.tzinfo is not None
+                and credential.expires_at.utcoffset() is not None
+                and credential.expires_at > db_now
+            )
+            mutation = ""
+            if reactivate_revoked_session and not preserve_verified_binding:
+                mutation = (
+                    ", revoked_at=NULL, binding_revision=binding_revision+1,"
+                    "binding_state='unverified',binding_subject_digest=NULL,"
+                    "binding_subject_verified_at=NULL"
+                )
             row = (
                 (
                     await session.execute(
@@ -309,6 +341,23 @@ class PostgreSQLCredentialStore:
             if row is None:
                 raise StaleCredentialWrite("credential write fenced")
             await session.commit()
+        if reactivate_revoked_session:
+            state_before = current["binding_state"]
+            if state_before not in {"active", "unverified", "unbound", "revoked"}:
+                state_before = "unknown"
+            branch = (
+                "preserved_verified_binding" if preserve_verified_binding else "invalidated_binding"
+            )
+            state_after = "active" if preserve_verified_binding else "unverified"
+            logging.getLogger("app.infra.auth.oa").info(
+                "oa_binding_transition operation=explicit_login branch=%s "
+                "state_before=%s state_after=%s revision_before=%s revision_after=%s",
+                branch,
+                state_before,
+                state_after,
+                current["binding_revision"],
+                row["binding_revision"],
+            )
         return CredentialWriteStamp(
             _snapshot(row), expected_write.operation_id, expected_write.deadline
         )
@@ -457,9 +506,10 @@ class PostgreSQLCredentialStore:
 
     async def activate_browser_binding(
         self, credential: PasswordBindingCredential, *, verified: Principal,
+        session_credential: OASessionCredential,
         captured_session: AuthenticatedSessionContext, expected_write: CredentialWriteStamp,
     ) -> BrowserBindingActivationView:
-        """One password/subject CAS; no stored secret is loaded for first verification."""
+        """One password/subject/session CAS using only this verification's material."""
         from app.infra.browser.local_resource_lifecycle import registered_subject_digest
 
         principal = captured_session.principal
@@ -474,7 +524,12 @@ class PostgreSQLCredentialStore:
                 or type(subject) is not str or not subject.strip() or subject != subject.strip()
                 or len(subject) > 256
                 or (principal.org_ctx.directory_user_id is not None
-                    and subject != principal.org_ctx.directory_user_id)):
+                    and subject != principal.org_ctx.directory_user_id)
+                or session_credential.oa_user_id.get_secret_value() != subject
+                or not session_credential.cookies
+                or session_credential.expires_at.tzinfo is None
+                or session_credential.expires_at.utcoffset() is None
+                or session_credential.expires_at <= datetime.now(UTC)):
             raise CredentialStoreError("browser_binding_activation_denied")
         digest = registered_subject_digest("oa", subject)
         nonce = os.urandom(_GCM_NONCE_BYTES)
@@ -486,6 +541,16 @@ class PostgreSQLCredentialStore:
             nonce, payload, _v2_aad(expected_write.snapshot, "password"),
         )
         del payload
+        session_nonce = os.urandom(_GCM_NONCE_BYTES)
+        session_payload = json.dumps({
+            "oa_user_id": session_credential.oa_user_id.get_secret_value(),
+            "cookies": {name: value.get_secret_value()
+                        for name, value in session_credential.cookies.items()},
+        }, sort_keys=True, separators=(",", ":")).encode()
+        encrypted_session = self._cipher.encrypt(
+            session_nonce, session_payload, _v2_aad(expected_write.snapshot, "session"),
+        )
+        del session_payload
         async with self._write_session(tenant, user, "oa") as session:
             # A missing revocation row cannot be row-locked. These short table
             # locks also fence concurrent inserts/removal until our commit; no
@@ -499,6 +564,9 @@ class PostgreSQLCredentialStore:
                 "auth_expires": captured_session.expires_at,
                 "version": _PASSWORD_V2, "nonce": nonce, "payload": encrypted,
                 "subject_digest": digest,
+                "session_version": _SESSION_V2, "session_nonce": session_nonce,
+                "session_payload": encrypted_session,
+                "session_expires": session_credential.expires_at,
             }
             roles = (await session.execute(text(
                 "SELECT role FROM principal_roles WHERE tenant_id=:tenant_id"
@@ -515,11 +583,12 @@ class PostgreSQLCredentialStore:
                 "binding_subject_verified_at=clock_timestamp(),updated_at=clock_timestamp(),"
                 "poll_status='active',poll_failure_count=0,"
                 "refresh_operation_id=NULL,refresh_deadline=NULL,"
-                # First verification does not attest previously stored cookies.
-                "cipher_version=NULL,nonce=NULL,encrypted_payload=NULL,expires_at=NULL"
+                "cipher_version=:session_version,nonce=:session_nonce,"
+                "encrypted_payload=:session_payload,expires_at=:session_expires"
                 f" WHERE {_WRITE_WHERE} AND binding_state='unverified'"
                 " AND revoked_at IS NULL AND encrypted_password_payload IS NOT NULL"
                 " AND :auth_expires > clock_timestamp()"
+                " AND :session_expires > clock_timestamp()"
                 " AND NOT EXISTS (SELECT 1 FROM auth_session_revocations"
                 " WHERE token_fingerprint=:fingerprint)"
                 " RETURNING binding_id,binding_revision,binding_subject_verified_at",
@@ -528,7 +597,8 @@ class PostgreSQLCredentialStore:
                 raise StaleCredentialWrite("browser_binding_activation_fenced")
             if (authenticated_session.get() != captured_session
                     or (await session.execute(text(
-                        "SELECT :auth_expires > clock_timestamp()",
+                        "SELECT :auth_expires > clock_timestamp()"
+                        " AND :session_expires > clock_timestamp()",
                     ), params)).scalar_one() is not True):
                 raise CredentialStoreError("browser_binding_activation_denied")
             await session.commit()

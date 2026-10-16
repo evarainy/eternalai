@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import subprocess
 import sys
@@ -14,6 +15,10 @@ from urllib.parse import urlsplit
 
 import psutil
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout, Error as PWError
+
+# Temporary approved D demo policy, fixed by the publication source digest.
+# Keep origin/target ownership, cancellation and actual field verification.
+DEMO_EXTRA_GUARDS_DISABLED = True
 
 FIELDS = ('报修类别', '故障位置', '故障描述')
 MODES = {'READ_REPORTER', 'FILL_STOP'}
@@ -32,6 +37,14 @@ CODES = {
     'WINDOW_PREP_FAILED',
     'WINDOW_LOOKUP_FAILED', 'WINDOW_SET_FAILED', 'WINDOW_VERIFY_FAILED',
 }
+
+# One metadata line for the first actual EGRESS decision of a Flow. Only fixed
+# enums and booleans; URL, host, path and request content are never logged.
+EGRESS_FORMAT=('d_form_egress_first source=%s scheme=%s default_port=%s mismatch=%s'
+    ' method=%s navigation=%s prior_violation=%s phase=%s')
+EGRESS_PHASES={'CONNECT','PREFLIGHT','LOCAL_WAIT','EXECUTE','VERIFY','REPORTER_WAIT','CLEANUP',
+    'PORTAL_PREP','PORTAL_ENTRY','PORTAL_ENTERED'}
+_egress_log=logging.getLogger('uvicorn.error.d_form')
 
 # Reused from the proven local DOM helpers. Labels are workflow structure;
 # desired business values are supplied through the local request, never here.
@@ -251,7 +264,8 @@ def origin(value):
     try:
         parsed=urlsplit(value)
         need(parsed.username is None and parsed.password is None,'SOURCE_URL_CREDENTIALS')
-        port=parsed.port if parsed.port is not None else 443 if parsed.scheme=='https' else 80
+        default=443 if parsed.scheme in ('https','wss') else 80
+        port=parsed.port if parsed.port is not None else default
         return parsed.scheme,parsed.hostname,port
     except (ValueError,TypeError):
         raise Stop('SOURCE_URL_PARSE') from None
@@ -273,6 +287,7 @@ class Flow:
         self.allowed=set();self.pages=set();self.frame_ids=set();self.route_installed=False;self.ws_installed=False
         self.http_route=None;self.ws_route=None;self.handlers=[];self.mutex=None;self.observe_depth=0
         self.helper_cleanup_failed=False;self.open_category=None
+        self.egress_recorded=False
         self.phase='CONNECT';self.began=None;self.frame_urls={}
         self.summary={'mode':self.mode,'passed':False,'error_code':'PREP_FAILED',
             'model_requests':0,'submit_actions':0,'recording_enabled':False,
@@ -302,9 +317,92 @@ class Flow:
         emitter.on(name,callback);self.handlers.append((emitter,name,callback))
 
     def flag(self, code):
+        if DEMO_EXTRA_GUARDS_DISABLED and code=='UNEXPECTED_DIALOG':
+            return
         if self.violation is None:self.violation=code
 
+    def egress_phase(self):
+        return self.phase
+
+    def egress_denied(self, source, value, address, allowed, request=None):
+        # Called only where EGRESS_BLOCKED is decided, never on a sticky reread.
+        # First decision only; diagnostics never change the rejection itself.
+        if self.egress_recorded:
+            return
+        self.egress_recorded=True
+        try:
+            differs=min((tuple(a!=b for a,b in zip(address,item)) for item in allowed),
+                        key=lambda d:(sum(d),d),default=())
+            mismatch='_'.join(n for n,d in zip(('scheme','host','port'),differs) if d) or 'none'
+            method='NONE'
+            navigation=False
+            if request is not None:
+                known=('GET','HEAD','POST','OPTIONS')
+                method=request.method if request.method in known else 'OTHER'
+                navigation=request.is_navigation_request() is True
+            phase=self.egress_phase()
+            scheme=address[0] if address[0] in ('http','https','ws','wss') else 'other'
+            _egress_log.info(EGRESS_FORMAT,source,scheme,
+                urlsplit(value).port is None,mismatch,method,navigation,self.violation is not None,
+                phase if phase in EGRESS_PHASES else 'OTHER')
+        except Exception:
+            pass
+
+    def allowed_origin(self, value, source):
+        address=origin(value)
+        if address not in self.allowed:
+            self.egress_denied(source,value,address,self.allowed)
+            raise Stop('EGRESS_BLOCKED')
+
+    def source_in_scope(self, value, locked=True):
+        try:
+            address=origin(value)
+        except Stop:
+            return False
+        return (address[0]==self.binding.scheme and address[1]==self.binding.host
+                and 0<address[2]<=65535
+                and (self.binding.source_port is None or address[2]==self.binding.source_port)
+                and (not locked or address in self.allowed))
+
+    def scan_frame(self, frame, page):
+        return (frame.url!='about:blank'
+                and (not DEMO_EXTRA_GUARDS_DISABLED or frame is page.main_frame
+                     or self.source_in_scope(frame.url)))
+
+    def demo_background_request(self, request):
+        if not DEMO_EXTRA_GUARDS_DISABLED:
+            return False
+        if not request.is_navigation_request():
+            return True
+        try:
+            frame=request.frame
+        except PWError:
+            return False
+        return frame.page is not self.page or frame is not self.page.main_frame
+
+    def demo_resource_allowed(self, request, address):
+        # Resource services on the configured host may use another port.
+        # Documents, other hosts/protocols and write methods keep their scope.
+        return (DEMO_EXTRA_GUARDS_DISABLED and not request.is_navigation_request()
+                and request.method in {'GET','HEAD'}
+                and address[0]==self.binding.scheme and address[1]==self.binding.host
+                and 0<address[2]<=65535)
+
     def page_changed(self, code, frame=None, page=None):
+        if DEMO_EXTRA_GUARDS_DISABLED and self.violation is None:
+            if code in {'PAGE_MAIN_FRAME_NAV','PAGE_CHILD_FRAME_NAV'} and frame is not None:
+                if code=='PAGE_CHILD_FRAME_NAV' or frame.page is not self.page:
+                    return
+                try:
+                    if frame.url!='about:blank':
+                        self.allowed_origin(frame.url,'frame')
+                except Stop as error:
+                    self.flag(error.code)
+                return
+            if code=='PAGE_CONTEXT_EVENT' and page is not None and page.context is self.context:
+                return
+            if code=='PAGE_TARGET_CLOSED' and page is not self.page:
+                return
         # Only closed codes, ordinal/depth, booleans and a timer leave the
         # local worker. URLs/target IDs remain private and are never recorded.
         self.flag(code)
@@ -360,9 +458,12 @@ class Flow:
                 info=(await cdp.send('Target.getTargetInfo'))['targetInfo']
                 if info.get('browserContextId')==b.context_id:targets.append((context,page,cdp,info['targetId']))
         matched=[item for item in targets if item[3]==b.target_id]
-        need(len(matched)==1 and 1<=len(targets)<=2,'CONFIG_FAILED')
+        need(len(matched)==1 and len(targets)>=1
+             and (DEMO_EXTRA_GUARDS_DISABLED or len(targets)<=2),'CONFIG_FAILED')
         self.context,self.page,self.cdp,_=matched[0]
-        need(set(self.context.pages)=={item[1] for item in targets},'CONFIG_FAILED')
+        need(self.page in self.context.pages,'CONFIG_FAILED')
+        if not DEMO_EXTRA_GUARDS_DISABLED:
+            need(set(self.context.pages)=={item[1] for item in targets},'CONFIG_FAILED')
         self.pages=set(self.context.pages)
         for _,page,cdp,_ in targets:
             tree=(await cdp.send('Page.getFrameTree'))['frameTree']
@@ -382,8 +483,14 @@ class Flow:
         self.event(self.page,'download',download)
         async def route(request_route):
             try:
-                if origin(request_route.request.url) in self.allowed:await request_route.continue_()
-                else:self.flag('EGRESS_BLOCKED');await request_route.abort()
+                request=request_route.request;address=origin(request.url)
+                if address in self.allowed or self.demo_resource_allowed(request,address):
+                    await request_route.continue_()
+                else:
+                    if not self.demo_background_request(request):
+                        self.egress_denied('http',request.url,address,self.allowed,request)
+                        self.flag('EGRESS_BLOCKED')
+                    await request_route.abort()
             except BaseException:
                 self.flag('REQUEST_GUARD_FAILED')
                 try:await request_route.abort()
@@ -393,8 +500,13 @@ class Flow:
         async def websocket(item):
             try:
                 allowed={('wss' if scheme=='https' else 'ws',host,port) for scheme,host,port in self.allowed}
-                if origin(item.url) in allowed:item.connect_to_server()
-                else:self.flag('EGRESS_BLOCKED');await item.close()
+                address=origin(item.url)
+                if address in allowed:item.connect_to_server()
+                else:
+                    if not DEMO_EXTRA_GUARDS_DISABLED:
+                        self.egress_denied('ws',item.url,address,allowed)
+                        self.flag('EGRESS_BLOCKED')
+                    await item.close()
             except BaseException:self.flag('REQUEST_GUARD_FAILED')
         self.ws_route=websocket
         await self.context.route_web_socket('**/*',websocket);self.ws_installed=True
@@ -409,6 +521,12 @@ class Flow:
         def visit(item,depth):
             nonlocal ordinal
             ordinal+=1;index=ordinal;frame=item['frame']
+            if (DEMO_EXTRA_GUARDS_DISABLED
+                    and (depth>0 or target_role=='OWNED_AUXILIARY')
+                    and frame['url']!='about:blank'
+                    and (not self.source_in_scope(frame['url'],locked)
+                         or (depth>0 and origin(frame['url']) not in (self.allowed|result)))):
+                return
             try:
                 if frame['url']!='about:blank':
                     address=origin(frame['url']);native=origin(frame['securityOrigin'])
@@ -431,16 +549,22 @@ class Flow:
         if self.violation:raise Stop(self.violation)
         need(self.page is not None,'PAGE_CHANGED')
         if self.page.is_closed():self.page_changed('PAGE_TARGET_CLOSED',page=self.page);raise Stop(self.violation)
-        if set(self.context.pages)!=self.pages:self.page_changed('PAGE_CONTEXT_SET_CHANGED');raise Stop(self.violation)
+        need(self.page in self.context.pages,'PAGE_TARGET_CLOSED')
+        if not DEMO_EXTRA_GUARDS_DISABLED and set(self.context.pages)!=self.pages:
+            self.page_changed('PAGE_CONTEXT_SET_CHANGED')
+            raise Stop(self.violation)
         need(psutil.Process(self.binding.pid).create_time()==self.binding.created,'CONFIG_FAILED')
         await self.bounded(self.maximize(),5,'WINDOW_PREP_FAILED')
         tree=(await self.cdp.send('Page.getFrameTree'))['frameTree']
         self.tree_origins(tree,locked=True)
-        if {item['frame']['id'] for item in self.walk(tree)}!=self.frame_ids:
-            self.page_changed('PAGE_FRAME_SET_CHANGED');raise Stop(self.violation)
+        if (not DEMO_EXTRA_GUARDS_DISABLED
+                and {item['frame']['id'] for item in self.walk(tree)}!=self.frame_ids):
+            self.page_changed('PAGE_FRAME_SET_CHANGED')
+            raise Stop(self.violation)
         for frame in self.page.frames:
-            if frame.url=='about:blank':continue
-            need(origin(frame.url) in self.allowed,'EGRESS_BLOCKED')
+            if not self.scan_frame(frame,self.page):
+                continue
+            self.allowed_origin(frame.url,'frame')
             need(await frame.locator('input[type="password"]').count()==0,'LOGIN_REQUIRED')
             modal=await frame.locator('[role="dialog"],[role="alertdialog"],.modal,.el-dialog,.ant-modal,.layui-layer,.k-window').evaluate_all(
                 'nodes=>nodes.some(e=>e.isConnected&&e.getClientRects().length>0)')
@@ -451,7 +575,8 @@ class Flow:
         for field in FIELDS:
             candidates=[]
             for frame in self.page.frames:
-                if frame.url=='about:blank':continue
+                if not self.scan_frame(frame,self.page):
+                    continue
                 array=await frame.evaluate_handle(FIND,field)
                 try:
                     count=await array.evaluate('a=>a.length')
@@ -470,7 +595,7 @@ class Flow:
             info=await node.evaluate(IDENTITY)
             need(info['connected'] and info['label']==field,'CONTROL_CHANGED')
             if self.mode=='FILL_STOP':need(not info['disabled'],'CONTROL_CHANGED')
-            need(origin(info['url']) in self.allowed,'EGRESS_BLOCKED')
+            self.allowed_origin(info['url'],'frame')
             need(info['type'] not in ('password','file','submit','image','reset'),'CONTROL_CHANGED')
             if field!=FIELDS[0]:
                 need(info['tag'] in ('INPUT','TEXTAREA'),'CONTROL_CHANGED')
@@ -514,7 +639,7 @@ class Flow:
         before=await node.evaluate(IDENTITY)
         need(before['connected'] and not before['disabled'],'CONTROL_CHANGED')
         need(not before['blocked_activation'] and not before['navigation'],'CONTROL_CHANGED')
-        need(origin(before['url']) in self.allowed,'EGRESS_BLOCKED')
+        self.allowed_origin(before['url'],'frame')
         need(before['type'] not in ('password','file','submit','image','reset'),'CONTROL_CHANGED')
         if code in ('POSITION_INPUT','DESCRIPTION_INPUT'):
             expected=FIELDS[1] if code=='POSITION_INPUT' else FIELDS[2]
@@ -545,7 +670,7 @@ class Flow:
                 need(await widget.get_attribute('aria-expanded')=='true','CONTROL_CHANGED')
                 need(await container.evaluate('(c,e)=>c.isConnected&&c.getClientRects().length>0&&c.contains(e)',node),'CONTROL_CHANGED')
         else:raise Stop('CONFIG_FAILED')
-        if before['href']:need(not urlsplit(before['href']).netloc or origin(before['href']) in self.allowed,'EGRESS_BLOCKED')
+        if before['href'] and urlsplit(before['href']).netloc:self.allowed_origin(before['href'],'href')
         key=await self.probe(node,event)
         self.summary['timings']['observe']+=time.perf_counter()-stamp
         self.summary['action_attempts']+=1;start=time.perf_counter()
@@ -656,7 +781,8 @@ class Flow:
     async def reporter_value(self):
         await self.check();values=[]
         for frame in self.page.frames:
-            if frame.url=='about:blank':continue
+            if not self.scan_frame(frame,self.page):
+                continue
             found=await frame.evaluate(REPORTER)
             need(not found['ambiguous'],'REPORTER_AMBIGUOUS');values.extend(found['values'])
         need(values,'REPORTER_MISSING');need(len(values)==1,'REPORTER_AMBIGUOUS')

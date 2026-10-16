@@ -267,12 +267,12 @@ class BoundedPostTransport:
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         if len(raw) > 4 * 1024 * 1024:
             raise McpFailure("mcp_request_too_large")
-        headers = {
+        headers = httpx2.Headers({
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
             "Accept-Encoding": "identity",
             "MCP-Protocol-Version": self.config.protocol_version,
-        }
+        })
         if isinstance(metadata, ClientMessageMetadata):
             if metadata.resumption_token or metadata.on_resumption_token_update:
                 raise McpFailure("mcp_resume_denied")

@@ -639,6 +639,7 @@ class BrowserSubmissionService:
                 ) else None
             )
             publication_code = None
+            publication_cause = None
             if type(error) is BrowserPublicationError and len(error.args) == 1:
                 publication_argument = error.args[0]
                 if type(publication_argument) is str and publication_argument in {
@@ -648,8 +649,22 @@ class BrowserSubmissionService:
                     "browser_teaching_primitive_denied",
                     "browser_teaching_grant_denied",
                     "browser_publication_capability_changed",
+                    "browser_publication_denied",
+                    "browser_publication_source_denied",
+                    "browser_publication_capability_unavailable",
+                    "browser_publication_registry_unavailable",
+                    "browser_publication_reference_invalid",
+                    "browser_publication_storage_invalid",
+                    "browser_publication_manifest_invalid",
+                    "browser_publication_store_unavailable",
                 }:
                     publication_code = publication_argument
+                cause = error.__context__
+                if (
+                    type(cause) is BrowserAuthorizationError
+                    and cause.code == "browser_binding_stale"
+                ):
+                    publication_cause = "browser_binding_stale"
             diagnostic = {
                 "stage": admission_stage,
                 "exception_type": exception_type if re.fullmatch(
@@ -659,6 +674,7 @@ class BrowserSubmissionService:
                     BrowserChatError, BrowserRunStoreError,
                     BrowserAuthorizationError, SchemaValidationError,
                 ) else publication_code,
+                "trusted_cause_code": publication_cause,
                 "aggregate_code": safe_code,
                 "task_id": request.task_id if isinstance(request.task_id, str) and re.fullmatch(
                     r"[A-Za-z0-9_-]{1,96}", request.task_id,

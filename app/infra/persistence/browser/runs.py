@@ -1737,7 +1737,17 @@ class PostgreSQLBrowserRunStore:
                                            self._write_event_id("fill-stop-receipt", current.run_id))
             if value is None:
                 return None
-            return FillStopReport.model_validate_json(json.dumps(value.get("report")))
+            report = FillStopReport.model_validate_json(json.dumps(value.get("report")))
+            # The immutable business receipt predates terminal resource cleanup.
+            # Only this owner-checked Run's canonical cleanup outcome updates its display.
+            cleanup_confirmed = current.cleanup in {"released", "terminated"}
+            if report.execution_status == "filled_stopped" and not cleanup_confirmed:
+                # The client accepts a successful finite receipt only after cleanup.
+                # Keep the immutable receipt and canonical business outcome intact.
+                return None
+            return report.model_copy(update={
+                "cleanup_confirmed": cleanup_confirmed,
+            })
 
     async def reserve_fill_stop(self, claim: RunSnapshot) -> RunSnapshot:
         """One whole finite D flow; no fabricated v4.2 per-control receipts."""

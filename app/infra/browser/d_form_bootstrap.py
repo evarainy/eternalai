@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,6 +41,7 @@ from app.infra.browser.d_form_installation import (
 from app.infra.browser.d_form_manifest import build_fill_stop_manifest, source_digest
 from app.infra.browser.d_form_owned_browser import (
     OwnedOALoginContract,
+    _D_FORM_LOG_CODES,
     log_d_form_stage,
     owned_provider_digest,
     validate_owned_paths,
@@ -91,6 +93,33 @@ def _management_error_code(error: Exception) -> object:
     if isinstance(error, OSError):
         return "os_error"
     return "error"
+
+
+def _log_cleanup_failure(step: str, error: Exception, began: float) -> None:
+    """Keep the failed close step without writing exception or business values."""
+    try:
+        code = _management_error_code(error)
+        safe_code = code if type(code) is str and code in _D_FORM_LOG_CODES else "error"
+        name = type(error).__name__
+        safe_name = name if name in {
+            "DFormManagementError", "BrowserLeaseError", "BrowserAuthorizationError",
+            "BrowserRunStoreError", "BrowserReadExecutionError", "ProgrammingError",
+            "DBAPIError", "OperationalError", "IntegrityError", "SQLAlchemyError",
+            "TimeoutError", "ValueError", "TypeError", "OSError",
+        } else "UnknownException"
+        sqlstate = "none"
+        if isinstance(error, SQLAlchemyError):
+            value = getattr(getattr(error, "orig", None), "sqlstate", None)
+            if (type(value) is str and len(value) == 5
+                    and all(char in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" for char in value)):
+                sqlstate = value
+        logging.getLogger("uvicorn.error.d_form").error(
+            "d_form_cleanup_failure step=%s exception_type=%s error_code=%s sqlstate=%s elapsed_ms=%d",
+            step, safe_name, safe_code, sqlstate,
+            max(0, int((time.monotonic() - began) * 1000)),
+        )
+    except Exception:
+        pass  # A diagnostic failure must not replace the cleanup exception.
 
 
 def pool_manifest_digest(origin: str, chromium_sha256: str) -> bytes:
@@ -511,15 +540,23 @@ class DFormManagement:
                     )
                     or self.cleanup is None or type(vertical.execution) is not DFormRuntime):
                 raise DFormManagementError("d_form_authorization_denied")
-            run = await vertical.runs.get_for_cleanup(
-                actor.owner, command.task_id, command.run_id,
-            )
-            async with self.components.browser_session_factory() as session:
-                await self.cleanup.authorize_run(session, run)
-            cleanup = await vertical.execution.close_owned_browser(run)
-            if cleanup != "released":
-                raise DFormManagementError("d_form_resource_scope_denied")
-            await vertical.runs.record_cleanup(run, cleanup=cleanup)
+            cleanup_step = "get_for_cleanup"
+            try:
+                run = await vertical.runs.get_for_cleanup(
+                    actor.owner, command.task_id, command.run_id,
+                )
+                cleanup_step = "authorize_run"
+                async with self.components.browser_session_factory() as session:
+                    await self.cleanup.authorize_run(session, run)
+                cleanup_step = "close_owned_browser"
+                cleanup = await vertical.execution.close_owned_browser(run)
+                if cleanup != "released":
+                    raise DFormManagementError("d_form_resource_scope_denied")
+                cleanup_step = "record_cleanup"
+                await vertical.runs.record_cleanup(run, cleanup=cleanup)
+            except Exception as error:
+                _log_cleanup_failure(cleanup_step, error, began)
+                raise
             return await self.state(principal)
         if command.operation == "confirm_handoff":
             raise DFormManagementError("d_form_resource_scope_denied")

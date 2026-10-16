@@ -118,7 +118,7 @@ def build_fill_stop_manifest(*, origin: str) -> BrowserPublicationManifest:
                        verifier_id="d_form_fields", version="v1", read_rule=read,
                        contract="d_form_fields_v1")
     site = _signed(BrowserSiteDefinition, "browser_site.publication.v1",
-                   site_id=SKILL_ID, version="v2", source=DecisionSource(
+                   site_id=SKILL_ID, version="v30", source=DecisionSource(
                        source_id=SKILL_ID, origin=origin, fixture_digest=digest),
                    navigation_origins=(origin,), policy=policy, read_rule=read,
                    steps=tuple(SiteStepRule(
@@ -133,7 +133,7 @@ def build_fill_stop_manifest(*, origin: str) -> BrowserPublicationManifest:
                    decision_manifest=ModelManifest(request_model="deterministic_local",
                        deployment_model="d_form_zero_llm_v1", manifest_digest=digest),
                    decision_budget=DecisionBudget(max_candidates=8))
-    skill = _signed(BrowserSkill, "browser_skill.v1", skill_id=SKILL_ID, version="v2",
+    skill = _signed(BrowserSkill, "browser_skill.v1", skill_id=SKILL_ID, version="v30",
                     site_id=site.site_id, site_digest=site.digest,
                     verifier_id=verifier.verifier_id, verifier_digest=verifier.digest,
                     parameters=("bound_form", *FIELDS), steps=steps)

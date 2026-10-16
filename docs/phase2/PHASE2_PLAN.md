@@ -565,7 +565,16 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|---|---|
 | MCP 修复的真实 PostgreSQL 定向验证 | 固定测试库不可达，已注册迁移版本未知；相关 `migrated_database_url` fixture 会隐式升级 schema，本次未授权迁移，故未执行。内存故障注入和真实持久化代码的 SQL/序列化单元验证不证明 PG 事务、advisory lock、跨进程唯一写入和恢复 | `P2-MCP-PR218-FIX-001`（环境恢复与迁移专项授权） | `P2-MCP-PR218-FIX-001` | 固定测试库及迁移授权具备后，只对确认决定持久化窗口、终态幂等 Trace、operation/checkpoint/gate 期限与已有 MCP API/恢复路径完成真实 PG 定向验收；本条不要求或授权全量 | 本次本地执行交付的定向验证记录；`tests/api/test_mcp.py`、`tests/workflow/test_mcp_recovery.py`、`tests/infra/observability/test_postgresql_trace.py`；不新增 migration |
 
+### Chat / D / 固定查询接续义务（2026-10-16）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| D v30 最终填写与自动释放 | 已移除 Chat 后重复本机确认并接入终态 Job 关闭/租约释放，但尚未取得用户最终填写与清理实测结果 | `P2-CHAT-BROWSER-READ-001`（用户真实验收及模型可用性） | `P2-CHAT-BROWSER-READ-001` | 用户在获准环境验证字段填写后停止、Chat 核验结果、成功/失败终态自动释放及下一次调用；不保存或提交 | `docs/dev/chat_browser_mcp_handoff.md`；候选 PR 与脱敏现场证据 |
+| 六查询完整真实覆盖 | 已有人员查询成功，不能据此证明全部六工具、分页与受限/空态均已实测 | `P2-CHAT-BROWSER-READ-001`（正式服务、用户授权与适用业务对象） | `P2-CHAT-BROWSER-READ-001` | 在获准查询范围逐项完成真实验收；写工具继续关闭 | `app/infra/adapters/business_mcp/fixed_query_contracts.py`；候选 PR |
+| 跨机组合装配 | 当前演示组合启动器、任务 JSON、CA/服务配置、日志处理器及 pins 在仓库外；源码原始字节摘要也受换行影响 | `P2-CHAT-BROWSER-READ-001`（目标环境配置与对应装载授权） | 待用户确定后续范围 | 目标机器按其实际源码/路径/配置完成装配和授权，真实只读及 D 填写后停止验收；不复制凭证或原机进程状态 | `docs/dev/chat_browser_mcp_handoff.md` 新电脑接续 |
+
 ## 6. P2 不做什么
+
 
 - 不把“能连到接口”当试点完成；缺可信身份、正式凭证、审计、Evaluator 或负向 Golden 时仍是半成品。（蓝图 §3.2 L176-L186、§7.0 L1383-L1404、§13 L2701-L2717）
 - 不让 Runtime、LLM、UI、Workflow 或 Skill 绕过 Capability Gateway；不让 DB Gateway 自由查生产表。（蓝图 §7.3 L1436-L1502、§14.2.1-§14.2.2 L2787-L2806）

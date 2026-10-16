@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
+import time
 from typing import Any
 
 from app.ports.adapter import AdapterResult
@@ -13,6 +16,22 @@ from app.ports.browser_gateway import (
 )
 from app.ports.error_codes import ErrorCode
 from app.ports.response_envelope import ResponseEnvelope
+
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _log_submission_failure(stage: str, code: object, error: BaseException | None,
+                            began: float) -> None:
+    """Record metadata only; never exception text, arguments or credentials."""
+    safe_code = (code if type(code) is str and re.fullmatch(
+        r"(?:browser|request|session|authentication)_[a-z0-9_]{1,80}", code,
+    ) else "unknown_exception")
+    name = type(error).__name__ if error is not None else "none"
+    safe_name = name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) else "UnknownException"
+    _logger.error("browser_submission_failure stage=%s code=%s exception_type=%s elapsed_ms=%d",
+                  stage, safe_code, safe_name, max(0, int((time.monotonic() - began) * 1000)))
 
 
 def browser_failure(code: str) -> tuple[ErrorCode, BrowserGatewayDiagnostic]:
@@ -82,6 +101,7 @@ class BrowserCapabilityAdapter:
         def received(response: ResponseEnvelope) -> None:
             invocation.scope.capture_admission(response)
 
+        began = time.monotonic()
         try:
             response = await self._submission.submit(
                 principal=invocation.scope.verified.principal,
@@ -98,18 +118,21 @@ class BrowserCapabilityAdapter:
                         and set(data) == {"kind", "error_code"} and data.get("kind") == "failed"
                         else None)
                 error, diagnostic = browser_failure(code if type(code) is str else "")
+                _log_submission_failure(diagnostic.stage, code, None, began)
                 return AdapterResult(status="error", error_code=error, browser_diagnostic=diagnostic)
             admission = invocation.scope.capture_admission(response)
             return AdapterResult(status="accepted", browser_admission=admission)
         except BrowserChatError as error:
             code, diagnostic = browser_failure(error.code)
+            _log_submission_failure(diagnostic.stage, error.code, error, began)
             return AdapterResult(status="error", error_code=code, browser_diagnostic=diagnostic)
         except TimeoutError:
             return AdapterResult(status="timeout", error_code="adapter_timeout",
                                  browser_diagnostic=BrowserGatewayDiagnostic("admission", "admission_timeout"))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
+            _log_submission_failure("admission", "browser_request_admission_uncertain", error, began)
             # An accept commit may have succeeded. Never reject, cancel, or issue a new key.
             return AdapterResult(status="error", error_code="adapter_error",
                                  browser_diagnostic=BrowserGatewayDiagnostic("admission", "admission_uncertain"))

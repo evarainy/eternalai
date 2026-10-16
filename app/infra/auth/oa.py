@@ -39,6 +39,7 @@ from app.ports.auth import (
     PrincipalOrgContext,
     StaleCredentialWrite,
 )
+from app.ports.credential_binding import CredentialBindingVerification
 
 _REQUIRED_OA_COOKIES = frozenset(
     {
@@ -298,7 +299,7 @@ class OACredentialVerifier:
         expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         async with self._credential_store.writer_guard():
-            result = await self._authenticate_once(
+            result, _ = await self._authenticate_once(
                 credential,
                 persist_session=True,
                 expected_subject=expected_subject,
@@ -313,23 +314,26 @@ class OACredentialVerifier:
         expected_subject: tuple[str, str],
         expected_write: CredentialWriteStamp,
     ) -> CredentialAuthenticationResult:
-        return await self._authenticate_once(
+        result, _ = await self._authenticate_once(
             credential,
             persist_session=True,
             expected_subject=expected_subject,
             reactivate_revoked_session=False,
             expected_write=expected_write,
         )
+        return result
 
-    async def verify_for_binding(self, credential: LoginCredential) -> Principal:
+    async def verify_for_binding(
+        self, credential: LoginCredential,
+    ) -> CredentialBindingVerification:
         """Verify identity without persisting a Session for a mismatched account."""
 
-        result = await self._authenticate_once(
+        result, session_credential = await self._authenticate_once(
             credential,
             persist_session=False,
             reactivate_revoked_session=False,
         )
-        return result.principal
+        return CredentialBindingVerification(result.principal, session_credential)
 
     async def _authenticate_once(
         self,
@@ -339,7 +343,7 @@ class OACredentialVerifier:
         expected_subject: tuple[str, str] | None = None,
         reactivate_revoked_session: bool,
         expected_write: CredentialWriteStamp | None = None,
-    ) -> CredentialAuthenticationResult:
+    ) -> tuple[CredentialAuthenticationResult, OASessionCredential]:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
         failure_kind: OAAuthenticationFailureKind = "local_failure"
         failure_diagnostics: dict[str, str] = {}
@@ -454,6 +458,11 @@ class OACredentialVerifier:
                     tenant_id=self._tenant_id, directory_user_id=oa_user_id
                 ),
             )
+            session_credential = OASessionCredential(
+                oa_user_id=SecretStr(oa_user_id),
+                cookies={name: SecretStr(value) for name, value in sorted(cookies.items())},
+                expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
+            )
             receipt: CredentialWriteStamp | None = None
             if persist_session:
                 failure_stage = "local_credential_store_failed"
@@ -472,18 +481,12 @@ class OACredentialVerifier:
                     receipt = await self._credential_store.store(
                         ai_user_id,
                         "oa",
-                        OASessionCredential(
-                            oa_user_id=SecretStr(oa_user_id),
-                            cookies={
-                                name: SecretStr(value) for name, value in sorted(cookies.items())
-                            },
-                            expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
-                        ),
+                        session_credential,
                         tenant_id=self._tenant_id,
                         reactivate_revoked_session=reactivate_revoked_session,
                         expected_write=expected_write,
                     )
-            return CredentialAuthenticationResult(principal, receipt)
+            return CredentialAuthenticationResult(principal, receipt), session_credential
         except StaleCredentialWrite:
             raise
         except OAAuthenticationError:

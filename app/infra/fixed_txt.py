@@ -1,4 +1,4 @@
-"""Bounded UTF-8 reader for one server-configured TXT file."""
+"""Bounded UTF-8 reader for one server-configured TXT or Markdown file."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _open_nonblocking(path: str, flags: int) -> int:
 class FixedTxtReader:
     """Read lazily; the byte cap is a context budget, not a token count.
 
-    Ordinary symlinks are resolved at read time and must end at a regular TXT
+    Ordinary symlinks are resolved at read time and must end at a regular TXT or Markdown
     file. This is a trusted server path, not a sandbox for user-selected paths.
     Windows device namespaces and alternate data streams are not supported.
     """
@@ -45,7 +45,7 @@ class FixedTxtReader:
         path = Path(self._path)
         if (
             not path.is_absolute()
-            or path.suffix.lower() != ".txt"
+            or path.suffix.lower() not in {".txt", ".md"}
             or path.is_reserved()
             or self._path.replace("\\", "/").startswith(("//./", "//?/"))
             or (os.name == "nt" and ":" in self._path[len(path.drive):])
@@ -53,7 +53,10 @@ class FixedTxtReader:
             raise FixedDocumentReadError("document_configuration_invalid")
         try:
             resolved = path.resolve(strict=True)
-            if resolved.suffix.lower() != ".txt" or not stat.S_ISREG(resolved.stat().st_mode):
+            if (
+                resolved.suffix.lower() not in {".txt", ".md"}
+                or not stat.S_ISREG(resolved.stat().st_mode)
+            ):
                 raise FixedDocumentReadError("document_unavailable")
             with open(resolved, "rb", opener=_open_nonblocking) as stream:
                 if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):

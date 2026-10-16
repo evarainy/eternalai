@@ -10,11 +10,146 @@ from typing import Any
 import anyio
 
 from app.infra.mcp.transport import BoundedPostTransport
-from app.mcp.diagnostics import McpLogRefs, record_mcp_event
+from app.mcp.diagnostics import (
+    CatalogDriftReason,
+    McpLogRefs,
+    record_mcp_catalog_drift,
+    record_mcp_event,
+)
 from app.mcp.models import McpFailure, ServiceConfig, digest
 from app.ports.mcp import McpAuthorizationContext, McpTokenResolverPort
 from mcp import Client
 from mcp.types import DiscoverResult
+
+_HINT_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+# The read service now adds a display-only title to these six query tools; the
+# bound snapshot predates it. Scoped by configured service id, never by env label.
+_TITLE_COMPAT_SERVICE = "lesscode-business-context-read"
+_TITLE_COMPAT_TOOLS = frozenset(
+    {
+        "person_find",
+        "talk_context_get",
+        "talk_record_get",
+        "talk_tasks_list",
+        "clothing_options_get",
+        "clothing_result_get",
+    }
+)
+
+
+def _annotations_reason(
+    config: ServiceConfig,
+    tool: str,
+    raw_actual: str | None,
+    dumped: dict[str, Any] | None,
+    safety_digest: str,
+) -> CatalogDriftReason | None:
+    """Single annotation verdict shared by the guard and its drift diagnostics.
+
+    Outside the compat scope raw and SDK digests must each equal the binding.
+    Inside it the SDK dump must still equal the raw digest exactly; only then a
+    string title is dropped from a copy before comparing with the binding, so
+    any other key, null/non-string title or changed hint still rejects.
+    """
+    if raw_actual is None:
+        return "raw_annotations_missing"
+    if config.service_config_id != _TITLE_COMPAT_SERVICE or tool not in _TITLE_COMPAT_TOOLS:
+        if raw_actual != safety_digest:
+            return "raw_annotations_mismatch"
+        if dumped is None:
+            return "sdk_annotations_missing"
+        if digest(dumped) != safety_digest:
+            return "sdk_annotations_mismatch"
+        return None
+    if dumped is None:
+        return "sdk_annotations_missing"
+    if digest(dumped) != raw_actual:
+        return "sdk_annotations_mismatch"
+    compared = dict(dumped)
+    if type(compared.get("title")) is str:
+        compared.pop("title")
+    if digest(compared) != safety_digest:
+        return "raw_annotations_mismatch"
+    return None
+
+
+def _key_state(dumped: dict[str, Any], key: str) -> str:
+    if key not in dumped:
+        return "-"
+    value = dumped[key]
+    if value is None:
+        return "n"
+    if isinstance(value, bool):
+        return "t" if value else "f"
+    return "s" if isinstance(value, str) else "x"
+
+
+def _annotation_shape(dumped: dict[str, Any]) -> str:
+    """Six fixed positions describing SDK annotation keys; never carries values.
+
+    Position 0 is title; positions 1-4 are readOnlyHint, destructiveHint,
+    idempotentHint and openWorldHint. Each is "-" absent, "n" null, "t"/"f"
+    bool, "s" string or "x" other type. Position 5 counts any other keys,
+    capped at 9.
+    """
+    extra = len(dumped.keys() - {"title", *_HINT_KEYS})
+    return "".join(_key_state(dumped, key) for key in ("title", *_HINT_KEYS)) + str(
+        min(extra, 9)
+    )
+
+
+def _record_catalog_drift(
+    config: ServiceConfig,
+    transport: BoundedPostTransport,
+    matches: list[Any],
+    tool: str,
+    *,
+    input_digest: str,
+    safety_digest: str,
+    trace_id: str,
+) -> None:
+    """Classify one drift rejection by the guard's own order; never alters it."""
+    try:
+        match = matches[0] if len(matches) == 1 else None
+        input_actual = digest(match.input_schema) if match is not None else ""
+        raw_actual = transport.catalog_annotations.get(tool)
+        annotations = match.annotations if match is not None else None
+        dumped = (
+            annotations.model_dump(by_alias=True, exclude_unset=True, mode="json")
+            if annotations is not None
+            else None
+        )
+        sdk_actual = digest(dumped) if dumped is not None else None
+        sdk_shape = _annotation_shape(dumped) if dumped is not None else ""
+        reason: CatalogDriftReason
+        if not matches:
+            reason = "tool_missing"
+        elif match is None:
+            reason = "tool_duplicate"
+        elif input_actual != input_digest:
+            reason = "input_schema_mismatch"
+        elif (
+            verdict := _annotations_reason(config, tool, raw_actual, dumped, safety_digest)
+        ) is not None:
+            reason = verdict
+        else:
+            reason = "unclassified"
+        record_mcp_catalog_drift(
+            reason,
+            profile=config,
+            tool=tool,
+            match_count=len(matches),
+            input_expected=input_digest,
+            input_actual=input_actual,
+            safety_expected=safety_digest,
+            raw_actual=raw_actual,
+            sdk_actual=sdk_actual,
+            sdk_shape=sdk_shape,
+            trace_id=trace_id,
+        )
+    except Exception:
+        # Diagnostics are best effort; the drift rejection keeps propagating.
+        return
 
 
 class McpDriver:
@@ -176,21 +311,42 @@ class McpDriver:
                         raise McpFailure("mcp_catalog_invalid")
                     matches = [item for item in listing.tools if item.name == tool]
                     if len(matches) != 1 or digest(matches[0].input_schema) != input_digest:
+                        _record_catalog_drift(
+                            config,
+                            transport,
+                            matches,
+                            tool,
+                            input_digest=input_digest,
+                            safety_digest=safety_digest,
+                            trace_id=trace_id,
+                        )
                         contract_failure = McpFailure("mcp_catalog_drift")
                         raise contract_failure
                     annotations = matches[0].annotations
+                    dumped = (
+                        annotations.model_dump(by_alias=True, exclude_unset=True, mode="json")
+                        if annotations is not None
+                        else None
+                    )
                     if (
-                        transport.catalog_annotations.get(tool) != safety_digest
-                        or annotations is None
-                        or digest(
-                            annotations.model_dump(
-                                by_alias=True,
-                                exclude_unset=True,
-                                mode="json",
-                            )
+                        _annotations_reason(
+                            config,
+                            tool,
+                            transport.catalog_annotations.get(tool),
+                            dumped,
+                            safety_digest,
                         )
-                        != safety_digest
+                        is not None
                     ):
+                        _record_catalog_drift(
+                            config,
+                            transport,
+                            matches,
+                            tool,
+                            input_digest=input_digest,
+                            safety_digest=safety_digest,
+                            trace_id=trace_id,
+                        )
                         contract_failure = McpFailure("mcp_catalog_drift")
                         raise contract_failure
                     record_mcp_event(

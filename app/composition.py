@@ -49,7 +49,13 @@ from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
 from app.infra.adapters.business_mcp.catalog import catalog as mcp_catalog
 from app.infra.adapters.business_mcp.catalog import workflow_definitions as mcp_definitions
 from app.infra.adapters.business_mcp.fixed_read_profile import (
+    QUERY_TOOLS as FIXED_QUERY_TOOLS,
+)
+from app.infra.adapters.business_mcp.fixed_read_profile import (
     SERVICE_CONFIG_ID as FIXED_READ_SERVICE_CONFIG_ID,
+)
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    TOOL as FIXED_READ_TOOL,
 )
 from app.infra.adapters.business_mcp.fixed_read_profile import (
     FixedReadCapabilityRegistry,
@@ -161,6 +167,7 @@ from app.ports.organization_directory import (
 )
 from app.ports.organization_directory_sync import DirectorySourceError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
+from app.ports.response_projection_contract import ApprovedResponseProjection
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import DFormCollectionStorePort, SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
@@ -490,6 +497,9 @@ def build_runtime(
     mcp_result_profiles: Mapping[str, ServiceConfig] | None = None,
     d_form_collection_store: DFormCollectionStorePort | None = None,
     document_qa: DocumentQAService | None = None,
+    approved_projections: Mapping[
+        str, tuple[str, str | None, str, ApprovedResponseProjection]
+    ] | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     resolved_human_gate = human_gate_port
@@ -507,6 +517,7 @@ def build_runtime(
         validate_workflow=validate_workflow,
         capability_formatters=capability_formatters,
         mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
     )
     return RuntimeImpl(
         task_store=task_store,
@@ -597,10 +608,16 @@ def build_production_components(
         if fixed_read_service is not None
         else None
     )
+    fixed_query_contracts = {
+        tool: contract
+        for (service, tool), contract in (mcp_contracts or {}).items()
+        if service == FIXED_READ_SERVICE_CONFIG_ID and tool in FIXED_QUERY_TOOLS
+    }
     fixed_read = load_fixed_read_profile(
         mcp_profiles, os.environ.get("MCP_FIXED_READ_APPROVAL_JSON"),
         tls_contexts=mcp_tls_contexts,
         prepared=prepared_fixed_read,
+        read_contracts=fixed_query_contracts,
     )
     if mcp_isolated_test_contracts:
         from urllib.parse import urlsplit
@@ -623,11 +640,20 @@ def build_production_components(
     )
     workflow_store = PostgreSQLWorkflowStore(mcp_store)
     mcp_contexts = McpExecutionContextFactory(mcp_store, workflow_store, human_gate_port)
-    mcp_outputs = dict(mcp_contracts or {})
+    # The fixed service receives reads only through its approved profile.
+    mcp_outputs = {
+        key: contract for key, contract in (mcp_contracts or {}).items()
+        if key[0] != FIXED_READ_SERVICE_CONFIG_ID
+        or key[1] not in (FIXED_READ_TOOL, *FIXED_QUERY_TOOLS)
+    }
     if fixed_read is not None:
-        mcp_outputs[(fixed_read.service.service_config_id, "business_context_get")] = (
+        mcp_outputs[(fixed_read.service.service_config_id, FIXED_READ_TOOL)] = (
             fixed_read.output_contract
         )
+        mcp_outputs.update({
+            (fixed_read.service.service_config_id, tool): read.output_contract
+            for tool, read in fixed_read.approved_reads.items()
+        })
     mcp_driver = McpDriver(mcp_profiles, mcp_store, tls_contexts=mcp_tls_contexts)
     if mcp_profiles:
         resolved_adapters["business_platform"] = BusinessMcpAdapter(
@@ -679,7 +705,7 @@ def build_production_components(
         mcp_scope_allowed=(
             lambda tenant, user, capability, service, tool: (
                 fixed_read is not None
-                and capability == fixed_read.capability.capability_id
+                and fixed_read.tool_for_capability(capability) == tool
                 and fixed_read.permits(
                     tenant_id=tenant, user_id=user, service_config_id=service, tool=tool
                 )
@@ -804,12 +830,41 @@ def build_production_components(
         human_gate_port=human_gate_port,
         candidate_policy=policy_guard,
         capability_formatters=(
-            {fixed_read.capability.capability_id: fixed_read.format_result}
+            {
+                fixed_read.capability.capability_id: fixed_read.format_result,
+                **{
+                    read.capability.capability_id: partial(
+                        fixed_read.format_query_result, tool
+                    )
+                    for tool, read in fixed_read.approved_reads.items()
+                },
+            }
             if fixed_read is not None
             else None
         ),
         mcp_result_profiles=(
-            {fixed_read.capability.capability_id: fixed_read.service}
+            {
+                fixed_read.capability.capability_id: fixed_read.service,
+                **{
+                    read.capability.capability_id: fixed_read.service
+                    for read in fixed_read.approved_reads.values()
+                },
+            }
+            if fixed_read is not None
+            else None
+        ),
+        # Process-local, code-owned rules for approved fixed reads only.
+        approved_projections=(
+            {
+                read.capability.capability_id: (
+                    read.capability.version,
+                    read.capability.policy_digest,
+                    read.capability.output_schema_digest,
+                    read.projection,
+                )
+                for read in fixed_read.approved_reads.values()
+                if read.projection is not None
+            }
             if fixed_read is not None
             else None
         ),

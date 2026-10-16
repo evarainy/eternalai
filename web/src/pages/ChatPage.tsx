@@ -117,15 +117,17 @@ function BrowserRunMonitor({
       setRead(incoming);
       setPollError(false);
       setReadFailure({ status: null, code: 'browser_read_failed' });
-      if (incoming.run.result !== null) onTerminal(true);
-      return incoming.run.result !== null;
+      const terminal = incoming.run.result !== null;
+      const cleanupPending = fillStopMode && incoming.run.result?.cleanup === 'pending';
+      if (terminal && !cleanupPending) onTerminal(true);
+      return terminal && !cleanupPending;
     } else if (decision === 'conflict') {
       setRead(null);
       setPollError(true);
       return null;
     }
     return false;
-  }, [target, onTerminal]);
+  }, [target, onTerminal, fillStopMode]);
 
   useEffect(() => {
     live.current = true;

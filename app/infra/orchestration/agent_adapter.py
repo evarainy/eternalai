@@ -11,8 +11,11 @@ from pydantic import ValidationError
 
 from app.contracts.sdui.models import ConfirmCardPayload
 from app.evaluator.overview import required_postcondition_rule
+from app.infra.adapters.business_mcp.fixed_query_contracts import record_fixed_query_failure
+from app.infra.adapters.business_mcp.reads import READ_TOOLS
 from app.infra.orchestration.overview_evaluation import build_overview_evaluation_input
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.sdui.response_projection import project_approved_response_data
 from app.infra.workflow.catalog import OVERVIEW_ID, OAReadOverviewInput, OAReadOverviewOutput
 from app.mcp.diagnostics import record_mcp_event
 from app.mcp.models import ServiceConfig
@@ -33,7 +36,11 @@ from app.ports.capability_registry import (
 from app.ports.evaluation import BusinessVerification, EvaluationScope
 from app.ports.human_gate import VersionBinding, VersionBindingMismatchError
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
-from app.ports.response_projection_contract import ProjectionContractSnapshot
+from app.ports.response_projection_contract import (
+    ApprovedResponseProjection,
+    ApprovedResponseProjectionError,
+    ProjectionContractSnapshot,
+)
 from app.ports.workflow_engine import WorkflowEnginePort
 from app.runtime.response_projection import project_response_data
 from app.version_binding import capability_version_bindings, merge_version_bindings
@@ -51,6 +58,9 @@ class AgentOrchestrationAdapter:
         validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None = None,
         capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = None,
         mcp_result_profiles: Mapping[str, ServiceConfig] | None = None,
+        approved_projections: Mapping[
+            str, tuple[str, str | None, str, ApprovedResponseProjection]
+        ] | None = None,
     ) -> None:
         self._capability_registry = capability_registry
         self._gateway = gateway
@@ -59,6 +69,27 @@ class AgentOrchestrationAdapter:
         self._validate_workflow = validate_workflow
         self._capability_formatters = dict(capability_formatters or {})
         self._mcp_result_profiles = dict(mcp_result_profiles or {})
+        # capability_id -> (version, policy_digest, output_schema_digest, rules)
+        self._approved_projections = dict(approved_projections or {})
+
+    def _assert_approved_capability(self, capability: CapabilitySpec) -> None:
+        approved = self._approved_projections.get(capability.capability_id)
+        if approved is None:
+            return
+        version, policy_digest, output_digest, policy = approved
+        try:
+            schema_matches = policy.matches_schema(capability.output_schema)
+        except (TypeError, ValueError, RecursionError):
+            schema_matches = False
+        if (
+            capability.version != version
+            or capability.policy_digest != policy_digest
+            or capability.output_schema_digest != output_digest
+            or not schema_matches
+        ):
+            raise VersionBindingMismatchError(
+                "Approved read projection differs from the selected capability"
+            )
 
     async def select_capability(
         self,
@@ -108,6 +139,7 @@ class AgentOrchestrationAdapter:
         capability: CapabilitySpec,
         intent_version_binding: VersionBinding,
     ) -> AgentTaskVersionBindings:
+        self._assert_approved_capability(capability)
         if self._validate_workflow is not None and (
             capability.type == "workflow" or capability.capability_id == OVERVIEW_ID
         ):
@@ -153,6 +185,7 @@ class AgentOrchestrationAdapter:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
+        self._assert_approved_capability(capability)
         if self._validate_workflow is not None and (
             capability.type == "workflow" or capability.capability_id == OVERVIEW_ID
         ):
@@ -263,20 +296,41 @@ class AgentOrchestrationAdapter:
         business_verification: BusinessVerification | None = None,
     ) -> ResponseEnvelope:
         started = monotonic()
-        response = self._build_response(
-            context=context,
-            execution=execution,
-            projection=projection,
-            confirmation=confirmation,
-            business_verification=business_verification,
-        )
         profile = self._mcp_result_profiles.get(context.capability_id)
+        tool = ""
+        if profile is not None:
+            prefix = f"business.{profile.service_config_id}."
+            tool = context.capability_id.removeprefix(prefix)
+            if context.capability_id != prefix + tool or tool not in READ_TOOLS:
+                profile, tool = None, ""
+        try:
+            response = self._build_response(
+                context=context,
+                execution=execution,
+                projection=projection,
+                confirmation=confirmation,
+                business_verification=business_verification,
+            )
+        except ApprovedResponseProjectionError as rejected:
+            # No success envelope exists; Runtime turns this into the failed terminal.
+            if profile is not None:
+                projection_failure = rejected
+                record_fixed_query_failure(
+                    "chat_projection",
+                    lambda: f"projection_rejected:{projection_failure.reason}",
+                    profile=profile,
+                    tool=tool,
+                    task_id=context.task_id,
+                    trace_id=context.trace_id,
+                    started_at=started,
+                )
+            raise
         if profile is not None:
             record_mcp_event(
                 "chat_terminal",
                 "success" if response.status == "completed" else "failed",
                 profile=profile,
-                tool="business_context_get",
+                tool=tool,
                 task_id=context.task_id,
                 trace_id=context.trace_id,
                 error_code=execution.error_code or "",
@@ -313,10 +367,27 @@ class AgentOrchestrationAdapter:
                 context.trace_id,
             )
         if execution.status == "completed":
-            data = project_response_data(
-                execution.data,
-                projection.load_output_schema() if projection is not None else None,
-            )
+            approved = self._approved_projections.get(context.capability_id)
+            if approved is not None:
+                # Third projection under the same frozen rules; any mismatch or
+                # rejection raises instead of producing a completed response.
+                version, _, output_digest, policy = approved
+                if (
+                    projection is None
+                    or projection.capability_id != context.capability_id
+                    or projection.capability_version != version
+                    or projection.declared_output_schema_digest != output_digest
+                    or projection.output_schema_json != policy.output_schema_json
+                ):
+                    raise ApprovedResponseProjectionError("policy_mismatch")
+                data: dict[str, Any] | None = project_approved_response_data(
+                    execution.data, projection.load_output_schema(), policy
+                )
+            else:
+                data = project_response_data(
+                    execution.data,
+                    projection.load_output_schema() if projection is not None else None,
+                )
             formatter = self._capability_formatters.get(context.capability_id)
             message = (
                 formatter(data or {})

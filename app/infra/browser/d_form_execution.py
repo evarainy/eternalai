@@ -16,6 +16,7 @@ import subprocess
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
@@ -23,11 +24,19 @@ from uuid import uuid4
 
 from app.browser_skill.models import BrowserOwner
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
-from app.infra.browser.d_form_cli import CODES, cancel_run, validate
+from app.infra.browser.d_form_cli import (
+    CODES,
+    cancel_run,
+    process_executable_allowed,
+    python_executables,
+    system_console_executable,
+    validate,
+)
 from app.infra.browser.d_form_manifest import FIELDS, MODE, build_fill_stop_manifest, source_digest
 from app.infra.browser.d_form_owned_browser import (
     OwnedDFormBrowser,
     OwnedOALoginContract,
+    log_d_form_fence_failure,
     log_d_form_stage,
     owned_provider_digest,
     validate_owned_paths,
@@ -45,6 +54,11 @@ from app.ports.browser_store import (
     BrowserProviderExpectation, BrowserProviderFact,
 )
 from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
+
+# Approved bound of one D execution. The Run, lease and HumanGate all end at the
+# verified EternalAI session expiry, so a start needs this window plus settlement.
+_D_WINDOW_SECONDS = 300
+_D_SETTLE_SECONDS = 30
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -91,6 +105,7 @@ class _State:
     fence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     cleanup_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     lease_quarantined: bool = False
+    fence_failed: bool = False
     attachment_cleanup_proven: bool = False
     owned_resource_cleanup_proven: bool = False
     process: asyncio.subprocess.Process | None = None
@@ -99,6 +114,8 @@ class _State:
     output_invalid: bool = False
     connected: bool = False
     input_sent: bool = False
+    inventory_denial_logged: bool = False
+    cleanup_failure_logged: bool = False
     cancelled: bool = False
     stopped: bool = False
     cleanup_proven: bool = False
@@ -228,12 +245,25 @@ class DFormRuntime:
         root = psutil.Process(process.pid)
         if state.owned.get(process.pid) != (root.create_time(), Path(root.exe()).resolve()):
             raise BrowserReadExecutionError("stale")
-        allowed = {self.options.python.resolve(), self.options.playwright_node.resolve()}
+        python_paths = python_executables(self.options.python)
+        allowed = python_paths | {self.options.playwright_node.resolve()}
+        console = system_console_executable()
         for child in root.children(recursive=True):
             try:
                 executable = Path(child.exe()).resolve()
-                if executable not in allowed:
+                parent = child.parent() if executable == console else None
+                parent_executable = (Path(parent.exe()).resolve() if parent is not None
+                    and parent.create_time() <= child.create_time() else None)
+                if not process_executable_allowed(executable, parent_executable, allowed, console):
+                    if not state.inventory_denial_logged:
+                        log_d_form_stage("process_inventory", "failed", "denied", state.began)
+                        state.inventory_denial_logged = True
                     raise BrowserReadExecutionError("denied")
+                if (executable in python_paths and executable != self.options.python.resolve()
+                        and child.pid not in state.owned):
+                    log_d_form_stage("process_python_base", "success", "OK", state.began)
+                if executable == console and child.pid not in state.owned:
+                    log_d_form_stage("process_console_host", "success", "OK", state.began)
                 state.owned[child.pid] = (child.create_time(), executable)
             except psutil.NoSuchProcess:
                 continue
@@ -273,19 +303,45 @@ class DFormRuntime:
         except Exception:
             state.output_invalid = True
 
-    async def _fence(self, state: _State, checkpoint: BrowserWorkerCheckpoint) -> None:
-        async with state.fence_lock:
-            if source_digest() != self.manifest.site.source.fixture_digest:
-                raise BrowserReadExecutionError("stale")
-            state.run = await checkpoint.refresh()
-            assert self._assert_publication is not None and self._leases is not None
-            await self._assert_publication(state.run)
-            await checkpoint.assert_fill_stop_reservation()
-            if state.claim is not None:
-                state.claim = await self._leases.renew(state.claim, ttl_seconds=120)
-                if state.acquired_evidence is not None:
-                    if await self._leases.authorize_resource(state.claim) != state.resource_ref:
-                        raise BrowserReadExecutionError("stale")
+    async def _fence(
+        self, state: _State, checkpoint: BrowserWorkerCheckpoint, *, trace_control: bool = False,
+    ) -> None:
+        step = "control_fence_lock"
+
+        def trace(stage: str, status: str) -> None:
+            nonlocal step
+            step = stage
+            if trace_control:
+                log_d_form_stage(stage, status, "OK", state.began)
+
+        try:
+            trace("control_fence_lock", "started")
+            async with state.fence_lock:
+                trace("control_fence_lock", "success")
+                if source_digest() != self.manifest.site.source.fixture_digest:
+                    raise BrowserReadExecutionError("stale")
+                trace("control_fence_refresh", "started")
+                state.run = await checkpoint.refresh()
+                trace("control_fence_refresh", "success")
+                assert self._assert_publication is not None and self._leases is not None
+                trace("control_fence_publication", "started")
+                await self._assert_publication(state.run)
+                trace("control_fence_publication", "success")
+                trace("control_fence_reservation", "started")
+                await checkpoint.assert_fill_stop_reservation()
+                trace("control_fence_reservation", "success")
+                if state.claim is not None:
+                    trace("control_fence_lease", "started")
+                    state.claim = await self._leases.renew(state.claim, ttl_seconds=120)
+                    trace("control_fence_lease", "success")
+                    if state.acquired_evidence is not None:
+                        if await self._leases.authorize_resource(state.claim) != state.resource_ref:
+                            raise BrowserReadExecutionError("stale")
+        except Exception as error:
+            # Fail closed: later local checks refuse; the original exception propagates.
+            state.fence_failed = True
+            log_d_form_fence_failure(step, error, state.began)
+            raise
 
 
     async def _signal(self, state: _State) -> None:
@@ -413,6 +469,19 @@ class DFormRuntime:
         output: asyncio.Task[None] | None = None
         failure: FillStopCode | None = None
         try:
+            # Before any lease/resource: the verified session's own expiry bounds
+            # this Run. Never extend it; ask for a new login instead.
+            remaining = (run.admission.auth_expires_at - datetime.now(UTC)).total_seconds()
+            if remaining < _D_WINDOW_SECONDS + _D_SETTLE_SECONDS:
+                log_d_form_stage("precondition", "failed", "AUTH_WINDOW_INSUFFICIENT", began)
+                state.report = FillStopReport(
+                    execution_status="failed", verification="incomplete",
+                    field_checks=FillStopChecks(), actions_attempted=0, actions_completed=0,
+                    seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
+                    error_code="LOGIN_REQUIRED", cleanup_confirmed=False,
+                )
+                await checkpoint.record_fill_stop(state.report)
+                return BrowserReadOutcome("not_sent", "incomplete", dispatch_failure_code="denied")
             private = self._cipher.decrypt_input(run.admission)
             arguments = private.get("arguments")
             if (type(arguments) is not dict or set(arguments) != set(FIELDS)
@@ -441,9 +510,48 @@ class DFormRuntime:
                 root=self.options.owned_runs_root, node=self.options.playwright_node,
                 origin=self.manifest.site.source.origin, contract=self.options.login_contract,
             )
+            fence_flight: asyncio.Task[None] | None = None
+            merge_login_fences = True
             async def fence() -> None:
-                await self._fence(state, checkpoint)
-            await state.owned_browser.create_and_login(self._login_vault(state.run), fence)
+                nonlocal fence_flight
+                if not merge_login_fences:
+                    await self._fence(state, checkpoint, trace_control=True)
+                    return
+                # Parallel resources in this Run share one unfinished check only.
+                if fence_flight is None or fence_flight.done():
+                    fence_flight = asyncio.create_task(
+                        self._fence(state, checkpoint, trace_control=True),
+                    )
+                    fence_flight.add_done_callback(
+                        lambda task: None if task.cancelled() else task.exception(),
+                    )
+                await asyncio.shield(fence_flight)
+
+            def local_check() -> None:
+                # Approved between full fences: local job/cancel/deadline facts only,
+                # bounded by the last DB-renewed worker, lease and session deadlines.
+                now = datetime.now(UTC)
+                worker_deadline = state.run.worker_deadline
+                if (state.cancelled or state.released or state.fence_failed
+                        or state.run.cancel_requested or state.claim is None
+                        or state.claim.deadline <= now
+                        or worker_deadline is None or worker_deadline <= now
+                        or state.run.admission.auth_expires_at <= now
+                        or time.monotonic() - state.began > _D_WINDOW_SECONDS):
+                    raise BrowserReadExecutionError("stale")
+
+            try:
+                await state.owned_browser.create_and_login(
+                    self._login_vault(state.run), fence, control_fence=fence,
+                    local_check=local_check,
+                )
+            finally:
+                merge_login_fences = False
+                if fence_flight is not None:
+                    if not fence_flight.done():
+                        fence_flight.cancel()
+                    await asyncio.gather(fence_flight, return_exceptions=True)
+                    fence_flight = None
             current_stage = "portal"
             await state.owned_browser.prepare_portal(fence)
             native = state.owned_browser.native
@@ -469,7 +577,7 @@ class DFormRuntime:
             origin = urlsplit(self.manifest.site.source.origin)
             request = {"mode": "FILL_STOP", "binding": {**native,
                        "source_port": origin.port or (443 if origin.scheme == "https" else 80)},
-                       "inputs": arguments, "local_gate": True}
+                       "inputs": arguments, "local_gate": False}
             payload = canonical_json(request).encode("utf-8")
             if len(payload) > 32768:
                 raise BrowserReadExecutionError("denied")
@@ -494,13 +602,16 @@ class DFormRuntime:
             await self._fence(state, checkpoint)
             await checkpoint.assert_fill_stop_reservation()
             self._native(state)
+            # The server-verified Chat confirmation already covers these exact
+            # inputs. Standalone D callers retain their native coordination gate.
+            log_d_form_stage("chat_confirmation", "success", "OK", began)
             assert state.process.stdin is not None
             state.input_sent = True
             state.process.stdin.write(payload)
             await state.process.stdin.drain()
             state.process.stdin.close()
             while state.process.returncode is None:
-                if time.monotonic() - state.began > 1800:
+                if time.monotonic() - state.began > _D_WINDOW_SECONDS:
                     failure = "EXECUTION_TIMEOUT"
                     await self._stop(state)
                     break
@@ -641,6 +752,13 @@ class DFormRuntime:
         if state is None:
             return "released" if run.lease_epoch is None else "quarantined"
         async with state.cleanup_lock:
+            if state.run.admission != run.admission:
+                raise BrowserReadExecutionError("stale")
+            if (run.status in {"completed", "failed", "cancelled"}
+                    and state.owned_browser is not None and state.claim is not None):
+                if state.process is not None and state.process.returncode is None:
+                    await self._stop(state)
+                return await self._close_owned_state(run, state)
             return await self._cleanup_state(run, state)
 
     async def _cleanup_state(self, run: RunSnapshot, state: _State) -> RunCleanup:
@@ -688,15 +806,26 @@ class DFormRuntime:
         """Explicit terminal cleanup, independent of the old business session."""
         state = self._state(run)
         async with state.cleanup_lock:
-            if (run.status not in {"completed", "failed", "cancelled"}
-                    or self._cleanup_authorize is None or state.owned_browser is None
-                    or state.claim is None or not self._exited(state)):
-                raise BrowserReadExecutionError("denied")
-            if state.released:
-                return "released"
+            return await self._close_owned_state(run, state)
+
+    async def _close_owned_state(self, run: RunSnapshot, state: _State) -> RunCleanup:
+        """Share exact-Run close/proof/release between terminal and manual cleanup."""
+        if state.run.admission != run.admission:
+            raise BrowserReadExecutionError("stale")
+        if state.released:
+            return "released"
+        if (run.status not in {"completed", "failed", "cancelled"}
+                or self._cleanup_authorize is None or state.owned_browser is None
+                or state.claim is None or not self._exited(state)):
+            raise BrowserReadExecutionError("denied")
+        stage = "cleanup_owned"
+        try:
             await self._cleanup_authorize(run)
-            await state.owned_browser.close_owned()
-            state.owned_resource_cleanup_proven = state.owned_browser.owned_resource_cleanup_proven
+            if not state.owned_resource_cleanup_proven:
+                await state.owned_browser.close_owned()
+                state.owned_resource_cleanup_proven = (
+                    state.owned_browser.owned_resource_cleanup_proven)
+                log_d_form_stage(stage, "success", "OK", state.began)
             if state.resource_ref is None:
                 # Actual Job/root close proof, no fabricated native/context record.
                 state.resource_ref = canonical_json({
@@ -706,7 +835,19 @@ class DFormRuntime:
                     "closed_creation": state.owned_browser.closed_job_identity,
                 }).encode()
             await self._cleanup_authorize(run)
-            return await self._cleanup_state(run, state)
+            stage = "cleanup_release"
+            result = await self._cleanup_state(run, state)
+            if result == "released":
+                log_d_form_stage(stage, "success", "OK", state.began)
+            elif not state.cleanup_failure_logged:
+                log_d_form_stage(stage, "failed", "unavailable", state.began)
+                state.cleanup_failure_logged = True
+            return result
+        except Exception:
+            if not state.cleanup_failure_logged:
+                log_d_form_stage(stage, "failed", "error", state.began)
+                state.cleanup_failure_logged = True
+            raise
 
     async def check_cancel(self, run: RunSnapshot) -> None:
         state = self._state(run)

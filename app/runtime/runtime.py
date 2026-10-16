@@ -78,7 +78,10 @@ from app.ports.human_gate import (
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
-from app.ports.response_projection_contract import ProjectionContractSnapshot
+from app.ports.response_projection_contract import (
+    ApprovedResponseProjectionError,
+    ProjectionContractSnapshot,
+)
 from app.ports.runtime import UserActionOutcome, d_form_collection_reference
 from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.ports.task_store import (
@@ -732,6 +735,27 @@ class RuntimeImpl:
                 event_type="task_created", status="ok",
             )
 
+        # An explicit document question does not enter business intent selection.
+        # Existing collection/confirmation state keeps ownership of its replies.
+        document_message = message.lstrip()
+        if (
+            document_message.startswith("请问") and collection is None and pending is None
+            and self._document_qa is not None and document_request is not None
+            and self._document_qa.permits(
+                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
+            )
+        ):
+            document_request.context = (
+                response_id, task_id, session_id, trace_id, memory_key,
+            )
+            _record_chat_stage(trace_id, "document_route", "ok", reason="explicit_prefix")
+            result = await self._document_qa.answer(
+                question=document_message[2:].lstrip(" ：:，,\t\r\n"),
+                tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
+                deadline=document_request.deadline, trace_id=trace_id,
+            )
+            return await self._finish_document_qa(document_request, result)
+
         visible_capabilities: tuple[CapabilitySpec, ...] = ()
         active_count = 0
         if message.strip():
@@ -916,24 +940,6 @@ class RuntimeImpl:
                 status="ok",
                 attributes={"result": "valid", "match": "none", **selection_attributes},
             )
-            if (
-                intent_result.match == "none" and collection is None and pending is None
-                and self._document_qa is not None and document_request is not None
-                and self._document_qa.permits(
-                    tenant_id=memory_key.tenant_id, ai_user_id=memory_key.ai_user_id,
-                )
-            ):
-                document_request.context = (
-                    response_id, task_id, session_id, trace_id, memory_key,
-                )
-                result = await self._document_qa.answer(
-                    question=message, tenant_id=memory_key.tenant_id,
-                    ai_user_id=memory_key.ai_user_id, deadline=document_request.deadline,
-                    trace_id=trace_id,
-                )
-                if result.outcome != "unrelated":
-                    return await self._finish_document_qa(document_request, result)
-                document_request.context = None
             return await self._finish_no_capability_found(
                 response_id,
                 task_id,
@@ -1342,20 +1348,40 @@ class RuntimeImpl:
             capability_id=selected_capability.capability_id,
             version=selected_capability.version,
         )
-        envelope = self._build_envelope(
-            response_id,
-            task_id,
-            session_id,
-            exec_result,
-            trace_id,
-            capability_ref,
-            capability=selected_capability,
-            projection_snapshot=projection_snapshot,
-            confirmation=confirmation,
-            business_verification=(
-                business_verification if business_verification.rule_id else None
-            ),
-        )
+        try:
+            envelope = self._build_envelope(
+                response_id,
+                task_id,
+                session_id,
+                exec_result,
+                trace_id,
+                capability_ref,
+                capability=selected_capability,
+                projection_snapshot=projection_snapshot,
+                confirmation=confirmation,
+                business_verification=(
+                    business_verification if business_verification.rule_id else None
+                ),
+            )
+        except ApprovedResponseProjectionError:
+            # An approved read's local projection was rejected after the provider
+            # returned. raw_execution keeps that fact; the business terminal is a
+            # failure with no result data and no success memory.
+            exec_result = ExecutionResult(
+                status="failed",
+                error_code="adapter_payload_invalid",
+                trace_id=exec_result.trace_id,
+            )
+            envelope = self._build_envelope(
+                response_id,
+                task_id,
+                session_id,
+                exec_result,
+                trace_id,
+                capability_ref,
+                capability=selected_capability,
+                projection_snapshot=projection_snapshot,
+            )
         if exec_result.browser_diagnostic is not None:
             envelope = envelope.model_copy(update={"data": {
                 "error_code": exec_result.error_code,
