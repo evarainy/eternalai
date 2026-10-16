@@ -303,6 +303,29 @@
         "title": "ConfirmUserAction",
         "type": "object"
       },
+      "DFormCollectionReference": {
+        "additionalProperties": false,
+        "description": "A reference only; authenticated ownership is rechecked on every reply.",
+        "properties": {
+          "task_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Task Id",
+            "type": "string"
+          },
+          "version": {
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "version"
+        ],
+        "title": "DFormCollectionReference",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -346,6 +369,16 @@
               }
             ],
             "title": "Client Request Id"
+          },
+          "d_form_collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DFormCollectionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "message": {
             "title": "Message",

@@ -8,6 +8,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
+from app.admin.d_form import (
+    AdminDFormManagementService,
+    DFormManagementCommand,
+    DFormManagementError,
+    DFormManagementState,
+)
 from app.admin.evidence import (
     AdminBindingListResponse,
     AdminTaskEventListResponse,
@@ -33,12 +39,6 @@ from app.admin.registry import (
 )
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
-from app.ports.browser_fill_stop import (
-    DFormManagementCommand,
-    DFormManagementError,
-    DFormManagementPort,
-    DFormManagementState,
-)
 
 
 class AdminCapabilityListResponse(BaseModel):
@@ -164,7 +164,7 @@ def _raise_http(error: RuntimeError) -> NoReturn:
 def make_router(
     service: AdminRegistryService | None,
     require_principal: PrincipalDependency,
-    *, d_form_management: DFormManagementPort | None = None,
+    *, d_form_management: AdminDFormManagementService | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -173,22 +173,20 @@ def make_router(
     ) -> AdminRequestContext:
         return _request_context(principal)
 
-    async def d_form_access(principal: Principal) -> DFormManagementPort:
+    async def d_form_access(principal: Principal) -> AdminDFormManagementService:
         if d_form_management is None:
             raise HTTPException(503, {"code": "d_form_management_unavailable",
                                       "message": "D form management is unavailable."})
         # The installed fixed D owner has a narrower, live session/binding grant.
         # Every other management route retains its existing Policy check.
-        fixed_access = getattr(d_form_management, "check_fixed_access", None)
-        if callable(fixed_access):
-            try:
-                if await fixed_access(principal) is True:
-                    return d_form_management
-            except Exception:
-                raise HTTPException(
-                    503, {"code": "d_form_management_unavailable",
-                          "message": "D form access is unavailable."},
-                ) from None
+        try:
+            if await d_form_management.check_fixed_access(principal) is True:
+                return d_form_management
+        except Exception:
+            raise HTTPException(
+                503, {"code": "d_form_management_unavailable",
+                      "message": "D form access is unavailable."},
+            ) from None
         try:
             await _configured(service).list_bindings(
                 principal.ai_user_id, _request_context(principal),

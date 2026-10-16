@@ -7,6 +7,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.admin.d_form import AdminDFormManagementService
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
 from app.api.v1.auth import (
@@ -219,9 +220,14 @@ def create_app(
         ),
         prefix="/api/v1",
     )
+    admin_d_form_management = (
+        AdminDFormManagementService(browser_management)
+        if browser_management is not None else None
+    )
     application.include_router(
         make_admin_router(
-            admin_registry_service, csrf_protected_principal, d_form_management=browser_management
+            admin_registry_service, csrf_protected_principal,
+            d_form_management=admin_d_form_management,
         ),
         prefix="/api/v1/admin",
     )
