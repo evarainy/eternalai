@@ -573,6 +573,15 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 六查询完整真实覆盖 | 已有人员查询成功，不能据此证明全部六工具、分页与受限/空态均已实测 | `P2-CHAT-BROWSER-READ-001`（正式服务、用户授权与适用业务对象） | `P2-CHAT-BROWSER-READ-001` | 在获准查询范围逐项完成真实验收；写工具继续关闭 | `app/infra/adapters/business_mcp/fixed_query_contracts.py`；候选 PR |
 | 跨机组合装配 | 当前演示组合启动器、任务 JSON、CA/服务配置、日志处理器及 pins 在仓库外；源码原始字节摘要也受换行影响 | `P2-CHAT-BROWSER-READ-001`（目标环境配置与对应装载授权） | 待用户确定后续范围 | 目标机器按其实际源码/路径/配置完成装配和授权，真实只读及 D 填写后停止验收；不复制凭证或原机进程状态 | `docs/dev/chat_browser_mcp_handoff.md` 新电脑接续 |
 
+### Runtime 替换 M0 剩余义务（2026-10-21）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| M0 正式 36 次工具调用样本 | 既有模型端点本机不可达（经代理 502、直连超时），Qwen3.6-27B 端点身份及 vLLM 版本/模板/工具解析器/自动工具选择开关未核实；OA 两项读能力为零参数，六项 MCP 读的输入 schema 只能从实时服务取得；真实读取需逐次授权与获准样本对象；模型可调用的受限读工具接缝属 M1 | `P2-RUNTIME-AGENTSCOPE-M0-001`（模型端点、真实读取授权与样本输入） | `P2-RUNTIME-AGENTSCOPE-M0-001`（M1 受限工具接缝 task_id 待 GOV-SYNC 分配） | 12 条样本连同完整提示、真实 schema 摘要与预期行为先冻结，再以本棒模型接缝、实际内网 vLLM 及获准读取路径完成 36 次并达到计划阈值；不以 Mock、合成工具结果或协议探测代替 | `app/infra/llm/agentscope_chat.py`；本棒 PR 验证段 |
+| 目标环境离线安装与同路径运行 | 仅有本机 Windows（Python 3.12.14）完全离线安装及回环运行证据；目标机器、操作系统/架构与批准离线缓存未定 | 外部输入：目标机器与离线缓存/内网镜像（雨爷或其授权管理员） | `P2-RUNTIME-AGENTSCOPE-M0-001` | 目标机按 `uv.lock` 由批准来源离线安装后，同一模型接缝在实际 vLLM 上可运行 | `docs/dev/dependency_policy.md` AgentScope 生产传递依赖清单 |
+| 浏览器运行镜像随之安装 AgentScope 闭包 | `infra/docker/browser-runtime` 两个 Dockerfile 以 `uv sync --frozen --no-dev` 安装全部生产依赖，现包含 AgentScope 及其传递依赖；构建需可访问固定提交归档，未构建验证镜像 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（随整体切换或镜像范围裁决） | 镜像构建实测通过，或裁定浏览器镜像排除该包并同步其构建入口 | `infra/docker/browser-runtime/Dockerfile.production` |
+| AgentScope 类型限于 infra 的架构守卫 | 现有 import 边界规则未声明 `agentscope` 只能出现在 `app/infra`；新增守卫属新增测试，本棒未获授权 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（M1 或明确授权的守卫补充） | `tests/architecture/` 增加对应边界规则并在 required CI 通过，或另经裁决不设 | `tests/architecture/test_import_boundaries.py::_boundary_rules` |
+
 ## 6. P2 不做什么
 
 
