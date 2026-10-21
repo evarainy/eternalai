@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from app.admin.d_form import AdminDFormManagementService
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
+from app.api.v1.agentscope_m0 import M0TurnRunner
+from app.api.v1.agentscope_m0 import make_router as make_agentscope_m0_router
 from app.api.v1.auth import (
     make_require_principal,
 )
@@ -98,6 +100,7 @@ def create_app(
     browser_management: DFormManagementPort | None = None,
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
+    agentscope_m0_turn: M0TurnRunner | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -211,6 +214,16 @@ def create_app(
         ),
         prefix="/api/v1/runtime",
     )
+    if agentscope_m0_turn is not None:
+        # Internal M0 counting route; present only when explicitly enabled.
+        application.include_router(
+            make_agentscope_m0_router(
+                agentscope_m0_turn,
+                csrf_protected_principal,
+                session_binder,
+            ),
+            prefix="/api/v1/runtime/agentscope-m0",
+        )
     application.include_router(
         make_browser_runs_router(
             browser_run_access if browser_run_access is not None else browser_chat,
@@ -436,6 +449,8 @@ def create_production_app(
         diagnostic_checks=dict(components.diagnostic_checks),
         validate_workflows=components.validate_workflows,
         mcp_service=components.mcp_service,
+        # Optional field: component doubles built before it existed omit it.
+        agentscope_m0_turn=getattr(components, "agentscope_m0_turn", None),
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
         browser_run_access=(browser_vertical.submission if browser_vertical is not None else None),
         browser_submission=(browser_vertical.submission if browser_vertical is not None else None),

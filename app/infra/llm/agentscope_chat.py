@@ -14,6 +14,7 @@ import logging
 import re
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextvars import ContextVar
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
@@ -70,6 +71,10 @@ _STATE_KEY = "eternalai_model_guard"
 _HALT_KEY = "eternalai_tool_halt"
 _EXECUTION_KEY = "eternalai_tool_executions"
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+# Absolute end of the current bounded turn (monotonic clock); tool-side waits
+# such as task closes must fit inside it.
+_TURN_DEADLINE: ContextVar[float | None] = ContextVar("eternalai_turn_deadline", default=None)
 
 _MODEL_LOGGER = logging.getLogger("eternalai.agentscope_model")
 _MODEL_LOGGER.addHandler(logging.NullHandler())
@@ -157,6 +162,7 @@ async def run_bounded_turn(agent: Agent, inputs: Msg | list[Msg]) -> Msg:
     """
 
     started = monotonic()
+    token = _TURN_DEADLINE.set(started + TURN_TIMEOUT_SECONDS)
     try:
         async with asyncio.timeout(TURN_TIMEOUT_SECONDS):
             return await agent.reply(inputs)
@@ -166,6 +172,23 @@ async def run_bounded_turn(agent: Agent, inputs: Msg | list[Msg]) -> Msg:
     except AgentScopeModelError as exc:
         _log_turn_failure(exc.code, started)
         raise
+    finally:
+        _TURN_DEADLINE.reset(token)
+
+
+def turn_seconds_remaining() -> float | None:
+    """Seconds left in the current bounded turn, or None outside a turn."""
+
+    deadline = _TURN_DEADLINE.get()
+    return None if deadline is None else max(0.0, deadline - monotonic())
+
+
+def model_call_count(state: AgentState) -> int:
+    """Model calls the guard admitted or rejected in the current reply."""
+
+    record = state.middle_context.get(_STATE_KEY)
+    count = record.get(state.reply_id, 0) if isinstance(record, dict) else 0
+    return int(count)
 
 
 def tool_halt_reason(state: AgentState) -> str | None:
@@ -347,7 +370,9 @@ __all__ = (
     "BoundedModelGuard",
     "build_chat_model",
     "create_bounded_agent",
+    "model_call_count",
     "reserve_tool_execution",
     "run_bounded_turn",
     "tool_halt_reason",
+    "turn_seconds_remaining",
 )

@@ -102,6 +102,7 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceWriter,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.orchestration.agentscope_m0_turn import M0TurnRunner, build_m0_turn_runner
 from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.reader import read_directory_snapshot
@@ -215,6 +216,8 @@ class ProductionComponents:
     browser_gateway: CapabilityGateway | None = None
     # Read-only AgentScope bridge dependencies (M0); not consumed by the HTTP app.
     agentscope_read_dependencies: AgentScopeReadDependencies | None = None
+    # Internal M0 counting turn; built only when AGENTSCOPE_M0_TURN_ENABLED == "1".
+    agentscope_m0_turn: M0TurnRunner | None = None
 
 
 def build_credential_store(
@@ -1042,6 +1045,15 @@ def build_production_components(
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
         agentscope_read_dependencies=agentscope_read_dependencies,
+        agentscope_m0_turn=(
+            build_m0_turn_runner(
+                agentscope_read_dependencies,
+                base_url=settings.llm_base_url,
+                model=settings.llm_model,
+            )
+            if settings.agentscope_m0_turn_enabled
+            else None
+        ),
         browser_gateway=gateway,
         browser_session_factory=session_factory,
         browser_capability_registry=capability_registry,

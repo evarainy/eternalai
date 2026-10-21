@@ -26,7 +26,11 @@ from agentscope.state import AgentState
 from agentscope.tool import FunctionTool, ToolChunk, Toolkit
 
 from app.infra.adapters.business_mcp.fixed_query_contracts import SERVICE_CONFIG_ID
-from app.infra.llm.agentscope_chat import reserve_tool_execution, tool_halt_reason
+from app.infra.llm.agentscope_chat import (
+    reserve_tool_execution,
+    tool_halt_reason,
+    turn_seconds_remaining,
+)
 from app.knowledge.capability_selection import (
     CandidateBinding,
     CapabilityCandidateSet,
@@ -373,8 +377,15 @@ class _ReadExecutor:
         )
         _PENDING_CLOSES.add(closing)
         closing.add_done_callback(_finish_close)
+        # The wait also fits the turn's absolute budget: once it is spent the
+        # caller stops waiting (and a pending cancellation propagates) while
+        # the close keeps its own deadline.
+        remaining = turn_seconds_remaining()
+        wait = _CLOSE_TIMEOUT_SECONDS if remaining is None else min(
+            _CLOSE_TIMEOUT_SECONDS, remaining
+        )
         try:
-            await asyncio.shield(closing)
+            await asyncio.wait_for(asyncio.shield(closing), wait)
         except asyncio.CancelledError:
             raise
         except Exception:
