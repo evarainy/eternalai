@@ -24,10 +24,13 @@ from agentscope.message import ToolCallBlock, ToolResultBlock, UserMsg
 
 from app.infra.llm.agentscope_chat import (
     AgentScopeModelError,
+    bind_turn_id,
     build_chat_model,
     create_bounded_agent,
+    log_turn_end,
     model_call_count,
     new_turn_deadline,
+    reset_turn_id,
     run_bounded_turn,
     tool_halt_reason,
 )
@@ -176,6 +179,37 @@ def build_m0_turn_runner(
     ) -> dict[str, Any]:
         rule = M0_SAMPLE_RULES[sample_id]
         started = monotonic()
+        _, turn_token = bind_turn_id()
+        try:
+            result = await _run(rule, session, session_id, sample_id, message, expected, started)
+        except asyncio.CancelledError:
+            log_turn_end("cancelled", started, model_calls=0, tool_calls=0,
+                         tool_executions=0, halt_reason=None)
+            raise
+        except Exception:
+            log_turn_end("internal_error", started, model_calls=0, tool_calls=0,
+                         tool_executions=0, halt_reason=None)
+            raise
+        else:
+            log_turn_end(
+                result["outcome"], started, model_calls=result["model_calls"],
+                tool_calls=len(result["tool_calls"]),
+                tool_executions=len(result["tool_executions"]),
+                halt_reason=result["halt_reason"],
+            )
+            return result
+        finally:
+            reset_turn_id(turn_token)
+
+    async def _run(
+        rule: SampleRule,
+        session: AuthenticatedSessionContext,
+        session_id: str,
+        sample_id: str,
+        message: str,
+        expected: Sequence[ExpectedCall],
+        started: float,
+    ) -> dict[str, Any]:
         # One absolute deadline from entry covers tool preparation, the reply
         # and the bridge's close waits.
         deadline = new_turn_deadline()

@@ -11,10 +11,10 @@ import asyncio
 import json
 import logging
 import re
-import secrets
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from hashlib import sha256
 from time import monotonic
 from typing import Any
@@ -27,6 +27,7 @@ from agentscope.tool import FunctionTool, ToolChunk, Toolkit
 
 from app.infra.adapters.business_mcp.fixed_query_contracts import SERVICE_CONFIG_ID
 from app.infra.llm.agentscope_chat import (
+    current_turn_id,
     reserve_tool_execution,
     tool_halt_reason,
     turn_seconds_remaining,
@@ -354,7 +355,8 @@ class _ReadExecutor:
                 task_id, trace_id, capability_id,
                 execution or _failed("internal_error", trace_id),
             )
-            _log("cancelled", capability_id, "internal_error", started)
+            _log("cancelled", capability_id, "internal_error", started,
+                 task_id=task_id, trace_id=trace_id)
             raise
         except Exception:
             execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
@@ -371,7 +373,8 @@ class _ReadExecutor:
                 projected if execution.status == "completed" else None,
             )
         )
-        _log(execution.status, capability_id, execution.error_code or "none", started)
+        _log(execution.status, capability_id, execution.error_code or "none", started,
+             task_id=task_id, trace_id=trace_id)
         if execution.status == "completed":
             return _chunk(text, error_code=None, task_id=task_id)
         return _chunk(text, error_code=execution.error_code or execution.status, task_id=task_id)
@@ -386,11 +389,10 @@ class _ReadExecutor:
         # The deadline lives inside the shielded close itself, so it still
         # holds after the waiter is cancelled; a module-level set keeps the
         # task referenced until it finishes. Cancellation still propagates.
-        closing = asyncio.ensure_future(
-            self._bounded_close(task_id, trace_id, capability_id, execution)
-        )
+        progress = _CloseProgress(task_id, trace_id, capability_id, monotonic())
+        closing = asyncio.ensure_future(self._bounded_close(progress, execution))
         _PENDING_CLOSES.add(closing)
-        closing.add_done_callback(_finish_close)
+        closing.add_done_callback(partial(_finish_close, progress))
         # The wait also fits the turn's absolute budget: once it is spent the
         # caller stops waiting (and a pending cancellation propagates) while
         # the close keeps its own deadline.
@@ -401,21 +403,23 @@ class _ReadExecutor:
         try:
             await asyncio.wait_for(asyncio.shield(closing), wait)
         except asyncio.CancelledError:
+            if not closing.done():
+                _log_close(progress, "waiting", "turn_cancelled", "none")
             raise
         except Exception:
-            _log("close_failed", capability_id, "internal_error", 0.0)
+            if not closing.done():
+                # The turn stopped waiting; the close goes on in the background
+                # and _finish_close logs how it ends.
+                _log_close(progress, "waiting", "turn_budget", "none")
             return False
         return True
 
-    async def _bounded_close(
-        self,
-        task_id: str,
-        trace_id: str,
-        capability_id: str,
-        execution: ExecutionResult,
-    ) -> None:
+    async def _bounded_close(self, progress: _CloseProgress, execution: ExecutionResult) -> None:
         async with asyncio.timeout(_CLOSE_TIMEOUT_SECONDS):
-            await self._close_task(task_id, trace_id, capability_id, execution)
+            await self._close_task(
+                progress.task_id, progress.trace_id, progress.capability_id, execution,
+                progress=progress,
+            )
 
     async def _run_task(
         self,
@@ -513,10 +517,14 @@ class _ReadExecutor:
         trace_id: str,
         capability_id: str,
         execution: ExecutionResult,
+        *,
+        progress: _CloseProgress | None = None,
     ) -> None:
         scope, deps = self._scope, self._deps
         status = _task_status(execution.status)
         await deps.task_store.update_status(task_id, status, execution.error_code)
+        if progress is not None:
+            progress.phase = "trace_step"
         if execution.status != "waiting_user":
             completed = execution.status == "completed"
             await deps.trace_port.record_step(
@@ -526,6 +534,8 @@ class _ReadExecutor:
                 status="ok" if completed else "failed",
                 capability_id=capability_id, error_code=execution.error_code,
             )
+        if progress is not None:
+            progress.phase = "trace_finalize"
         await deps.trace_port.finalize_task_trace(
             trace_id, task_id, scope.session_id,
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
@@ -537,12 +547,22 @@ class _ReadExecutor:
         )
 
 
-def _finish_close(task: asyncio.Future[None]) -> None:
+def _finish_close(progress: _CloseProgress, task: asyncio.Future[None]) -> None:
     # Drop the strong reference and retrieve any failure, which asyncio's
-    # default handler would otherwise log with its exception text.
+    # default handler would otherwise log with its exception text; log only
+    # the phase, a symbolic reason, the exception class and the real duration.
     _PENDING_CLOSES.discard(task)
-    if not task.cancelled():
-        task.exception()
+    if task.cancelled():
+        _log_close(progress, "failed", "cancelled", "none")
+        return
+    error = task.exception()
+    if error is None:
+        progress.phase = "done"
+        _log_close(progress, "ok", "none", "none")
+    elif isinstance(error, TimeoutError):
+        _log_close(progress, "failed", "timeout", "TimeoutError")
+    else:
+        _log_close(progress, "failed", "storage_error", type(error).__name__)
 
 
 def _matches_binding(capability: CapabilitySpec, binding: CandidateBinding) -> bool:
@@ -584,15 +604,56 @@ def _chunk(text: str, *, error_code: str | None, task_id: str | None = None) -> 
     )
 
 
-def _log(result: str, capability_id: str, error_code: str, started: float) -> None:
-    # Code-owned values only: approved capability id, status, error code, timing.
+def _log(
+    result: str,
+    capability_id: str,
+    error_code: str,
+    started: float,
+    *,
+    task_id: str = "none",
+    trace_id: str = "none",
+) -> None:
+    # Code-owned values only: approved capability id, status, error code,
+    # timing and the turn/task/trace ids that tie this line to its records.
     _TOOL_LOGGER.info(
-        "agentscope_read_tool result=%s capability=%s error=%s elapsed_ms=%s trace=%s",
+        "agentscope_read_tool result=%s capability=%s error=%s elapsed_ms=%s "
+        "turn=%s task=%s trace=%s",
         result,
         capability_id if capability_id in M0_READ_CAPABILITY_IDS else "other",
         error_code,
         round((monotonic() - started) * 1000) if started else 0,
-        secrets.token_hex(16),
+        current_turn_id(),
+        task_id,
+        trace_id,
+    )
+
+
+@dataclass(slots=True)
+class _CloseProgress:
+    task_id: str
+    trace_id: str
+    capability_id: str
+    started: float
+    # Write in progress: task_status -> trace_step -> trace_finalize -> done.
+    phase: str = "task_status"
+
+
+def _log_close(progress: _CloseProgress, result: str, reason: str, error_class: str) -> None:
+    # A failure in phase task_status means the task row keeps its running
+    # status (known storage-fault limitation); later phases mean the task row
+    # was already closed and only Trace writes are missing.
+    _TOOL_LOGGER.info(
+        "agentscope_read_tool_close result=%s phase=%s reason=%s error_class=%s "
+        "elapsed_ms=%s capability=%s turn=%s task=%s trace=%s",
+        result,
+        progress.phase,
+        reason,
+        error_class,
+        round((monotonic() - progress.started) * 1000),
+        progress.capability_id if progress.capability_id in M0_READ_CAPABILITY_IDS else "other",
+        current_turn_id(),
+        progress.task_id,
+        progress.trace_id,
     )
 
 

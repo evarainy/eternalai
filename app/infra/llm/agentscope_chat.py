@@ -14,7 +14,7 @@ import logging
 import re
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
@@ -75,6 +75,9 @@ _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 # Absolute end of the current bounded turn (event-loop clock); tool-side waits
 # such as task closes must fit inside it.
 _TURN_DEADLINE: ContextVar[float | None] = ContextVar("eternalai_turn_deadline", default=None)
+# One random id per turn, shared by every model, tool, stop and turn log line
+# so a single turn can be followed across loggers; carries no request data.
+_TURN_ID: ContextVar[str | None] = ContextVar("eternalai_turn_id", default=None)
 
 _MODEL_LOGGER = logging.getLogger("eternalai.agentscope_model")
 _MODEL_LOGGER.addHandler(logging.NullHandler())
@@ -174,6 +177,7 @@ async def run_bounded_turn(
     started = monotonic()
     end = new_turn_deadline() if deadline is None else deadline
     token = _TURN_DEADLINE.set(end)
+    turn_token = _TURN_ID.set(secrets.token_hex(8)) if _TURN_ID.get() is None else None
     try:
         async with asyncio.timeout_at(end):
             return await agent.reply(inputs)
@@ -185,6 +189,25 @@ async def run_bounded_turn(
         raise
     finally:
         _TURN_DEADLINE.reset(token)
+        if turn_token is not None:
+            _TURN_ID.reset(turn_token)
+
+
+def bind_turn_id() -> tuple[str, Token[str | None]]:
+    """Start a turn log id for the caller's whole turn; reset with the token."""
+
+    turn_id = secrets.token_hex(8)
+    return turn_id, _TURN_ID.set(turn_id)
+
+
+def reset_turn_id(token: Token[str | None]) -> None:
+    _TURN_ID.reset(token)
+
+
+def current_turn_id() -> str:
+    """Log id of the current turn, or "none" outside a turn."""
+
+    return _TURN_ID.get() or "none"
 
 
 def turn_seconds_remaining() -> float | None:
@@ -253,7 +276,7 @@ class BoundedModelGuard(MiddlewareBase):
                 )
                 agent.state.middle_context[_HALT_KEY] = {event.reply_id: reason}
                 _MODEL_LOGGER.info(
-                    "agentscope_tool_halt reason=%s trace=%s", reason, secrets.token_hex(16)
+                    "agentscope_tool_halt reason=%s turn=%s", reason, current_turn_id()
                 )
             yield event
 
@@ -347,9 +370,9 @@ def _reject(
     # error_class is a code-owned class name, never the provider message.
     _MODEL_LOGGER.info(
         "agentscope_model_call result=rejected error=%s error_class=%s call_index=%s "
-        "elapsed_ms=%s trace=%s",
+        "elapsed_ms=%s turn=%s",
         code, error_class, call_index, round((monotonic() - started) * 1000),
-        secrets.token_hex(16),
+        current_turn_id(),
     )
     raise AgentScopeModelError(code)
 
@@ -361,19 +384,40 @@ def _log_model_call(call_index: int, started: float, response: ChatResponse) -> 
     usage = response.usage
     _MODEL_LOGGER.info(
         "agentscope_model_call result=ok call_index=%s elapsed_ms=%s finished=%s "
-        "tool_calls=%s blocks=%s input_tokens=%s output_tokens=%s trace=%s",
+        "tool_calls=%s blocks=%s input_tokens=%s output_tokens=%s turn=%s",
         call_index, round((monotonic() - started) * 1000), str(response.finished_reason),
         tool_calls, len(content),
         usage.input_tokens if usage is not None else "unknown",
         usage.output_tokens if usage is not None else "unknown",
-        secrets.token_hex(16),
+        current_turn_id(),
+    )
+
+
+def log_turn_end(
+    outcome: str,
+    started: float,
+    *,
+    model_calls: int,
+    tool_calls: int,
+    tool_executions: int,
+    halt_reason: str | None,
+) -> None:
+    """One closing line per turn: outcome, counts and duration only."""
+
+    _MODEL_LOGGER.info(
+        "agentscope_turn_end outcome=%s model_calls=%s tool_calls=%s tool_executions=%s "
+        "halt=%s elapsed_ms=%s turn=%s",
+        outcome if _SAFE_CODE.fullmatch(outcome) else "other",
+        model_calls, tool_calls, tool_executions,
+        halt_reason if halt_reason and _SAFE_CODE.fullmatch(halt_reason) else "none",
+        round((monotonic() - started) * 1000), current_turn_id(),
     )
 
 
 def _log_turn_failure(code: AgentScopeErrorCode, started: float) -> None:
     _MODEL_LOGGER.info(
-        "agentscope_turn result=failed error=%s elapsed_ms=%s trace=%s",
-        code, round((monotonic() - started) * 1000), secrets.token_hex(16),
+        "agentscope_turn result=failed error=%s elapsed_ms=%s turn=%s",
+        code, round((monotonic() - started) * 1000), current_turn_id(),
     )
 
 
@@ -381,11 +425,15 @@ __all__ = (
     "AgentScopeErrorCode",
     "AgentScopeModelError",
     "BoundedModelGuard",
+    "bind_turn_id",
     "build_chat_model",
+    "current_turn_id",
+    "log_turn_end",
     "create_bounded_agent",
     "model_call_count",
     "new_turn_deadline",
     "reserve_tool_execution",
+    "reset_turn_id",
     "run_bounded_turn",
     "tool_halt_reason",
     "turn_seconds_remaining",

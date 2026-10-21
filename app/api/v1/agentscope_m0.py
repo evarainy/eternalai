@@ -90,6 +90,8 @@ def make_router(
             # Disconnect or cancellation of this handler both cancel the turn;
             # the cancellation propagates through the bridge's task closes.
             watcher.cancel()
+            # Collect the watcher so no task outcome is left unretrieved.
+            await asyncio.gather(watcher, return_exceptions=True)
             if not running.done():
                 running.cancel()
                 with suppress(asyncio.CancelledError):
@@ -105,8 +107,16 @@ def make_router(
 
 
 async def _wait_for_disconnect(request: Request) -> None:
-    while not await request.is_disconnected():
-        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+    try:
+        while not await request.is_disconnected():
+            await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+    except Exception as error:
+        # A failed check must not cancel the turn: stop watching, log the
+        # class name only, and let the turn finish within its own budget.
+        _logger.info(
+            "agentscope_m0_turn disconnect_check=failed error_class=%s", type(error).__name__
+        )
+        await asyncio.Event().wait()
 
 
 __all__ = ("M0TurnRequest", "M0TurnRunner", "make_router")
