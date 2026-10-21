@@ -108,16 +108,19 @@ def _tool_calls(context: Sequence[Any], expected: Sequence[ExpectedCall]) -> lis
             elif isinstance(block, ToolResultBlock):
                 results[block.id] = block
     summary: list[dict[str, Any]] = []
-    for index, call in enumerate(calls):
+    # Order-insensitive: independent reads in one response may come in any order.
+    unmatched = list(expected)
+    for call in calls:
         try:
             arguments = json.loads(call.input or "{}")
         except ValueError:
             arguments = None
         result = results.get(call.id)
         matches: bool | None = None
-        if index < len(expected):
-            expected_name, expected_arguments = expected[index]
-            matches = call.name == expected_name and arguments == expected_arguments
+        if expected:
+            matches = (call.name, arguments) in unmatched
+            if matches:
+                unmatched.remove((call.name, arguments))
         summary.append(
             {
                 "tool": _TOOL_NAMES.get(call.name, "unregistered"),
