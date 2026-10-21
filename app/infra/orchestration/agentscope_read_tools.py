@@ -7,6 +7,7 @@ the verified request session; the model supplies business arguments only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -78,6 +79,8 @@ AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
 AGENT_PROMPT_VERSION = "m0-1"
 MAX_TOOL_RESULT_BYTES = 8192
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_READ_FAILED_TEXT = "读取失败。"
+_CLOSE_TIMEOUT_SECONDS = 5.0
 _HALTED_TEXT = "本轮已停止工具调用，请先向用户澄清。"
 _SCOPE_TEXT = "需要用户补充范围（账套、资源范围或设备域），请先向用户确认，不要猜测。"
 _ALLOW = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="approved read")
@@ -300,52 +303,82 @@ class _ReadExecutor:
         )
 
     async def _execute(self, capability_id: str, arguments: dict[str, Any]) -> ToolChunk:
+        # Every await from task creation to terminal close sits inside this
+        # boundary: the SDK would hand str(exc) to the model, and a created
+        # task must never be left running.
         scope, deps = self._scope, self._deps
         task_id, trace_id = str(uuid4()), str(uuid4())
         started = monotonic()
-        await deps.task_store.create_task(
-            TaskRecord(
-                task_id=task_id,
-                session_id=scope.session_id,
-                ai_user_id=scope.ai_user_id,
-                tenant_id=scope.tenant_id,
-                status="running",
-                trace_id=trace_id,
-                capability_id=capability_id,
-            )
-        )
-        await deps.trace_port.start_task_trace(
-            trace_id, task_id, scope.session_id,
-            tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
-        )
-        await deps.trace_port.record_step(
-            trace_id, task_id, scope.session_id,
-            tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
-            event_type="task_created", status="ok",
-        )
+        created = False
         execution: ExecutionResult | None = None
+        text = _READ_FAILED_TEXT
         try:
-            try:
-                execution, text = await self._run_task(
-                    task_id, trace_id, capability_id, arguments
+            await deps.task_store.create_task(
+                TaskRecord(
+                    task_id=task_id,
+                    session_id=scope.session_id,
+                    ai_user_id=scope.ai_user_id,
+                    tenant_id=scope.tenant_id,
+                    status="running",
+                    trace_id=trace_id,
+                    capability_id=capability_id,
                 )
-            except Exception:
-                # The SDK would hand str(exc) to the model; keep internals out.
-                execution, text = _failed("internal_error", trace_id), "读取失败。"
-            if execution.status == "completed":
-                return _chunk(text, error_code=None)
-            return _chunk(text, error_code=execution.error_code or execution.status)
-        finally:
-            if execution is None:
-                # Exception or cancellation before a result: close as failed.
-                execution = ExecutionResult(
-                    status="failed", error_code="internal_error", trace_id=trace_id
-                )
-            await self._close_task(task_id, trace_id, capability_id, execution)
-            self._toolkit.executions.append(
-                ReadToolExecution(task_id, capability_id, execution.status, execution.error_code)
             )
-            _log(execution.status, capability_id, execution.error_code or "none", started)
+            created = True
+            await deps.trace_port.start_task_trace(
+                trace_id, task_id, scope.session_id,
+                tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
+            )
+            await deps.trace_port.record_step(
+                trace_id, task_id, scope.session_id,
+                tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
+                event_type="task_created", status="ok",
+            )
+            execution, text = await self._run_task(task_id, trace_id, capability_id, arguments)
+        except asyncio.CancelledError:
+            if created:
+                await self._close_safely(
+                    task_id, trace_id, capability_id,
+                    execution or _failed("internal_error", trace_id),
+                )
+            _log("cancelled", capability_id, "internal_error", started)
+            raise
+        except Exception:
+            execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
+        if execution is None:
+            execution = _failed("internal_error", trace_id)
+        if created and not await self._close_safely(task_id, trace_id, capability_id, execution):
+            # A failed terminal write is reported as a failure, never as success.
+            execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
+        self._toolkit.executions.append(
+            ReadToolExecution(task_id, capability_id, execution.status, execution.error_code)
+        )
+        _log(execution.status, capability_id, execution.error_code or "none", started)
+        if execution.status == "completed":
+            return _chunk(text, error_code=None)
+        return _chunk(text, error_code=execution.error_code or execution.status)
+
+    async def _close_safely(
+        self,
+        task_id: str,
+        trace_id: str,
+        capability_id: str,
+        execution: ExecutionResult,
+    ) -> bool:
+        # Shielded so a cancellation arriving here does not abort the close;
+        # the caller stops waiting after a bound and the close runs on.
+        closing = asyncio.ensure_future(
+            self._close_task(task_id, trace_id, capability_id, execution)
+        )
+        closing.add_done_callback(_consume_result)
+        try:
+            await asyncio.wait_for(asyncio.shield(closing), _CLOSE_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log("close_failed", capability_id, "internal_error", 0.0)
+            return False
+        return True
 
     async def _run_task(
         self,
@@ -408,8 +441,6 @@ class _ReadExecutor:
             )
         except VersionBindingMismatchError:
             execution = _failed("internal_error", trace_id)
-        if execution.error_code == "needs_binding_scope":
-            return execution, _SCOPE_TEXT
         context = AgentResponseContext(
             response_id=str(uuid4()), task_id=task_id, session_id=scope.session_id,
             trace_id=trace_id, capability_id=capability_id,
@@ -428,6 +459,10 @@ class _ReadExecutor:
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             event_type="response_envelope_created", status="ok",
         )
+        if execution.error_code == "needs_binding_scope":
+            # The envelope above carries the existing scope clarification; the
+            # model gets a fixed instruction to ask instead of guessing.
+            return execution, _SCOPE_TEXT
         return execution, _model_text(execution, envelope.fallback_text, envelope.data)
 
     async def _close_task(
@@ -458,6 +493,13 @@ class _ReadExecutor:
             ),
             capability_id=capability_id, error_code=execution.error_code,
         )
+
+
+def _consume_result(future: asyncio.Future[None]) -> None:
+    # Keep a background close failure out of asyncio's default handler, which
+    # would log the exception text.
+    if not future.cancelled():
+        future.exception()
 
 
 def _matches_binding(capability: CapabilitySpec, binding: CandidateBinding) -> bool:
