@@ -1,12 +1,13 @@
 """M0 counting turn: one bounded AgentScope reply over the read-only bridge.
 
-The result is symbolic only. Tool arguments and tool results never leave this
-module as text: argument values and replies are judged in-process against the
-caller-supplied expectation and the frozen per-sample rules below, and only
-boolean verdicts are returned. The one exception is ``local_review``: for the
-samples whose reply semantics no fixed rule can judge, the reply goes back to
-the requesting browser so the user judges it against the frozen criterion and
-records only pass/fail.
+The result is symbolic only. Tool calls, executions and dependencies are
+judged in-process against the caller-supplied expectation and the frozen
+per-sample rules below, and only boolean verdicts are returned. Whether the
+reply is faithful to the approved results cannot be proven by rule, so only a
+turn that passes every structural rule carries ``local_review``: the reply and
+the approved results go back to the requesting browser alone, where the user
+judges them against the frozen criterion and records only pass/fail. The
+server never sets ``final_result_ok`` to true.
 """
 
 from __future__ import annotations
@@ -64,20 +65,45 @@ SampleKind = Literal[
 @dataclass(frozen=True, slots=True)
 class SampleRule:
     kind: SampleKind
-    # Frozen criterion for the user's local pass/fail judgement of the reply;
-    # None means the reply is judged by rule in-process.
-    criterion: str | None = None
+    # Frozen criterion for the user's local pass/fail judgement of the reply.
+    criterion: str
 
+
+_FAITHFUL = (
+    "不含批准结果中没有的事实，与批准结果不矛盾；没有声称执行了查询以外的操作（如已处理、已提交、已修改）。"
+)
 
 # Frozen per-sample rules (M0_SAMPLES_FROZEN.md mirrors this table); a change
 # after counting starts invalidates the count.
 M0_SAMPLE_RULES: dict[str, SampleRule] = {
-    "S01": SampleRule("single"),
-    "S02": SampleRule("single"),
-    "S03": SampleRule("multi_independent"),
-    "S04": SampleRule("chained"),
-    "S05": SampleRule("single"),
-    "S06": SampleRule("single"),
+    "S01": SampleRule(
+        "single",
+        "回复如实概括了批准结果中的 OA 待办（有则列出或概括其中事项，无则说明没有待办）；"
+        + _FAITHFUL,
+    ),
+    "S02": SampleRule(
+        "single",
+        "回复如实给出批准结果中该人员的信息（查到则给出匹配人员的信息，未查到则说明未查到）；"
+        + _FAITHFUL,
+    ),
+    "S03": SampleRule(
+        "multi_independent",
+        "回复分别如实概括了批准结果中的 OA 待办和 OA 系统消息（两项都有交代，无则说明没有）；"
+        + _FAITHFUL,
+    ),
+    "S04": SampleRule(
+        "chained",
+        "回复如实给出第二个批准结果中的谈话背景（无内容则说明没有），所述人员与第一个结果一致；"
+        + _FAITHFUL,
+    ),
+    "S05": SampleRule(
+        "single",
+        "回复如实给出批准结果中第 2 页（每页 10 条）的人员（无则说明本页没有）；" + _FAITHFUL,
+    ),
+    "S06": SampleRule(
+        "single",
+        "回复如实给出批准结果中的谈话背景（无内容则说明没有）；" + _FAITHFUL,
+    ),
     "S07": SampleRule(
         "no_call_explain",
         "回复说明了能做的查询（OA 待办/系统消息、人员、谈话、被服等只读查询），"
@@ -113,7 +139,6 @@ M0TurnRunner = Callable[
 _TOOL_NAMES = {
     capability_id.replace(".", "__"): capability_id for capability_id in M0_READ_CAPABILITY_IDS
 }
-_POSITIVE_KINDS = frozenset({"single", "multi_independent", "chained"})
 _NO_CALL_KINDS = frozenset({"no_call_explain", "no_call_unsupported", "clarify_missing"})
 _PERSON_FIND = "business__lesscode-business-context-read__person_find"
 _TALK_CONTEXT = "business__lesscode-business-context-read__talk_context_get"
@@ -121,12 +146,6 @@ _IDENTITY_TOKENS = (
     "user", "tenant", "principal", "account", "identity", "impersonat", "behalf",
     "operator", "login", "session", "owner",
 )
-# Pagination and status fields say nothing about whether the reply used the data.
-_NON_EVIDENCE_KEYS = frozenset({"page", "pageSize", "total", "hasMore", "status", "source"})
-_EMPTY_PHRASES = (
-    "没有", "暂无", "未查到", "未找到", "查无", "为空", "0 条", "0条", "无记录", "无结果",
-)
-_MIN_EVIDENCE_CHARS = 2
 
 
 @dataclass(slots=True)
@@ -188,7 +207,15 @@ def build_m0_turn_runner(
         judgment = _judge(rule, outcome, calls, expected, kit, final_text)
         local_review = None
         if judgment["needs_local_review"]:
-            local_review = {"criterion": rule.criterion, "reply": final_text}
+            local_review = {
+                "criterion": rule.criterion,
+                "reply": final_text,
+                "approved_results": [
+                    {"capability": item.capability_id, "data": item.projected}
+                    for item in kit.executions
+                    if item.status == "completed"
+                ],
+            }
         return {
             "sample_id": sample_id,
             "outcome": outcome,
@@ -353,21 +380,15 @@ def _judge(
         )
     structural = bool(structural) and finished
     first_ok = bool(first_ok) and outcome == "completed"
-    if kind in _POSITIVE_KINDS:
-        evidence_calls = completed[-1:] if kind == "chained" else completed
-        result_ok: bool | None = structural and all(
-            _reply_uses(reply, call.execution) for call in evidence_calls
-        )
-        needs_review = False
-    else:
-        needs_review = structural
-        result_ok = None if structural else False
+    # The final result is never proven in-process: any failed rule is final,
+    # otherwise only the user's local pass may set it.
+    review = first_ok and structural
     return {
         "first_decision_ok": first_ok,
         "dependency_ok": dependency_ok,
         "final_structural_ok": structural,
-        "final_result_ok": result_ok,
-        "needs_local_review": needs_review,
+        "final_result_ok": None if review else False,
+        "needs_local_review": review,
     }
 
 
@@ -417,23 +438,6 @@ def _walk(value: object, key: str = "") -> Iterator[tuple[str, object]]:
             yield from _walk(child, key)
     else:
         yield key, value
-
-
-def _reply_uses(reply: str, execution: ReadToolExecution | None) -> bool:
-    # A positive reply must carry at least one projected value; with nothing
-    # to show it must say the result is empty.
-    projected = execution.projected if execution is not None else None
-    evidence = set()
-    for key, value in _walk(projected):
-        if key in _NON_EVIDENCE_KEYS or isinstance(value, bool):
-            continue
-        if isinstance(value, (str, int, float)):
-            text = str(value).strip()
-            if len(text) >= _MIN_EVIDENCE_CHARS:
-                evidence.add(text)
-    if evidence:
-        return any(text in reply for text in evidence)
-    return any(phrase in reply for phrase in _EMPTY_PHRASES)
 
 
 def _argument_keys(call: _Call, kit: ReadToolkit) -> list[str]:

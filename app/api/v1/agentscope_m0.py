@@ -2,15 +2,19 @@
 
 Authentication, revocation and CSRF come from the shared csrf-protected
 principal dependency; the turn runner is injected by composition, so this
-module never imports infra. The response is symbolic only.
+module never imports infra. The response is symbolic only. A client that
+disconnects cancels its turn instead of leaving it running to the turn budget.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,6 +28,8 @@ M0TurnRunner = Callable[
     Awaitable[dict[str, Any]],
 ]
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_DISCONNECT_POLL_SECONDS = 0.5
+_logger = logging.getLogger(__name__)
 
 
 class ExpectedToolCall(BaseModel):
@@ -53,6 +59,7 @@ def make_router(
     @router.post("/turn", include_in_schema=False)
     async def turn(
         body: M0TurnRequest,
+        request: Request,
         principal: Principal = Depends(require_principal),
     ) -> JSONResponse:
         session = authenticated_session.get()
@@ -67,16 +74,39 @@ def make_router(
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
-        result = await turn_runner(
-            session,
-            session_id,
-            body.sample_id,
-            body.message,
-            [(call.tool, call.arguments) for call in body.expected_calls],
+        running = asyncio.ensure_future(
+            turn_runner(
+                session,
+                session_id,
+                body.sample_id,
+                body.message,
+                [(call.tool, call.arguments) for call in body.expected_calls],
+            )
         )
-        return JSONResponse(result, headers=_PRIVATE_HEADERS)
+        watcher = asyncio.ensure_future(_wait_for_disconnect(request))
+        try:
+            await asyncio.wait({running, watcher}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Disconnect or cancellation of this handler both cancel the turn;
+            # the cancellation propagates through the bridge's task closes.
+            watcher.cancel()
+            if not running.done():
+                running.cancel()
+                with suppress(asyncio.CancelledError):
+                    await running
+        if running.cancelled():
+            _logger.info("agentscope_m0_turn result=client_disconnected")
+            return JSONResponse(
+                {"outcome": "client_disconnected"}, status_code=499, headers=_PRIVATE_HEADERS
+            )
+        return JSONResponse(running.result(), headers=_PRIVATE_HEADERS)
 
     return router
+
+
+async def _wait_for_disconnect(request: Request) -> None:
+    while not await request.is_disconnected():
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
 
 
 __all__ = ("M0TurnRequest", "M0TurnRunner", "make_router")
