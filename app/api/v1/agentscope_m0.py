@@ -43,7 +43,7 @@ class M0TurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(min_length=1, max_length=128)
-    sample_id: str = Field(pattern=r"^S(0[1-9]|1[0-2])$")
+    sample_id: str = Field(pattern=r"^(S(0[1-9]|1[0-2])|S10R)$")
     message: str = Field(min_length=1, max_length=2000)
     expected_calls: list[ExpectedToolCall] = Field(default_factory=list, max_length=4)
 

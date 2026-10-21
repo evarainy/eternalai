@@ -61,23 +61,13 @@ from app.ports.task_store import TaskRecord, TaskStatus, TaskStorePort
 from app.ports.trace import TracePort
 from app.version_binding import prompt_version_binding
 
-# Reads approved for the M0 count (STOP_002). business_context_get is in
-# READ_TOOLS but not in this authorization, so it is never registered.
+# Reads approved for the M0 count: the two reads actually connected for the
+# user (2026-10-22). OA login and profile are identity sources, not tools; the
+# other OA and business MCP reads are never registered.
 M0_READ_CAPABILITY_IDS = frozenset(
     {
         "oa.list_pending_workflows",
-        "oa.list_system_messages",
-        *(
-            f"business.{SERVICE_CONFIG_ID}.{tool}"
-            for tool in (
-                "person_find",
-                "talk_context_get",
-                "talk_record_get",
-                "talk_tasks_list",
-                "clothing_options_get",
-                "clothing_result_get",
-            )
-        ),
+        f"business.{SERVICE_CONFIG_ID}.person_find",
     }
 )
 AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
