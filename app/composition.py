@@ -102,6 +102,7 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceWriter,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.reader import read_directory_snapshot
 from app.infra.organization_directory.source_binding import BoundOrganizationDirectorySourceFactory
@@ -212,6 +213,8 @@ class ProductionComponents:
     browser_intent_model: str
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
+    # Read-only AgentScope bridge dependencies (M0); not consumed by the HTTP app.
+    agentscope_read_dependencies: AgentScopeReadDependencies | None = None
 
 
 def build_credential_store(
@@ -803,6 +806,43 @@ def build_production_components(
     overview_evaluator = OverviewPostconditionEvaluator()
     if not isinstance(overview_evaluator, OverviewPostconditionEvaluator):
         raise RuntimeError("overview_evaluator_configuration_invalid")
+    capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = (
+        {
+            fixed_read.capability.capability_id: fixed_read.format_result,
+            **{
+                read.capability.capability_id: partial(fixed_read.format_query_result, tool)
+                for tool, read in fixed_read.approved_reads.items()
+            },
+        }
+        if fixed_read is not None
+        else None
+    )
+    mcp_result_profiles = (
+        {
+            fixed_read.capability.capability_id: fixed_read.service,
+            **{
+                read.capability.capability_id: fixed_read.service
+                for read in fixed_read.approved_reads.values()
+            },
+        }
+        if fixed_read is not None
+        else None
+    )
+    # Process-local, code-owned rules for approved fixed reads only.
+    approved_projections = (
+        {
+            read.capability.capability_id: (
+                read.capability.version,
+                read.capability.policy_digest,
+                read.capability.output_schema_digest,
+                read.projection,
+            )
+            for read in fixed_read.approved_reads.values()
+            if read.projection is not None
+        }
+        if fixed_read is not None
+        else None
+    )
     runtime = build_runtime(
         task_store=task_store,
         d_form_collection_store=task_store,
@@ -829,45 +869,28 @@ def build_production_components(
         ),
         human_gate_port=human_gate_port,
         candidate_policy=policy_guard,
-        capability_formatters=(
-            {
-                fixed_read.capability.capability_id: fixed_read.format_result,
-                **{
-                    read.capability.capability_id: partial(
-                        fixed_read.format_query_result, tool
-                    )
-                    for tool, read in fixed_read.approved_reads.items()
-                },
-            }
-            if fixed_read is not None
-            else None
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
+    )
+    # The AgentScope read bridge reuses the same production instances and
+    # result mappings; the HTTP application does not consume it.
+    agentscope_read_dependencies = AgentScopeReadDependencies(
+        capability_registry=capability_registry,
+        candidate_policy=policy_guard,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=capability_registry,
+            gateway=gateway,
+            workflow_engine=None,
+            response_builder=ResponseEnvelopeBuilder(),
+            validate_workflow=validate_workflow,
+            capability_formatters=capability_formatters,
+            mcp_result_profiles=mcp_result_profiles,
+            approved_projections=approved_projections,
         ),
-        mcp_result_profiles=(
-            {
-                fixed_read.capability.capability_id: fixed_read.service,
-                **{
-                    read.capability.capability_id: fixed_read.service
-                    for read in fixed_read.approved_reads.values()
-                },
-            }
-            if fixed_read is not None
-            else None
-        ),
-        # Process-local, code-owned rules for approved fixed reads only.
-        approved_projections=(
-            {
-                read.capability.capability_id: (
-                    read.capability.version,
-                    read.capability.policy_digest,
-                    read.capability.output_schema_digest,
-                    read.projection,
-                )
-                for read in fixed_read.approved_reads.values()
-                if read.projection is not None
-            }
-            if fixed_read is not None
-            else None
-        ),
+        task_store=task_store,
+        trace_port=resolved_trace_port,
+        human_gate=human_gate_port,
     )
     resolved_authentication = (
         build_authentication_port(
@@ -1018,6 +1041,7 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
+        agentscope_read_dependencies=agentscope_read_dependencies,
         browser_gateway=gateway,
         browser_session_factory=session_factory,
         browser_capability_registry=capability_registry,

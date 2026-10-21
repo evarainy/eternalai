@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from time import monotonic
@@ -18,7 +19,8 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
 from agentscope.agent import Agent, ContextConfig, InjectionConfig, ModelConfig, ReActConfig
 from agentscope.credential import OpenAICredential
-from agentscope.message import Msg, ToolCallBlock
+from agentscope.event import ToolResultEndEvent
+from agentscope.message import Msg, ToolCallBlock, ToolResultState
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatResponse, FinishedReason, OpenAIChatModel
 from agentscope.state import AgentState
@@ -38,17 +40,21 @@ AgentScopeErrorCode: TypeAlias = Literal[
     "model_not_available",
     "model_call_budget_exceeded",
     "forbidden_request_shape",
+    "tool_call_budget_exceeded",
 ]
 
 # Fixed M0 request contract (PLAN v1.3 section 4.1.1); not environment-tunable.
 MODEL_CALL_TIMEOUT_SECONDS = 30.0
 TURN_TIMEOUT_SECONDS = 120.0
 MAX_MODEL_CALLS_PER_TURN = 4
+MAX_TOOL_CALLS_PER_RESPONSE = 2
+MAX_TOOL_EXECUTIONS_PER_TURN = 4
 MAX_OUTPUT_TOKENS = 2048
 TEMPERATURE = 0.0
 TOP_P = 1.0
-# Upper bound of the estimated model input; larger inputs are rejected.
-DEFAULT_CONTEXT_TOKEN_BUDGET = 32768
+# Empirical bound on the SDK's bytes/4 input estimate (template overhead not
+# counted), well below the measured 200000-token vLLM window minus 2048 output.
+DEFAULT_CONTEXT_TOKEN_BUDGET = 65536
 # Interruption fallback text written by the framework. It is not a business
 # fact: callers must re-read business records instead of trusting it.
 INTERRUPTION_MESSAGE = "本轮对话已中断，请以业务记录的实际状态为准。"
@@ -61,6 +67,9 @@ _CLIENT_TIMEOUT_SECONDS = MODEL_CALL_TIMEOUT_SECONDS + 5.0
 _DISABLE_THINKING_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 _FORBIDDEN_TOOL_NAMES = frozenset({"generate_structured_output", "CompressContext"})
 _STATE_KEY = "eternalai_model_guard"
+_HALT_KEY = "eternalai_tool_halt"
+_EXECUTION_KEY = "eternalai_tool_executions"
+_SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 _MODEL_LOGGER = logging.getLogger("eternalai.agentscope_model")
 _MODEL_LOGGER.addHandler(logging.NullHandler())
@@ -159,8 +168,58 @@ async def run_bounded_turn(agent: Agent, inputs: Msg | list[Msg]) -> Msg:
         raise
 
 
+def tool_halt_reason(state: AgentState) -> str | None:
+    """Return the first tool error code that stopped tool use in this reply."""
+
+    record = state.middle_context.get(_HALT_KEY)
+    reason = record.get(state.reply_id) if isinstance(record, dict) else None
+    return reason if isinstance(reason, str) else None
+
+
+def reserve_tool_execution(state: AgentState) -> bool:
+    """Claim one real tool execution for this reply, at most four per turn."""
+
+    reply_id = state.reply_id
+    record = state.middle_context.get(_EXECUTION_KEY)
+    count = record.get(reply_id, 0) if isinstance(record, dict) else 0
+    if count >= MAX_TOOL_EXECUTIONS_PER_TURN:
+        return False
+    state.middle_context[_EXECUTION_KEY] = {reply_id: count + 1}
+    return True
+
+
 class BoundedModelGuard(MiddlewareBase):
-    """Enforce per-turn call budget, request shape and per-call timeout."""
+    """Enforce per-turn call budget, request shape and per-call timeout.
+
+    Any tool result in ERROR state also stops further tool execution for the
+    rest of the reply, so rejected parameters are clarified with the user
+    instead of being repaired and retried by the model.
+    """
+
+    async def on_reply(
+        self,
+        agent: Agent,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        # Events arrive one at a time; a sequential batch does not start the
+        # next tool call until this generator pulls again.
+        async for event in next_handler(**input_kwargs):
+            if (
+                isinstance(event, ToolResultEndEvent)
+                and event.state == ToolResultState.ERROR
+                and tool_halt_reason(agent.state) is None
+            ):
+                code = event.metadata.get("error_code")
+                reason = (
+                    code if isinstance(code, str) and _SAFE_CODE.fullmatch(code)
+                    else "tool_input_rejected"
+                )
+                agent.state.middle_context[_HALT_KEY] = {event.reply_id: reason}
+                _MODEL_LOGGER.info(
+                    "agentscope_tool_halt reason=%s trace=%s", reason, secrets.token_hex(16)
+                )
+            yield event
 
     async def on_compress_context(
         self,
@@ -209,6 +268,9 @@ class BoundedModelGuard(MiddlewareBase):
             # wall clock is spent, that is this guard's timeout.
             if monotonic() - started >= MODEL_CALL_TIMEOUT_SECONDS:
                 _reject("timeout", call_index, started)
+        tool_calls = sum(1 for block in response.content if isinstance(block, ToolCallBlock))
+        if tool_calls > MAX_TOOL_CALLS_PER_RESPONSE:
+            _reject("tool_call_budget_exceeded", call_index, started)
         _log_model_call(call_index, started, response)
         return response
 
@@ -285,5 +347,7 @@ __all__ = (
     "BoundedModelGuard",
     "build_chat_model",
     "create_bounded_agent",
+    "reserve_tool_execution",
     "run_bounded_turn",
+    "tool_halt_reason",
 )
