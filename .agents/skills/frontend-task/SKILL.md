@@ -9,7 +9,7 @@ Follow the current Goal and repository AGENTS.md for scope, review tier, full-te
 
 ## Choose checks by impact
 
-- Select tests covering the changed behavior, its failure paths and nearest affected callers.
+- Default to no new test code. Use cross-model static review and authorized checks of the actual UI flow; select existing tests only when needed for affected behavior. Add minimal regression tests only under AGENTS.md's criteria, and honor any static-only development phase.
 - From the repository root, run a selected test with `pnpm --dir web exec vitest --run src/path/to/file.test.tsx` (or `.test.ts`). Replace the example with an existing test.
 - **Each selected `.test.tsx` file must run in its own process**, one command per file. Do not group multiple component files into one Vitest invocation. Full frontend coverage uses `pnpm --dir web test`, whose existing component runner preserves that isolation.
 - For TypeScript/TSX changes, run `pnpm --dir web lint` and `pnpm --dir web typecheck`. Run `pnpm --dir web build` when bundling, entrypoints, imports, styling/assets or build configuration are affected. Pure prose changes do not trigger this package's gates.

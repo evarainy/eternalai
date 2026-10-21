@@ -163,10 +163,10 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | Python 3.16 移除旧式 Windows asyncio event-loop policy 的兼容欠债 | 全量与定向测试持续产生 `WindowsSelectorEventLoopPolicy` / `set_event_loop_policy` 弃用 warning；本棒修改到相关 E2E 文件但修复属于兼容性重构，不是本棒缺陷路径 | Python 3.16 兼容方案与独立测试基础设施 Scope | 待 GOV-SYNC 排期的 Python 3.16 compatibility lane | Windows 测试改用仍受支持的事件循环构造方式，相关 DB/E2E 测试在目标 Python 版本无这些弃用 warning，且既有行为不弱化 | `uv run pytest` 收口原始 warning；`tests/runtime/test_pilot_foundation_e2e.py:50-51` 及其他 PostgreSQL 测试同类设置 |
 | `CapabilityGateway.assert_production_wiring` 当前固定要求 `adapters["oa"]` | 当前生产纵切只有 OA，固定键能忠实堵住本棒静默漏接线；未来若引入非 OA 生产组合，守卫需由 composition 提供必需 adapter 集合，而不能继续把 OA 当通用不变量 | 第二个真实生产 Adapter 的已决 composition 设计 | 对应第二 Adapter composition lane（未排期） | 守卫按已决生产组合验证明确的必需 adapter key 集合，同时继续强制 Registry / Identity / Policy / Trace 非空，并保留破坏式回归测试 | `app/infra/gateway/capability_gateway.py::CapabilityGateway.assert_production_wiring`；`tests/runtime/test_runtime_composition.py::test_production_composition_rejects_incomplete_gateway_wiring` |
 | OA 长会话心跳保活缺失 | OA 登录技术对接文档步骤 6 要求“启动心跳保活”，当前 `app/` 没有心跳实现，长会话可能因 OA Session 超时而中断 | 尚未排期 | `P2-OA-SESSION-KEEPALIVE-001` | `app/` 实现有界、可停止且不泄漏凭证的 OA Session 心跳，并以长会话测试证明续期与失败行为 | `OA登录技术对接文档.md` §4.1、§4.2；本棒只登记，不实现 |
-| `phase0/main` 分支保护缺 up-to-date 与禁止 bypass 两项 | 非 fresh PR 仍可能可合并，且有权限账号可绕过 required checks；外部当前状态本轮未现场读取，不宣称已开启 | 仓库 owner 权限，agent 无专项授权不得修改 | 雨爷在 GitHub 分支保护设置中开启 | **Require branches to be up to date before merging** 与 **Do not allow bypassing the above settings** 均开启，且非 fresh PR / bypass 由 GitHub 自动拦截 | `AGENTS.md`「仓库 owner 待办」；`docs/phase2/DECISIONS.md` 2026-08-20「并行 lane 的测试库约束」 |
+| `phase0/main` 分支保护缺 up-to-date 与禁止 bypass 两项 | 非 fresh PR 仍可能可合并，且有权限账号可绕过 required checks；外部当前状态本轮未现场读取，不宣称已开启 | 仓库 owner 权限，agent 无专项授权不得修改 | 雨爷在 GitHub 分支保护设置中开启 | **Require branches to be up to date before merging** 与 **Do not allow bypassing the above settings** 均开启，且非 fresh PR / bypass 由 GitHub 自动拦截 | `docs/phase2/STATUS.md`「必达链与阻塞」Owner 待办；`docs/phase2/DECISIONS.md` 2026-08-20「并行 lane 的测试库约束」 |
 | 仓库卫生候选需逐项复核 | 分支或 worktree 可能仍有独有文件、未暂存修改或未合入 commit；数量易漂移，且删除属于红线 | 逐项只读复核与动作级专项授权 | `P2-REPO-CLEANUP-001`（仅已授权范围） | 每个候选均证明无唯一未集成内容并取得对应删除授权 | `git worktree list --porcelain`；`git branch --format`；`git branch -r --format` |
-| `.github` PR body 三段式模板缺失 | 当前没有仓库级填写兜底；模板只能兜底，`gh pr create --body` 仍可绕过 | 新的 `.github/` Scope lane | 尚未排期的 PR 治理加固 | `.github/pull_request_template.md` 提供三个固定标题并验证常规创建路径；文档明确它不是强制门禁 | `AGENTS.md:27-28`；`.github/` 当前无 `pull_request_template.md` |
-| PR body 三段式缺少 CI 强制校验 | 文档和模板都不能阻止遗漏，CI 是唯一“忘了也会被拦下”的形态 | 新的 `.github/workflows` Scope；若设 required check，还需仓库 owner 按规则授权配置 | 尚未排期的 PR body CI gate | CI 对缺失三段的 PR fail-closed、对完整三段通过，并纳入 `phase0/main` required checks | `AGENTS.md:27-28`；`.github/workflows/ci.yml` 有 PR 触发但无 PR body 三段校验 |
+| `.github` PR body 三段式模板缺失 | 当前没有仓库级填写兜底；模板只能兜底，`gh pr create --body` 仍可绕过 | 新的 `.github/` Scope lane | 尚未排期的 PR 治理加固 | `.github/pull_request_template.md` 提供三个固定标题并验证常规创建路径；文档明确它不是强制门禁 | `AGENTS.md`「Git 与永久任务记录」；`.github/` 当前无 `pull_request_template.md` |
+| PR body 三段式缺少 CI 强制校验 | 文档和模板都不能阻止遗漏，CI 是唯一“忘了也会被拦下”的形态 | 新的 `.github/workflows` Scope；若设 required check，还需仓库 owner 按规则授权配置 | 尚未排期的 PR body CI gate | CI 对缺失三段的 PR fail-closed、对完整三段通过，并纳入 `phase0/main` required checks | `AGENTS.md`「Git 与永久任务记录」；`.github/workflows/ci.yml` 有 PR 触发但无 PR body 三段校验 |
 | `_scratch/` 决策产物仍未纳入版本控制 | 本棒只改项目级治理文档单一权威结构；启动合同明确把既有 `_scratch/` 决策产物归档延后，当前仍缺版本历史、跨机器可见性和生命周期状态 | 需独立获批的决策产物盘点与归档 Scope；本棒禁止移动既有 `_scratch/` 文件 | 待 GOV-SYNC 分配决策产物归档 task_id | 逐项区分临时文件、可入库决定/ADR/报告与原始敏感素材；获批的持久产物进入 `docs/phase2/` 或 ADR 目录并更新引用，敏感素材继续留在仓库外，任何删除另取专项授权 | `_scratch/治理文档信息架构_输入规格.md` §1.4；`P2-GOVDOC-SSOT-001` 启动合同 Out of scope；`.gitignore` 的 `_scratch/` 规则 |
 | Capability Preselector 组织范围精度仍不足 | 已合并 Top-K 已实现相关性排序和管理平面确定拒绝预排除；缺 allowed_departments 等可信 metadata，defer 不代表用户/组织预授权，不能笼统结清整层义务 | 既有冷启动 Capability contract lane（尚未分配 task_id）及可信组织合同；Top-K 集成前置已解除 | 沿既有冷启动 contract lane；b4 增强仍按需激活 | 获批 metadata 与 Policy 预筛有跨主体正负证据，执行前授权继续保留；本批只结清 b1/b2/b3，不核销组织范围义务 | `app/ports/capability_registry.py::CapabilitySpec`；`app/infra/policy/minimal_policy_guard.py::preview_capability`；真实 HTTP/Identity 回归 |
 
@@ -326,8 +326,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 页面上下文注册失败降级 | `web/src/app/usePageContextRegistration.ts` 只负责在 effect 中转调；`web/src/stores/aiDockStore.ts::registerPageContext` 在实际解析边界把 `PageContextValidationError` 降级为无上下文和用户可见提示，其他异常仍抛出；`web/src/pages/__tests__/WorkObjectsPage.test.tsx` 覆盖非 `Z` 时间戳与 15/18 位数字凭证形状来源引用。 |
 | Dock 页面上下文提示与绑定一致 | `web/src/stores/aiDockStore.ts::registerPageContext` 在干净重绑时清除旧 notice；`web/src/app/__tests__/AppShell.test.tsx` 覆盖「事项页 → 落地页 → 再进事项页」。 |
 | 通用会话剥离页面绑定并可回到 page 模式 | `web/src/contracts/pageContext.ts::createGeneralPageContext` 清空 `work_object_refs`、`source_refs`、`allowed_capabilities`；`web/src/stores/aiDockStore.ts::clearPageContext` 形成 `general → page` 正常回切；对应合同与 store 回归持续生效。 |
-| PR #73 任务记录与合并授权守卫 | `AGENTS.md:27-30`：PR body 三段与欠债五字段须在合并前完成；checks 绿不等于合并授权。 |
-| A/B 档静态评审桥安全摘要 | `AGENTS.md` 的 PR body 永久记录规则要求 A/B 档合并前记录闭集 JSON 摘要并绑定最终候选；评审桥模型按现役裁决选择并以 `observed_model` 如实记录；PR #134 是历史合规实例。 |
+| PR #73 任务记录与合并授权守卫 | `AGENTS.md`「Git 与永久任务记录」：PR body 三段与欠债五字段须在合并前完成；checks 绿不等于合并授权。 |
+| 静态评审桥安全摘要 | `AGENTS.md`「Git 与永久任务记录」与 `docs/phase2/REVIEW_EVIDENCE.md`：实际运行评审桥时才记录闭集 JSON 摘要并绑定最终候选，以 `observed_model` 如实记录模型；不因档位默认增加评审桥。PR #134 是历史合规实例。 |
 | Golden fixture expectation 凭证扫描 | `scripts/golden_task_assertions.py::_assert_judgement_credentials_absent`；`tests/golden_tasks/test_runner_assertions.py`。 |
 | Golden 扫描无值失败输出 | `scripts/golden_task_assertions.py::_raise_credential_failure`；无值失败回归。 |
 | 引号包裹凭证键扫描 | `scripts/golden_task_assertions.py::_bounded_serialized_json_mapping`；serialized JSON 回归。 |
@@ -338,7 +338,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 企业密钥配置文件管理裁决 | `docs/phase2/DECISIONS.md` 决定三：运维配置文件管理，不建设运行时管理页面。 |
 | Golden 策略唯一副本守卫 | `docs/phase2/DECISIONS.md` 决定四；`tests/architecture/test_governance_document_ssot.py` 守住唯一副本。 |
 | OA Rehearse pack↔pack 比较守卫 | `scripts/smoke/runner.py::_run_rehearsal` 的 pack↔pack 比较及回归；保留以防按旧前提立项。 |
-| CLAUDE/AGENTS 治理 SSOT 分层 | `AGENTS.md:9` 的状态/计划/决策分层；`tests/architecture/test_governance_document_ssot.py`。 |
+| CLAUDE/AGENTS 治理 SSOT 分层 | `AGENTS.md`「权威、范围与执行」的状态/计划/决策分层；`tests/architecture/test_governance_document_ssot.py`。 |
 | Runtime Capability 咽喉动态观测 | `tests/architecture/runtime_schema_observer.py` 与 `tests/architecture/test_response_output_contracts.py` 的咽喉动态观测。 |
 | Registry 确定性 bootstrap | `scripts/manage_oa_capabilities.py`；`tests/scripts/test_manage_oa_capabilities.py`；startup Registry DML 守卫。 |
 | Golden 敏感父键容器扫描 | `scripts/golden_task_assertions.py`；`P2-GOLDEN-CREDENTIAL-CONTAINER-001` 的 structured/serialized 回归。 |
