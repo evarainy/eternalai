@@ -18,8 +18,9 @@ from app.api.v1.auth import PrincipalDependency
 from app.api.v1.runtime import _bind_session, _PrivateHandleRoute
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 
+# (session, bound session id, sample id, message, expected calls)
 M0TurnRunner = Callable[
-    [AuthenticatedSessionContext, str, str, Sequence[tuple[str, dict[str, Any]]]],
+    [AuthenticatedSessionContext, str, str, str, Sequence[tuple[str, dict[str, Any]]]],
     Awaitable[dict[str, Any]],
 ]
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -36,6 +37,7 @@ class M0TurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(min_length=1, max_length=128)
+    sample_id: str = Field(pattern=r"^S(0[1-9]|1[0-2])$")
     message: str = Field(min_length=1, max_length=2000)
     expected_calls: list[ExpectedToolCall] = Field(default_factory=list, max_length=4)
 
@@ -68,6 +70,7 @@ def make_router(
         result = await turn_runner(
             session,
             session_id,
+            body.sample_id,
             body.message,
             [(call.tool, call.arguments) for call in body.expected_calls],
         )

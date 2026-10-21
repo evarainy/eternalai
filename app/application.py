@@ -424,6 +424,11 @@ def create_production_app(
     if (d_form_execution_without_sync
             and type(browser_supervisor) is not BrowserWorkerSupervisor):
         raise RuntimeError("browser_d_form_execution_without_sync_invalid")
+    agentscope_m0_turn: M0TurnRunner | None = None
+    if resolved_settings.agentscope_m0_turn_enabled:
+        agentscope_m0_turn = getattr(components, "agentscope_m0_turn", None)
+        if not callable(agentscope_m0_turn):
+            raise RuntimeError("agentscope_m0_turn_installation_invalid")
     application_factory = create_app if _application_factory is None else _application_factory
     return application_factory(
         runtime=components.runtime,
@@ -449,8 +454,7 @@ def create_production_app(
         diagnostic_checks=dict(components.diagnostic_checks),
         validate_workflows=components.validate_workflows,
         mcp_service=components.mcp_service,
-        # Optional field: component doubles built before it existed omit it.
-        agentscope_m0_turn=getattr(components, "agentscope_m0_turn", None),
+        agentscope_m0_turn=agentscope_m0_turn,
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
         browser_run_access=(browser_vertical.submission if browser_vertical is not None else None),
         browser_submission=(browser_vertical.submission if browser_vertical is not None else None),

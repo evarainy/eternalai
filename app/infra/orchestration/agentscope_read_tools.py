@@ -140,6 +140,9 @@ class ReadToolExecution:
     capability_id: str
     status: ExecutionStatus
     error_code: str | None
+    # Approved projection of a completed read, in memory only for in-process
+    # judging; never logged or returned.
+    projected: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)
@@ -148,6 +151,8 @@ class ReadToolkit:
     selection: CapabilityCandidateSet
     exposed_schema_digests: dict[str, str]
     executions: list[ReadToolExecution] = field(default_factory=list)
+    # Tool name -> schema exactly as exposed to the model and the SDK.
+    exposed_schemas: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 async def build_read_toolkit(
@@ -176,6 +181,7 @@ async def build_read_toolkit(
             continue
         exposed = _exposed_schema(spec.input_schema)
         result.exposed_schema_digests[name] = _schema_digest(exposed)
+        result.exposed_schemas[name] = deepcopy(exposed)
         tools.append((binding, spec, name, exposed))
     intent_binding = prompt_version_binding(
         resource_id=AGENT_PROMPT_RESOURCE_ID,
@@ -318,6 +324,7 @@ class _ReadExecutor:
         started = monotonic()
         execution: ExecutionResult | None = None
         text = _READ_FAILED_TEXT
+        projected: dict[str, Any] | None = None
         try:
             await deps.task_store.create_task(
                 TaskRecord(
@@ -339,7 +346,9 @@ class _ReadExecutor:
                 tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
                 event_type="task_created", status="ok",
             )
-            execution, text = await self._run_task(task_id, trace_id, capability_id, arguments)
+            execution, text, projected = await self._run_task(
+                task_id, trace_id, capability_id, arguments
+            )
         except asyncio.CancelledError:
             await self._close_safely(
                 task_id, trace_id, capability_id,
@@ -349,18 +358,23 @@ class _ReadExecutor:
             raise
         except Exception:
             execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
+            projected = None
         if execution is None:
             execution = _failed("internal_error", trace_id)
         if not await self._close_safely(task_id, trace_id, capability_id, execution):
             # A failed terminal write is reported as a failure, never as success.
             execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
+            projected = None
         self._toolkit.executions.append(
-            ReadToolExecution(task_id, capability_id, execution.status, execution.error_code)
+            ReadToolExecution(
+                task_id, capability_id, execution.status, execution.error_code,
+                projected if execution.status == "completed" else None,
+            )
         )
         _log(execution.status, capability_id, execution.error_code or "none", started)
         if execution.status == "completed":
-            return _chunk(text, error_code=None)
-        return _chunk(text, error_code=execution.error_code or execution.status)
+            return _chunk(text, error_code=None, task_id=task_id)
+        return _chunk(text, error_code=execution.error_code or execution.status, task_id=task_id)
 
     async def _close_safely(
         self,
@@ -409,7 +423,7 @@ class _ReadExecutor:
         trace_id: str,
         capability_id: str,
         arguments: dict[str, Any],
-    ) -> tuple[ExecutionResult, str]:
+    ) -> tuple[ExecutionResult, str, dict[str, Any] | None]:
         scope, deps = self._scope, self._deps
         selection = await deps.orchestration.select_capability(
             capability_id=capability_id, target_system=None, capability_type=None
@@ -420,7 +434,8 @@ class _ReadExecutor:
             or selection.capability.type != "query"
             or not _matches_binding(selection.capability, self._binding)
         ):
-            return _failed("capability_candidate_stale", trace_id), "能力定义已变化，请重新提问。"
+            stale = _failed("capability_candidate_stale", trace_id)
+            return stale, "能力定义已变化，请重新提问。", None
         capability = selection.capability.model_copy(deep=True)
         projection = ProjectionContractSnapshot.from_capability(capability)
         try:
@@ -438,7 +453,7 @@ class _ReadExecutor:
                 raise VersionBindingMismatchError("projection binding differs from capability")
             await deps.human_gate.bind_task(manifest)
         except (HumanGateConflictError, VersionBindingMismatchError, ValueError):
-            return _failed("internal_error", trace_id), "版本绑定失败。"
+            return _failed("internal_error", trace_id), "版本绑定失败。", None
         await deps.trace_port.record_step(
             trace_id, task_id, scope.session_id,
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
@@ -485,8 +500,12 @@ class _ReadExecutor:
         if execution.error_code == "needs_binding_scope":
             # The envelope above carries the existing scope clarification; the
             # model gets a fixed instruction to ask instead of guessing.
-            return execution, _SCOPE_TEXT
-        return execution, _model_text(execution, envelope.fallback_text, envelope.data)
+            return execution, _SCOPE_TEXT, None
+        return (
+            execution,
+            _model_text(execution, envelope.fallback_text, envelope.data),
+            envelope.data,
+        )
 
     async def _close_task(
         self,
@@ -550,13 +569,18 @@ def _model_text(execution: ExecutionResult, message: str, data: dict[str, Any] |
     return cut + "\n[结果已截断，未展示部分不得推断]"
 
 
-def _chunk(text: str, *, error_code: str | None) -> ToolChunk:
+def _chunk(text: str, *, error_code: str | None, task_id: str | None = None) -> ToolChunk:
+    # Metadata stays inside the agent (the formatter never sends it to the
+    # model); the task id lets in-process judging pair a call with its read.
+    metadata = {} if task_id is None else {"task_id": task_id}
     if error_code is None:
-        return ToolChunk(content=[TextBlock(text=text)], state=ToolResultState.SUCCESS)
+        return ToolChunk(
+            content=[TextBlock(text=text)], state=ToolResultState.SUCCESS, metadata=metadata
+        )
     return ToolChunk(
         content=[TextBlock(text=text)],
         state=ToolResultState.ERROR,
-        metadata={"error_code": error_code},
+        metadata={**metadata, "error_code": error_code},
     )
 
 

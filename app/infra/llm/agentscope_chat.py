@@ -72,7 +72,7 @@ _HALT_KEY = "eternalai_tool_halt"
 _EXECUTION_KEY = "eternalai_tool_executions"
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
-# Absolute end of the current bounded turn (monotonic clock); tool-side waits
+# Absolute end of the current bounded turn (event-loop clock); tool-side waits
 # such as task closes must fit inside it.
 _TURN_DEADLINE: ContextVar[float | None] = ContextVar("eternalai_turn_deadline", default=None)
 
@@ -154,17 +154,28 @@ def create_bounded_agent(
     )
 
 
-async def run_bounded_turn(agent: Agent, inputs: Msg | list[Msg]) -> Msg:
+def new_turn_deadline() -> float:
+    """Absolute end (event-loop clock) of a turn that starts now."""
+
+    return asyncio.get_running_loop().time() + TURN_TIMEOUT_SECONDS
+
+
+async def run_bounded_turn(
+    agent: Agent, inputs: Msg | list[Msg], *, deadline: float | None = None
+) -> Msg:
     """Run one user turn within the fixed wall-clock budget.
 
-    Never pass a structured schema: the forced structured-output path is out of
-    contract for this seam.
+    ``deadline`` is an absolute event-loop time set when the caller's turn
+    began, so tool preparation done before this call counts against the same
+    budget. Never pass a structured schema: the forced structured-output path
+    is out of contract for this seam.
     """
 
     started = monotonic()
-    token = _TURN_DEADLINE.set(started + TURN_TIMEOUT_SECONDS)
+    end = new_turn_deadline() if deadline is None else deadline
+    token = _TURN_DEADLINE.set(end)
     try:
-        async with asyncio.timeout(TURN_TIMEOUT_SECONDS):
+        async with asyncio.timeout_at(end):
             return await agent.reply(inputs)
     except TimeoutError:
         _log_turn_failure("turn_timeout", started)
@@ -180,7 +191,9 @@ def turn_seconds_remaining() -> float | None:
     """Seconds left in the current bounded turn, or None outside a turn."""
 
     deadline = _TURN_DEADLINE.get()
-    return None if deadline is None else max(0.0, deadline - monotonic())
+    if deadline is None:
+        return None
+    return max(0.0, deadline - asyncio.get_running_loop().time())
 
 
 def model_call_count(state: AgentState) -> int:
@@ -371,6 +384,7 @@ __all__ = (
     "build_chat_model",
     "create_bounded_agent",
     "model_call_count",
+    "new_turn_deadline",
     "reserve_tool_execution",
     "run_bounded_turn",
     "tool_halt_reason",
