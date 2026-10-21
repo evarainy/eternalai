@@ -81,6 +81,7 @@ MAX_TOOL_RESULT_BYTES = 8192
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _READ_FAILED_TEXT = "读取失败。"
 _CLOSE_TIMEOUT_SECONDS = 5.0
+_PENDING_CLOSES: set[asyncio.Future[None]] = set()
 _HALTED_TEXT = "本轮已停止工具调用，请先向用户澄清。"
 _SCOPE_TEXT = "需要用户补充范围（账套、资源范围或设备域），请先向用户确认，不要猜测。"
 _ALLOW = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="approved read")
@@ -305,11 +306,12 @@ class _ReadExecutor:
     async def _execute(self, capability_id: str, arguments: dict[str, Any]) -> ToolChunk:
         # Every await from task creation to terminal close sits inside this
         # boundary: the SDK would hand str(exc) to the model, and a created
-        # task must never be left running.
+        # task must never be left running. The task id exists before the
+        # create call, so every exit path closes it: a create that never
+        # committed makes the close fail safely in update_status.
         scope, deps = self._scope, self._deps
         task_id, trace_id = str(uuid4()), str(uuid4())
         started = monotonic()
-        created = False
         execution: ExecutionResult | None = None
         text = _READ_FAILED_TEXT
         try:
@@ -324,7 +326,6 @@ class _ReadExecutor:
                     capability_id=capability_id,
                 )
             )
-            created = True
             await deps.trace_port.start_task_trace(
                 trace_id, task_id, scope.session_id,
                 tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
@@ -336,18 +337,17 @@ class _ReadExecutor:
             )
             execution, text = await self._run_task(task_id, trace_id, capability_id, arguments)
         except asyncio.CancelledError:
-            if created:
-                await self._close_safely(
-                    task_id, trace_id, capability_id,
-                    execution or _failed("internal_error", trace_id),
-                )
+            await self._close_safely(
+                task_id, trace_id, capability_id,
+                execution or _failed("internal_error", trace_id),
+            )
             _log("cancelled", capability_id, "internal_error", started)
             raise
         except Exception:
             execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
         if execution is None:
             execution = _failed("internal_error", trace_id)
-        if created and not await self._close_safely(task_id, trace_id, capability_id, execution):
+        if not await self._close_safely(task_id, trace_id, capability_id, execution):
             # A failed terminal write is reported as a failure, never as success.
             execution, text = _failed("internal_error", trace_id), _READ_FAILED_TEXT
         self._toolkit.executions.append(
@@ -365,20 +365,32 @@ class _ReadExecutor:
         capability_id: str,
         execution: ExecutionResult,
     ) -> bool:
-        # Shielded so a cancellation arriving here does not abort the close;
-        # the caller stops waiting after a bound and the close runs on.
+        # The deadline lives inside the shielded close itself, so it still
+        # holds after the waiter is cancelled; a module-level set keeps the
+        # task referenced until it finishes. Cancellation still propagates.
         closing = asyncio.ensure_future(
-            self._close_task(task_id, trace_id, capability_id, execution)
+            self._bounded_close(task_id, trace_id, capability_id, execution)
         )
-        closing.add_done_callback(_consume_result)
+        _PENDING_CLOSES.add(closing)
+        closing.add_done_callback(_finish_close)
         try:
-            await asyncio.wait_for(asyncio.shield(closing), _CLOSE_TIMEOUT_SECONDS)
+            await asyncio.shield(closing)
         except asyncio.CancelledError:
             raise
         except Exception:
             _log("close_failed", capability_id, "internal_error", 0.0)
             return False
         return True
+
+    async def _bounded_close(
+        self,
+        task_id: str,
+        trace_id: str,
+        capability_id: str,
+        execution: ExecutionResult,
+    ) -> None:
+        async with asyncio.timeout(_CLOSE_TIMEOUT_SECONDS):
+            await self._close_task(task_id, trace_id, capability_id, execution)
 
     async def _run_task(
         self,
@@ -495,11 +507,12 @@ class _ReadExecutor:
         )
 
 
-def _consume_result(future: asyncio.Future[None]) -> None:
-    # Keep a background close failure out of asyncio's default handler, which
-    # would log the exception text.
-    if not future.cancelled():
-        future.exception()
+def _finish_close(task: asyncio.Future[None]) -> None:
+    # Drop the strong reference and retrieve any failure, which asyncio's
+    # default handler would otherwise log with its exception text.
+    _PENDING_CLOSES.discard(task)
+    if not task.cancelled():
+        task.exception()
 
 
 def _matches_binding(capability: CapabilitySpec, binding: CandidateBinding) -> bool:
