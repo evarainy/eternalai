@@ -2,17 +2,53 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs, ValidationError
 
 from app.api.v1.auth import PrincipalDependency
 from app.contracts.sdui.models import UserAction
-from app.ports.auth import Principal, SessionBindingError
+from app.ports.auth import Principal, SessionBindingError, authenticated_session
+from app.ports.browser_chat import BrowserChatError, BrowserChatPort
+from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
-from app.ports.runtime import RuntimePort, UserActionOutcome
+from app.ports.runtime import (
+    DFormCollectionReference,
+    RuntimePort,
+    UserActionOutcome,
+    d_form_collection_reference,
+)
+from app.ports.task_store import DFormCollectionError
+
+_PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+class _PrivateHandleRoute(APIRoute):
+    """Protect submitted conversation data before body validation or auth succeeds."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def handle(request: Request) -> Response:
+            try:
+                response = await original(request)
+            except RequestValidationError:
+                raise HTTPException(
+                    422,
+                    {"code": "runtime_request_input_invalid"},
+                    headers=_PRIVATE_HEADERS,
+                ) from None
+            except HTTPException as error:
+                error.headers = {**(error.headers or {}), **_PRIVATE_HEADERS}
+                raise
+            response.headers.update(_PRIVATE_HEADERS)
+            return response
+
+        return handle
 
 
 class HandleRequest(BaseModel):
@@ -22,6 +58,8 @@ class HandleRequest(BaseModel):
     session_id: str
     message: str
     client_capabilities: dict[str, Any] = Field(default_factory=dict)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=96)
+    d_form_collection: DFormCollectionReference | None = None
 
 
 class ActionRequest(BaseModel):
@@ -69,8 +107,7 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
         {
             "status": "failed",
             "message": (
-                "操作响应未通过安全校验，无法确认本次操作结果。"
-                "请先核对业务状态，避免重复提交。"
+                "操作响应未通过安全校验，无法确认本次操作结果。请先核对业务状态，避免重复提交。"
             ),
             "fallback_text": (
                 "Action response validation failed; verify the business state and "
@@ -87,13 +124,12 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
     return ActionResponseEnvelope.model_validate(fields)
 
 
-def _bind_runtime_request(
+def _bind_session(
     *,
-    runtime: RuntimePort | None,
     principal: Principal,
     requested_session_id: str,
     session_binder: Callable[[Principal, str], str] | None,
-) -> tuple[RuntimePort, str]:
+) -> str:
     if session_binder is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,6 +149,21 @@ def _bind_runtime_request(
                 "message": "Session was not found.",
             },
         ) from None
+    return session_id
+
+
+def _bind_runtime_request(
+    *,
+    runtime: RuntimePort | None,
+    principal: Principal,
+    requested_session_id: str,
+    session_binder: Callable[[Principal, str], str] | None,
+) -> tuple[RuntimePort, str]:
+    session_id = _bind_session(
+        principal=principal,
+        requested_session_id=requested_session_id,
+        session_binder=session_binder,
+    )
     if runtime is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -128,28 +179,97 @@ def make_router(
     runtime: RuntimePort | None,
     require_principal: PrincipalDependency,
     session_binder: Callable[[Principal, str], str] | None,
+    *,
+    browser_chat: BrowserChatPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    handle_router = APIRouter(route_class=_PrivateHandleRoute)
 
-    @router.post("/handle", response_model=ResponseEnvelope)
+    @handle_router.post("/handle", response_model=ResponseEnvelope)
     async def handle(
         body: HandleRequest,
+        response: Response,
         principal: Principal = Depends(require_principal),
     ) -> ResponseEnvelope:
+        if body.client_capabilities.get("browser_async_v1") is True:
+            if body.d_form_collection is not None:
+                raise HTTPException(422, {"code": "collection_not_found"})
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+            session_id = _bind_session(
+                principal=principal,
+                requested_session_id=body.session_id,
+                session_binder=session_binder,
+            )
+            if browser_chat is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "browser_runtime_unavailable"},
+                    headers={"Cache-Control": "no-store"},
+                )
+            selected_skill = body.client_capabilities.get(
+                "browser_skill_id",
+                browser_chat.skill_id,
+            )
+            selector = getattr(browser_chat, "can_select_skill", None)
+            if type(selected_skill) is not str or (
+                selected_skill != browser_chat.skill_id
+                and (not callable(selector) or selector(selected_skill) is not True)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "browser_skill_not_configured"},
+                    headers={"Cache-Control": "no-store"},
+                )
+            if body.client_request_id is None:
+                raise BrowserChatError("browser_request_id_required", http_status=422)
+            return await browser_chat.start(
+                channel=body.channel,
+                principal=principal,
+                bound_session=session_id,
+                message=body.message,
+                client_capabilities=body.client_capabilities,
+                client_request_id=body.client_request_id,
+                skill_id=selected_skill,
+            )
         bound_runtime, session_id = _bind_runtime_request(
             runtime=runtime,
             principal=principal,
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
-        envelope: ResponseEnvelope = await bound_runtime.handle_user_message(
-            channel=body.channel,
-            principal=principal,
-            session_id=session_id,
-            message=body.message,
-            client_capabilities=body.client_capabilities,
-        )
-        return envelope
+        scope = None
+        if browser_chat is not None and body.client_request_id is not None:
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+            captured = authenticated_session.get()
+            if captured is None or captured.principal != principal:
+                raise HTTPException(status_code=403, detail={"code": "policy_denied"})
+            try:
+                scope = BrowserRequestScope(captured, session_id, body.client_request_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422, detail={"code": "adapter_payload_invalid"}
+                ) from None
+        token = browser_request_scope.set(scope)
+        collection_token = d_form_collection_reference.set(body.d_form_collection)
+        try:
+            return await bound_runtime.handle_user_message(
+                channel=body.channel,
+                principal=principal,
+                session_id=session_id,
+                message=body.message,
+                client_capabilities=body.client_capabilities,
+            )
+        except DFormCollectionError as error:
+            raise HTTPException(
+                404 if error.code == "collection_not_found" else 409,
+                {"code": error.code},
+                headers=_PRIVATE_HEADERS,
+            ) from None
+        finally:
+            d_form_collection_reference.reset(collection_token)
+            browser_request_scope.reset(token)
 
     @router.post("/action", response_model=ActionResponseEnvelope)
     async def handle_action(
@@ -173,4 +293,5 @@ def make_router(
         except ValidationError:
             return _failed_action_response(envelope)
 
+    router.include_router(handle_router)
     return router

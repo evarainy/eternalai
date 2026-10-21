@@ -554,7 +554,7 @@
       },
       "TargetSystem": {
         "type": "string",
-        "enum": ["oa", "u8", "hikvision_ivms"]
+        "enum": ["oa", "u8", "hikvision_ivms", "business_platform"]
       },
       "ExecutionIdentity": {
         "type": "string",
@@ -872,7 +872,7 @@
       },
       "CapabilityTargetSystem": {
         "type": "string",
-        "enum": ["oa", "u8", "hikvision_ivms"],
+        "enum": ["oa", "u8", "hikvision_ivms", "business_platform"],
         "nullable": true
       },
       "CapabilityExecutionIdentity": {

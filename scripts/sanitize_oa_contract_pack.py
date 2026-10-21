@@ -1342,6 +1342,11 @@ def _validate_candidate_pack(candidate_payloads: Mapping[str, Any]) -> None:
             strict=True,
         )
         profile_kind = _capture_profile_kind(profile.profile_version)
+        collection_model: (
+            type[OALegacyPendingWorkflowCollection]
+            | type[OAPendingWorkflowCollection]
+            | type[OASystemMessageCollection]
+        )
         if profile_kind == "legacy_pending_workflows":
             collection_model = OALegacyPendingWorkflowCollection
             expected_capability_id = "oa.list_pending_workflows"

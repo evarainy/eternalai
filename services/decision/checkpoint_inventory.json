@@ -1,0 +1,54 @@
+{
+  "schema_version": "decision_checkpoint_inventory.v1",
+  "status": "WAITING_ENV",
+  "preferred_repository": "cklxx/laya-browser",
+  "challenger_repository": "ichenney/laya-browser-v32b",
+  "arbiter_reference": "bf71358774c85aeff2051ec7b1dcc4577a87706d",
+  "arbiter_proof_scope": "A0_reference_only",
+  "reference_dependency_bundle": {
+    "status": "RESOLVED_METADATA_ONLY",
+    "target": "CPython 3.12 / Linux x86_64 / glibc >= 2.28 / CPU PyTorch",
+    "requirements": "requirements-linux-cpu.in",
+    "lock": "pylock.linux_cpu.toml",
+    "lock_sha256": "dc05fe0b9f02bdd4b8208a3f30d485a47243b4ffe58d2cc2608f06803a09dba9",
+    "wheel_count": 35,
+    "license_metadata": "license_sources.json",
+    "wheelhouse_and_actual_notices": "NOT_OBTAINED",
+    "installed_or_imported": false,
+    "approved_for_final_hardware": false
+  },
+  "preferred_candidate_snapshot": {
+    "status": "OBSERVED_NOT_APPROVED",
+    "repository": "cklxx/laya-browser",
+    "revision": "645cf366a2ae35f1086e8c20eff48f909bb49206",
+    "source": "https://huggingface.co/api/models/cklxx/laya-browser/tree/645cf366a2ae35f1086e8c20eff48f909bb49206?expand=true",
+    "files": [
+      {"path": "model.safetensors", "size_bytes": 643835524, "sha256_from_lfs_metadata": "82844f2528b9915f8408146384409ccc99f860f56ba0e37d19d0d5775b098e52"},
+      {"path": "tokenizer/tokenizer.json", "size_bytes": 34363188, "sha256_from_lfs_metadata": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"},
+      {"path": "config.json", "size_bytes": 2630, "sha256_from_public_bytes": "5f2dc280e9107ab24e9dddb7471e126d36946cc9873f284284a4af8fd025e4b8"},
+      {"path": "rl_agent_config.json", "size_bytes": 561, "sha256_from_public_bytes": "b78796b604532688de6749c61912503cc89b2f998a07b06ef27c280989a34eea"},
+      {"path": "encoder/config.json", "size_bytes": 1968, "sha256_from_public_bytes": "252795756225d703e1913d5647eb542ded520cfd6684f232cc8f4a5ccb6faf9d"},
+      {"path": "tokenizer/tokenizer_config.json", "size_bytes": 624, "sha256_from_public_bytes": "f2ff584a8f78ac9f3b6fd0afcf9ab310e41c2d445ef628f9ab4b0d594e992b7a"},
+      {"path": "modeling_laya_browser.py", "size_bytes": 16903, "sha256_from_public_bytes": "d084f8720ee4a738efc3cee6e0cef78ab983af8cf17939957af2c2265fdd99d1"}
+    ],
+    "license_card_claim": "apache-2.0",
+    "license_notice_file_in_repository": false,
+    "weights_or_tokenizer_bytes_downloaded": false,
+    "runtime_compatibility_or_quality_verified": false
+  },
+  "required_operator_inputs": [
+    "approved_immutable_checkpoint_revision_and_subfolder",
+    "tokenizer_revision_and_exact_files",
+    "dtype_and_audited_model_code",
+    "approved_target_choice_input_adapter",
+    "input_output_schema_digests",
+    "registered_projection_policy",
+    "weights_and_all_artifact_hashes_and_sizes",
+    "checkpoint_license_and_runtime_notices",
+    "checkpoint_bound_calibration_evidence",
+    "approved_target_runtime_lock_and_verified_wheelhouse_notices",
+    "authorized_artifact_root_and_loaded_backend",
+    "real_A1_A2_A3_A4_A5_environment_evidence"
+  ],
+  "launchable": false
+}

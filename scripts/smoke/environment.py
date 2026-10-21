@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 from scripts.smoke.errors import SmokeError
@@ -127,19 +128,36 @@ def parse_env_file(path: Path) -> dict[str, str]:
     except (OSError, UnicodeError):
         raise SmokeError("env_file_unreadable") from None
     result: dict[str, str] = {}
-    for raw_line in lines:
+    for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
             line = line[7:].lstrip()
         if "=" not in line:
-            raise SmokeError("env_file_invalid")
+            raise SmokeError(
+                "env_file_invalid", parse_reason="missing_assignment", line_number=line_number,
+            )
         key, raw_value = line.split("=", 1)
         key = key.strip()
-        if _ENV_KEY.fullmatch(key) is None or key in result:
-            raise SmokeError("env_file_invalid")
-        result[key] = _parse_env_value(raw_value.strip())
+        if _ENV_KEY.fullmatch(key) is None:
+            raise SmokeError(
+                "env_file_invalid", parse_reason="invalid_key", line_number=line_number,
+            )
+        if key in result:
+            raise SmokeError(
+                "env_file_invalid", parse_reason="duplicate_key", line_number=line_number,
+            )
+        try:
+            result[key] = _parse_env_value(raw_value.strip())
+        except SmokeError as error:
+            if error.code != "env_file_invalid":
+                raise
+            reason, _ = error.safe_env_diagnostic()
+            raise SmokeError(
+                error.code, exit_code=error.exit_code,
+                parse_reason=reason, line_number=line_number,
+            ) from None
     return result
 
 
@@ -488,7 +506,7 @@ def _render_env_mutations(
         if key in removals:
             continue
         if key in updates:
-            rendered.append(_replace_env_assignment_value(raw_line, updates[key]))
+            rendered.append(_replace_env_assignment_value(raw_line, updates[cast(str, key)]))
         else:
             rendered.append(raw_line)
     result = "".join(rendered)
@@ -533,7 +551,7 @@ def _parse_env_value(raw: str) -> str:
         return ""
     if raw[0] in {"'", '"'}:
         if len(raw) < 2 or raw[-1] != raw[0]:
-            raise SmokeError("env_file_invalid")
+            raise SmokeError("env_file_invalid", parse_reason="quote_boundary_invalid")
         return raw[1:-1]
     marker = raw.find(" #")
     return raw[:marker].rstrip() if marker >= 0 else raw

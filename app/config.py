@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import ipaddress
+import json
 import math
 import os
 import re
+import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +19,7 @@ from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db.config import get_database_url
+from app.mcp.models import ServiceConfig
 
 _DEFAULT_LLM_BASE_URL = "http://34.74.11.38:8011/v1"
 _DEFAULT_LLM_MODEL = "glm-4.7"
@@ -40,6 +44,12 @@ _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY = 4
 _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS = 60
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
+MCP_TLS_CA_ENDPOINT = "https://34.64.8.101/mcp"
+MCP_TLS_CA_OAUTH_ENDPOINTS = frozenset({
+    "https://34.64.8.101/oauth/register",
+    "https://34.64.8.101/oauth/token",
+})
+_MCP_TLS_CA_PEM_SHA256 = "1f6ece41434a006f9cb29043a0c10c314c9a053d2bc16dbeec17f6d49118c76a"
 
 
 class _SecretValue:
@@ -136,6 +146,130 @@ class RedisConnectionURL:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserSettings:
+    """Isolated opt-in configuration; disabled mode reads only its switch.
+
+    No credentials or provider instances are loaded here. Composition remains
+    disconnected until the browser execution and source manifest gates are ready.
+    """
+
+    enabled: bool = False
+    transport: Literal["playwright", "cdp"] | None = None
+    decision_origin: str | None = None
+    request_model: str | None = None
+    deployment_model: str | None = None
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> BrowserSettings:
+        if not _boolean(source, "BROWSER_ENABLED", default=False):
+            return cls()
+        transport = _required(source, "BROWSER_TRANSPORT")
+        if transport not in {"playwright", "cdp"}:
+            raise RuntimeError("BROWSER_TRANSPORT must be playwright or cdp")
+        decision_keys = (
+            "BROWSER_DECISION_ORIGIN", "BROWSER_DECISION_REQUEST_MODEL",
+            "BROWSER_DECISION_DEPLOYMENT_MODEL",
+        )
+        configured = tuple(name in source for name in decision_keys)
+        if not any(configured):
+            # Absence is only configuration data. The signed Site budget and
+            # installation authority decide whether a model-free path is legal.
+            return cls(
+                enabled=True, transport=cast(Literal["playwright", "cdp"], transport),
+            )
+        if not all(configured):
+            raise RuntimeError("BROWSER_DECISION configuration must be complete")
+        deployment = _required(source, "BROWSER_DECISION_DEPLOYMENT_MODEL")
+        if "latest" in deployment.casefold():
+            raise RuntimeError("BROWSER_DECISION_DEPLOYMENT_MODEL must be pinned")
+        origin = _http_base_url(source, "BROWSER_DECISION_ORIGIN")
+        _canonical_http_origin(origin, "BROWSER_DECISION_ORIGIN")
+        return cls(
+            enabled=True, transport=cast(Literal["playwright", "cdp"], transport),
+            decision_origin=origin,
+            request_model=_required(source, "BROWSER_DECISION_REQUEST_MODEL"),
+            deployment_model=deployment,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class McpTlsCaConfig:
+    """One approved public certificate and one exact existing service version."""
+
+    ca_file: Path = field(repr=False)
+    service_config_id: str
+    service_config_version: int
+    endpoint: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.ca_file, Path) or not self.ca_file.is_absolute()
+            or type(self.service_config_id) is not str
+            or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.service_config_id) is None
+            or type(self.service_config_version) is not int or self.service_config_version < 1
+            or self.endpoint != MCP_TLS_CA_ENDPOINT
+        ):
+            raise ValueError("mcp_tls_ca_configuration_invalid")
+
+    @property
+    def service_key(self) -> tuple[str, int, str]:
+        return self.service_config_id, self.service_config_version, self.endpoint
+
+
+def load_mcp_tls_context(ca_file: Path) -> ssl.SSLContext:
+    """Load only the approved public PEM; no settings, environment or client IO."""
+    try:
+        if not ca_file.is_absolute() or ca_file.is_symlink():
+            raise ValueError
+        with ca_file.open("rb") as certificate:
+            pem = certificate.read(65537)
+        if len(pem) > 65536 or hashlib.sha256(pem).hexdigest() != _MCP_TLS_CA_PEM_SHA256:
+            raise ValueError
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_verify_locations(cadata=pem.decode("ascii"))
+        return context
+    except (OSError, ValueError):
+        raise RuntimeError("mcp_tls_ca_certificate_invalid") from None
+
+
+@dataclass(frozen=True, slots=True)
+class FixedDocumentSettings:
+    """Optional single-document settings; never open the file at application startup."""
+
+    path: str = field(repr=False)
+    tenant_id: str = field(repr=False)
+    ai_user_id: str = field(repr=False)
+    topic: str = field(default="指定文档", repr=False)
+    max_bytes: int = 32768
+
+    @property
+    def valid(self) -> bool:
+        return bool(self.tenant_id and self.ai_user_id and self.topic.strip()) and (
+            type(self.max_bytes) is int and 1 <= self.max_bytes <= 131072
+            and len(self.topic) <= 256
+        )
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> FixedDocumentSettings | None:
+        path = source.get("FIXED_DOCUMENT_PATH", "").strip()
+        if not path:
+            return None
+        try:
+            max_bytes = int(source.get("FIXED_DOCUMENT_MAX_BYTES", "32768"))
+        except ValueError:
+            max_bytes = 0  # A document-local error must not prevent OA/D/MCP startup.
+        return cls(
+            path=path,
+            tenant_id=source.get("FIXED_DOCUMENT_TENANT_ID", "").strip(),
+            ai_user_id=source.get("FIXED_DOCUMENT_AI_USER_ID", "").strip(),
+            topic=source.get("FIXED_DOCUMENT_TOPIC", "指定文档").strip(),
+            max_bytes=max_bytes,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
 
@@ -202,8 +336,23 @@ class ProductionSettings:
     organization_directory_max_age_s: int = 172800
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
+    mcp_services: tuple[ServiceConfig, ...] = ()
+    mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
+    fixed_document: FixedDocumentSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        ids = [profile.service_config_id for profile in self.mcp_services]
+        if len(ids) != len(set(ids)) or any(
+            p.tenant_id != self.source_tenant_id for p in self.mcp_services
+        ):
+            raise ValueError("mcp_configuration_invalid")
+        if self.mcp_tls_ca is not None and not any(
+            (profile.service_config_id, profile.service_config_version, profile.endpoint)
+            == self.mcp_tls_ca.service_key
+            for profile in self.mcp_services
+        ):
+            raise ValueError("mcp_tls_ca_service_mismatch")
         for value in (self.source_profile_id, self.source_tenant_id):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("source_profile_configuration_invalid")
@@ -499,6 +648,10 @@ class ProductionSettings:
                 maximum=600,
             ),
             phase0_mock_mode=phase0_mock_mode,
+            mcp_services=_mcp_services(source),
+            mcp_tls_ca=_mcp_tls_ca(source),
+            browser=BrowserSettings.from_env(source),
+            fixed_document=FixedDocumentSettings.from_env(source),
         )
         if (
             settings.credential_poll_maximum_backoff_seconds
@@ -892,3 +1045,45 @@ def _directory_source_user(source: Mapping[str, str]) -> str | None:
             "ORGANIZATION_DIRECTORY_SYNC_SOURCE_AI_USER_ID must be a nonblank identifier"
         )
     return raw
+
+
+def _mcp_services(source: Mapping[str, str]) -> tuple[ServiceConfig, ...]:
+    raw = source.get("MCP_SERVICE_CONFIGS_JSON", "[]")
+    try:
+        if len(raw.encode()) > 65536:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) > 16:
+            raise ValueError
+        return tuple(ServiceConfig.model_validate(value) for value in values)
+    except (ValueError, TypeError):
+        raise RuntimeError("mcp_configuration_invalid") from None
+
+
+def _mcp_tls_ca(source: Mapping[str, str]) -> McpTlsCaConfig | None:
+    raw = source.get("MCP_TLS_CA_CONFIG_JSON")
+    if raw is None or not raw.strip():
+        return None
+
+    def unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        fields: dict[str, object] = {}
+        for name, value in pairs:
+            if name in fields:
+                raise ValueError
+            fields[name] = value
+        return fields
+
+    try:
+        if len(raw.encode()) > 4096:
+            raise ValueError
+        values = json.loads(raw, object_pairs_hook=unique_fields)
+        if type(values) is not dict or set(values) != {
+            "ca_file", "service_config_id", "service_config_version", "endpoint",
+        } or type(values["ca_file"]) is not str:
+            raise ValueError
+        return McpTlsCaConfig(
+            ca_file=Path(values["ca_file"]), service_config_id=values["service_config_id"],
+            service_config_version=values["service_config_version"], endpoint=values["endpoint"],
+        )
+    except (ValueError, TypeError):
+        raise RuntimeError("mcp_tls_ca_configuration_invalid") from None

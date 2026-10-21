@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Any
@@ -23,11 +24,16 @@ from app.admin.registry import (
 )
 from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.health import HealthCheck
+from app.api.v1.mcp import McpApiService
 from app.api.v1.work_objects import (
     OA_PENDING_WORKFLOWS_CAPABILITY_ID,
     WorkObjectService,
 )
-from app.config import ProductionSettings
+from app.config import (
+    MCP_TLS_CA_OAUTH_ENDPOINTS,
+    ProductionSettings,
+    load_mcp_tls_context,
+)
 from app.credential_polling import (
     CREDENTIAL_POLLING_TASK_TYPE,
     CredentialPollingPolicy,
@@ -39,6 +45,23 @@ from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
+from app.infra.adapters.business_mcp.catalog import catalog as mcp_catalog
+from app.infra.adapters.business_mcp.catalog import workflow_definitions as mcp_definitions
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    QUERY_TOOLS as FIXED_QUERY_TOOLS,
+)
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    SERVICE_CONFIG_ID as FIXED_READ_SERVICE_CONFIG_ID,
+)
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    TOOL as FIXED_READ_TOOL,
+)
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    FixedReadCapabilityRegistry,
+    load_fixed_read_profile,
+    prepare_fixed_read_definition,
+)
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.profile import (
     LiveOAProfileTransport,
@@ -62,13 +85,17 @@ from app.infra.auth.postgresql import (
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
+from app.infra.fixed_txt import FixedTxtReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
 from app.infra.human_gate import PostgreSQLHumanGate
+from app.infra.identity.mcp_identity import McpIdentityMapping
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.job_queue.in_memory import InMemoryJobQueue
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
+from app.infra.mcp.driver import McpDriver
+from app.infra.mcp.transport import BoundedOAuthHttp
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
@@ -83,6 +110,8 @@ from app.infra.organization_directory.validation import InvalidDirectorySnapshot
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
+from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
+from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore
 from app.infra.persistence.task_store.postgresql import (
     PostgreSQLSessionStore,
     PostgreSQLTaskStore,
@@ -105,6 +134,11 @@ from app.knowledge.basic_knowledge import (
     POLICY_TEMPLATE_ITEMS,
     REPLAY_SYSTEM_ITEMS,
 )
+from app.mcp.connections import McpExecutionContextFactory
+from app.mcp.contracts import OutputContract
+from app.mcp.models import ServiceConfig
+from app.mcp.oauth import OAuthConnections, PendingIdentityPolicy
+from app.mcp.operations import GovernedOperations
 from app.memory import SessionMemory
 from app.organization_directory_policy import check_dispatch_department_policy
 from app.organization_directory_sync import (
@@ -125,16 +159,21 @@ from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.job_queue import JobQueuePort
 from app.ports.llm_provider import LLMProviderPort
+from app.ports.mcp import McpSubmitPreconditionPort, McpTaskRulesPort
+from app.ports.mcp_store import IdentityAssertionPort
 from app.ports.organization_directory import (
     OrganizationDirectorySnapshot,
     OrganizationDirectorySourcePort,
 )
 from app.ports.organization_directory_sync import DirectorySourceError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
+from app.ports.response_projection_contract import ApprovedResponseProjection
 from app.ports.structured_output import StructuredOutputPort
-from app.ports.task_store import SessionStorePort, TaskStorePort
+from app.ports.task_store import DFormCollectionStorePort, SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
 from app.ports.user_profile import UserProfilePort
+from app.ports.workflow_store import McpRecoveryPolicyPort
+from app.runtime.document_qa import DocumentQAService
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
@@ -161,6 +200,18 @@ class ProductionComponents:
     organization_directory_scheduler: OrganizationDirectoryScheduler
     diagnostic_checks: Mapping[str, HealthCheck]
     validate_workflows: Callable[[], Awaitable[None]]
+    mcp_service: McpApiService
+    # The browser installation must use these exact production authorities.
+    browser_session_factory: async_sessionmaker[AsyncSession]
+    browser_capability_registry: PostgreSQLCapabilityRegistry
+    browser_policy: MinimalPolicyGuard
+    browser_sessions: SessionStorePort
+    browser_trace: TracePort
+    browser_llm_provider: LLMProviderPort
+    browser_structured_output: StructuredOutputPort
+    browser_intent_model: str
+    browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
+    browser_gateway: CapabilityGateway | None = None
 
 
 def build_credential_store(
@@ -442,6 +493,13 @@ def build_runtime(
     overview_evaluator: OverviewPostconditionEvaluator | None = None,
     human_gate_port: HumanGatePort | None = None,
     candidate_policy: CapabilityCandidatePolicyPort | None = None,
+    capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = None,
+    mcp_result_profiles: Mapping[str, ServiceConfig] | None = None,
+    d_form_collection_store: DFormCollectionStorePort | None = None,
+    document_qa: DocumentQAService | None = None,
+    approved_projections: Mapping[
+        str, tuple[str, str | None, str, ApprovedResponseProjection]
+    ] | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     resolved_human_gate = human_gate_port
@@ -457,6 +515,9 @@ def build_runtime(
         workflow_engine=resolved_workflow_port,
         response_builder=response_builder,
         validate_workflow=validate_workflow,
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
     )
     return RuntimeImpl(
         task_store=task_store,
@@ -468,15 +529,15 @@ def build_runtime(
         structured_output=structured_output,
         intent_model=intent_model,
         response_builder=response_builder,
-        candidate_policy=(
-            MinimalPolicyGuard() if candidate_policy is None else candidate_policy
-        ),
+        candidate_policy=(MinimalPolicyGuard() if candidate_policy is None else candidate_policy),
         workflow_engine=resolved_workflow_port,
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
         evaluator=evaluator or TerminalEvaluator(),
         overview_evaluator=overview_evaluator,
         human_gate_port=resolved_human_gate,
+        d_form_collection_store=d_form_collection_store,
+        document_qa=document_qa,
     )
 
 
@@ -491,6 +552,12 @@ def build_production_components(
     adapters: Mapping[str, AdapterPort] | None = None,
     trace_port: TracePort | None = None,
     health_checks: Mapping[str, HealthCheck] | None = None,
+    mcp_contracts: Mapping[tuple[str, str], OutputContract] | None = None,
+    mcp_identity_policy: IdentityAssertionPort | None = None,
+    mcp_recovery_policies: Mapping[tuple[str, str], McpRecoveryPolicyPort] | None = None,
+    mcp_isolated_test_contracts: bool = False,
+    mcp_task_rules: McpTaskRulesPort | None = None,
+    mcp_submit_preconditions: Mapping[tuple[str, str], McpSubmitPreconditionPort] | None = None,
 ) -> ProductionComponents:
     """Build the real database/auth/runtime composition with explicit test seams."""
 
@@ -528,7 +595,102 @@ def build_production_components(
         if adapters is None
         else dict(adapters)
     )
-    policy_guard = MinimalPolicyGuard()
+    mcp_profiles = {p.service_config_id: p for p in settings.mcp_services}
+    mcp_tls_contexts: dict[tuple[str, int, str], ssl.SSLContext] = {}
+    oauth_tls_contexts: dict[str, ssl.SSLContext] = {}
+    if settings.mcp_tls_ca is not None:
+        context = load_mcp_tls_context(settings.mcp_tls_ca.ca_file)
+        mcp_tls_contexts[settings.mcp_tls_ca.service_key] = context
+        oauth_tls_contexts = {endpoint: context for endpoint in MCP_TLS_CA_OAUTH_ENDPOINTS}
+    fixed_read_service = mcp_profiles.get(FIXED_READ_SERVICE_CONFIG_ID)
+    prepared_fixed_read = (
+        prepare_fixed_read_definition(fixed_read_service)
+        if fixed_read_service is not None
+        else None
+    )
+    fixed_query_contracts = {
+        tool: contract
+        for (service, tool), contract in (mcp_contracts or {}).items()
+        if service == FIXED_READ_SERVICE_CONFIG_ID and tool in FIXED_QUERY_TOOLS
+    }
+    fixed_read = load_fixed_read_profile(
+        mcp_profiles, os.environ.get("MCP_FIXED_READ_APPROVAL_JSON"),
+        tls_contexts=mcp_tls_contexts,
+        prepared=prepared_fixed_read,
+        read_contracts=fixed_query_contracts,
+    )
+    if mcp_isolated_test_contracts:
+        from urllib.parse import urlsplit
+
+        from sqlalchemy.engine import make_url
+
+        test_database = make_url(settings.database_url)
+        if (test_database.host, test_database.port, test_database.database) != (
+            "127.0.0.1",
+            15432,
+            "eternalai_test",
+        ) or any(
+            urlsplit(profile.endpoint).hostname not in {"127.0.0.1", "::1"}
+            for profile in mcp_profiles.values()
+        ):
+            raise RuntimeError("mcp_isolated_contract_boundary_invalid")
+    session_revocations = PostgreSQLSessionRevocationStore(session_factory)
+    mcp_store = PostgreSQLMcpStore(
+        session_factory, settings.credential_encryption_key, session_revocations
+    )
+    workflow_store = PostgreSQLWorkflowStore(mcp_store)
+    mcp_contexts = McpExecutionContextFactory(mcp_store, workflow_store, human_gate_port)
+    # The fixed service receives reads only through its approved profile.
+    mcp_outputs = {
+        key: contract for key, contract in (mcp_contracts or {}).items()
+        if key[0] != FIXED_READ_SERVICE_CONFIG_ID
+        or key[1] not in (FIXED_READ_TOOL, *FIXED_QUERY_TOOLS)
+    }
+    if fixed_read is not None:
+        mcp_outputs[(fixed_read.service.service_config_id, FIXED_READ_TOOL)] = (
+            fixed_read.output_contract
+        )
+        mcp_outputs.update({
+            (fixed_read.service.service_config_id, tool): read.output_contract
+            for tool, read in fixed_read.approved_reads.items()
+        })
+    mcp_driver = McpDriver(mcp_profiles, mcp_store, tls_contexts=mcp_tls_contexts)
+    if mcp_profiles:
+        resolved_adapters["business_platform"] = BusinessMcpAdapter(
+            mcp_driver,
+            mcp_store,
+            mcp_outputs,
+            workflows=workflow_store,
+            profiles=mcp_profiles,
+            isolated_test_contracts=mcp_isolated_test_contracts,
+            task_rules=mcp_task_rules,
+            submit_preconditions=dict(mcp_submit_preconditions or {}),
+        )
+        if resolved_identity_mapping is None:
+            raise RuntimeError("Production CapabilityGateway wiring is incomplete")
+        resolved_identity_mapping = McpIdentityMapping(resolved_identity_mapping, mcp_store)
+    governed_definitions = {
+        key: value
+        for profile in mcp_profiles.values()
+        for key, value in mcp_definitions(profile).items()
+    }
+    governed_manifests = {
+        key: value.policy for key, value in governed_definitions.items() if value.policy is not None
+    }
+    policy_guard = MinimalPolicyGuard(
+        governed_outer_ids=governed_manifests,
+        governed_leaf_ids=[policy.leaf_capability_id for policy in governed_manifests.values()],
+        mcp_candidate_allowed=(
+            lambda user, capability, context: (
+                fixed_read is not None
+                and fixed_read.permits_candidate(
+                    ai_user_id=user, capability_id=capability, request_context=context
+                )
+            )
+        )
+        if fixed_read is not None
+        else None,
+    )
     gateway = CapabilityGateway(
         capability_registry=capability_registry,
         identity_mapping=resolved_identity_mapping,
@@ -538,6 +700,19 @@ def build_production_components(
         human_gate_port=human_gate_port,
         unbound_task_capability_ids=frozenset({OA_PENDING_WORKFLOWS_CAPABILITY_ID}),
         tenant_id=settings.source_tenant_id,
+        mcp_contexts=mcp_contexts,
+        mcp_profiles=mcp_profiles,
+        mcp_scope_allowed=(
+            lambda tenant, user, capability, service, tool: (
+                fixed_read is not None
+                and fixed_read.tool_for_capability(capability) == tool
+                and fixed_read.permits(
+                    tenant_id=tenant, user_id=user, service_config_id=service, tool=tool
+                )
+            )
+        )
+        if fixed_read is not None
+        else None,
     )
     gateway.assert_production_wiring()
     definitions = deepcopy(production_workflow_definitions())
@@ -545,7 +720,35 @@ def build_production_components(
         item.capability_id: item.model_copy(deep=True)
         for item in production_workflow_capabilities()
     }
+    # Configuring a service never publishes or activates Registry entries.
+    for profile in mcp_profiles.values():
+        capabilities, _ = mcp_catalog(
+            profile,
+            {
+                tool: contract
+                for (service, tool), contract in mcp_outputs.items()
+                if service == profile.service_config_id
+            },
+        )
+        for capability in capabilities:
+            if capability.type == "workflow" and capability.status == "active":
+                descriptors[capability.capability_id] = capability
+                definitions[capability.capability_id] = governed_definitions[
+                    capability.capability_id
+                ]
+    governed_operations = GovernedOperations(
+        workflow_store,
+        mcp_contexts,
+        human_gate_port,
+        gateway,
+        policy_guard,
+        governed_manifests,
+        mcp_recovery_policies,
+        mcp_submit_preconditions,
+        capability_registry,
+    )
     validate_workflow_configuration(definitions, descriptors)
+    terminal_evaluator = TerminalEvaluator()
     workflow_engine = WorkflowEngine(
         definitions=definitions,
         capability_registry=capability_registry,
@@ -553,20 +756,29 @@ def build_production_components(
         task_store=task_store,
         trace_port=resolved_trace_port,
         human_gate_port=human_gate_port,
+        governed_operations=governed_operations if mcp_profiles else None,
+        evaluator=terminal_evaluator,
     )
     if workflow_engine is None:
         raise RuntimeError("workflow_configuration_invalid")
     validate_workflows = partial(
-        validate_production_workflows, registry=capability_registry,
-        definitions=definitions, descriptors=descriptors,
+        validate_production_workflows,
+        registry=capability_registry,
+        definitions=definitions,
+        descriptors=descriptors,
     )
     validate_workflow = partial(
-        validate_selected_workflow, registry=capability_registry,
-        definitions=definitions, descriptors=descriptors,
+        validate_selected_workflow,
+        registry=capability_registry,
+        definitions=definitions,
+        descriptors=descriptors,
     )
+    workflow_engine.configure_governed_validation(validate_workflow)
     production_llm = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,
-        timeout_seconds=settings.llm_timeout_seconds,
+        timeout_seconds=min(settings.llm_timeout_seconds, 120)
+        if settings.browser.enabled
+        else settings.llm_timeout_seconds,
         max_tokens=settings.llm_max_tokens,
         temperature=settings.llm_temperature,
         top_p=settings.llm_top_p,
@@ -574,23 +786,38 @@ def build_production_components(
         enable_thinking=settings.llm_enable_thinking,
     )
     resolved_llm = production_llm if llm_provider is None else llm_provider
+    resolved_structured_output = (
+        JSONStructuredOutputProvider() if structured_output is None else structured_output
+    )
+    document_settings = settings.fixed_document
+    document_qa = (
+        DocumentQAService(
+            reader=FixedTxtReader(document_settings.path, document_settings.max_bytes),
+            llm_provider=resolved_llm, structured_output=resolved_structured_output,
+            model=settings.llm_model, tenant_id=document_settings.tenant_id,
+            ai_user_id=document_settings.ai_user_id, topic=document_settings.topic,
+            configuration_valid=document_settings.valid,
+        )
+        if document_settings is not None else None
+    )
     overview_evaluator = OverviewPostconditionEvaluator()
     if not isinstance(overview_evaluator, OverviewPostconditionEvaluator):
         raise RuntimeError("overview_evaluator_configuration_invalid")
     runtime = build_runtime(
         task_store=task_store,
+        d_form_collection_store=task_store,
         session_store=session_store,
         capability_registry=capability_registry,
         gateway=gateway,
         trace_port=resolved_trace_port,
         llm_provider=resolved_llm,
-        structured_output=(
-            JSONStructuredOutputProvider() if structured_output is None else structured_output
-        ),
+        structured_output=resolved_structured_output,
         intent_model=settings.llm_model,
+        document_qa=document_qa,
         workflow_engine=workflow_engine,
         validate_workflow=validate_workflow,
         overview_evaluator=overview_evaluator,
+        evaluator=terminal_evaluator,
         semantic_knowledge=BasicKnowledge(
             static_items=ENTERPRISE_TERM_ITEMS
             + {
@@ -602,6 +829,45 @@ def build_production_components(
         ),
         human_gate_port=human_gate_port,
         candidate_policy=policy_guard,
+        capability_formatters=(
+            {
+                fixed_read.capability.capability_id: fixed_read.format_result,
+                **{
+                    read.capability.capability_id: partial(
+                        fixed_read.format_query_result, tool
+                    )
+                    for tool, read in fixed_read.approved_reads.items()
+                },
+            }
+            if fixed_read is not None
+            else None
+        ),
+        mcp_result_profiles=(
+            {
+                fixed_read.capability.capability_id: fixed_read.service,
+                **{
+                    read.capability.capability_id: fixed_read.service
+                    for read in fixed_read.approved_reads.values()
+                },
+            }
+            if fixed_read is not None
+            else None
+        ),
+        # Process-local, code-owned rules for approved fixed reads only.
+        approved_projections=(
+            {
+                read.capability.capability_id: (
+                    read.capability.version,
+                    read.capability.policy_digest,
+                    read.capability.output_schema_digest,
+                    read.projection,
+                )
+                for read in fixed_read.approved_reads.values()
+                if read.projection is not None
+            }
+            if fixed_read is not None
+            else None
+        ),
     )
     resolved_authentication = (
         build_authentication_port(
@@ -630,7 +896,11 @@ def build_production_components(
     )
     session_binder = build_session_binder(binding_key=settings.session_binding_key)
     admin_registry_service = build_admin_registry_service(
-        capability_registry=capability_registry,
+        capability_registry=(
+            FixedReadCapabilityRegistry(capability_registry, mcp_store, fixed_read)
+            if fixed_read is not None
+            else capability_registry
+        ),
         task_store=task_store,
         identity_mapping=resolved_identity_mapping,
         trace_port=resolved_trace_port,
@@ -656,7 +926,8 @@ def build_production_components(
     directory_sync_state = PostgreSQLOrganizationDirectorySync(session_factory)
 
     async def directory_reader(
-        source: OrganizationDirectorySourcePort, fetched_at: datetime,
+        source: OrganizationDirectorySourcePort,
+        fetched_at: datetime,
     ) -> OrganizationDirectorySnapshot:
         try:
             return await read_directory_snapshot(source=source, fetched_at=fetched_at)
@@ -664,7 +935,9 @@ def build_production_components(
             raise DirectorySourceError("snapshot_invalid") from None
 
     directory_sync_service = OrganizationDirectorySyncService(
-        store=directory_sync_state, reader=directory_reader, source_opener=directory_source_factory,
+        store=directory_sync_state,
+        reader=directory_reader,
+        source_opener=directory_source_factory,
         max_age_s=settings.organization_directory_max_age_s,
     )
     directory_scheduler = OrganizationDirectoryScheduler(directory_sync_service)
@@ -745,6 +1018,62 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
+        browser_gateway=gateway,
+        browser_session_factory=session_factory,
+        browser_capability_registry=capability_registry,
+        browser_policy=policy_guard,
+        browser_sessions=session_store,
+        browser_trace=resolved_trace_port,
+        browser_llm_provider=resolved_llm,
+        browser_structured_output=resolved_structured_output,
+        browser_intent_model=settings.llm_model,
+        browser_credential_store=credential_store,
+        mcp_service=McpApiService(
+            OAuthConnections(
+                mcp_profiles,
+                mcp_store,
+                BoundedOAuthHttp(tls_contexts=oauth_tls_contexts),
+                session_revocations,
+                fixed_read or mcp_identity_policy or PendingIdentityPolicy(),
+                cancel_authorization=mcp_store.cancel_authorization,
+                authorization_probe=(fixed_read.probe_authorization if fixed_read else None),
+                issuer_parameter_supported=(
+                    {
+                        fixed_read.service.service_config_id: (
+                            fixed_read.approval.issuer_parameter_supported
+                        )
+                    }
+                    if fixed_read
+                    else None
+                ),
+                authorization_allowed=(
+                    lambda profile, session: fixed_read.permits_authorization(
+                        profile, session
+                    )
+                )
+                if fixed_read is not None
+                else (
+                    lambda profile, session: (
+                        profile.service_config_id != FIXED_READ_SERVICE_CONFIG_ID
+                    )
+                ),
+            ),
+            governed_operations,
+            WorkflowEngineAdapter(workflow_engine),
+            bind_authorization_owner=(
+                partial(
+                    fixed_read.bind_authorization_owner,
+                    revocations=session_revocations,
+                )
+                if fixed_read is not None
+                else None
+            ),
+            complete_authorization_owner=(
+                partial(fixed_read.complete_authorization_owner, store=mcp_store)
+                if fixed_read is not None
+                else None
+            ),
+        ),
         validate_workflows=validate_workflows,
         runtime=runtime,
         admin_registry_service=admin_registry_service,
@@ -754,7 +1083,7 @@ def build_production_components(
         credential_polling_scheduler=credential_polling_scheduler,
         authentication=resolved_authentication,
         session_tokens=session_tokens,
-        session_revocations=PostgreSQLSessionRevocationStore(session_factory),
+        session_revocations=session_revocations,
         session_binder=session_binder,
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_timeout_seconds=settings.health_timeout_seconds,

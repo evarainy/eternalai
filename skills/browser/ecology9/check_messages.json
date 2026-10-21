@@ -1,0 +1,70 @@
+{
+  "schema_version": "browser_publication.v1",
+  "version": "synthetic_v1",
+  "skill": {
+    "schema_version": "browser_skill.v1",
+    "skill_id": "check_messages",
+    "version": "synthetic_v1",
+    "site_id": "ecology9_synthetic_site",
+    "site_digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad",
+    "verifier_id": "ecology9_synthetic_verifier",
+    "verifier_digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9",
+    "parameters": [],
+    "steps": [
+      {
+        "step_id": "step_1",
+        "operation": "read",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_unread_messages"
+        },
+        "value_ref": null,
+        "url_ref": null,
+        "effect": "read_only",
+        "option_ref": null
+      }
+    ],
+    "digest": "e2403e36beb38e605bb5874f610884788777f05aaa32c98aa47f3c85f3e3ffac"
+  },
+  "site": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "site",
+    "dependency_id": "ecology9_synthetic_site",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_site_v1",
+    "digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad"
+  },
+  "verifier": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "verifier",
+    "dependency_id": "ecology9_synthetic_verifier",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_business_key_verifier_v1",
+    "digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9"
+  },
+  "descriptor": {
+    "schema_version": "browser_descriptor.v1",
+    "capability_id": "synthetic_check_messages",
+    "version": "synthetic_v1",
+    "skill_id": "check_messages",
+    "skill_version": "synthetic_v1",
+    "skill_digest": "e2403e36beb38e605bb5874f610884788777f05aaa32c98aa47f3c85f3e3ffac",
+    "target_system": "oa",
+    "visibility": "public",
+    "http_api_preferred": true,
+    "execution_state": "synthetic_contract_only",
+    "deferred_capabilities": [
+      "real_site_adapter",
+      "real_verifier",
+      "capability_integration",
+      "registered_cloud_source"
+    ],
+    "digest": "daa9a16c28eb3a68ad412b027a5cc2580d7044a85efe57c67dd1c1e80a7f0dc5"
+  },
+  "dependency_digest": "f8bf40656e307678acbeafeb1daccb00623b6afb74ffd01ba450d62c4746681c",
+  "digest": "0f78fb3f6eccb9c749a6af0c0ccd2bd36d985e059dd9fdab65f8757165aa589f"
+}

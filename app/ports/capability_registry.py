@@ -20,7 +20,7 @@ CapabilityType: TypeAlias = Literal["query", "action", "workflow", "mock"]
 CapabilityAutomationLevel: TypeAlias = Literal["full", "assisted", "manual"]
 CapabilityRiskLevel: TypeAlias = Literal["low", "medium", "high"]
 CapabilityStatus: TypeAlias = Literal["draft", "active", "disabled", "deprecated"]
-CapabilityTargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms"]
+CapabilityTargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms", "business_platform"]
 CapabilityExecutionIdentity: TypeAlias = Literal[
     "user_delegated",
     "system_scope",

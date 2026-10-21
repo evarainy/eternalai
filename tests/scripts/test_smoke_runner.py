@@ -5861,13 +5861,16 @@ def test_verify_uses_production_supported_event_loop(
     loop_factory_calls = 0
     running_loop_is_selector: list[bool] = []
     expected = (object(), object())
+    settings = SimpleNamespace(database_url="synthetic_database_url")
 
-    def supported_loop_factory() -> asyncio.AbstractEventLoop:
+    def supported_loop_factory(*, database_url: str) -> asyncio.AbstractEventLoop:
         nonlocal loop_factory_calls
+        assert database_url == settings.database_url
         loop_factory_calls += 1
         return asyncio.SelectorEventLoop()
 
     async def fake_live_checks(_settings: object) -> tuple[object, object]:
+        assert _settings is settings
         running_loop_is_selector.append(
             isinstance(asyncio.get_running_loop(), asyncio.SelectorEventLoop)
         )
@@ -5876,9 +5879,7 @@ def test_verify_uses_production_supported_event_loop(
     monkeypatch.setattr(smoke_runner, "make_event_loop", supported_loop_factory)
     monkeypatch.setattr(smoke_runner, "_run_live_checks", fake_live_checks)
 
-    result = smoke_runner._run_live_checks_with_supported_loop(  # type: ignore[arg-type]
-        object()
-    )
+    result = smoke_runner._run_live_checks_with_supported_loop(settings)
 
     assert result == expected
     assert loop_factory_calls == 1

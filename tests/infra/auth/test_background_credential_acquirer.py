@@ -17,7 +17,14 @@ from app.infra.auth.oa import (
     OATimeoutError,
     OAUpstreamServerError,
 )
-from app.ports.auth import LoginCredential, Principal, PrincipalOrgContext
+from app.ports.auth import (
+    CredentialAuthenticationResult,
+    CredentialSnapshot,
+    CredentialWriteStamp,
+    LoginCredential,
+    Principal,
+    PrincipalOrgContext,
+)
 from app.ports.credential_binding import (
     CredentialAcquisitionError,
     CredentialAcquisitionFailureCode,
@@ -32,6 +39,12 @@ CANDIDATE = CredentialPollCandidate(
     poll_failure_count=0,
     updated_at=datetime(2026, 8, 21, tzinfo=UTC),
     tenant_id="default",
+    snapshot=CredentialSnapshot("default", "usr_v1_synthetic", "oa", "synthetic-binding", 1, 0, 1),
+    write_stamp=CredentialWriteStamp(
+        CredentialSnapshot("default", "usr_v1_synthetic", "oa", "synthetic-binding", 1, 0, 1),
+        "synthetic-operation",
+        datetime(2099, 1, 1, tzinfo=UTC),
+    ),
 )
 PRINCIPAL = Principal(
     ai_user_id=CANDIDATE.ai_user_id,
@@ -82,7 +95,12 @@ class FakePasswordReader:
         self.calls = 0
 
     async def load_password_for_poll(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> PasswordBindingCredential:
         assert (ai_user_id, target_system) == (CANDIDATE.ai_user_id, "oa")
         self.calls += 1
@@ -97,20 +115,20 @@ class FakeAuthentication:
         self.failure = failure
         self.calls = 0
 
-    async def authenticate(
+    async def refresh_credential(
         self,
         credential: LoginCredential,
         *,
-        reactivate_revoked_session: bool = True,
+        expected_write: CredentialWriteStamp,
         expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         assert credential.loginid.get_secret_value() == "LOGIN-CANARY"
         assert credential.userpassword.get_secret_value() == "PASSWORD-CANARY"
-        assert reactivate_revoked_session is False
+        assert expected_write == CANDIDATE.write_stamp
         self.calls += 1
         if self.failure is not None:
             raise self.failure
-        return PRINCIPAL
+        return CredentialAuthenticationResult(PRINCIPAL, expected_write)
 
 
 def _acquirer(

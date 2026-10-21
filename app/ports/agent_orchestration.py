@@ -59,7 +59,7 @@ class ConfirmationPreview:
             raise TypeError("Confirmation preview identifiers and summary must be strings")
         if self.target_system is not None and (
             type(self.target_system) is not str
-            or self.target_system not in ("oa", "u8", "hikvision_ivms")
+            or self.target_system not in ("oa", "u8", "hikvision_ivms", "business_platform")
         ):
             raise TypeError("Confirmation preview target must be a supported system or None")
         if type(self.field_names) is not tuple or any(

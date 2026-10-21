@@ -9,6 +9,8 @@ import { Icon } from '../../shared/ui/Icon';
 import type { IconName } from '../../shared/ui/Icon';
 import { useAuthStore } from '../../stores/authStore';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
+import { McpConnectionsPanel } from './McpConnectionsPanel';
+import { McpOperationPanel } from './McpOperationPanel';
 import styles from './AppsPage.module.css';
 
 /**
@@ -102,6 +104,8 @@ export default function AppsPage() {
         </header>
 
         <div className={styles.sections}>
+          <McpConnectionsPanel />
+          <McpOperationPanel />
           <section className={styles.section}>
             <div className={styles.sectionHead}>
               <h2>业务系统</h2>

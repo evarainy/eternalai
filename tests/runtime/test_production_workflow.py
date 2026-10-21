@@ -508,6 +508,43 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
             async with engine.begin() as connection:
                 source, target = sa.MetaData(), sa.MetaData()
                 await connection.run_sync(lambda sync: source.reflect(bind=sync, schema="public"))
+                check_rows = (
+                    await connection.execute(
+                        sa.text(
+                            "SELECT relation.relname AS table_name,"
+                            " constraint_row.conname AS constraint_name,"
+                            " pg_catalog.pg_get_expr(constraint_row.conbin,"
+                            " constraint_row.conrelid) AS expression"
+                            " FROM pg_catalog.pg_constraint AS constraint_row"
+                            " JOIN pg_catalog.pg_class AS relation"
+                            " ON relation.oid = constraint_row.conrelid"
+                            " JOIN pg_catalog.pg_namespace AS namespace"
+                            " ON namespace.oid = relation.relnamespace"
+                            " WHERE namespace.nspname = :schema"
+                            " AND constraint_row.contype = :constraint_type"
+                        ),
+                        {"schema": "public", "constraint_type": "c"},
+                    )
+                ).mappings().all()
+                catalog_checks = {
+                    (row["table_name"], row["constraint_name"]): row["expression"]
+                    for row in check_rows
+                }
+                assert len(catalog_checks) == len(check_rows)
+                reflected_checks = set()
+                # SQLAlchemy reflection can strip non-enclosing parentheses from
+                # CHECK expressions. Preserve catalog semantics in this synthetic clone.
+                for table in source.tables.values():
+                    for constraint in table.constraints:
+                        if isinstance(constraint, sa.CheckConstraint):
+                            assert isinstance(constraint.name, str) and constraint.name
+                            key = (table.name, constraint.name)
+                            assert key in catalog_checks
+                            expression = catalog_checks[key]
+                            assert isinstance(expression, str) and expression.strip()
+                            constraint.sqltext = sa.text(expression)
+                            reflected_checks.add(key)
+                assert reflected_checks == set(catalog_checks)
                 for table in source.sorted_tables:
                     if table.name == "alembic_version":
                         continue

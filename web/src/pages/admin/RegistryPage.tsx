@@ -23,6 +23,7 @@ import {
   listRegistry,
 } from '../../generated/admin/admin';
 import {
+  CapabilityAutomationLevel,
   CapabilityExecutionIdentity,
   CapabilityRiskLevel,
   CapabilityTargetSystem,
@@ -59,6 +60,7 @@ interface CreateFormValues {
   execution_identity: AdminCapabilityCreate['execution_identity'];
   binding_required: boolean;
   policy_digest?: string;
+  automation_level: NonNullable<AdminCapabilityCreate['automation_level']>;
 }
 
 function selectOptions(values: Record<string, string>) {
@@ -226,6 +228,7 @@ export default function RegistryPage() {
       execution_identity: values.execution_identity,
       binding_required: values.binding_required,
       policy_digest: values.policy_digest?.trim() || null,
+      automation_level: values.automation_level,
     };
     createMutation.mutate(payload);
   };
@@ -283,6 +286,7 @@ export default function RegistryPage() {
             risk_level: 'low',
             execution_identity: 'user_delegated',
             binding_required: false,
+            automation_level: 'manual',
           }}
           onFinish={submitCreate}
         >
@@ -376,6 +380,13 @@ export default function RegistryPage() {
             rules={[{ required: true }]}
           >
             <Select options={selectOptions(CapabilityExecutionIdentity)} />
+          </Form.Item>
+          <Form.Item
+            label="自动化级别"
+            name="automation_level"
+            rules={[{ required: true }]}
+          >
+            <Select options={selectOptions(CapabilityAutomationLevel)} />
           </Form.Item>
           <Form.Item label="需要绑定" name="binding_required" valuePropName="checked">
             <Switch />

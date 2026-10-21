@@ -8,6 +8,7 @@ import json
 import logging
 import socket
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
@@ -28,12 +29,17 @@ from app.infra.auth.crypto import ensure_json_object, identity_surrogate, requir
 from app.ports.auth import (
     AuthenticationError,
     AuthenticationPort,
+    CredentialAuthenticationResult,
+    CredentialSnapshot,
     CredentialStorePort,
+    CredentialWriteStamp,
     LoginCredential,
     OASessionCredential,
     Principal,
     PrincipalOrgContext,
+    StaleCredentialWrite,
 )
+from app.ports.credential_binding import CredentialBindingVerification
 
 _REQUIRED_OA_COOKIES = frozenset(
     {
@@ -69,6 +75,10 @@ _RSA_DIAGNOSTIC_TYPES = frozenset(
 
 OAAuthenticationFailureStage: TypeAlias = Literal[
     "oa_session_setup_failed",
+    "oa_setup_identity_derivation_failed",
+    "oa_setup_credential_snapshot_failed",
+    "oa_setup_http_session_factory_failed",
+    "oa_setup_clock_failed",
     "oa_rsa_request_failed",
     "oa_rsa_public_key_missing_or_invalid",
     "oa_rsa_code_type_invalid",
@@ -288,21 +298,42 @@ class OACredentialVerifier:
         reactivate_revoked_session: bool = True,
         expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
-        return await self._authenticate_once(
+        async with self._credential_store.writer_guard():
+            result, _ = await self._authenticate_once(
+                credential,
+                persist_session=True,
+                expected_subject=expected_subject,
+                reactivate_revoked_session=reactivate_revoked_session,
+            )
+        return result.principal
+
+    async def refresh_credential(
+        self,
+        credential: LoginCredential,
+        *,
+        expected_subject: tuple[str, str],
+        expected_write: CredentialWriteStamp,
+    ) -> CredentialAuthenticationResult:
+        result, _ = await self._authenticate_once(
             credential,
             persist_session=True,
             expected_subject=expected_subject,
-            reactivate_revoked_session=reactivate_revoked_session,
+            reactivate_revoked_session=False,
+            expected_write=expected_write,
         )
+        return result
 
-    async def verify_for_binding(self, credential: LoginCredential) -> Principal:
+    async def verify_for_binding(
+        self, credential: LoginCredential,
+    ) -> CredentialBindingVerification:
         """Verify identity without persisting a Session for a mismatched account."""
 
-        return await self._authenticate_once(
+        result, session_credential = await self._authenticate_once(
             credential,
             persist_session=False,
             reactivate_revoked_session=False,
         )
+        return CredentialBindingVerification(result.principal, session_credential)
 
     async def _authenticate_once(
         self,
@@ -311,12 +342,26 @@ class OACredentialVerifier:
         persist_session: bool,
         expected_subject: tuple[str, str] | None = None,
         reactivate_revoked_session: bool,
-    ) -> Principal:
+        expected_write: CredentialWriteStamp | None = None,
+    ) -> tuple[CredentialAuthenticationResult, OASessionCredential]:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
         failure_kind: OAAuthenticationFailureKind = "local_failure"
         failure_diagnostics: dict[str, str] = {}
+        setup_stage: OAAuthenticationFailureStage = "oa_setup_identity_derivation_failed"
         try:
+            # Anonymous input may only locate a read-only snapshot, never invalidate a writer.
+            before_login: CredentialSnapshot | None = None
+            if persist_session and expected_write is None:
+                prospective_id = identity_surrogate(
+                    credential.loginid.get_secret_value(), key=self._identity_hmac_key
+                )
+                setup_stage = "oa_setup_credential_snapshot_failed"
+                before_login = await self._credential_store.snapshot(
+                    prospective_id, "oa", tenant_id=self._tenant_id
+                )
+            setup_stage = "oa_setup_http_session_factory_failed"
             session = self._session_factory()
+            setup_stage = "oa_setup_clock_failed"
             now = self._clock()
             failure_stage = "oa_rsa_request_failed"
             rsa_info = await session.get_json(
@@ -404,21 +449,8 @@ class OACredentialVerifier:
                     set(await self._role_reader.list_roles(ai_user_id, tenant_id=self._tenant_id))
                 )
             )
-            if persist_session:
-                failure_stage = "local_credential_store_failed"
-                await self._credential_store.store(
-                    ai_user_id,
-                    "oa",
-                    OASessionCredential(
-                        oa_user_id=SecretStr(oa_user_id),
-                        cookies={name: SecretStr(value) for name, value in sorted(cookies.items())},
-                        expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
-                    ),
-                    tenant_id=self._tenant_id,
-                    reactivate_revoked_session=reactivate_revoked_session,
-                )
             failure_stage = "local_principal_build_failed"
-            return Principal(
+            principal = Principal(
                 ai_user_id=ai_user_id,
                 display_name=display_name,
                 roles=roles,
@@ -426,6 +458,37 @@ class OACredentialVerifier:
                     tenant_id=self._tenant_id, directory_user_id=oa_user_id
                 ),
             )
+            session_credential = OASessionCredential(
+                oa_user_id=SecretStr(oa_user_id),
+                cookies={name: SecretStr(value) for name, value in sorted(cookies.items())},
+                expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
+            )
+            receipt: CredentialWriteStamp | None = None
+            if persist_session:
+                failure_stage = "local_credential_store_failed"
+                async with AsyncExitStack() as locks:
+                    if expected_write is None:
+                        locked = await locks.enter_async_context(
+                            self._credential_store.poll_lock(
+                                ai_user_id, "oa", tenant_id=self._tenant_id
+                            )
+                        )
+                        if not locked:
+                            raise ValueError("credential writer busy")
+                        if before_login is None:
+                            raise ValueError("credential snapshot missing")
+                        expected_write = await self._credential_store.claim_write(before_login)
+                    receipt = await self._credential_store.store(
+                        ai_user_id,
+                        "oa",
+                        session_credential,
+                        tenant_id=self._tenant_id,
+                        reactivate_revoked_session=reactivate_revoked_session,
+                        expected_write=expected_write,
+                    )
+            return CredentialAuthenticationResult(principal, receipt), session_credential
+        except StaleCredentialWrite:
+            raise
         except OAAuthenticationError:
             raise
         except Exception as error:
@@ -433,7 +496,7 @@ class OACredentialVerifier:
             logging.getLogger(__name__).warning(
                 "%s%s",
                 _AUTH_FAILURE_LOG_PREFIX,
-                failure_stage,
+                setup_stage if failure_stage == "oa_session_setup_failed" else failure_stage,
             )
             if failure_stage in _RSA_RESPONSE_FAILURE_STAGES:
                 for name, value in sorted(failure_diagnostics.items()):
@@ -447,9 +510,7 @@ class OACredentialVerifier:
             failure_stage,
             failure_kind=failure_kind,
             diagnostics=(
-                failure_diagnostics
-                if failure_stage in _RSA_RESPONSE_FAILURE_STAGES
-                else None
+                failure_diagnostics if failure_stage in _RSA_RESPONSE_FAILURE_STAGES else None
             ),
         )
 
@@ -603,6 +664,13 @@ def _login_succeeded(payload: dict[str, Any]) -> bool:
     return str(msgcode) == "0" and _is_true(loginstatus)
 
 
+def parse_oa_login_subject(payload: dict[str, Any]) -> str:
+    """Reuse checkLogin success/identity rules; never infer identity from page DOM."""
+    if not _login_succeeded(payload):
+        raise OAAuthenticationDeniedError("oa_browser_login_rejected")
+    return _required_oa_user_id(payload)
+
+
 def _authentication_failure_kind(
     stage: OAAuthenticationFailureStage,
     error: Exception,
@@ -654,4 +722,5 @@ __all__ = (
     "PrincipalRoleReader",
     "UrllibOASession",
     "make_urllib_session_factory",
+    "parse_oa_login_subject",
 )

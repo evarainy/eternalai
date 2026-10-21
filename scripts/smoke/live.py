@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from http.client import HTTPMessage, RemoteDisconnected
-from typing import IO, Any
+from typing import IO, Any, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -65,7 +65,7 @@ class ProtocolEvidence:
 
     def observe_request(self, request: Request) -> None:
         """Observe one outgoing request without retaining any wire value."""
-        form = _parse_request_form(request.data)
+        form = _parse_request_form(cast(bytes | None, request.data))
         self.request_count += 1
         if set(form) != _EXPECTED_FORM_FIELDS:
             self.configured_form_matches = False
@@ -199,7 +199,7 @@ class TodoProtocolEvidence:
             path = urlsplit(request.full_url).path
         except ValueError:
             path = ""
-        form = _parse_request_form(request.data)
+        form = _parse_request_form(cast(bytes | None, request.data))
         kind = self._request_kind(path)
         self._last_request_kind = kind
         expected_kind = (
@@ -429,10 +429,25 @@ def _url_error_kind(error: URLError) -> str:
     return "url_error"
 
 
+class _OpenedResponse(Protocol):
+    headers: HTTPMessage
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> bool | None: ...
+
+    def getcode(self) -> int: ...
+
+    def read(self, amount: int = -1) -> bytes: ...
+
+
 class _RecordingResponse:
     def __init__(
         self,
-        response: Any,
+        response: _OpenedResponse,
         request: Request,
         evidence: ProtocolEvidence | TodoProtocolEvidence,
     ) -> None:

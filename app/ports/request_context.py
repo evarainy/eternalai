@@ -20,3 +20,11 @@ class RequestOrgContext(BaseModel):
     account_set_id: str | None = None
     device_domain_id: str | None = None
     resource_scope: str | None = None
+
+
+class GovernedPolicyContext(RequestOrgContext):
+    """Built only after Gateway verifies a durable, confirmed operation."""
+
+    operation_id: str
+    leaf_capability_id: str
+    attempt_id: str

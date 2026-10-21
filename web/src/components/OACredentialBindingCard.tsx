@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -15,6 +15,9 @@ import {
   Typography,
 } from 'antd';
 import { ApiError } from '../api/mutator';
+import {
+  activateBrowserBinding, getBrowserBindingStatus, type BrowserBindingSelection,
+} from '../api/browserBinding';
 import {
   bindPasswordApiV1CredentialBindingsTargetSystemPut as bindPassword,
   getBindingApiV1CredentialBindingsTargetSystemGet as getBinding,
@@ -60,53 +63,97 @@ export default function OACredentialBindingCard() {
   const [submitting, setSubmitting] = useState(false);
   const [unbinding, setUnbinding] = useState(false);
   const [operationError, setOperationError] = useState<string>();
+  const [activation, setActivation] = useState<BrowserBindingSelection | null>(null);
   const authGeneration = useAuthStore((state) => state.generation);
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
   const queryKey = bindingQueryKey(authGeneration);
+  const browserQueryKey = ['browser-binding', authGeneration, 'oa'] as const;
   const bindingQuery = useQuery({
     queryKey,
     queryFn: () => getBinding('oa'),
   });
   const binding = bindingQuery.data;
   const presentation = statusPresentation(binding);
+  const browserQuery = useQuery({
+    queryKey: browserQueryKey,
+    queryFn: ({ signal }) => getBrowserBindingStatus(signal),
+    refetchOnWindowFocus: 'always',
+  });
+  const browserBinding = submitting || unbinding || browserQuery.isFetching || browserQuery.isError
+    ? undefined : browserQuery.data;
+  const browserActive = browserBinding?.binding_state === 'active';
+  const canActivate = browserBinding?.binding_id != null
+    && browserBinding.binding_revision != null
+    && browserBinding.binding_state === 'unverified';
+
+  useEffect(() => {
+    form.resetFields();
+    setModalOpen(false);
+    setActivation(null);
+    setOperationError(undefined);
+    setSubmitting(false);
+    setUnbinding(false);
+  }, [authGeneration, form]);
 
   const closeModal = () => {
     form.resetFields();
     setOperationError(undefined);
     setModalOpen(false);
+    setActivation(null);
   };
 
   const handleBind = async (
     credential: BindPasswordApiV1CredentialBindingsTargetSystemPutBody,
   ) => {
+    const generation = authGeneration;
+    const selection = activation;
     form.resetFields();
     setSubmitting(true);
     setOperationError(undefined);
     try {
+      if (selection !== null) {
+        const updated = await activateBrowserBinding(selection, credential);
+        if (useAuthStore.getState().generation !== generation) return;
+        await queryClient.cancelQueries({ queryKey: browserQueryKey });
+        queryClient.setQueryData(browserQueryKey, updated);
+        setModalOpen(false);
+        setActivation(null);
+        void message.success('OA 自动登录凭证已启用');
+        return;
+      }
       const updated = await bindPassword('oa', credential);
+      if (useAuthStore.getState().generation !== generation) return;
       queryClient.setQueryData(queryKey, updated);
+      await queryClient.resetQueries({ queryKey: browserQueryKey });
       setModalOpen(false);
       void message.success(binding?.bound ? 'OA 密码已更新' : 'OA 密码已绑定');
     } catch (error) {
+      if (useAuthStore.getState().generation !== generation) return;
       setOperationError(safeErrorText(error));
+      void queryClient.resetQueries({ queryKey: browserQueryKey });
     } finally {
-      setSubmitting(false);
+      if (useAuthStore.getState().generation === generation) setSubmitting(false);
     }
   };
 
   const handleUnbind = async () => {
+    const generation = authGeneration;
     setUnbinding(true);
     setOperationError(undefined);
     try {
       const updated = await unbindPassword('oa');
+      if (useAuthStore.getState().generation !== generation) return;
       queryClient.setQueryData(queryKey, updated);
+      await queryClient.resetQueries({ queryKey: browserQueryKey });
       form.resetFields();
       void message.success('OA 密码绑定已解除');
     } catch (error) {
+      if (useAuthStore.getState().generation !== generation) return;
       void message.error(safeErrorText(error));
+      void queryClient.resetQueries({ queryKey: browserQueryKey });
     } finally {
-      setUnbinding(false);
+      if (useAuthStore.getState().generation === generation) setUnbinding(false);
     }
   };
 
@@ -123,6 +170,9 @@ export default function OACredentialBindingCard() {
               后台同步凭证
             </Title>
             <Tag color={presentation.color}>{presentation.label}</Tag>
+            <Tag color={browserActive ? 'green' : 'default'}>
+              {browserActive ? '自动登录凭证已启用' : '自动登录尚未启用'}
+            </Tag>
           </Space>
           <Paragraph type="secondary" style={{ margin: 0, maxWidth: 720 }}>
             密码仅用于 OA 身份验证并加密保存。密码错误一次或出现验证码时，后台轮询会持久停止。
@@ -134,6 +184,18 @@ export default function OACredentialBindingCard() {
           ) : null}
         </Space>
         <Space>
+          <Button
+            disabled={!canActivate || submitting || unbinding}
+            onClick={() => {
+              if (!canActivate || browserBinding?.binding_id == null
+                  || browserBinding.binding_revision == null) return;
+              form.resetFields();
+              setActivation({ binding_id: browserBinding.binding_id,
+                binding_revision: browserBinding.binding_revision });
+              setOperationError(undefined);
+              setModalOpen(true);
+            }}
+          >启用自动登录</Button>
           {binding?.bound ? (
             <Popconfirm
               title="解除 OA 密码绑定？"
@@ -142,14 +204,17 @@ export default function OACredentialBindingCard() {
               cancelText="取消"
               onConfirm={handleUnbind}
             >
-              <Button danger loading={unbinding}>
+              <Button danger loading={unbinding} disabled={submitting}>
                 解除绑定
               </Button>
             </Popconfirm>
           ) : null}
           <Button
             type="primary"
+            disabled={submitting || unbinding}
             onClick={() => {
+              form.resetFields();
+              setActivation(null);
               setOperationError(undefined);
               setModalOpen(true);
             }}
@@ -168,24 +233,33 @@ export default function OACredentialBindingCard() {
           description={safeErrorText(bindingQuery.error)}
         />
       ) : null}
+      {browserQuery.error ? (
+        <Alert showIcon type="error" style={{ marginTop: 16 }}
+          title="无法确认自动登录凭证状态" description="请刷新状态后再启用自动登录。" />
+      ) : null}
 
       <Modal
-        title={binding?.bound ? '重新绑定 OA 密码' : '绑定 OA 密码'}
+        title={activation !== null ? '启用 OA 自动登录' :
+          binding?.bound ? '重新绑定 OA 密码' : '绑定 OA 密码'}
         open={modalOpen}
         footer={null}
         destroyOnHidden
         mask={{ closable: !submitting }}
-        onCancel={closeModal}
+        closable={!submitting}
+        onCancel={() => { if (!submitting) closeModal(); }}
       >
         <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
           <Alert
             showIcon
             type="info"
             title="提交后立即从表单清除"
-            description="如果 OA 拒绝这次验证，凭证不会保存。"
+            description={activation !== null
+              ? '确认当前绑定并验证 OA 身份后启用自动登录；验证成功后才显示已启用。'
+              : '如果 OA 拒绝这次验证，凭证不会保存。重新绑定后需再次启用自动登录。'}
           />
           {operationError ? (
-            <Alert showIcon type="error" title="绑定失败" description={operationError} />
+            <Alert showIcon type="error" title={activation !== null ? '启用失败' : '绑定失败'}
+              description={operationError} />
           ) : null}
           <Form<BindPasswordApiV1CredentialBindingsTargetSystemPutBody>
             autoComplete="off"
@@ -216,7 +290,7 @@ export default function OACredentialBindingCard() {
               />
             </Form.Item>
             <Button block htmlType="submit" loading={submitting} type="primary">
-              验证并保存
+              {activation !== null ? '验证并启用自动登录' : '验证并保存'}
             </Button>
           </Form>
         </Space>

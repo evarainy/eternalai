@@ -3,13 +3,16 @@
 from collections.abc import Mapping
 
 from app.evaluator.overview import OVERVIEW_VERSION, required_postcondition_rule
+from app.infra.adapters.business_mcp.catalog import POLICY_VERSION, VERSION
 from app.infra.adapters.oa.capabilities import expected_oa_capabilities
 from app.infra.workflow.catalog import OVERVIEW_ID
+from app.mcp.contracts import WRITE_TOOLS, input_digest
+from app.mcp.models import digest
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.human_gate import VersionBindingMismatchError
 from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
-from app.workflow.models import WorkflowDefinition
+from app.workflow.models import GovernedWorkflowDefinition, WorkflowDefinition
 
 
 def validate_workflow_configuration(
@@ -61,6 +64,28 @@ async def _validate_entry(
     if capability != canonical or definition.version != capability.version:
         raise RuntimeError("workflow_contract_mismatch")
     canonical_leaves = {item.capability_id: item for item in expected_oa_capabilities()}
+    governed = isinstance(definition, GovernedWorkflowDefinition)
+    if governed:
+        assert isinstance(definition, GovernedWorkflowDefinition)
+        policy = definition.policy
+        if (
+            policy is None
+            or policy.remote_tool not in WRITE_TOOLS
+            or policy.version != VERSION
+            or policy.outer_capability_id != capability.capability_id
+            or policy.outer_capability_id
+            != f"business.{policy.service_config_id}.{policy.remote_tool}"
+            or policy.leaf_capability_id
+            != f"business.{policy.service_config_id}.internal.{policy.remote_tool}"
+            or policy.retry_limit != 0
+            or policy.risk != "high"
+            or not policy.confirmation_required
+            or capability.risk_level != "high"
+            or capability.target_system != "business_platform"
+            or len(definition.steps) != 1
+            or definition.steps[0].capability_id != policy.leaf_capability_id
+        ):
+            raise RuntimeError("workflow_contract_mismatch")
     for step in definition.steps:
         for leaf_id in (step.capability_id, step.confirmed_capability_id):
             if leaf_id is None:
@@ -69,7 +94,7 @@ async def _validate_entry(
             if (
                 leaf is None
                 or leaf.status != "active"
-                or leaf.risk_level != "low"
+                or leaf.risk_level != ("high" if governed else "low")
                 or leaf.type == "workflow"
                 or (
                     capability.capability_id == OVERVIEW_ID
@@ -77,6 +102,21 @@ async def _validate_entry(
                 )
             ):
                 raise RuntimeError("workflow_dependency_invalid")
+            if governed:
+                assert (
+                    isinstance(definition, GovernedWorkflowDefinition)
+                    and definition.policy is not None
+                )
+                policy = definition.policy
+                if (
+                    leaf.type != "action"
+                    or leaf.version != VERSION
+                    or leaf.target_system != "business_platform"
+                    or leaf.input_schema_digest != input_digest(policy.remote_tool)
+                    or leaf.policy_digest
+                    != digest([POLICY_VERSION, policy.service_config_id, policy.remote_tool])
+                ):
+                    raise RuntimeError("workflow_dependency_invalid")
 
 
 async def validate_production_workflows(

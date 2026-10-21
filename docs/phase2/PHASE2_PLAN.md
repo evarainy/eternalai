@@ -327,7 +327,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | Dock 页面上下文提示与绑定一致 | `web/src/stores/aiDockStore.ts::registerPageContext` 在干净重绑时清除旧 notice；`web/src/app/__tests__/AppShell.test.tsx` 覆盖「事项页 → 落地页 → 再进事项页」。 |
 | 通用会话剥离页面绑定并可回到 page 模式 | `web/src/contracts/pageContext.ts::createGeneralPageContext` 清空 `work_object_refs`、`source_refs`、`allowed_capabilities`；`web/src/stores/aiDockStore.ts::clearPageContext` 形成 `general → page` 正常回切；对应合同与 store 回归持续生效。 |
 | PR #73 任务记录与合并授权守卫 | `AGENTS.md`「Git 与永久任务记录」：PR body 三段与欠债五字段须在合并前完成；checks 绿不等于合并授权。 |
-| A/B 档静态评审桥安全摘要 | `AGENTS.md` 的 PR body 永久记录规则要求 A/B 档合并前记录闭集 JSON 摘要并绑定最终候选；评审桥模型按现役裁决选择并以 `observed_model` 如实记录；PR #134 是历史合规实例。 |
+| 静态评审桥安全摘要 | `AGENTS.md`「Git 与永久任务记录」与 `docs/phase2/REVIEW_EVIDENCE.md`：实际运行评审桥时才记录闭集 JSON 摘要并绑定最终候选，以 `observed_model` 如实记录模型；不因档位默认增加评审桥。PR #134 是历史合规实例。 |
 | Golden fixture expectation 凭证扫描 | `scripts/golden_task_assertions.py::_assert_judgement_credentials_absent`；`tests/golden_tasks/test_runner_assertions.py`。 |
 | Golden 扫描无值失败输出 | `scripts/golden_task_assertions.py::_raise_credential_failure`；无值失败回归。 |
 | 引号包裹凭证键扫描 | `scripts/golden_task_assertions.py::_bounded_serialized_json_mapping`；serialized JSON 回归。 |
@@ -548,7 +548,33 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 已决架构与历史 supersede 唯一见 `docs/phase2/DECISIONS.md`；未决项以上方五字段活欠债为准。
 
+### MCP 离线接入后的启用义务（2026-09-30）
+
+`P2-MCP-PLATFORM-001` 提供通用多服务底层及 13 工具离线开发候选；公司未确认事项按以下插口保持关闭。此记录不分配后继、不改变原 OA 必达链或第二租户禁启裁决。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| MCP 公司身份、13 输出与业务恢复合同 | 同主体证据、分用途输出、网页确认原子保障、业务后态/规则及原制品恢复尚未签收；合成测试不能代替公司合同 | `P2-MCP-PLATFORM-001`（启用前外部输入） | 待 GOV-SYNC 分配 | 公司签收版本化合同并接入既有身份/输出/规则/恢复插口，对应真实用户与获准写入验收通过后逐工具解除关闭 | `docs/dev/mcp_company_questions.md` MCP-Q01–Q11；`docs/dev/mcp_offline_acceptance.md` 13 工具矩阵 |
+| MCP 数据保留与配置版本升级 | 未决操作不得丢失原 client/制品/期限；公司尚未确定最小保留及销毁条件，当前不自动清理，配置漂移默认拒绝 | `P2-MCP-PLATFORM-001`（公司保留/恢复规则待确认） | 待 GOV-SYNC 分配 | 批准保留/结案规则、旧注册兼容升级和精确删除/迁移动作，复验 UNKNOWN 恢复不受损 | `docs/dev/mcp_company_questions.md` MCP-Q07/Q08/Q12；`docs/dev/mcp_activation_checklist.md` |
+| MCP 真实部署与业务验收 | 当前证据为合成合同、真实本地 SDK/HTTP/PG 及生产装配；未使用正式业务账号，未执行真实写或生产迁移 | `P2-MCP-PLATFORM-001`（正式服务及真实动作专项授权待具备） | 待 GOV-SYNC 分配 | 正式服务可用，专项授权齐备，逐工具完成普通用户权限、确认/恢复与可核验业务后态验收 | `docs/dev/mcp_activation_checklist.md`；候选及 PR 验证记录 |
+| 开发诊断敏感输出处置 | 固定测试库连接敏感值曾出现于工具会话，未撤回/轮换；官方后台原始日志接缝未修改，补丁两次被自动审批拒绝。本棒内存 wrapper 仅约束本次验证 | `P2-MCP-PLATFORM-001`（owner 处置及工具修复授权待安排） | 待 GOV-SYNC 分配 | owner 在明确授权范围内完成既有会话风险处置与诊断输出安全改进并验证；不得自行读原素材或改凭证 | `docs/dev/mcp_offline_acceptance.md` 结果与限制；仓库外事件/拒绝/等价全量授权证据 |
+
+### MCP PR #218 修复验证欠债（2026-10-01）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| MCP 修复的真实 PostgreSQL 定向验证 | 固定测试库不可达，已注册迁移版本未知；相关 `migrated_database_url` fixture 会隐式升级 schema，本次未授权迁移，故未执行。内存故障注入和真实持久化代码的 SQL/序列化单元验证不证明 PG 事务、advisory lock、跨进程唯一写入和恢复 | `P2-MCP-PR218-FIX-001`（环境恢复与迁移专项授权） | `P2-MCP-PR218-FIX-001` | 固定测试库及迁移授权具备后，只对确认决定持久化窗口、终态幂等 Trace、operation/checkpoint/gate 期限与已有 MCP API/恢复路径完成真实 PG 定向验收；本条不要求或授权全量 | 本次本地执行交付的定向验证记录；`tests/api/test_mcp.py`、`tests/workflow/test_mcp_recovery.py`、`tests/infra/observability/test_postgresql_trace.py`；不新增 migration |
+
+### Chat / D / 固定查询接续义务（2026-10-16）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| D v30 最终填写与自动释放 | 已移除 Chat 后重复本机确认并接入终态 Job 关闭/租约释放，但尚未取得用户最终填写与清理实测结果 | `P2-CHAT-BROWSER-READ-001`（用户真实验收及模型可用性） | `P2-CHAT-BROWSER-READ-001` | 用户在获准环境验证字段填写后停止、Chat 核验结果、成功/失败终态自动释放及下一次调用；不保存或提交 | `docs/dev/chat_browser_mcp_handoff.md`；候选 PR 与脱敏现场证据 |
+| 六查询完整真实覆盖 | 已有人员查询成功，不能据此证明全部六工具、分页与受限/空态均已实测 | `P2-CHAT-BROWSER-READ-001`（正式服务、用户授权与适用业务对象） | `P2-CHAT-BROWSER-READ-001` | 在获准查询范围逐项完成真实验收；写工具继续关闭 | `app/infra/adapters/business_mcp/fixed_query_contracts.py`；候选 PR |
+| 跨机组合装配 | 当前演示组合启动器、任务 JSON、CA/服务配置、日志处理器及 pins 在仓库外；源码原始字节摘要也受换行影响 | `P2-CHAT-BROWSER-READ-001`（目标环境配置与对应装载授权） | 待用户确定后续范围 | 目标机器按其实际源码/路径/配置完成装配和授权，真实只读及 D 填写后停止验收；不复制凭证或原机进程状态 | `docs/dev/chat_browser_mcp_handoff.md` 新电脑接续 |
+
 ## 6. P2 不做什么
+
 
 - 不把“能连到接口”当试点完成；缺可信身份、正式凭证、审计、Evaluator 或负向 Golden 时仍是半成品。（蓝图 §3.2 L176-L186、§7.0 L1383-L1404、§13 L2701-L2717）
 - 不让 Runtime、LLM、UI、Workflow 或 Skill 绕过 Capability Gateway；不让 DB Gateway 自由查生产表。（蓝图 §7.3 L1436-L1502、§14.2.1-§14.2.2 L2787-L2806）

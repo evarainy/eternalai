@@ -9,10 +9,13 @@ import logging
 import re
 import socket
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from http.client import HTTPMessage
 from pathlib import Path
-from typing import IO, Any, NoReturn, Protocol
+from time import monotonic
+from types import TracebackType
+from typing import IO, Any, NoReturn, Protocol, TypeGuard
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import (
@@ -22,6 +25,7 @@ from urllib.request import (
     Request,
     build_opener,
 )
+from uuid import UUID
 
 from pydantic import SecretStr, ValidationError
 
@@ -40,6 +44,89 @@ from app.infra.adapters.oa.contracts import (
     normalize_system_message_records,
 )
 from app.ports.auth import OASessionCredential
+
+_CHAT_STAGE_LOGGER = logging.getLogger("eternalai.chat_stages")
+_CHAT_STAGE_LOGGER.addHandler(logging.NullHandler())
+_CHAT_STAGE_LOGGER.propagate = False
+_CHAT_STAGE_NODES = frozenset({
+    'candidate', 'catalog', 'credential_read', 'execution', 'fixed_reply', 'identity', 'intent',
+    'model', 'normalization', 'oa_result', 'oa_route', 'provider_transport'
+})
+_CHAT_STAGE_OUTCOMES = frozenset({
+    'blocked', 'failed', 'ok', 'skipped', 'start', 'unknown'
+})
+_CHAT_STAGE_REASONS = frozenset({
+    'adapter_error', 'adapter_http_500', 'adapter_payload_invalid', 'adapter_timeout',
+    'ambiguous', 'argument_validation', 'binding_required', 'blank_input',
+    'capability_not_found', 'catalog_invalid', 'completed', 'completion_returned',
+    'confirm_required', 'context_length_exceeded', 'credential_not_required',
+    'credential_resolved', 'd_form_consumed', 'denied', 'empty', 'empty_response', 'failed',
+    'http_server', 'identity_expired', 'identity_revoked', 'identity_unbound', 'internal_error',
+    'invalid_request', 'low_confidence', 'match_capability', 'match_none',
+    'model_not_available', 'no_active_capability_registered', 'no_capability_found',
+    'no_matching_capability', 'no_unique_active_candidate', 'no_visible_capability', 'none',
+    'not_configured', 'over_budget', 'payload_invalid', 'payload_received', 'permission_denied',
+    'policy_denied', 'provider_error', 'provider_returned', 'rate_limited', 'ready',
+    'request_error', 'response_received', 'running', 'schema_invalid',
+    'split_key_format', 'split_key_missing', 'split_key_type',
+    'structured_output_error', 'timeout', 'unknown', 'unparsed', 'upstream_permission_denied',
+    'visible_empty', 'visible_present', 'waiting_user'
+})
+# Temporary split diagnostic; accepted only on provider_transport/failed/pending workflows.
+_SPLIT_DATA_SHAPE_REASONS = frozenset({
+    'split_data_absent', 'split_data_identity_expired', 'split_data_key_invalid',
+    'split_data_key_missing', 'split_data_key_valid', 'split_data_nonobject',
+    'split_data_permission_denied', 'split_data_unknown'
+})
+_CHAT_STAGE_CAPABILITIES = frozenset({
+    'oa.list_pending_workflows', 'oa.list_system_messages'
+})
+
+
+def _record_chat_stage(
+    trace_id: object, node: str, outcome: str, *, reason: object = None,
+    capability_id: object = None, elapsed_ms: int | None = None,
+    http_status: object = None,
+) -> None:
+    # Project only code-owned enums and Runtime's existing server UUID trace.
+    try:
+        if type(trace_id) is not str or node not in _CHAT_STAGE_NODES:
+            return
+        trace = UUID(trace_id)
+        if trace.version != 4 or str(trace) != trace_id:
+            return
+        _CHAT_STAGE_LOGGER.info(
+            "chat_stage node=%s outcome=%s capability=%s reason=%s "
+            "http_status=%s elapsed_ms=%s trace=%s",
+            node, outcome if outcome in _CHAT_STAGE_OUTCOMES else "unknown",
+            capability_id if type(capability_id) is str
+            and capability_id in _CHAT_STAGE_CAPABILITIES else "none" if capability_id is None
+            else "other",
+            reason if type(reason) is str and (
+                reason in _CHAT_STAGE_REASONS
+                or (reason in _SPLIT_DATA_SHAPE_REASONS and node == "provider_transport"
+                    and outcome == "failed"
+                    and capability_id == "oa.list_pending_workflows"))
+            else "none" if reason is None else "unknown",
+            http_status if type(http_status) is int and 100 <= http_status <= 599 else "null",
+            elapsed_ms if type(elapsed_ms) is int and 0 <= elapsed_ms <= 86_400_000
+            else "null", trace.hex,
+        )
+    except Exception:
+        # Diagnostics must not replace the existing business result.
+        return
+
+
+_oa_stage_scope: ContextVar[tuple[object, str] | None] = ContextVar("oa_stage_scope", default=None)
+
+
+def _record_oa_stage(node: str, outcome: str, *, reason: object = None,
+                     http_status: object = None, elapsed_ms: int | None = None) -> None:
+    scope = _oa_stage_scope.get()
+    if scope is not None:
+        _record_chat_stage(scope[0], node, outcome, reason=reason,
+                           capability_id=scope[1], http_status=http_status, elapsed_ms=elapsed_ms)
+
 
 _DEFAULT_MESSAGE_CENTER_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
@@ -106,6 +193,25 @@ class OAStructuralDriftReporter(Protocol):
     """Optional value-free sink for a Live structural comparison."""
 
     def __call__(self, report: OAStructuralDriftReport) -> None: ...
+
+
+class _OAOpenResponse(Protocol):
+    def __enter__(self) -> _OAOpenResponse: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+    def getcode(self) -> int: ...
+
+    def read(self, amount: int = -1) -> bytes: ...
+
+
+class _OARequestOpener(Protocol):
+    def open(self, request: Request, *, timeout: float) -> _OAOpenResponse: ...
 
 
 class OAContractPackError(RuntimeError):
@@ -215,7 +321,7 @@ class LiveOAReadProvider:
         max_pages: int = _DEFAULT_MAX_PAGES,
         max_records: int = _DEFAULT_MAX_RECORDS,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
-        opener_factory: Callable[[], OpenerDirector] | None = None,
+        opener_factory: Callable[[], _OARequestOpener] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._base_url, self._allowed_origin = validate_base_url(base_url)
@@ -298,6 +404,7 @@ class LiveOAReadProvider:
             raw_records, authoritative_count = (
                 await self._list_pending_workflow_records(credential)
             )
+            _record_oa_stage("normalization", "start")
             try:
                 actual_fingerprint = (
                     build_live_pending_workflows_fingerprint(raw_records)
@@ -355,6 +462,7 @@ class LiveOAReadProvider:
                 credential,
                 self._system_messages_form,
             )
+            _record_oa_stage("normalization", "start")
             try:
                 actual_fingerprint = build_live_system_messages_fingerprint(
                     raw_records
@@ -410,7 +518,7 @@ class LiveOAReadProvider:
             raise OALiveIdentityUnbound("OA credential is required")
         cookie_header = ""
         sessionkey = ""
-        opener: OpenerDirector | None = None
+        opener: _OARequestOpener | None = None
         split_payload: dict[str, Any] | None = None
         counts_payload: dict[str, Any] | None = None
         datas_payload: dict[str, Any] | None = None
@@ -576,7 +684,7 @@ class LiveOAReadProvider:
         if credential is None:
             raise OALiveIdentityUnbound("OA credential is required")
         cookie_header = ""
-        opener: OpenerDirector | None = None
+        opener: _OARequestOpener | None = None
         payload: dict[str, Any] | None = None
         page_records: list[Any] = []
         raw_records: list[Any] = []
@@ -751,7 +859,7 @@ class LiveOAReadProvider:
     async def _request_message_center_page(
         self,
         *,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         cookie_header: str,
         form: Mapping[str, str],
         cursor: tuple[str, str],
@@ -781,11 +889,13 @@ class LiveOAReadProvider:
     async def _request_form_payload(
         self,
         *,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         cookie_header: str,
         endpoint_path: str,
         parameters: Mapping[str, str],
     ) -> dict[str, Any]:
+        started = monotonic()
+        _record_oa_stage("provider_transport", "start")
         owned_parameters = dict(parameters)
         encoded_parameters = b""
         payload: dict[str, Any] | None = None
@@ -816,6 +926,8 @@ class LiveOAReadProvider:
             )
             payload = await asyncio.to_thread(self._open_json, opener, request)
         except HTTPError as exc:
+            _record_oa_stage("provider_transport", "failed",
+                             reason=_http_error_kind(int(exc.code)), http_status=exc.code)
             error_kind = _http_error_kind(int(exc.code))
         except OALiveIdentityUnbound:
             error_kind = "identity_unbound"
@@ -846,6 +958,13 @@ class LiveOAReadProvider:
             _log_provider_failure("http_request")
             error_kind = "request_error"
         finally:
+            _record_oa_stage(
+                "provider_transport",
+                "failed" if error_kind is not None or payload is None else "ok",
+                reason=error_kind or (
+                    "payload_received" if payload is not None else "request_error"),
+                elapsed_ms=round((monotonic() - started) * 1000),
+            )
             request = None
             encoded_parameters = b""
             owned_parameters.clear()
@@ -874,11 +993,14 @@ class LiveOAReadProvider:
 
     def _open_json(
         self,
-        opener: OpenerDirector,
+        opener: _OARequestOpener,
         request: Request,
     ) -> dict[str, Any]:
         with opener.open(request, timeout=self._timeout_seconds) as response:
             status_code = int(response.getcode())
+            _record_oa_stage("provider_transport",
+                             "ok" if 200 <= status_code < 300 else "failed",
+                             reason="response_received", http_status=status_code)
             raise_for_http_status(status_code)
             raw = response.read(self._max_response_bytes + 1)
         if len(raw) > self._max_response_bytes:
@@ -1286,17 +1408,63 @@ def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
     raise OALiveRequestError("OA response processing failed")
 
 
-def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
-    sessionkey = payload.get("sessionkey")
-    if (
-        not isinstance(sessionkey, str)
-        or len(sessionkey) != _PENDING_WORKFLOW_SESSION_KEY_LENGTH
-        or sessionkey != sessionkey.strip()
-        or any(
+def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> TypeGuard[str]:
+    return (
+        isinstance(sessionkey, str)
+        and len(sessionkey) == _PENDING_WORKFLOW_SESSION_KEY_LENGTH
+        and sessionkey == sessionkey.strip()
+        and not any(
             ord(character) < 0x20 or ord(character) == 0x7F
             for character in sessionkey
         )
-    ):
+    )
+
+
+def _split_data_shape(payload: Mapping[str, Any]) -> str:
+    """Classify only the known ``data`` field; never values, lengths or keysets."""
+
+    data: Any = None
+    try:
+        if "data" not in payload:
+            return "split_data_absent"
+        data = payload.get("data")
+        if not isinstance(data, Mapping):
+            return "split_data_nonobject"
+        try:
+            _raise_for_business_error(data)
+        except OALiveIdentityExpired:
+            return "split_data_identity_expired"
+        except OALivePermissionDenied:
+            return "split_data_permission_denied"
+        if "sessionkey" not in data:
+            return "split_data_key_missing"
+        if _is_valid_pending_workflow_sessionkey(data.get("sessionkey")):
+            return "split_data_key_valid"
+        return "split_data_key_invalid"
+    except Exception:
+        return "split_data_unknown"
+    finally:
+        data = None
+
+
+def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
+    sessionkey = payload.get("sessionkey")
+    if not _is_valid_pending_workflow_sessionkey(sessionkey):
+        # One closed category only; never the value, its length or the payload.
+        _record_oa_stage(
+            "provider_transport", "failed",
+            reason=(
+                "split_key_missing" if "sessionkey" not in payload
+                else "split_key_type" if not isinstance(sessionkey, str)
+                else "split_key_format"
+            ),
+        )
+        if "sessionkey" not in payload:
+            # Temporary diagnostic: one extra closed shape category, no new behavior.
+            _record_oa_stage(
+                "provider_transport", "failed", reason=_split_data_shape(payload)
+            )
+        sessionkey = None
         raise OALivePayloadInvalid(
             "OA pending-workflow split response session key is invalid"
         )

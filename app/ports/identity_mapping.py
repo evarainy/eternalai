@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.ports.capability_gateway import RequestOrgContext
 
-TargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms"]
+TargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms", "business_platform"]
 ExecutionIdentity: TypeAlias = Literal[
     "user_delegated",
     "system_scope",
@@ -56,6 +56,8 @@ class IdentityMappingPort(Protocol):
         target_system: TargetSystem,
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
+        *,
+        service_config_id: str | None = None,
     ) -> IdentityCheckResult: ...
 
     async def get_mapping(

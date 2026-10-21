@@ -50,6 +50,24 @@ class WorkflowDefinition:
 
 
 @dataclass(frozen=True)
+class GovernedWorkflowPolicy:
+    service_config_id: str
+    outer_capability_id: str
+    leaf_capability_id: str
+    remote_tool: str
+    version: str
+    recovery_capability_id: str | None = None
+    risk: Literal["high"] = "high"
+    retry_limit: Literal[0] = 0
+    confirmation_required: Literal[True] = True
+
+
+@dataclass(frozen=True)
+class GovernedWorkflowDefinition(WorkflowDefinition):
+    policy: GovernedWorkflowPolicy | None = None
+
+
+@dataclass(frozen=True)
 class WorkflowRunResult:
     workflow_id: str
     workflow_version: str
@@ -61,7 +79,25 @@ class WorkflowRunResult:
     evaluation_observations: tuple[StepObservation, ...] = ()
 
 
+class GovernedTerminalResult(WorkflowRunResult):
+    """Typed in-process proof returned only after a durable governed terminal."""
+
+
+class GovernedConfirmationFailureResult(GovernedTerminalResult):
+    """Durable unsent failure; confirmation is invalid, original error is retained."""
+
+
+class GovernedFinalizationError(RuntimeError):
+    """Business terminal is durable; task/trace writes still require repair."""
+
+    def __init__(self, result: WorkflowRunResult) -> None:
+        super().__init__("governed terminal finalizer incomplete")
+        self.result = result
+
+
 __all__ = (
+    "GovernedFinalizationError",
+    "GovernedTerminalResult",
     "WorkflowCondition",
     "WorkflowDefinition",
     "WorkflowInputRef",

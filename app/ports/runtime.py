@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.sdui.models import UserAction
 from app.ports.auth import Principal
 from app.ports.response_envelope import ResponseEnvelope
+
+
+class DFormCollectionReference(BaseModel):
+    """A reference only; authenticated ownership is rechecked on every reply."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    task_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,96}$")
+    version: int = Field(strict=True, ge=1, le=32)
+
+
+d_form_collection_reference: ContextVar[DFormCollectionReference | None] = ContextVar(
+    "d_form_collection_reference", default=None,
+)
 
 type UserActionOutcome = Literal[
     "accepted",
@@ -42,4 +58,6 @@ class RuntimePort(Protocol):
     ) -> ResponseEnvelope: ...
 
 
-__all__ = ("RuntimePort", "UserActionOutcome")
+__all__ = (
+    "DFormCollectionReference", "RuntimePort", "UserActionOutcome", "d_form_collection_reference",
+)

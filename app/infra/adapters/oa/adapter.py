@@ -22,6 +22,8 @@ from app.infra.adapters.oa.provider import (
     OALiveRequestError,
     OALiveTimeout,
     OAReadProvider,
+    _oa_stage_scope,
+    _record_chat_stage,
 )
 from app.ports.adapter import AdapterFailureStage, AdapterResult, AdapterTraceMetadata
 from app.ports.auth import OASessionCredential
@@ -89,12 +91,29 @@ class OAReadAdapter:
         argument_keys = tuple(sorted(arguments))
         binding = self._bindings.get(capability_id)
         if binding is None:
+            _record_chat_stage(execution_context.get("trace_id"), "oa_result", "blocked",
+                               reason="capability_not_found", capability_id=capability_id)
             return _adapter_error(argument_keys, "unknown")
         try:
             binding.arguments_model.model_validate(arguments, strict=True)
         except ValidationError:
+            _record_chat_stage(execution_context.get("trace_id"), "oa_result", "blocked",
+                               reason="argument_validation", capability_id=capability_id)
             return _adapter_error(argument_keys, "argument_validation")
-        return await binding.handler(execution_context, argument_keys)
+        trace_id = execution_context.get("trace_id")
+        token = _oa_stage_scope.set((trace_id, capability_id))
+        try:
+            result = await binding.handler(execution_context, argument_keys)
+            stage = result.trace_metadata.failure_stage if result.trace_metadata else None
+            _record_chat_stage(trace_id,
+                               stage if stage in {"credential_read", "provider_transport",
+                                                  "normalization"} else "oa_result",
+                               "ok" if result.status == "success" else "failed",
+                               reason=result.error_code or "provider_returned",
+                               capability_id=capability_id)
+            return result
+        finally:
+            _oa_stage_scope.reset(token)
 
     async def _list_pending_workflows(
         self,
@@ -127,7 +146,9 @@ class OAReadAdapter:
         argument_keys: tuple[str, ...],
         provider_call: Callable[[OASessionCredential | None], Awaitable[BaseModel]],
     ) -> AdapterResult:
+        trace_id = execution_context.get("trace_id")
         credential: OASessionCredential | None = None
+        _record_chat_stage(trace_id, "credential_read", "start", capability_id=capability_id)
         try:
             if self._provider.requires_credential:
                 credential_ref = execution_context.get("credential_ref")
@@ -140,7 +161,13 @@ class OAReadAdapter:
                 credential = await self._secret_provider.resolve_oa_session(
                     credential_ref
                 )
+            _record_chat_stage(trace_id, "credential_read",
+                               "ok" if self._provider.requires_credential else "skipped",
+                               reason="credential_resolved" if self._provider.requires_credential
+                               else "credential_not_required", capability_id=capability_id)
             collection = await provider_call(credential)
+            _record_chat_stage(trace_id, "normalization", "ok", reason="provider_returned",
+                               capability_id=capability_id)
             return AdapterResult(
                 status="success",
                 data=collection.model_dump(mode="json"),

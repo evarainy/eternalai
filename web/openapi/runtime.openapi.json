@@ -84,6 +84,7 @@
           },
           "status": {
             "enum": [
+              "running",
               "completed",
               "blocked",
               "waiting_user",
@@ -203,7 +204,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },
@@ -253,7 +255,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },
@@ -300,6 +303,29 @@
         "title": "ConfirmUserAction",
         "type": "object"
       },
+      "DFormCollectionReference": {
+        "additionalProperties": false,
+        "description": "A reference only; authenticated ownership is rechecked on every reply.",
+        "properties": {
+          "task_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Task Id",
+            "type": "string"
+          },
+          "version": {
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "version"
+        ],
+        "title": "DFormCollectionReference",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -330,6 +356,29 @@
             "additionalProperties": true,
             "title": "Client Capabilities",
             "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "d_form_collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DFormCollectionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "message": {
             "title": "Message",
@@ -412,6 +461,7 @@
           },
           "status": {
             "enum": [
+              "running",
               "completed",
               "blocked",
               "waiting_user",
@@ -527,7 +577,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },

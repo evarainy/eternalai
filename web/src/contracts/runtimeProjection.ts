@@ -14,6 +14,7 @@ declare const __ETERNALAI_OA_ALLOWED_PATH_PREFIXES__: string;
 
 const SUPPORTED_SCHEMA_VERSION = 'phase0.sdui.v1';
 const responseStatuses = new Set<ResponseEnvelopeStatus>([
+  'running',
   'completed',
   'cancelled',
   'confirmation_invalidated',
@@ -34,6 +35,7 @@ const generatedTargetSystemMembership = {
   oa: true,
   u8: true,
   hikvision_ivms: true,
+  business_platform: true,
 } as const satisfies Record<GeneratedTargetSystem, true>;
 const confirmPayloadKeys = new Set([
   'capability_id',
@@ -44,6 +46,7 @@ const confirmPayloadKeys = new Set([
 ]);
 
 export type PresentationKind =
+  | 'unconfirmed'
   | 'completed'
   | 'cancelled'
   | 'confirmation_invalidated'
@@ -116,6 +119,9 @@ export type RecordsView =
     };
 
 export interface ProjectedResponse {
+  dFormCollection?: DFormCollectionReference;
+  dFormCategoryOptions?: readonly string[];
+  mcpRecoveryPath?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -129,6 +135,19 @@ export interface ProjectedResponse {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export interface DFormCollectionReference {
+  readonly task_id: string;
+  readonly version: number;
+}
+
+function collectionReference(value: unknown): DFormCollectionReference | null {
+  if (!isRecord(value) || Object.keys(value).length !== 2
+      || typeof value.task_id !== 'string' || !/^[A-Za-z0-9_-]{1,96}$/.test(value.task_id)
+      || typeof value.version !== 'number' || !Number.isInteger(value.version)
+      || value.version < 1 || value.version > 32) return null;
+  return { task_id: value.task_id, version: value.version };
 }
 
 function isGeneratedTargetSystem(value: unknown): value is GeneratedTargetSystem {
@@ -646,7 +665,31 @@ export function projectResponse(
     confirm: null,
     records: data.records,
     actionOutcome: data.actionOutcome,
+    ...mcpRecoveryReference(value.data),
   };
+
+  if (isRecord(value.data) && value.data.kind === 'd_form_collection') {
+    if (action !== 'none' || value.ui.component_type !== 'none') return incompatibleResponse();
+    if (status === 'waiting_user' && value.data.outcome === 'waiting_user') {
+      const reference = collectionReference(value.data.d_form_collection);
+      if (reference === null || value.task_id !== reference.task_id) return incompatibleResponse();
+      const options = value.data.category_options;
+      if (!Array.isArray(options) || options.length > 64
+          || options.some((item: unknown) => typeof item !== 'string' || !item.trim()
+            || item.length > 100 || hasControlCharacter(item))
+          || new Set(options).size !== options.length
+          || typeof value.data.category_source_available !== 'boolean'
+          || (!value.data.category_source_available && options.length !== 0)) {
+        return incompatibleResponse();
+      }
+      return { ...base, presentationKind: 'clarification', dFormCollection: reference,
+        dFormCategoryOptions: options };
+    }
+    if (status === 'running' && value.data.outcome === 'handoff_pending'
+        && value.data.d_form_collection === null) {
+      return { ...base, presentationKind: 'unconfirmed' };
+    }
+  }
 
   if (status === 'cancelled' || status === 'confirmation_invalidated') {
     if (
@@ -694,4 +737,18 @@ export function projectResponse(
     return { ...base, presentationKind: 'failed' };
   }
   return incompatibleResponse();
+}
+
+function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {
+  const reference = isRecord(data) && 'action_outcome' in data ? data.result : data;
+  if (!isRecord(reference) ||
+      Object.keys(reference).some((key) => !['operation_id', 'state', 'result'].includes(key)) ||
+      typeof reference.operation_id !== 'string' || !/^[a-f0-9]{32}$/.test(reference.operation_id) ||
+      typeof reference.state !== 'string' || ![
+        'READY', 'WAITING_LOCAL_CONFIRM', 'WAITING_EXTERNAL_CONFIRM', 'SENDING', 'UNKNOWN',
+        'VERIFIED_SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED',
+      ].includes(reference.state)) return {};
+  if (reference.result !== undefined && reference.result !== null &&
+      (reference.state !== 'VERIFIED_SUCCESS' || !isRecord(reference.result))) return {};
+  return { mcpRecoveryPath: `/apps?operation=${reference.operation_id}` };
 }

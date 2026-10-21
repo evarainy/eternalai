@@ -157,6 +157,8 @@ class MockIdentityMapping:
         target_system: TargetSystem,
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
+        *,
+        service_config_id: str | None = None,
     ) -> IdentityCheckResult:
         return self._resolve_identity_sync(
             ai_user_id=ai_user_id,

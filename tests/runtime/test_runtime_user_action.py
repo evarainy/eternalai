@@ -67,6 +67,26 @@ class RecordingTrace:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
         self.finalizations: list[dict[str, Any]] = []
+        self.once = {}
+
+    async def record_event_once(self, event, idempotency_key):
+        existing = self.once.get(idempotency_key)
+        if existing is not None:
+            assert existing == event
+            return
+        await self.record_step(
+            event.trace_id,
+            event.task_id,
+            event.session_id,
+            tenant_id=event.tenant_id,
+            ai_user_id=event.ai_user_id,
+            event_type=event.event_type,
+            status=event.status,
+            capability_id=event.capability_id,
+            error_code=event.error_code,
+            attributes=event.attributes,
+        )
+        self.once[idempotency_key] = event
 
     async def start_task_trace(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -1678,6 +1698,7 @@ def test_terminal_store_or_trace_failure_never_reports_success(failure: str) -> 
             raise RuntimeError("synthetic terminal write failure")
 
         original_step = harness.trace.record_step
+        original_update = harness.runtime._task_store.update_status
 
         async def broken_step(*args: Any, **kwargs: Any) -> Any:
             if kwargs["event_type"] == (
@@ -1692,14 +1713,22 @@ def test_terminal_store_or_trace_failure_never_reports_success(failure: str) -> 
             harness.trace.record_step = broken_step
         with pytest.raises(RuntimeError, match="synthetic terminal write failure"):
             await _terminal_action(harness, "cancel")
-        assert not harness.runtime._pending_workflows
         claim = next(iter(harness.runtime._claimed_pending_confirmations.values()))
         assert claim.state in {"cancelled", "confirmation_invalidated"}
         assert claim.cleanup_complete is False
-        assert claim.pending is None
-        with pytest.raises(RuntimeError, match="Confirmation cleanup is incomplete"):
+        assert claim.pending is not None
+        assert harness.runtime._pending_workflows
+        with pytest.raises(RuntimeError, match="synthetic terminal write failure"):
             await _terminal_action(harness, "cancel")
         assert claim.cleanup_complete is False
+        assert harness.engine.resume_calls == 0
+        assert harness.gate.record_decision_calls == 1
+        harness.runtime._task_store.update_status = original_update
+        harness.trace.record_step = original_step
+        recovered = await _terminal_action(harness, "cancel")
+        assert _outcome(recovered) == "cancelled"
+        assert claim.cleanup_complete is True and claim.pending is None
+        assert not harness.runtime._pending_workflows
         assert harness.engine.resume_calls == 0
         assert harness.gate.record_decision_calls == 1
 
@@ -1962,7 +1991,7 @@ def test_expire_forget_cas_keeps_other_tenant():
         expired = replace(a, monotonic_deadline=99.0)
         assert h.runtime._compare_and_swap_pending_workflow(ka, expected=a, replacement=expired)
         assert h.runtime._pending_workflows[kb] is b
-        await h.runtime._expire_pending_confirmations()
+        await h.runtime._expire_pending_confirmations(a.owner)
         assert h.runtime._task_store.records[a.task_id].status == "confirmation_invalidated"
         assert h.runtime._pending_workflows[kb] is b
         assert h.gate.record_decision_calls == h.engine.resume_calls == 0

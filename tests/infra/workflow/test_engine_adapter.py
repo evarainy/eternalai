@@ -118,12 +118,38 @@ class _SpyWorkflowEngine:
         self.resume_version_bindings_calls.append(kwargs)
         return self.resume_version_bindings_result
 
-    def discard_checkpoint(self, task_id: str) -> None:
+    async def discard_checkpoint(self, task_id: str) -> None:
         self.discard_checkpoint_calls.append(task_id)
 
-    def pending_confirmation_action_digest(self, task_id: str) -> str:
+    async def pending_confirmation_action_digest(self, task_id: str) -> str:
         self.pending_confirmation_action_digest_calls.append(task_id)
         return self.pending_confirmation_action_digest_result
+
+    async def governed_confirmation(self, task_id):
+        self.governed_task = task_id
+        return "synthetic-gate"
+
+    async def finalize_governed_task(self, **kwargs):
+        self.finalized_task = kwargs
+        return self.execute_result
+
+    async def retire_owned_confirmation(self, *args):
+        self.retired_confirmation = args
+        return True
+
+
+def test_governed_lifecycle_methods_forward_exact_identity():
+    async def run():
+        spy = _SpyWorkflowEngine()
+        adapter = WorkflowEngineAdapter(spy)
+        assert await adapter.governed_confirmation("task-1") == "synthetic-gate"
+        assert spy.governed_task == "task-1"
+        assert await adapter.finalize_governed_task(task_id="task-1") is spy.execute_result
+        assert spy.finalized_task == {"task_id": "task-1"}
+        assert await adapter.retire_owned_confirmation("task-1", "action", "gate", "expired")
+        assert spy.retired_confirmation == ("task-1", "action", "gate", "expired")
+
+    asyncio.run(run())
 
 
 def test_execute_forwards_every_argument_and_returns_engine_result_unchanged() -> None:
@@ -235,7 +261,7 @@ def test_discard_checkpoint_forwards_task_id() -> None:
     spy = _SpyWorkflowEngine()
     adapter = WorkflowEngineAdapter(spy)  # type: ignore[arg-type]
 
-    adapter.discard_checkpoint("task-5")
+    asyncio.run(adapter.discard_checkpoint("task-5"))
 
     assert spy.discard_checkpoint_calls == ["task-5"]
 
@@ -244,7 +270,7 @@ def test_pending_confirmation_action_digest_forwards_task_id_and_returns_engine_
     spy = _SpyWorkflowEngine()
     adapter = WorkflowEngineAdapter(spy)  # type: ignore[arg-type]
 
-    result = adapter.pending_confirmation_action_digest("task-6")
+    result = asyncio.run(adapter.pending_confirmation_action_digest("task-6"))
 
     assert spy.pending_confirmation_action_digest_calls == ["task-6"]
     assert result == spy.pending_confirmation_action_digest_result

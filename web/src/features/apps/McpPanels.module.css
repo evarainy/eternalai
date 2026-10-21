@@ -1,0 +1,9 @@
+.panel { display: grid; gap: 14px; padding-block: 20px; border-top: 1px solid var(--color-border, #e2e8f0); }
+.panel h2, .panel p { margin: 0; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px; border: 1px solid var(--color-border, #e2e8f0); border-radius: 12px; }
+.name { flex: 1; min-width: 150px; }
+.muted { color: var(--color-text-secondary, #64748b); font-size: 14px; }
+.error { color: var(--color-error, #a23b32); }
+.form { display: flex; flex-wrap: wrap; gap: 10px; }
+.form input { min-width: 180px; flex: 1; }
+.link { text-decoration: underline; text-underline-offset: 3px; }

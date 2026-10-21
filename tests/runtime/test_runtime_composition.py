@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -189,33 +191,70 @@ def test_production_components_share_real_gateway_with_orchestration() -> None:
 
 
 @pytest.fixture
-def orchestration_clean_database_url(migrated_database_url: str) -> str:
-    """Prove this entry test builds its tables using existing Alembic migrations.
-
-    The fixed, exclusively held test database is the only allowed target. No
-    schema definition or handwritten drop/create is used here.
-    """
+def orchestration_clean_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Build the production entry schema from empty through the real Alembic chain."""
     from alembic.config import Config
-    from sqlalchemy import create_engine, inspect
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine, inspect, text
     from sqlalchemy.engine import make_url
 
     from alembic import command
     from app.db.config import normalize_database_url
 
-    url = make_url(normalize_database_url(migrated_database_url))
+    database_url = os.environ.get("DATABASE_URL")
+    assert database_url, "DATABASE_URL must be set by the test runner environment"
+    url = make_url(normalize_database_url(database_url))
     assert (url.host, url.port, url.database) == ("127.0.0.1", 15432, "eternalai_test")
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
-    command.downgrade(config, "base")
     engine = create_engine(url)
+    schema = f"orchestration_entry_{uuid4().hex}"
+    created = False
     try:
-        tables = inspect(engine).get_table_names()
-        assert set(tables) <= {"alembic_version"}
-        print("ORCHSEAM_CLEAN_DATABASE business_tables=0 target=127.0.0.1:15432/eternalai_test")
+        with engine.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            assert inspect(connection).get_table_names(schema=schema) == []
+        created = True
+        print("ORCHSEAM_CLEAN_DATABASE business_tables=0 isolated_schema=true")
+
+        isolated_url = url.update_query_dict({"options": f"-csearch_path={schema}"})
+        scoped_database_url = isolated_url.render_as_string(hide_password=False)
+        scoped_engine = create_engine(isolated_url)
+        try:
+            with scoped_engine.connect() as connection:
+                assert connection.execute(text("SELECT current_schema()")).scalar_one() == schema
+                assert inspect(connection).get_table_names() == []
+        finally:
+            scoped_engine.dispose()
+        with monkeypatch.context() as migration_environment:
+            migration_environment.setenv("DATABASE_URL", scoped_database_url)
+            command.upgrade(config, "head")
+
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+                assert connection.execute(text("SELECT current_schema()")).scalar_one() == schema
+                assert {"alembic_version", "tasks", "capabilities"} <= set(
+                    inspect(connection).get_table_names()
+                )
+                assert (
+                    connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                    == ScriptDirectory.from_config(config).get_current_head()
+                )
+            finally:
+                transaction.rollback()
+        yield scoped_database_url
     finally:
+        if created:
+            assert schema.startswith("orchestration_entry_")
+            with engine.begin() as connection:
+                connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+                assert connection.execute(
+                    text("SELECT COUNT(*) FROM pg_namespace WHERE nspname = :schema"),
+                    {"schema": schema},
+                ).scalar_one() == 0
         engine.dispose()
-    command.upgrade(config, "head")
-    return migrated_database_url
 
 
 def test_production_entry_request_reaches_agent_and_real_gateway_once(
@@ -313,9 +352,11 @@ def test_production_entry_request_reaches_agent_and_real_gateway_once(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, updated_at)"
-                        " VALUES ('synthetic-production-tenant', :user, :cipher, :nonce,"
+                        " VALUES (md5(random()::text),'synthetic-production-tenant',"
+                        " :user, :cipher, :nonce,"
                         " :payload, :expires, :updated)"
                     ),
                     {
@@ -879,6 +920,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_checks={},
+        mcp_service=None,
         health_timeout_seconds=settings.health_timeout_seconds,
         user_profile=None,
     )
@@ -889,13 +931,13 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
     )
     monkeypatch.setattr("app.main.create_app", lambda **_kwargs: application)
 
-    with caplog.at_level(logging.WARNING, logger="app.main"):
+    with caplog.at_level(logging.WARNING, logger="app.application"):
         result = create_production_app(settings)
 
     warning_records = [
         record
         for record in caplog.records
-        if record.name == "app.main"
+        if record.name == "app.application"
         and record.getMessage().startswith("session_cookie_secure_disabled")
     ]
     assert result is application
@@ -1021,6 +1063,7 @@ def _oa_mode_settings(mode: str) -> ProductionSettings:
         oa_system_messages_bizstate=("system-business-state" if mode == "live" else None),
         oa_system_messages_select_state=("system-selection-state" if mode == "live" else None),
     )
+
 
 @pytest.mark.parametrize(
     ("mode", "provider_type"),
@@ -1189,7 +1232,6 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
 
     with pytest.raises(RuntimeError, match="does not allow"):
         build_production_components(settings, **overrides)
-
 
 
 def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db):

@@ -1249,3 +1249,125 @@ def test_profile_mismatch_stops_before_all_gateway_dependencies():
     assert result.status == "denied" and result.error_code == "policy_denied"
     assert result.data is None
     assert [dependency.mock_calls for dependency in dependencies] == [[], [], [], [], []]
+
+
+@pytest.mark.parametrize("condition, expected_error", [
+    ("no_scope", "policy_denied"),
+    ("wrong_user", "policy_denied"),
+    ("wrong_session", "policy_denied"),
+    ("wrong_intent", "policy_denied"),
+    ("unbound", "identity_unbound"),
+    ("extra_argument", "adapter_payload_invalid"),
+    ("missing_argument", "adapter_payload_invalid"),
+    ("stale_publication", "capability_candidate_stale"),
+])
+def test_chat_browser_gateway_refuses_before_submission(condition, expected_error) -> None:
+    from app.ports.browser_gateway import browser_request_scope
+    from tests.runtime.test_runtime_gateway_result_mapping import (
+        _chat_browser_fixture,
+        _chat_browser_scope,
+    )
+
+    async def scenario() -> None:
+        fixture = _chat_browser_fixture()
+        with _chat_browser_scope(fixture.principal) as scope:
+            scope.attempt.task_id, scope.attempt.trace_id = "intent-I", "intent-trace"
+            scope.attempt.message, scope.attempt.channel = fixture.message, "web"
+            if condition == "unbound":
+                fixture.gateway._identity_mapping.resolve_execution_identity.return_value = (
+                    _identity_result("unbound")
+                )
+            if condition == "stale_publication":
+                fixture.gateway._capability_registry = FakeRegistry(
+                    fixture.spec.model_copy(update={"version": "v2"})
+                )
+            arguments = {"business_key": "DEMO-731"}
+            if condition == "extra_argument":
+                arguments["caller_authored_grant"] = "allow"
+            if condition == "missing_argument":
+                arguments = {}
+            token = browser_request_scope.set(None if condition == "no_scope" else scope)
+            try:
+                result = await fixture.gateway.execute_capability(
+                    "wrong-I" if condition == "wrong_intent" else "intent-I",
+                    "other-session" if condition == "wrong_session" else scope.bound_session,
+                    "other-user" if condition == "wrong_user" else fixture.principal.ai_user_id,
+                    fixture.spec.capability_id, arguments,
+                    RequestOrgContext(request_id="intent-trace",
+                                      tenant_id=fixture.principal.org_ctx.tenant_id),
+                )
+            finally:
+                browser_request_scope.reset(token)
+            assert result.status != "running"
+            assert result.error_code == expected_error
+            assert result.browser_admission is None
+            assert fixture.submission.submit_calls == []
+            assert fixture.fallback.calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_chat_browser_gateway_accepts_only_process_local_matching_admission() -> None:
+    from tests.runtime.test_runtime_gateway_result_mapping import (
+        _chat_browser_fixture,
+        _chat_browser_scope,
+    )
+
+    async def scenario() -> None:
+        fixture = _chat_browser_fixture()
+        with _chat_browser_scope(fixture.principal) as scope:
+            scope.attempt.task_id, scope.attempt.trace_id = "intent-I", "intent-trace"
+            scope.attempt.message, scope.attempt.channel = fixture.message, "web"
+            result = await fixture.gateway.execute_capability(
+                "intent-I", scope.bound_session, fixture.principal.ai_user_id,
+                fixture.spec.capability_id, {"business_key": "DEMO-731"},
+                RequestOrgContext(request_id="intent-trace",
+                                  tenant_id=fixture.principal.org_ctx.tenant_id),
+            )
+            assert result.status == "running" and result.error_code is None
+            assert result.browser_admission is scope.attempt.admission
+            assert result.browser_admission.task_id == "canonical-B"
+            assert result.browser_admission.run_id == "canonical-R"
+            assert "browser_admission" not in result.model_dump()
+            assert len(fixture.submission.submit_calls) == 1
+            assert fixture.fallback.calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_chat_browser_gateway_refuses_foreign_owner_admission() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.browser_skill.models import BrowserOwner
+    from app.ports.browser_gateway import BrowserGatewayAdmission
+    from tests.runtime.test_runtime_gateway_result_mapping import (
+        _chat_browser_fixture,
+        _chat_browser_scope,
+    )
+
+    async def scenario() -> None:
+        fixture = _chat_browser_fixture()
+        with _chat_browser_scope(fixture.principal) as scope:
+            scope.attempt.task_id, scope.attempt.trace_id = "intent-I", "intent-trace"
+            scope.attempt.message, scope.attempt.channel = fixture.message, "web"
+            registration, _adapter = fixture.gateway._browser_dispatch
+            foreign = BrowserGatewayAdmission(BrowserOwner(
+                tenant_id="other-tenant", user_id="other-user", session_id=scope.bound_session,
+            ), "foreign-B", "foreign-trace", "accepted", "foreign-R", 1)
+            adapter = SimpleNamespace(execute=AsyncMock(return_value=AdapterResult(
+                status="accepted", browser_admission=foreign,
+            )))
+            fixture.gateway._browser_dispatch = registration, adapter
+            result = await fixture.gateway.execute_capability(
+                "intent-I", scope.bound_session, fixture.principal.ai_user_id,
+                fixture.spec.capability_id, {"business_key": "DEMO-731"},
+                RequestOrgContext(request_id="intent-trace",
+                                  tenant_id=fixture.principal.org_ctx.tenant_id),
+            )
+            assert result.status == "denied" and result.error_code == "policy_denied"
+            assert result.browser_admission is None and result.data is None
+            assert scope.attempt.admission is None
+            assert adapter.execute.await_count == 1
+
+    asyncio.run(scenario())

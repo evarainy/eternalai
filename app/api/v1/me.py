@@ -18,10 +18,11 @@ from __future__ import annotations
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
+from app.ports.browser_chat import BrowserChatPort
 from app.ports.user_profile import (
     OrgProfileStatus,
     UserAvatar,
@@ -71,6 +72,15 @@ class MeOrg(BaseModel):
     department_id: str | None = None
 
 
+class BrowserOwnerScope(BaseModel):
+    """Server HMAC cache aliases; never internal IDs or authorization grants."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: str
+    user_id: str
+
+
 class MeResponse(BaseModel):
     """A 200 always means authenticated; ``org`` may still be absent."""
 
@@ -84,11 +94,17 @@ class MeResponse(BaseModel):
     # information and must not reach the browser, so the type makes it
     # impossible for one to be placed here.
     avatar_path: Literal["/api/v1/me/avatar"] | None = None
+    browser_owner_scope: BrowserOwnerScope | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    browser_skill_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def make_router(
     user_profile: UserProfilePort | None,
     require_principal: PrincipalDependency,
+    *,
+    browser_chat: BrowserChatPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -115,11 +131,22 @@ def make_router(
             if snapshot.org is not None
             else None
         )
+        cache_scope = (
+            browser_chat.owner_cache_scope(principal) if browser_chat is not None else None
+        )
         return MeResponse(
             display_name=principal.display_name,
             org=org,
             org_status=snapshot.org_status,
             avatar_path=AVATAR_PATH if snapshot.avatar_available else None,
+            browser_owner_scope=(
+                BrowserOwnerScope(
+                    tenant_id=cache_scope[0],
+                    user_id=cache_scope[1],
+                )
+                if cache_scope is not None else None
+            ),
+            browser_skill_id=browser_chat.skill_id if browser_chat is not None else None,
         )
 
     @router.get("/avatar", response_class=Response, responses=_AVATAR_RESPONSES)

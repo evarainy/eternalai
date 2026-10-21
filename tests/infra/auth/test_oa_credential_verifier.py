@@ -27,14 +27,19 @@ from app.credential_polling import CredentialPollingPolicy, CredentialPollingSer
 from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.auth.crypto import identity_surrogate
 from app.infra.auth.oa import (
+    OAAuthenticationDeniedError,
     OAAuthenticationError,
     OACredentialVerifier,
+    OAInvalidResponseError,
     make_urllib_session_factory,
+    parse_oa_login_subject,
 )
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
 from app.ports.auth import (
     AuthenticationError,
+    CredentialSnapshot,
     CredentialStorePort,
+    CredentialWriteStamp,
     LoginCredential,
     OASessionCredential,
     Principal,
@@ -70,6 +75,24 @@ class RecordingCredentialStore:
         self.records: list[tuple[str, OASessionCredential]] = []
         self.reactivation_flags: list[bool] = []
 
+    @asynccontextmanager
+    async def writer_guard(self):
+        yield
+
+    async def snapshot(self, ai_user_id, target_system, *, tenant_id):
+        return CredentialSnapshot(
+            tenant_id, ai_user_id, target_system, "synthetic-binding", 1, 0, 0, True
+        )
+
+    async def claim_write(self, snapshot):
+        return CredentialWriteStamp(
+            snapshot, "synthetic-operation", datetime(2099, 1, 1, tzinfo=UTC)
+        )
+
+    @asynccontextmanager
+    async def poll_lock(self, ai_user_id, target_system, *, tenant_id):
+        yield True
+
     async def store(
         self,
         ai_user_id: str,
@@ -78,10 +101,12 @@ class RecordingCredentialStore:
         *,
         tenant_id: str,
         reactivate_revoked_session: bool = True,
+        expected_write: CredentialWriteStamp,
     ) -> None:
         assert target_system == "oa"
         self.records.append((ai_user_id, credential))
         self.reactivation_flags.append(reactivate_revoked_session)
+        return expected_write
 
     async def load(
         self, ai_user_id: str, target_system: str, *, tenant_id: str
@@ -396,12 +421,35 @@ def test_background_authentication_preserves_revocation_in_store_handoff() -> No
 def test_binding_verification_does_not_persist_a_session_before_identity_match() -> None:
     verifier, store, openers, credential = _fixture(login_succeeds=True)
 
-    principal = asyncio.run(verifier.verify_for_binding(credential))
+    verification = asyncio.run(verifier.verify_for_binding(credential))
 
-    assert principal.ai_user_id.startswith("usr_v1_")
+    assert verification.principal.ai_user_id.startswith("usr_v1_")
+    assert (verification.session_credential.oa_user_id.get_secret_value()
+            == verification.principal.org_ctx.directory_user_id)
+    assert verification.session_credential.cookies
     assert store.records == []
     assert openers[0].check_login_calls == 1
     assert openers[0].requested_user_ids == ["123"]
+
+
+@pytest.mark.parametrize("payload,subject", [
+    ({"msgcode": 0, "loginstatus": True, "userid": 731}, "731"),
+    ({"msgcode": "0", "loginstatus": "true", "userid": " 731 "}, "731"),
+])
+def test_shared_browser_login_parser_uses_existing_success_identity_rules(payload, subject):
+    assert parse_oa_login_subject(payload) == subject
+
+
+@pytest.mark.parametrize("payload,error", [
+    ({"msgcode": 1, "loginstatus": True, "userid": "731"}, OAAuthenticationDeniedError),
+    ({"msgcode": 0, "loginstatus": False, "userid": "731"}, OAAuthenticationDeniedError),
+    ({"msgcode": False, "loginstatus": True, "userid": "731"}, OAInvalidResponseError),
+    ({"msgcode": 0, "loginstatus": True, "userid": True}, ValueError),
+    ({"msgcode": 0, "loginstatus": True, "userid": ""}, ValueError),
+])
+def test_shared_browser_login_parser_rejects_unproven_or_invalid_identity(payload, error):
+    with pytest.raises(error):
+        parse_oa_login_subject(payload)
 
 
 def test_oa_string_userid_shape_remains_compatible() -> None:
@@ -568,6 +616,15 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
         poll_failure_count=0,
         updated_at=datetime(2026, 8, 21, 1, 0, tzinfo=UTC),
         tenant_id="default",
+        snapshot=CredentialSnapshot(
+            "default",
+            identity_surrogate(credential.loginid.get_secret_value(), key=bytes(range(32))),
+            "oa",
+            "synthetic-binding",
+            1,
+            0,
+            1,
+        ),
     )
 
     class _NoCaptchaSession:
@@ -593,7 +650,12 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
 
     class _PasswordReader:
         async def load_password_for_poll(
-            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+            *,
+            tenant_id: str,
+            expected_write: CredentialWriteStamp,
         ) -> PasswordBindingCredential:
             assert (ai_user_id, target_system) == (
                 candidate.ai_user_id,
@@ -605,6 +667,11 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             )
 
     class _PollingStore:
+        async def claim_write(self, snapshot):
+            return CredentialWriteStamp(
+                snapshot, "synthetic-operation", datetime(2099, 1, 1, tzinfo=UTC)
+            )
+
         def __init__(self) -> None:
             self.terminal: list[CredentialTerminalFailure] = []
             self.counted_failures = 0
@@ -635,23 +702,39 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             failure: CredentialTerminalFailure,
             *,
             tenant_id: str,
+            expected_write: CredentialWriteStamp,
         ) -> None:
             del ai_user_id, target_system
             self.terminal.append(failure)
 
         async def mark_non_authentication_failure(
-            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+            *,
+            tenant_id: str,
+            expected_write: CredentialWriteStamp,
         ) -> None:
             del ai_user_id, target_system
             self.counted_failures += 1
 
         async def mark_non_counted_failure(
-            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+            *,
+            tenant_id: str,
+            expected_write: CredentialWriteStamp,
         ) -> None:
             raise AssertionError((ai_user_id, target_system))
 
         async def mark_poll_succeeded(
-            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+            *,
+            tenant_id: str,
+            expected_write: CredentialWriteStamp,
         ) -> None:
             raise AssertionError((ai_user_id, target_system))
 
@@ -757,6 +840,9 @@ def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
                     expires_at=datetime(2099, 1, 1, tzinfo=UTC),
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
             async with factory() as session:
                 await session.execute(
@@ -804,10 +890,7 @@ def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()

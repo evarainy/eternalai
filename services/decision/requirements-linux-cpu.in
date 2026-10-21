@@ -1,0 +1,9 @@
+# Reference-only offline build target: CPython 3.12, Linux x86_64, glibc >= 2.28,
+# CPU PyTorch. This is independent of the unapproved browser checkpoint and the
+# company's as-yet-unconfirmed deployment hardware. No optional Laya extras.
+laya==0.4.1
+torch==2.14.1
+transformers==5.19.0
+safetensors==0.8.0
+huggingface-hub==1.33.0
+numpy==2.5.3

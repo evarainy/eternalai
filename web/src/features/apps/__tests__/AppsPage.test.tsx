@@ -38,7 +38,12 @@ const SYSTEMS_WITHOUT_A_DATA_SOURCE = ['财务系统', '公文交换平台', '�
 /** 状态文案闭集（2026-09-02 第二轮意见）。「未开通」当前没有任何真实来源，任何一屏都不该出现。 */
 const FABRICATED_STATUS_LABELS = ['未开通'];
 
-const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn(), mcpServices: vi.fn(), mcpConnections: vi.fn(), mcpOperations: vi.fn() }));
+vi.mock('../../../api/mcp', () => ({
+  listMcpServices: apiMocks.mcpServices, listMcpConnections: apiMocks.mcpConnections,
+  listMcpOperations: apiMocks.mcpOperations,
+  safeMcpLink: () => undefined,
+}));
 
 vi.mock('../../../generated/credential-bindings/credential-bindings', () => ({
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
@@ -97,6 +102,9 @@ function oaCard(): HTMLElement {
 }
 
 beforeEach(() => {
+  apiMocks.mcpServices.mockResolvedValue([]);
+  apiMocks.mcpOperations.mockResolvedValue([]);
+  apiMocks.mcpConnections.mockResolvedValue([]);
   useAuthStore.getState().markAuthenticated();
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
@@ -215,7 +223,7 @@ describe('AppsPage backend gaps', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('oa-status')).toHaveTextContent('已绑定'));
     expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent))
-      .toEqual(['业务系统', '单位软件', '我的功能']);
+      .toEqual(['业务服务连接', '查看原操作', '业务系统', '单位软件', '我的功能']);
     for (const text of [
       '财务系统、公文交换平台、督查督办系统还没有接进来，请照原来的方式打开。',
       '单位发布的软件还没有接进来，这里暂时不能显示；要装什么软件，先找信息中心。',

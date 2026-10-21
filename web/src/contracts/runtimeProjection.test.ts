@@ -27,6 +27,33 @@ function confirmCard(
   };
 }
 
+describe('MCP original-operation navigation', () => {
+  it('accepts absent, null or verified object result while preserving navigation', () => {
+    const make = (data: unknown) => ({ schema_version: 'phase0.sdui.v1', status: 'completed',
+      response_id: 'r1', message: 'Done', fallback_text: 'Done', ui: { component_type: 'none', action: 'none' }, data });
+    for (const result of [undefined, null, { artifactId: 'b'.repeat(32) }]) {
+      expect(projectResponse(make({ operation_id: 'a'.repeat(32), state: 'VERIFIED_SUCCESS', result })).mcpRecoveryPath)
+        .toBe(`/apps?operation=${'a'.repeat(32)}`);
+    }
+    expect(projectResponse(make({ operation_id: 'a'.repeat(32), state: 'UNKNOWN', result: { artifactId: 'b'.repeat(32) } })).mcpRecoveryPath).toBeUndefined();
+  });
+  const response = (data: unknown) => ({ schema_version: 'phase0.sdui.v1', status: 'failed',
+    response_id: 'r1', message: '结果待核对', fallback_text: 'Unknown', ui: { component_type: 'none', action: 'none' }, data });
+  it('projects only a server-local original-operation reference, including action results', () => {
+    const reference = { operation_id: 'a'.repeat(32), state: 'UNKNOWN' };
+    expect(projectResponse(response(reference)).mcpRecoveryPath).toBe(`/apps?operation=${'a'.repeat(32)}`);
+    expect(projectResponse(response({ action_outcome: 'accepted', result: reference })).mcpRecoveryPath).toBe(`/apps?operation=${'a'.repeat(32)}`);
+  });
+  it.each([
+    { operation_id: 'https://untrusted.invalid', state: 'UNKNOWN' },
+    { operation_id: 'a'.repeat(32), state: 'UNKNOWN', review_url: 'https://untrusted.invalid' },
+    { operation_id: 'a'.repeat(32), state: 'invented' },
+    { operation_id: 'a'.repeat(32), state: 'UNKNOWN', arguments: { content: 'hidden' } },
+  ])('rejects malformed or externally supplied navigation data', (data) => {
+    expect(projectResponse(response(data)).mcpRecoveryPath).toBeUndefined();
+  });
+});
+
 const navigationConfig: OaNavigationConfig = {
   baseUrl: 'http://oa.synthetic.invalid',
   pathPrefixes: ['/oa', '/workflow'],
@@ -90,7 +117,7 @@ describe('projectConfirmCard exact payload contract', () => {
     expect(projectConfirmCard(confirmCard({ unexpected: 'blocked' }))).toBeNull();
   });
 
-  it.each(['oa', 'u8', 'hikvision_ivms'] as const)(
+  it.each(['oa', 'u8', 'hikvision_ivms', 'business_platform'] as const)(
     'accepts generated target-system value %s',
     (targetSystem) => {
       expect(
