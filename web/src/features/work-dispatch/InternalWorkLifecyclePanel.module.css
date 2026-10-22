@@ -1,3 +1,10 @@
 .panel { display: grid; gap: 16px; }
 .event { white-space: pre-wrap; overflow-wrap: anywhere; border-bottom: 1px solid var(--color-border, #e5e7eb); padding: 12px 0; }
 .review { white-space: pre-wrap; overflow-wrap: anywhere; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.toolbar h3, .toolbar strong { margin: 0; margin-right: auto; }
+.relations, .action, .remark, .targets { display: grid; min-width: 0; gap: 12px; }
+.relation, .action, .remark { padding: 16px; border: 1px solid var(--workbench-edge); border-radius: var(--workbench-radius-control); background: var(--workbench-field-fill); }
+.action label { display: grid; gap: 6px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.action input[type='datetime-local'] { min-height: 40px; padding: 6px 10px; border: 1px solid var(--workbench-edge); border-radius: var(--workbench-radius-control); color: var(--workbench-text); background: var(--workbench-panel-fill); font: inherit; }

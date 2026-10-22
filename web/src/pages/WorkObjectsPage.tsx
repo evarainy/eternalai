@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   App as AntApp,
@@ -7,6 +8,8 @@ import {
   Descriptions,
   Drawer,
   Flex,
+  Select,
+  Table,
   Radio,
   Space,
   Spin,
@@ -36,13 +39,18 @@ import { QueryTable } from '../shared/ui/QueryTable';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import InternalWorkLifecyclePanel from '../features/work-dispatch/InternalWorkLifecyclePanel';
+import { lifecycleStatusLabels } from '../features/work-dispatch/InternalWorkLifecyclePanel';
+import { SeriesHistoryPanel } from '../features/work-dispatch/WorkObjectSeriesPage';
+import { accessLost, logDispatchFailure } from '../features/work-dispatch/dispatchErrors';
+import { readWorkQueue, lifecycleErrorText } from '../features/work-dispatch/workObjectLifecycleApi';
+import type { LifecycleStatus, WorkQueue } from '../features/work-dispatch/workObjectLifecycleApi';
 import styles from './WorkObjectsPage.module.css';
 
 const { Text } = Typography;
 
 type WorkObjectView = 'urgent' | 'todo' | 'done';
 const UNAVAILABLE_COUNT = '—';
-const internalStatusLabels = { assigned: '已派发', department_pending: '待部门认领', in_progress: '办理中', completed: '已办结' };
+const internalStatusLabels = lifecycleStatusLabels;
 
 function workObjectsQueryKey(authGeneration: number, view: 'active' | 'unconfirmed' | 'completed' = 'active') {
   return ['work-objects', authGeneration, 'list', view === 'completed' ? 'active' : view,
@@ -346,7 +354,9 @@ function markBadge(mark: OAWorkObjectView['handling_mark']) {
 }
 
 export default function WorkObjectsPage() {
-  const [selectedWorkObjectId, setSelectedWorkObjectId] = useState<string>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedWorkObjectId, setSelectedWorkObjectId] = useState(() => searchParams.get('work_object_id') ?? '');
+  const [privateCleared, setPrivateCleared] = useState(false);
   const [view, setView] = useState<WorkObjectView>('urgent');
   const autoSyncGeneration = useRef<number>();
   const queryClient = useQueryClient();
@@ -354,6 +364,18 @@ export default function WorkObjectsPage() {
   const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
   const dockMode = useAIDockStore((state) => state.mode);
   const { message } = AntApp.useApp();
+  const openTask = useCallback((id?: string) => {
+    setSelectedWorkObjectId(id ?? '');
+    setSearchParams((old) => { const next = new URLSearchParams(old); if (id) next.set('work_object_id', id); else next.delete('work_object_id'); return next; }, { replace: true });
+  }, [setSearchParams]);
+  useEffect(() => { setSelectedWorkObjectId(searchParams.get('work_object_id') ?? ''); }, [searchParams]);
+  const clearPrivate = useCallback(() => {
+    setPrivateCleared(true); openTask();
+    useAIDockStore.getState().clearPageContext('work-objects');
+    useAIDockStore.getState().clearPageContext('work-object-series-history');
+    void queryClient.cancelQueries({ queryKey: ['work-objects', authGeneration] });
+    queryClient.removeQueries({ queryKey: ['work-objects', authGeneration] });
+  }, [authGeneration, openTask, queryClient]);
   const listQueryKey = workObjectsQueryKey(authGeneration);
 
   const listQuery = useQuery({
@@ -426,19 +448,24 @@ export default function WorkObjectsPage() {
   const detailQuery = useQuery({
     queryKey: workObjectDetailQueryKey(
       authGeneration,
-      selectedWorkObjectId ?? '',
+      selectedWorkObjectId,
     ),
     queryFn: () => {
-      if (selectedWorkObjectId === undefined) {
+      if (!selectedWorkObjectId) {
         throw new Error('work_object_id_required');
       }
       return getWorkObject(selectedWorkObjectId);
     },
-    enabled: selectedWorkObjectId !== undefined,
+    enabled: !!selectedWorkObjectId && !privateCleared,
     structuralSharing: (old, incoming) => mergeWorkObjectView(
       old as WorkObjectListResponseItemsItem | undefined, incoming as WorkObjectListResponseItemsItem,
     ),
   });
+
+  useEffect(() => {
+    const denied = [listQuery.error, historyQuery.error, completedQuery.error, detailQuery.error].find(accessLost);
+    if (denied) { logDispatchFailure('work_objects_read', denied); clearPrivate(); }
+  }, [listQuery.error, historyQuery.error, completedQuery.error, detailQuery.error, clearPrivate]);
 
   useEffect(() => {
     if (useAuthStore.getState().generation !== authGeneration) return;
@@ -517,18 +544,19 @@ export default function WorkObjectsPage() {
       if (useAuthStore.getState().generation !== variables.authGeneration) {
         return;
       }
+      if (accessLost(error)) clearPrivate();
       void message.error(errorText(error));
     },
   });
 
-  const items = listQuery.isSuccess ? listQuery.data.items : undefined;
+  const items = listQuery.isSuccess && !privateCleared ? listQuery.data.items : undefined;
   const visibleSourceItems = useMemo(() => (items ?? []).filter((item) =>
     item.state_authority !== 'external_snapshot' || item.oa_observation.pending_state !== 'unconfirmed'), [items]);
   const syncStatus = listQuery.data?.oa_sync;
   const newestFetchedAt = syncStatus?.last_success_at ?? undefined;
-  const historyItems = (historyQuery.data?.items ?? []).filter((item) =>
+  const historyItems = (privateCleared ? [] : historyQuery.data?.items ?? []).filter((item) =>
     item.state_authority === 'external_snapshot' && item.oa_observation.pending_state === 'unconfirmed');
-  const listsAligned = listQuery.isSuccess && historyQuery.isSuccess &&
+  const listsAligned = !privateCleared && listQuery.isSuccess && historyQuery.isSuccess &&
     listQuery.data.oa_sync.revision === historyQuery.data.oa_sync.revision;
   const coordinatedRevision = useRef<string>();
   useEffect(() => {
@@ -550,9 +578,9 @@ export default function WorkObjectsPage() {
     return { todoItems: todo, urgentItems: urgent };
   }, [visibleSourceItems]);
 
-  const visibleItems = view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : completedQuery.data?.items ?? [];
+  const visibleItems = privateCleared ? [] : view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : completedQuery.data?.items ?? [];
   const contextWorkObject =
-    selectedWorkObjectId !== undefined && detailQuery.isSuccess
+    !privateCleared && !!selectedWorkObjectId && detailQuery.isSuccess
       ? detailQuery.data
       : undefined;
   const pageContextDeclaration = useMemo<PageContextDeclaration>(() => {
@@ -680,7 +708,7 @@ export default function WorkObjectsPage() {
         render: (_, item) => (
           <Button
             className={styles.actionButton}
-            onClick={() => setSelectedWorkObjectId(item.work_object_id)}
+            onClick={() => openTask(item.work_object_id)}
             type="primary"
           >
             {handlingActionLabels[item.handling_action]}
@@ -740,6 +768,11 @@ export default function WorkObjectsPage() {
         标题，供读屏软件定位本页。
       */}
       <h1 className={styles.pageTitle}>工作事项</h1>
+
+      <div className={styles.internalToolbar}><Link to="/work-dispatch">创建任务</Link><Link to="/work-object-series">周期任务</Link>
+        <Button onClick={() => { setPrivateCleared(false); void Promise.all([listQuery.refetch(), historyQuery.refetch(), completedQuery.refetch()]); }}>重新读取事项</Button></div>
+      {privateCleared ? <Alert type="warning" title="当前访问已失效，已清除事项、计数与上下文引用。请重新读取核对。" />
+        : <InternalWorkQueues key={authGeneration} generation={authGeneration} onOpen={openTask} onAccessLost={clearPrivate} />}
 
       {syncReadError?.generation === authGeneration ? <Alert type="error" title={syncReadError.message} /> : null}
       {completedQuery.error ? <Alert type="error" title="已完成事项读取失败" /> : null}
@@ -828,7 +861,7 @@ export default function WorkObjectsPage() {
             </Radio.Button>
             <Radio.Button value="done">
               已完成<span className={styles.segmentCount} data-testid="work-count-done">
-                {completedQuery.isSuccess ? `${completedQuery.data.items.length}${completedQuery.data.limit_exceeded ? '+' : ''}` : UNAVAILABLE_COUNT}
+                {!privateCleared && completedQuery.isSuccess ? `${completedQuery.data.items.length}${completedQuery.data.limit_exceeded ? '+' : ''}` : UNAVAILABLE_COUNT}
               </span>
             </Radio.Button>
           </Radio.Group>
@@ -881,11 +914,11 @@ export default function WorkObjectsPage() {
 
       <Drawer
         title="工作事项详情"
-        open={selectedWorkObjectId !== undefined}
-        onClose={() => setSelectedWorkObjectId(undefined)}
+        open={!!selectedWorkObjectId && !privateCleared}
+        onClose={() => openTask()}
         closable={false}
         extra={(
-          <Button onClick={() => setSelectedWorkObjectId(undefined)}>
+          <Button onClick={() => openTask()}>
             关闭详情
           </Button>
         )}
@@ -903,7 +936,7 @@ export default function WorkObjectsPage() {
           <Spin />
         ) : detailQuery.data?.state_authority === 'internal' ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-            <Alert type="info" title="内部事项" description="指定收件人或部门成员可接单，接单人可反馈并办结。" />
+            <Alert type="info" title="内部事项" description="个人任务由明确承办人办理；部门任务须负责人分配和审核，协作由主办汇总，按完成模式办结。" />
             <Descriptions bordered column={1} size="small">
               <Descriptions.Item label="事项编号">{detailQuery.data.work_object_id}</Descriptions.Item>
               <Descriptions.Item label="事项">{detailQuery.data.title === null ? <span>未提供标题</span> : detailQuery.data.title}</Descriptions.Item>
@@ -918,7 +951,8 @@ export default function WorkObjectsPage() {
               <Descriptions.Item label="创建时间">{detailQuery.data.created_at === null ? '未提供' : formatTimestamp(detailQuery.data.created_at)}</Descriptions.Item>
               <Descriptions.Item label="更新时间">{detailQuery.data.updated_at === null ? '未提供' : formatTimestamp(detailQuery.data.updated_at)}</Descriptions.Item>
             </Descriptions>
-            {detailQuery.data.source_kind === 'manual_dispatch' ? <InternalWorkLifecyclePanel workObjectId={detailQuery.data.work_object_id} /> : null}
+            {detailQuery.data.source_kind === 'manual_dispatch' ? <InternalWorkLifecyclePanel workObjectId={detailQuery.data.work_object_id} onAccessLost={clearPrivate} /> : null}
+            {'series_id' in detailQuery.data && typeof detailQuery.data.series_id === 'string' ? <SeriesHistoryPanel seriesId={detailQuery.data.series_id} onOpenWorkObject={openTask} onAccessLost={clearPrivate} /> : null}
           </Space>
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
@@ -1010,4 +1044,52 @@ export default function WorkObjectsPage() {
       </Drawer>
     </Space>
   );
+}
+
+function InternalWorkQueues({ generation, onOpen, onAccessLost }: { generation: number; onOpen: (id: string) => void; onAccessLost: () => void }) {
+  const [queue, setQueue] = useState<WorkQueue | 'history_completed' | 'history_withdrawn'>('mine_sent');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  const [rangeError, setRangeError] = useState('');
+  const history = queue.startsWith('history_');
+  const query = useInfiniteQuery({
+    queryKey: ['work-objects', generation, 'queue', queue, range?.from, range?.to],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => readWorkQueue({ ...(history ? { completion: queue === 'history_completed' ? 'completed' as const : 'withdrawn' as const,
+      ...(range ? { history_from: range.from, history_to: range.to } : {}) } : { queue: queue as WorkQueue }), ...(pageParam ? { cursor: pageParam } : {}) }),
+    enabled: !history || range !== null,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
+  useEffect(() => { if (accessLost(query.error)) { logDispatchFailure('work_queue', query.error); onAccessLost(); } }, [query.error, onAccessLost]);
+  const items = query.isSuccess ? query.data.pages.flatMap((page) => page.items) : [];
+  const applyRange = () => {
+    if (!from || !to || from > to) { setRangeError('请选择有效的起止日期。'); return; }
+    const start = new Date(`${from}T00:00:00`);
+    const end = new Date(`${to}T00:00:00`); end.setDate(end.getDate() + 1);
+    setRange({ from: start.toISOString(), to: end.toISOString() }); setRangeError('');
+  };
+  return <section className={styles.listSection} aria-label="内部工作队列">
+    <div className={styles.internalToolbar}><h2>内部工作队列</h2>
+      <Select aria-label="选择内部工作队列" value={queue} onChange={(value) => { setQueue(value); setRangeError(''); }} options={[
+        { value: 'mine_sent', label: '我发出的' }, { value: 'department_unassigned', label: '部门待分配' },
+        { value: 'department_review', label: '待部门审核' }, { value: 'awaiting_acceptance', label: '待我验收' },
+        { value: 'history_completed', label: '办结历史' }, { value: 'history_withdrawn', label: '撤回历史' },
+      ]} />
+      <Button loading={query.isFetching} disabled={history && !range} onClick={() => void query.refetch()}>重新读取队列</Button></div>
+    {history ? <div className={styles.internalToolbar}><label>开始日期<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+      <label>结束日期<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label><Button onClick={applyRange}>查询历史区间</Button>
+      <span>按浏览器本地自然日查询，包含起止日期；可翻阅全部授权历史。</span></div> : null}
+    {rangeError ? <p role="alert">{rangeError}</p> : null}
+    {query.error ? <Alert type="error" title={lifecycleErrorText(query.error)} /> : null}
+    <Table<WorkObjectListResponseItemsItem> rowKey="work_object_id" dataSource={items} pagination={false} loading={query.isFetching} scroll={{ x: 650 }} columns={[
+      { title: '事项', key: 'title', render: (_, item) => <Button type="link" onClick={() => onOpen(item.work_object_id)}>{item.state_authority === 'internal' ? item.title : item.source_title}</Button> },
+      { title: '办理状态', key: 'status', render: (_, item) => item.state_authority === 'internal' ? internalStatusLabels[item.status as LifecycleStatus] ?? item.status : item.source_status },
+      { title: '截止时间', key: 'due', render: (_, item) => item.due_at ? formatTimestamp(item.due_at) : '未设置' },
+      { title: '责任人', dataIndex: 'assignee_display_name' },
+    ]} locale={{ emptyText: history && !range ? '请先选择历史日期范围' : '当前队列没有可见事项' }} />
+    {query.hasNextPage ? <Button loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>加载下一页</Button> : null}
+    {query.data?.pages.some((page) => page.limit_exceeded) ? <p>当前页达到服务端展示上限，请继续翻页或缩小历史区间。</p> : null}
+    <p>当前加载 {items.length} 条。列表、计数和可执行动作均由服务端按当前参与权限提供；部门任务分配后仍保留负责人跟进职责。</p>
+  </section>;
 }

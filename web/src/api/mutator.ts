@@ -46,53 +46,57 @@ function removeHeaderCaseInsensitive(headers: Record<string, string>, name: stri
   }
 }
 
-export const customInstance = async <T>(
-  config: { url: string; method: string; headers?: Record<string, string>; params?: Record<string, unknown>; data?: unknown; signal?: AbortSignal },
-): Promise<T> => {
-  const { url, method, headers, params, data, signal } = config;
+export interface ApiRequestConfig {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  params?: Record<string, unknown>;
+  data?: unknown;
+  signal?: AbortSignal;
+  responseType?: 'json' | 'blob';
+  rawBody?: BodyInit;
+}
+
+export const requestWithResponse = async <T>(
+  config: ApiRequestConfig,
+): Promise<{ data: T; etag: string | null }> => {
+  const { url, method, headers, params, data, signal, rawBody, responseType = 'json' } = config;
   const authGeneration = useAuthStore.getState().generation;
   const requestHeaders = { ...headers };
   removeHeaderCaseInsensitive(requestHeaders, 'X-EternalAI-Roles');
   removeHeaderCaseInsensitive(requestHeaders, CSRF_HEADER_NAME);
-
-  if (!SAFE_HTTP_METHODS.has(method.toUpperCase())) {
-    requestHeaders[CSRF_HEADER_NAME] = '1';
-  }
-  if (data !== undefined && requestHeaders['Content-Type'] === undefined) {
+  if (!SAFE_HTTP_METHODS.has(method.toUpperCase())) requestHeaders[CSRF_HEADER_NAME] = '1';
+  if (data !== undefined && !(data instanceof Blob) && !Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'content-type')) {
     requestHeaders['Content-Type'] = 'application/json';
   }
-
-  const searchParams = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-  const response = await fetch(url + searchParams, {
-    method,
-    headers: requestHeaders,
-    body: data !== undefined ? JSON.stringify(data) : undefined,
-    signal,
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value !== undefined && value !== null) query.set(key, String(value));
+  }
+  const suffix = query.size > 0 ? '?' + query.toString() : '';
+  const response = await fetch(url + suffix, {
+    method, headers: requestHeaders, body: rawBody ?? (data instanceof Blob ? data : data === undefined ? undefined : JSON.stringify(data)), signal,
   });
   if (response.status === 401) {
     useAuthStore.getState().markUnauthenticated(authGeneration);
-    throw new ApiError(
-      response.status,
-      'authentication_required',
-      'Authentication is required.',
-    );
+    throw new ApiError(401, 'authentication_required', 'Authentication is required.');
   }
-  if (
-    method.toUpperCase() === 'POST' && url === '/api/v1/auth/logout' &&
-    response.ok && response.status !== 200
-  ) {
+  if (method.toUpperCase() === 'POST' && url === '/api/v1/auth/logout' && response.ok && response.status !== 200) {
     throw new ApiError(response.status, 'logout_unconfirmed', 'Logout was not confirmed.');
   }
-  const payload: unknown = await response.json();
   if (!response.ok) {
-    if (isAdminErrorEnvelope(payload)) {
-      throw new ApiError(response.status, payload.detail.code, payload.detail.message);
-    }
-    throw new ApiError(
-      response.status,
-      `http_${response.status}`,
-      `HTTP ${response.status}: ${response.statusText}`,
-    );
+    const errorBody: unknown = response.headers.get('content-type')?.includes('json') ? await response.json() : null;
+    if (isAdminErrorEnvelope(errorBody)) throw new ApiError(response.status, errorBody.detail.code, errorBody.detail.message);
+    throw new ApiError(response.status, `http_${response.status}`, `HTTP ${response.status}: ${response.statusText}`);
   }
-  return payload as T;
+  const mime = response.headers.get('content-type');
+  const binary = responseType === 'blob' || (mime !== null && !mime.includes('json'));
+  const payload: unknown = response.status === 204 ? null : binary ? await response.blob() : await response.json();
+  if (useAuthStore.getState().generation !== authGeneration) {
+    throw new ApiError(409, 'identity_changed', '身份已变化，请重新读取。');
+  }
+  return { data: payload as T, etag: response.headers.get('ETag') };
 };
+
+export const customInstance = async <T>(config: ApiRequestConfig): Promise<T> =>
+  (await requestWithResponse<T>(config)).data;

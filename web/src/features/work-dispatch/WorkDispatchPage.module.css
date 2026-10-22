@@ -19,6 +19,10 @@
   min-width: 0;
 }
 
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.toolbar h1 { margin: 0; color: var(--workbench-text); font-size: 22px; }
+.directoryActions :global(.ant-input-search) { max-width: 280px; }
+
 /* 所在页由左导航高亮表明，视觉上不再放一个大标题；标题只留给读屏软件。 */
 .pageTitle {
   position: absolute;

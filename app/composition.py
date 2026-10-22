@@ -116,7 +116,9 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLSessionStore,
     PostgreSQLTaskStore,
 )
+from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
+from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSeriesStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.workflow.catalog import production_workflow_capabilities
@@ -175,6 +177,9 @@ from app.ports.user_profile import UserProfilePort
 from app.ports.workflow_store import McpRecoveryPolicyPort
 from app.runtime.document_qa import DocumentQAService
 from app.runtime.runtime import RuntimeImpl
+from app.work_dispatch.attachments import WorkObjectAttachmentService
+from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
+from app.work_dispatch.service import WorkDispatchService
 from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
 
@@ -186,6 +191,8 @@ class ProductionComponents:
     runtime: RuntimeImpl
     admin_registry_service: AdminRegistryService
     work_object_service: WorkObjectService
+    work_object_series_service: WorkObjectSeriesService
+    work_object_series_scheduler: WorkObjectSeriesScheduler
     credential_binding_service: CredentialBindingService
     credential_polling_job_queue: JobQueuePort
     credential_polling_scheduler: CredentialPollingScheduler
@@ -941,13 +948,25 @@ def build_production_components(
         max_age_s=settings.organization_directory_max_age_s,
     )
     directory_scheduler = OrganizationDirectoryScheduler(directory_sync_service)
-    work_object_service = WorkObjectService(
-        store=PostgreSQLWorkObjectStore(session_factory),
-        gateway=gateway,
-        capability_registry=capability_registry,
-        organization_directory=organization_directory,
+    work_object_store = PostgreSQLWorkObjectStore(session_factory)
+    work_dispatch_service = WorkDispatchService(
+        store=work_object_store, organization_directory=organization_directory,
         directory_max_age_s=settings.organization_directory_max_age_s,
         trace_port=resolved_trace_port,
+    )
+    work_attachment_service = WorkObjectAttachmentService(
+        PostgreSQLWorkObjectAttachmentStore(session_factory), work_dispatch_service,
+    )
+    work_series_service = WorkObjectSeriesService(
+        PostgreSQLWorkObjectSeriesStore(session_factory), work_dispatch_service,
+    )
+    work_series_scheduler = WorkObjectSeriesScheduler(work_series_service)
+    work_object_service = WorkObjectService(
+        store=work_object_store, gateway=gateway, capability_registry=capability_registry,
+        organization_directory=organization_directory,
+        directory_max_age_s=settings.organization_directory_max_age_s,
+        trace_port=resolved_trace_port, dispatch_service=work_dispatch_service,
+        attachment_service=work_attachment_service, series_service=work_series_service,
     )
     credential_binding_service = CredentialBindingService(
         store=credential_store,
@@ -1078,6 +1097,8 @@ def build_production_components(
         runtime=runtime,
         admin_registry_service=admin_registry_service,
         work_object_service=work_object_service,
+        work_object_series_service=work_series_service,
+        work_object_series_scheduler=work_series_scheduler,
         credential_binding_service=credential_binding_service,
         credential_polling_job_queue=credential_polling_job_queue,
         credential_polling_scheduler=credential_polling_scheduler,

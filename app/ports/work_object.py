@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.ports.work_object_dispatch import WorkDispatchStorePort
 from app.ports.work_object_lifecycle import (
     CompletionFilter,
     LifecycleActor,
@@ -47,6 +48,11 @@ DISPATCH_RECORD_FIELDS: tuple[str, ...] = (
     "accepted_at",
     "completed_by_ai_user_id",
     "completed_at",
+    "dispatch_model_version",
+    "dispatch_mode",
+    "completion_mode",
+    "withdrawn_at",
+    "withdrawn_by_ai_user_id",
 )
 
 WorkObjectHandlingMark: TypeAlias = Literal[
@@ -57,8 +63,13 @@ WorkObjectHandlingMark: TypeAlias = Literal[
 OASyncStream: TypeAlias = Literal["pending", "completed"]
 OAView: TypeAlias = Literal["active", "unconfirmed", "all"]
 OASyncFailureCode: TypeAlias = Literal[
-    "reauthentication_required", "binding_scope_required", "forbidden",
-    "invalid_response", "upstream_unavailable", "storage_unavailable", "clock_invalid",
+    "reauthentication_required",
+    "binding_scope_required",
+    "forbidden",
+    "invalid_response",
+    "upstream_unavailable",
+    "storage_unavailable",
+    "clock_invalid",
 ]
 
 
@@ -104,7 +115,8 @@ class OAObservation(_OAStrictModel):
             if self.revision != 0 or self.last_checked_at is not None:
                 raise ValueError("legacy observations have no reconciliation")
         elif (
-            self.revision == 0 or self.last_checked_at is None
+            self.revision == 0
+            or self.last_checked_at is None
             or self.last_checked_at < self.last_seen_at
             or (self.pending_state == "current" and self.last_checked_at != self.last_seen_at)
         ):
@@ -157,9 +169,12 @@ class OASyncStatus(_OAStrictModel):
 
     def to_view(self) -> OASyncStatusView:
         return OASyncStatusView(
-            status=self.last_attempt_status, revision=self.applied_generation,
-            attempt_revision=self.issued_generation, last_attempt_at=self.last_attempt_started_at,
-            last_success_at=self.last_success_at, failure_code=self.last_error_code,
+            status=self.last_attempt_status,
+            revision=self.applied_generation,
+            attempt_revision=self.issued_generation,
+            last_attempt_at=self.last_attempt_started_at,
+            last_success_at=self.last_success_at,
+            failure_code=self.last_error_code,
         )
 
     @model_validator(mode="after")
@@ -175,7 +190,8 @@ class OASyncStatus(_OAStrictModel):
             raise ValueError("successful finish must match publication time")
         elif (
             self.last_attempt_started_at is not None
-            and finished < self.last_attempt_started_at and self.last_error_code != "clock_invalid"
+            and finished < self.last_attempt_started_at
+            and self.last_error_code != "clock_invalid"
         ):
             raise ValueError("finish precedes start without clock diagnostic")
         return self
@@ -312,6 +328,11 @@ class InternalWorkObjectRecord(_WorkObjectRecordBase):
     accepted_at: datetime | None = None
     completed_by_ai_user_id: str | None = None
     completed_at: datetime | None = None
+    dispatch_model_version: int | None = None
+    dispatch_mode: Literal["independent", "collaborative"] | None = None
+    completion_mode: Literal["submit_completes", "confirm_required"] | None = None
+    withdrawn_at: datetime | None = None
+    withdrawn_by_ai_user_id: str | None = None
 
     state_authority: Literal["internal"]
     source_system: str
@@ -331,6 +352,61 @@ class InternalWorkObjectRecord(_WorkObjectRecordBase):
                 raise ValueError("legacy internal records require their original assignee")
             if any(getattr(self, name) is not None for name in DISPATCH_RECORD_FIELDS):
                 raise ValueError("legacy internal records cannot carry dispatch fields")
+            return self
+        if self.dispatch_model_version is not None:
+            if self.dispatch_model_version != 2 or self.source_system != "eternalai":
+                raise ValueError("unsupported dispatch model")
+            if not self.tenant_id or not self.initiator_ai_user_id or not self.owner_department_id:
+                raise ValueError("dispatch identity required")
+            if (
+                self.dispatch_mode is None
+                or self.completion_mode is None
+                or self.target_kind is None
+            ):
+                raise ValueError("dispatch modes required")
+            if self.version is None or self.version < 1 or self.status is None or self.kind is None:
+                raise ValueError("dispatch lifecycle required")
+            for value, minimum, maximum in (
+                (self.title, 1, 200),
+                (self.requirement, 0, 10000),
+                (self.receipt_requirement, 0, 2000),
+            ):
+                if (
+                    value is None
+                    or value != value.strip(SEARCH_WHITESPACE)
+                    or not minimum <= len(value) <= maximum
+                ):
+                    raise ValueError("invalid dispatch text")
+            if (
+                self.reminder_choices is None
+                or self.reminder_choices
+                != [c for c in REMINDER_CHOICES if c in self.reminder_choices]
+                or (self.due_at is None and self.reminder_choices)
+            ):
+                raise ValueError("invalid reminders")
+            if self.status == "completed":
+                if (
+                    self.completed_at is None
+                    or not self.completed_by_ai_user_id
+                    or self.updated_at != self.completed_at
+                ):
+                    raise ValueError("completion evidence required")
+            elif self.completed_at is not None or self.completed_by_ai_user_id is not None:
+                raise ValueError("non-completed task cannot carry completion")
+            if (self.status == "withdrawn") != (
+                self.withdrawn_at is not None and self.withdrawn_by_ai_user_id is not None
+            ):
+                raise ValueError("withdrawal evidence inconsistent")
+            if any(
+                v is not None
+                for v in (
+                    self.handling_mark,
+                    self.handling_marked_at,
+                    self.handling_marked_by_ai_user_id,
+                    self.task_record_id,
+                )
+            ):
+                raise ValueError("manual tasks cannot carry OA handling")
             return self
         if self.source_system != "eternalai" or self.assignee_ai_user_id is not None:
             raise ValueError("manual dispatch requires the internal target identity")
@@ -418,7 +494,7 @@ class InternalWorkObjectRecord(_WorkObjectRecordBase):
 
 
 class DispatchReceipt(BaseModel):
-    """Persistent safe response snapshot; recipient join keys never belong here."""
+    """Persistent authorized response snapshot; replay rechecks root and child access."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -443,22 +519,35 @@ class WorkObjectReadBatch(_OAStrictModel):
     oa_sync: OASyncStatusView
 
 
-class WorkObjectStorePort(Protocol):
+class WorkObjectStorePort(WorkDispatchStorePort, Protocol):
     async def begin_oa_sync(
-        self, subject: OASyncSubject, stream: OASyncStream, started_at: datetime,
+        self,
+        subject: OASyncSubject,
+        stream: OASyncStream,
+        started_at: datetime,
     ) -> OASyncTicket: ...
 
     async def apply_oa_pending_snapshot(
-        self, ticket: OASyncTicket, *, assignee_display_name: str,
-        collection: OAPendingWorkSnapshotCollection, fetched_at: datetime,
+        self,
+        ticket: OASyncTicket,
+        *,
+        assignee_display_name: str,
+        collection: OAPendingWorkSnapshotCollection,
+        fetched_at: datetime,
     ) -> Literal["applied", "superseded"]: ...
 
     async def finish_oa_sync_failure(
-        self, ticket: OASyncTicket, *, failure_code: OASyncFailureCode, finished_at: datetime,
+        self,
+        ticket: OASyncTicket,
+        *,
+        failure_code: OASyncFailureCode,
+        finished_at: datetime,
     ) -> None: ...
 
     async def get_oa_sync_status(
-        self, subject: OASyncSubject, stream: OASyncStream,
+        self,
+        subject: OASyncSubject,
+        stream: OASyncStream,
     ) -> OASyncStatus: ...
 
     async def list_with_oa_sync_for_scope(
@@ -469,6 +558,10 @@ class WorkObjectStorePort(Protocol):
         oa_view: OAView = "active",
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
         completion: CompletionFilter | None = None,
+        queue: str | None = None,
+        history_from: datetime | None = None,
+        history_to: datetime | None = None,
+        cursor: str | None = None,
     ) -> WorkObjectReadBatch: ...
 
     async def upsert_oa_pending_workflows(
@@ -487,6 +580,10 @@ class WorkObjectStorePort(Protocol):
         search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
         completion: CompletionFilter | None = None,
+        queue: str | None = None,
+        history_from: datetime | None = None,
+        history_to: datetime | None = None,
+        cursor: str | None = None,
     ) -> list[WorkObjectRecord]: ...
 
     async def get_for_scope(

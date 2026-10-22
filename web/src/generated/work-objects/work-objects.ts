@@ -5,20 +5,47 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  AttachmentLinkRequest,
+  AttachmentMutationResult,
+  AttachmentView,
   CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody,
   CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostHeaders,
+  CreateSeriesApiV1WorkObjectSeriesPostHeaders,
+  DetachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDeleteHeaders,
+  DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders,
   DispatchOptionsResponse,
+  DispatchWorkObjectsApiV1WorkObjectsDispatchPostHeaders,
   DispatchWorkObjectsRequest,
   DispatchWorkObjectsResponse,
+  EditRemarkApiV1WorkObjectsWorkObjectIdRemarksPatchHeaders,
+  EditRemarkRequest,
+  EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostHeaders,
   GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200,
   LifecycleCommandResponse,
   LifecycleEventsResponse,
   LifecycleView,
+  LinkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPostHeaders,
   ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams,
+  ListRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGetParams,
+  ListSeriesApiV1WorkObjectSeriesGetParams,
   ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetParams,
   ListWorkObjectsApiV1WorkObjectsGetParams,
+  RemarkHistoryPage,
+  RemarkResponse,
+  RemarkView,
+  SeriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGetParams,
+  SeriesHistoryPage,
+  SeriesMutationResult,
+  SeriesOccurrencePage,
+  SeriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGetParams,
+  SeriesPage,
+  SeriesRequest,
+  SeriesView,
   SetHandlingMarkRequest,
   SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200,
+  UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders,
+  UploadAttachmentApiV1WorkObjectsAttachmentsPostHeaders,
+  UploadAttachmentApiV1WorkObjectsAttachmentsPostParams,
   WorkObjectListResponse
 } from './work-objects.schemas';
 
@@ -27,6 +54,118 @@ import { customInstance } from '../../api/mutator';
 
 
   /**
+ * @summary List Series
+ */
+export const listSeriesApiV1WorkObjectSeriesGet = (
+    params?: ListSeriesApiV1WorkObjectSeriesGetParams,
+ ) => {
+      return customInstance<SeriesPage>(
+      {url: `/api/v1/work-object-series`, method: 'GET',
+        params
+    },
+      );
+    }
+
+/**
+ * @summary Create Series
+ */
+export const createSeriesApiV1WorkObjectSeriesPost = (
+    seriesRequest: SeriesRequest,
+    headers: CreateSeriesApiV1WorkObjectSeriesPostHeaders,
+ ) => {
+      return customInstance<SeriesMutationResult | SeriesMutationResult>(
+      {url: `/api/v1/work-object-series`, method: 'POST',
+      headers: {'Content-Type': 'application/json', ...headers},
+      data: seriesRequest
+    },
+      );
+    }
+
+/**
+ * @summary Get Series
+ */
+export const getSeriesApiV1WorkObjectSeriesSeriesIdGet = (
+    seriesId: string,
+ ) => {
+      return customInstance<SeriesView>(
+      {url: `/api/v1/work-object-series/${seriesId}`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary Update Series
+ */
+export const updateSeriesApiV1WorkObjectSeriesSeriesIdPut = (
+    seriesId: string,
+    seriesRequest: SeriesRequest,
+    headers: UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders,
+ ) => {
+      return customInstance<SeriesMutationResult>(
+      {url: `/api/v1/work-object-series/${seriesId}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', ...headers},
+      data: seriesRequest
+    },
+      );
+    }
+
+/**
+ * @summary Disable Series
+ */
+export const disableSeriesApiV1WorkObjectSeriesSeriesIdDisablePost = (
+    seriesId: string,
+    headers: DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders,
+ ) => {
+      return customInstance<SeriesMutationResult>(
+      {url: `/api/v1/work-object-series/${seriesId}/disable`, method: 'POST',
+      headers
+    },
+      );
+    }
+
+/**
+ * @summary Enable Series
+ */
+export const enableSeriesApiV1WorkObjectSeriesSeriesIdEnablePost = (
+    seriesId: string,
+    headers: EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostHeaders,
+ ) => {
+      return customInstance<SeriesMutationResult>(
+      {url: `/api/v1/work-object-series/${seriesId}/enable`, method: 'POST',
+      headers
+    },
+      );
+    }
+
+/**
+ * @summary Series History
+ */
+export const seriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGet = (
+    seriesId: string,
+    params?: SeriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGetParams,
+ ) => {
+      return customInstance<SeriesHistoryPage>(
+      {url: `/api/v1/work-object-series/${seriesId}/history`, method: 'GET',
+        params
+    },
+      );
+    }
+
+/**
+ * @summary Series Occurrences
+ */
+export const seriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGet = (
+    seriesId: string,
+    params?: SeriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGetParams,
+ ) => {
+      return customInstance<SeriesOccurrencePage>(
+      {url: `/api/v1/work-object-series/${seriesId}/occurrences`, method: 'GET',
+        params
+    },
+      );
+    }
+
+/**
  * @summary List Work Objects
  */
 export const listWorkObjectsApiV1WorkObjectsGet = (
@@ -40,14 +179,32 @@ export const listWorkObjectsApiV1WorkObjectsGet = (
     }
 
 /**
+ * @summary Upload Attachment
+ */
+export const uploadAttachmentApiV1WorkObjectsAttachmentsPost = (
+    uploadAttachmentApiV1WorkObjectsAttachmentsPostBody: Blob,
+    params: UploadAttachmentApiV1WorkObjectsAttachmentsPostParams,
+    headers: UploadAttachmentApiV1WorkObjectsAttachmentsPostHeaders,
+ ) => {
+      return customInstance<AttachmentView>(
+      {url: `/api/v1/work-objects/attachments`, method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream', ...headers},
+      data: uploadAttachmentApiV1WorkObjectsAttachmentsPostBody,
+        params
+    },
+      );
+    }
+
+/**
  * @summary Dispatch Work Objects
  */
 export const dispatchWorkObjectsApiV1WorkObjectsDispatchPost = (
     dispatchWorkObjectsRequest: DispatchWorkObjectsRequest,
+    headers: DispatchWorkObjectsApiV1WorkObjectsDispatchPostHeaders,
  ) => {
-      return customInstance<DispatchWorkObjectsResponse | DispatchWorkObjectsResponse>(
+      return customInstance<DispatchWorkObjectsResponse>(
       {url: `/api/v1/work-objects/dispatch`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: dispatchWorkObjectsRequest
     },
       );
@@ -86,6 +243,63 @@ export const getWorkObjectApiV1WorkObjectsWorkObjectIdGet = (
  ) => {
       return customInstance<GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200>(
       {url: `/api/v1/work-objects/${workObjectId}`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary List Attachments
+ */
+export const listAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsGet = (
+    workObjectId: string,
+ ) => {
+      return customInstance<AttachmentView[]>(
+      {url: `/api/v1/work-objects/${workObjectId}/attachments`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary Link Attachments
+ */
+export const linkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPost = (
+    workObjectId: string,
+    attachmentLinkRequest: AttachmentLinkRequest,
+    headers: LinkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPostHeaders,
+ ) => {
+      return customInstance<AttachmentMutationResult>(
+      {url: `/api/v1/work-objects/${workObjectId}/attachments`, method: 'POST',
+      headers: {'Content-Type': 'application/json', ...headers},
+      data: attachmentLinkRequest
+    },
+      );
+    }
+
+/**
+ * @summary Detach Attachment
+ */
+export const detachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDelete = (
+    workObjectId: string,
+    attachmentId: string,
+    headers: DetachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDeleteHeaders,
+ ) => {
+      return customInstance<AttachmentMutationResult>(
+      {url: `/api/v1/work-objects/${workObjectId}/attachments/${attachmentId}`, method: 'DELETE',
+      headers
+    },
+      );
+    }
+
+/**
+ * @summary Download Attachment
+ */
+export const downloadAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdContentGet = (
+    workObjectId: string,
+    attachmentId: string,
+ ) => {
+      return customInstance<Blob>(
+      {url: `/api/v1/work-objects/${workObjectId}/attachments/${attachmentId}/content`, method: 'GET',
+        responseType: 'blob'
     },
       );
     }
@@ -147,12 +361,70 @@ export const listWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleE
       );
     }
 
+/**
+ * @summary Get Remark
+ */
+export const getRemarkApiV1WorkObjectsWorkObjectIdRemarksGet = (
+    workObjectId: string,
+ ) => {
+      return customInstance<RemarkView>(
+      {url: `/api/v1/work-objects/${workObjectId}/remarks`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary Edit Remark
+ */
+export const editRemarkApiV1WorkObjectsWorkObjectIdRemarksPatch = (
+    workObjectId: string,
+    editRemarkRequest: EditRemarkRequest,
+    headers: EditRemarkApiV1WorkObjectsWorkObjectIdRemarksPatchHeaders,
+ ) => {
+      return customInstance<RemarkResponse>(
+      {url: `/api/v1/work-objects/${workObjectId}/remarks`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', ...headers},
+      data: editRemarkRequest
+    },
+      );
+    }
+
+/**
+ * @summary List Remark History
+ */
+export const listRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGet = (
+    workObjectId: string,
+    params?: ListRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGetParams,
+ ) => {
+      return customInstance<RemarkHistoryPage>(
+      {url: `/api/v1/work-objects/${workObjectId}/remarks/history`, method: 'GET',
+        params
+    },
+      );
+    }
+
+export type ListSeriesApiV1WorkObjectSeriesGetResult = NonNullable<Awaited<ReturnType<typeof listSeriesApiV1WorkObjectSeriesGet>>>
+export type CreateSeriesApiV1WorkObjectSeriesPostResult = NonNullable<Awaited<ReturnType<typeof createSeriesApiV1WorkObjectSeriesPost>>>
+export type GetSeriesApiV1WorkObjectSeriesSeriesIdGetResult = NonNullable<Awaited<ReturnType<typeof getSeriesApiV1WorkObjectSeriesSeriesIdGet>>>
+export type UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutResult = NonNullable<Awaited<ReturnType<typeof updateSeriesApiV1WorkObjectSeriesSeriesIdPut>>>
+export type DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostResult = NonNullable<Awaited<ReturnType<typeof disableSeriesApiV1WorkObjectSeriesSeriesIdDisablePost>>>
+export type EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostResult = NonNullable<Awaited<ReturnType<typeof enableSeriesApiV1WorkObjectSeriesSeriesIdEnablePost>>>
+export type SeriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGetResult = NonNullable<Awaited<ReturnType<typeof seriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGet>>>
+export type SeriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGetResult = NonNullable<Awaited<ReturnType<typeof seriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGet>>>
 export type ListWorkObjectsApiV1WorkObjectsGetResult = NonNullable<Awaited<ReturnType<typeof listWorkObjectsApiV1WorkObjectsGet>>>
+export type UploadAttachmentApiV1WorkObjectsAttachmentsPostResult = NonNullable<Awaited<ReturnType<typeof uploadAttachmentApiV1WorkObjectsAttachmentsPost>>>
 export type DispatchWorkObjectsApiV1WorkObjectsDispatchPostResult = NonNullable<Awaited<ReturnType<typeof dispatchWorkObjectsApiV1WorkObjectsDispatchPost>>>
 export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetResult = NonNullable<Awaited<ReturnType<typeof listDispatchOptionsApiV1WorkObjectsDispatchOptionsGet>>>
 export type SyncWorkObjectsApiV1WorkObjectsSyncPostResult = NonNullable<Awaited<ReturnType<typeof syncWorkObjectsApiV1WorkObjectsSyncPost>>>
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGetResult = NonNullable<Awaited<ReturnType<typeof getWorkObjectApiV1WorkObjectsWorkObjectIdGet>>>
+export type ListAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsGetResult = NonNullable<Awaited<ReturnType<typeof listAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsGet>>>
+export type LinkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPostResult = NonNullable<Awaited<ReturnType<typeof linkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPost>>>
+export type DetachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDeleteResult = NonNullable<Awaited<ReturnType<typeof detachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDelete>>>
+export type DownloadAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdContentGetResult = NonNullable<Awaited<ReturnType<typeof downloadAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdContentGet>>>
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatchResult = NonNullable<Awaited<ReturnType<typeof setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch>>>
 export type GetWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleGetResult = NonNullable<Awaited<ReturnType<typeof getWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleGet>>>
 export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostResult = NonNullable<Awaited<ReturnType<typeof commandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPost>>>
 export type ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetResult = NonNullable<Awaited<ReturnType<typeof listWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGet>>>
+export type GetRemarkApiV1WorkObjectsWorkObjectIdRemarksGetResult = NonNullable<Awaited<ReturnType<typeof getRemarkApiV1WorkObjectsWorkObjectIdRemarksGet>>>
+export type EditRemarkApiV1WorkObjectsWorkObjectIdRemarksPatchResult = NonNullable<Awaited<ReturnType<typeof editRemarkApiV1WorkObjectsWorkObjectIdRemarksPatch>>>
+export type ListRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGetResult = NonNullable<Awaited<ReturnType<typeof listRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGet>>>

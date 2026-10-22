@@ -51,13 +51,14 @@ interface PrimaryNavigationItem {
 }
 
 /**
- * 2026-09-02 裁决：一级导航五项平铺，顺序与路径固定。图标取定稿画板符号表（`shared/ui/Icon`），
+ * 2026-09-02 裁决：一级导航沿用平铺结构，增加周期任务入口，顺序与路径固定。图标取定稿画板符号表（`shared/ui/Icon`），
  * 与画板左导航逐项对应，不再用字符符号。
  */
 const PRIMARY_NAVIGATION: readonly PrimaryNavigationItem[] = [
   { icon: 'chat', label: 'AI 助手', to: AI_ASSISTANT_PATH },
   { icon: 'list', label: '工作事项', to: WORK_OBJECTS_PATH },
   { icon: 'send', label: '任务交办', to: '/work-dispatch' },
+  { icon: 'list', label: '周期任务', to: '/work-object-series' },
   { icon: 'grid', label: '软件中心', to: '/apps' },
   { icon: 'mail', label: '消息', to: '/messages' },
 ];

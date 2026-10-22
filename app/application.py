@@ -29,6 +29,7 @@ from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
 from app.api.v1.runtime import make_router as make_runtime_router
+from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
 from app.browser_skill.supervisor import BrowserWorkerSupervisor
@@ -66,6 +67,7 @@ from app.ports.browser_fill_stop import DFormManagementPort
 from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
+from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
@@ -88,6 +90,8 @@ def create_app(
     health_timeout_seconds: float = 5.0,
     credential_polling_scheduler: CredentialPollingScheduler | None = None,
     organization_directory_scheduler: OrganizationDirectoryScheduler | None = None,
+    work_object_series_service: WorkObjectSeriesService | None = None,
+    work_object_series_scheduler: WorkObjectSeriesScheduler | None = None,
     diagnostic_checks: dict[str, HealthCheck] | None = None,
     validate_workflows: Callable[[], Awaitable[None]] | None = None,
     mcp_service: McpApiService | None = None,
@@ -101,7 +105,7 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
-        credential_started = organization_started = browser_started = False
+        credential_started = organization_started = browser_started = series_started = False
         try:
             if d_form_execution_without_sync and not background_sync_disabled_receipt:
                 raise RuntimeError("browser_d_form_execution_without_sync_invalid")
@@ -131,6 +135,9 @@ def create_app(
             if organization_directory_scheduler is not None:
                 await organization_directory_scheduler.start()
                 organization_started = True
+            if work_object_series_scheduler is not None:
+                work_object_series_scheduler.start()
+                series_started = True
             if browser_worker_supervisor is not None:
                 await browser_worker_supervisor.start()
                 browser_started = True
@@ -143,8 +150,12 @@ def create_app(
             yield
         finally:
             try:
-                if browser_started and browser_worker_supervisor is not None:
-                    await browser_worker_supervisor.stop()
+                try:
+                    if series_started and work_object_series_scheduler is not None:
+                        await work_object_series_scheduler.stop()
+                finally:
+                    if browser_started and browser_worker_supervisor is not None:
+                        await browser_worker_supervisor.stop()
             finally:
                 try:
                     if organization_started and organization_directory_scheduler is not None:
@@ -234,6 +245,10 @@ def create_app(
     application.include_router(
         make_work_object_router(work_object_service, csrf_protected_principal),
         prefix="/api/v1/work-objects",
+    )
+    application.include_router(
+        make_work_object_series_router(work_object_series_service, csrf_protected_principal),
+        prefix="/api/v1/work-object-series",
     )
     application.include_router(
         make_me_router(
@@ -416,6 +431,10 @@ def create_production_app(
         runtime=components.runtime,
         admin_registry_service=components.admin_registry_service,
         work_object_service=components.work_object_service,
+        work_object_series_service=components.work_object_series_service,
+        work_object_series_scheduler=(
+            components.work_object_series_scheduler if background_sync_enabled else None
+        ),
         credential_binding_service=components.credential_binding_service,
         user_profile=components.user_profile,
         authentication=components.authentication,

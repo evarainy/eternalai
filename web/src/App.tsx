@@ -129,6 +129,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
     LazyTasksPage,
     LazyWorkDispatchPage,
     LazyWorkObjectSearchPage,
+    LazyWorkObjectSeriesPage,
     LazyWorkObjectsPage,
   } = routes;
   return (
@@ -198,6 +199,9 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
                     </RouteLoadBoundary>
                   )}
                 />
+                <Route path="/work-object-series" element={(
+                  <RouteLoadBoundary label="正在打开周期任务"><LazyWorkObjectSeriesPage /></RouteLoadBoundary>
+                )} />
                 <Route
                   path="/apps"
                   element={(
