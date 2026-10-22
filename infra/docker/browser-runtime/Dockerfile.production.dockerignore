@@ -98,6 +98,8 @@ app/memory/*
 app/ports/*
 !app/runtime/
 app/runtime/*
+!app/work_dispatch/
+app/work_dispatch/*
 !app/workflow/
 app/workflow/*
 !scripts/
@@ -127,6 +129,7 @@ services/decision/*
 !app/api/v1/me.py
 !app/api/v1/mock_control.py
 !app/api/v1/runtime.py
+!app/api/v1/work_object_series.py
 !app/api/v1/work_objects.py
 !app/browser_skill/__init__.py
 !app/browser_skill/chat.py
@@ -277,7 +280,11 @@ services/decision/*
 !app/infra/persistence/task_store/errors.py
 !app/infra/persistence/task_store/postgresql.py
 !app/infra/persistence/task_store/transactional.py
+!app/infra/persistence/work_object/attachments.py
+!app/infra/persistence/work_object/authorization.py
+!app/infra/persistence/work_object/dispatch_insert.py
 !app/infra/persistence/work_object/postgresql.py
+!app/infra/persistence/work_object/recurrence.py
 !app/infra/policy/minimal_policy_guard.py
 !app/infra/sdui/credential_markers.py
 !app/infra/sdui/response_envelope_builder.py
@@ -341,8 +348,11 @@ services/decision/*
 !app/ports/task_store.py
 !app/ports/trace.py
 !app/ports/user_profile.py
+!app/ports/work_object_attachment.py
+!app/ports/work_object_dispatch.py
 !app/ports/work_object_handling.py
 !app/ports/work_object_lifecycle.py
+!app/ports/work_object_recurrence.py
 !app/ports/work_object_scope.py
 !app/ports/work_object_search.py
 !app/ports/work_object.py
@@ -356,6 +366,10 @@ services/decision/*
 !app/runtime/runtime.py
 !app/server.py
 !app/version_binding.py
+!app/work_dispatch/__init__.py
+!app/work_dispatch/attachments.py
+!app/work_dispatch/recurrence.py
+!app/work_dispatch/service.py
 !app/workflow/__init__.py
 !app/workflow/definitions.py
 !app/workflow/engine.py
