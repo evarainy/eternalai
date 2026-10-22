@@ -3517,7 +3517,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
-              "pattern": "\"wolc-[0-9a-f]{64}\"",
+              "pattern": "\"wosr-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -3662,7 +3662,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
-              "pattern": "\"wolc-[0-9a-f]{64}\"",
+              "pattern": "\"wosr-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -3797,7 +3797,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
-              "pattern": "\"wolc-[0-9a-f]{64}\"",
+              "pattern": "\"wosr-[0-9a-f]{64}\"",
               "type": "string"
             }
           }

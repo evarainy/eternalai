@@ -300,14 +300,22 @@ def test_stale_directory_blocks_creation_but_preserves_authorized_receipt_read(d
 
 
 def test_expiry_during_request_blocks_publication(dispatch_db, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from app.infra.persistence.work_object import authorization, dispatch_insert
+
     db = dispatch_db
-    ticks = [0.0]
-    db.service.dispatch._monotonic = lambda: ticks[0]
+    ticks = [time.monotonic()]
+    clock = SimpleNamespace(monotonic=lambda: ticks[0])
+    db.service.dispatch._monotonic = clock.monotonic
+    monkeypatch.setattr(authorization, "time", clock)
+    monkeypatch.setattr(dispatch_insert, "time", clock)
     original = db.trace.record_event
 
     async def slow_audit(event):
         await original(event)
-        ticks[0] = 172801.0
+        ticks[0] += 172801.0
 
     monkeypatch.setattr(db.trace, "record_event", slow_audit)
     assert_error(db.post(), 503, "organization_directory_stale")

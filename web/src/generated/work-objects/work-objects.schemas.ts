@@ -1133,7 +1133,7 @@ export type CreateSeriesApiV1WorkObjectSeriesPostHeaders = {
 export type UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders = {
 'Idempotency-Key': string;
 /**
- * @pattern "wolc-[0-9a-f]{64}"
+ * @pattern "wosr-[0-9a-f]{64}"
  */
 'If-Match': string;
 };
@@ -1141,7 +1141,7 @@ export type UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders = {
 export type DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders = {
 'Idempotency-Key': string;
 /**
- * @pattern "wolc-[0-9a-f]{64}"
+ * @pattern "wosr-[0-9a-f]{64}"
  */
 'If-Match': string;
 };
@@ -1149,7 +1149,7 @@ export type DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders = {
 export type EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostHeaders = {
 'Idempotency-Key': string;
 /**
- * @pattern "wolc-[0-9a-f]{64}"
+ * @pattern "wosr-[0-9a-f]{64}"
  */
 'If-Match': string;
 };

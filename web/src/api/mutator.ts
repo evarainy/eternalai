@@ -89,8 +89,7 @@ export const requestWithResponse = async <T>(
     if (isAdminErrorEnvelope(errorBody)) throw new ApiError(response.status, errorBody.detail.code, errorBody.detail.message);
     throw new ApiError(response.status, `http_${response.status}`, `HTTP ${response.status}: ${response.statusText}`);
   }
-  const mime = response.headers.get('content-type');
-  const binary = responseType === 'blob' || (mime !== null && !mime.includes('json'));
+  const binary = responseType === 'blob';
   const payload: unknown = response.status === 204 ? null : binary ? await response.blob() : await response.json();
   if (useAuthStore.getState().generation !== authGeneration) {
     throw new ApiError(409, 'identity_changed', '身份已变化，请重新读取。');

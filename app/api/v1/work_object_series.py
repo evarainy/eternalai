@@ -112,7 +112,7 @@ def make_router(
                 "headers": {"ETag": {"schema": {"type": "string"}}},
             },
         },
-        openapi_extra=mutation_schema(),
+        openapi_extra=mutation_schema(prefix="wosr"),
     )
     async def update_series(
         series_id: UUID,
@@ -141,7 +141,7 @@ def make_router(
                 "headers": {"ETag": {"schema": {"type": "string"}}},
             },
         },
-        openapi_extra=mutation_schema(),
+        openapi_extra=mutation_schema(prefix="wosr"),
     )
     async def enable_series(
         series_id: UUID,
@@ -169,7 +169,7 @@ def make_router(
                 "headers": {"ETag": {"schema": {"type": "string"}}},
             },
         },
-        openapi_extra=mutation_schema(),
+        openapi_extra=mutation_schema(prefix="wosr"),
     )
     async def disable_series(
         series_id: UUID,

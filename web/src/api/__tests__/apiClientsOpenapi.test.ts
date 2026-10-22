@@ -460,6 +460,16 @@ describe('FastAPI-derived Orval clients', () => {
       { name: 'Idempotency-Key', in: 'header', required: true, schema: { format: 'uuid', type: 'string' } },
       { name: 'If-Match', in: 'header', required: true, schema: { pattern: '"wolc-[0-9a-f]{64}"', type: 'string' } },
     ]);
+    for (const [path, method] of [
+      ['/api/v1/work-object-series/{series_id}', 'put'],
+      ['/api/v1/work-object-series/{series_id}/enable', 'post'],
+      ['/api/v1/work-object-series/{series_id}/disable', 'post'],
+    ] as const) {
+      expect(document.paths[path]![method]!.parameters).toContainEqual({
+        name: 'If-Match', in: 'header', required: true,
+        schema: { pattern: '"wosr-[0-9a-f]{64}"', type: 'string' },
+      });
+    }
     const commandModels = ['AssignCommand', 'AcceptCommand', 'FeedbackCommand', 'SubmitCommand', 'CompleteCommand', 'DepartmentReviewCommand', 'SubmitSummaryCommand', 'ConfirmCommand', 'ReturnCommand', 'ReviseCommand', 'WithdrawCommand', 'ExtendCommand', 'ReassignCommand'];
     expect(command.requestBody?.content?.['application/json']?.schema).toMatchObject({
       discriminator: { propertyName: 'operation' },
