@@ -102,8 +102,6 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceWriter,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
-from app.infra.orchestration.agentscope_m0_turn import M0TurnRunner, build_m0_turn_runner
-from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.reader import read_directory_snapshot
 from app.infra.organization_directory.source_binding import BoundOrganizationDirectorySourceFactory
@@ -214,10 +212,9 @@ class ProductionComponents:
     browser_intent_model: str
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
-    # Read-only AgentScope bridge dependencies (M0); not consumed by the HTTP app.
-    agentscope_read_dependencies: AgentScopeReadDependencies | None = None
-    # Internal M0 counting turn; built only when AGENTSCOPE_M0_TURN_ENABLED == "1".
-    agentscope_m0_turn: M0TurnRunner | None = None
+    # Internal M0 counting turn (agentscope_m0_turn.M0TurnRunner); built only
+    # when AGENTSCOPE_M0_TURN_ENABLED == "1", so AgentScope is otherwise never imported.
+    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
 
 
 def build_credential_store(
@@ -877,24 +874,35 @@ def build_production_components(
         approved_projections=approved_projections,
     )
     # The AgentScope read bridge reuses the same production instances and
-    # result mappings; the HTTP application does not consume it.
-    agentscope_read_dependencies = AgentScopeReadDependencies(
-        capability_registry=capability_registry,
-        candidate_policy=policy_guard,
-        orchestration=AgentOrchestrationAdapter(
+    # result mappings. It exists only for the M0 counting route; with the
+    # switch off neither AgentScope nor the bridge is imported.
+    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
+    if settings.agentscope_m0_turn_enabled:
+        from app.infra.orchestration.agentscope_m0_turn import build_m0_turn_runner
+        from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
+
+        agentscope_read_dependencies = AgentScopeReadDependencies(
             capability_registry=capability_registry,
-            gateway=gateway,
-            workflow_engine=None,
-            response_builder=ResponseEnvelopeBuilder(),
-            validate_workflow=validate_workflow,
-            capability_formatters=capability_formatters,
-            mcp_result_profiles=mcp_result_profiles,
-            approved_projections=approved_projections,
-        ),
-        task_store=task_store,
-        trace_port=resolved_trace_port,
-        human_gate=human_gate_port,
-    )
+            candidate_policy=policy_guard,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=capability_registry,
+                gateway=gateway,
+                workflow_engine=None,
+                response_builder=ResponseEnvelopeBuilder(),
+                validate_workflow=validate_workflow,
+                capability_formatters=capability_formatters,
+                mcp_result_profiles=mcp_result_profiles,
+                approved_projections=approved_projections,
+            ),
+            task_store=task_store,
+            trace_port=resolved_trace_port,
+            human_gate=human_gate_port,
+        )
+        agentscope_m0_turn = build_m0_turn_runner(
+            agentscope_read_dependencies,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
     resolved_authentication = (
         build_authentication_port(
             oa_base_url=settings.oa_base_url,
@@ -1044,16 +1052,7 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
-        agentscope_read_dependencies=agentscope_read_dependencies,
-        agentscope_m0_turn=(
-            build_m0_turn_runner(
-                agentscope_read_dependencies,
-                base_url=settings.llm_base_url,
-                model=settings.llm_model,
-            )
-            if settings.agentscope_m0_turn_enabled
-            else None
-        ),
+        agentscope_m0_turn=agentscope_m0_turn,
         browser_gateway=gateway,
         browser_session_factory=session_factory,
         browser_capability_registry=capability_registry,

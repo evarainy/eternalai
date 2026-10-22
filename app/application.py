@@ -2,7 +2,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -10,8 +10,6 @@ from fastapi.responses import JSONResponse
 from app.admin.d_form import AdminDFormManagementService
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
-from app.api.v1.agentscope_m0 import M0TurnRunner
-from app.api.v1.agentscope_m0 import make_router as make_agentscope_m0_router
 from app.api.v1.auth import (
     make_require_principal,
 )
@@ -68,6 +66,10 @@ from app.ports.browser_fill_stop import DFormManagementPort
 from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
+
+# Same shape as app.api.v1.agentscope_m0.M0TurnRunner; spelled out here so the
+# route module is imported only when the M0 counting switch is on.
+M0TurnRunner = Callable[..., Awaitable[dict[str, Any]]]
 
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
@@ -215,7 +217,10 @@ def create_app(
         prefix="/api/v1/runtime",
     )
     if agentscope_m0_turn is not None:
-        # Internal M0 counting route; present only when explicitly enabled.
+        # Internal M0 counting route; present only when explicitly enabled, and
+        # imported only then so the default import closure stays unchanged.
+        from app.api.v1.agentscope_m0 import make_router as make_agentscope_m0_router
+
         application.include_router(
             make_agentscope_m0_router(
                 agentscope_m0_turn,
