@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ports.work_object_scope import AuthorizedWorkObjectScope
+from app.ports.work_object_search import SEARCH_WHITESPACE
 
 if TYPE_CHECKING:
     from app.ports.work_object import DispatchReceipt, InternalWorkObjectRecord
@@ -84,7 +85,7 @@ class DispatchRequest(DispatchModel):
     @field_validator("title", "requirement", "receipt_requirement", mode="before")
     @classmethod
     def normalize_text(cls, value: Any) -> Any:
-        return value.strip() if isinstance(value, str) else value
+        return value.strip(SEARCH_WHITESPACE) if isinstance(value, str) else value
 
     @field_validator("due_at", mode="before")
     @classmethod
@@ -304,6 +305,7 @@ def dispatch_public_item(
         "withdrawn_at",
         "dispatch_mode",
         "completion_mode",
+        "dispatch_model_version",
     )
     return {
         **{k: record[k] for k in fields},

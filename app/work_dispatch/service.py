@@ -131,6 +131,17 @@ class WorkDispatchService:
                 (fresh.view.observed_at - fresh.view.last_success_at).total_seconds(),
             )
         )
+        heads = (
+            [
+                candidate
+                for candidate in fresh.view.memberships
+                if member is not None
+                and candidate.department_id == member.department_id
+                and is_department_head(candidate)
+            ]
+            if fresh is not None
+            else []
+        )
         return AuthorizedWorkObjectScope(
             principal_tenant_id=subject.tenant_id,
             principal_ai_user_id=subject.ai_user_id,
@@ -138,7 +149,10 @@ class WorkDispatchService:
             principal_department_id=None if member is None else member.department_id,
             responsible_department_ids=(
                 frozenset({member.department_id})
-                if member is not None and is_department_head(member)
+                if member is not None
+                and is_department_head(member)
+                and len(heads) == 1
+                and heads[0].user_id == member.user_id
                 else frozenset()
             ),
             directory_snapshot_version=None if fresh is None else fresh.view.snapshot_version,
@@ -147,14 +161,29 @@ class WorkDispatchService:
             else fresh.started_at + remaining,
         )
 
-    async def build_scope_for_subject(self, subject: DispatchSubject) -> AuthorizedWorkObjectScope:
+    async def _read_scope(
+        self, subject: DispatchSubject
+    ) -> tuple[AuthorizedWorkObjectScope, str | None]:
+        if self._organization_directory is None or subject.tenant_id != "default":
+            return self._scope(subject), None
         try:
             fresh = await self._fresh(subject)
         except WorkDispatchError as exc:
             if exc.code in {"organization_directory_missing", "organization_directory_stale"}:
-                return self._scope(subject)
+                return self._scope(subject), exc.code
             raise
-        return self._scope(subject, fresh)
+        scope = self._scope(subject, fresh)
+        try:
+            self._member(subject, fresh)
+        except WorkDispatchError as exc:
+            if exc.code in {"directory_membership_missing", "directory_membership_ambiguous"}:
+                return scope, exc.code
+            raise
+        return scope, None
+
+    async def build_scope_for_subject(self, subject: DispatchSubject) -> AuthorizedWorkObjectScope:
+        scope, _ = await self._read_scope(subject)
+        return scope
 
     async def build_scope(self, principal: Principal) -> AuthorizedWorkObjectScope:
         # No directory adapter means no head privilege; authenticated direct identity survives.
@@ -167,6 +196,21 @@ class WorkDispatchService:
         subject: DispatchSubject, request: DispatchRequest, fresh: FreshDirectoryView
     ) -> None:
         actor = WorkDispatchService._member(subject, fresh)
+        # Check the whole batch's authority before resolving any target's existence.
+        for target in request.targets:
+            if not may_dispatch_to(
+                actor,
+                target_kind=target.kind,
+                target_department_id=target.department_id,
+                target_directory_user_id=target.directory_user_id
+                if target.kind == "user"
+                else None,
+            ):
+                raise WorkDispatchError(
+                    "cross_department_dispatch_denied"
+                    if is_department_head(actor) or is_leader(actor)
+                    else "not_department_head"
+                )
         for target in request.targets:
             if target.department_id not in fresh.departments:
                 raise WorkDispatchError("dispatch_target_department_missing")
@@ -186,15 +230,6 @@ class WorkDispatchService:
                     raise WorkDispatchError("dispatch_department_head_missing")
                 if len(heads) != 1 or len(fresh.memberships[heads[0].user_id]) != 1:
                     raise WorkDispatchError("dispatch_department_head_ambiguous")
-            if not may_dispatch_to(
-                actor,
-                target_kind=target.kind,
-                target_department_id=target.department_id,
-                target_directory_user_id=target.directory_user_id
-                if target.kind == "user"
-                else None,
-            ):
-                raise WorkDispatchError("cross_department_dispatch_denied")
 
     async def prepare_dispatch(
         self,
@@ -309,7 +344,9 @@ class WorkDispatchService:
             scheduled_at,
         )
 
-    async def _audit(self, subject: DispatchSubject, operation: str) -> None:
+    async def _audit(
+        self, subject: DispatchSubject, operation: str, *, reason: str | None = None
+    ) -> None:
         if self._trace_port is None:
             raise WorkDispatchError("work_object_audit_unavailable")
         correlation_id = self._id_factory()
@@ -322,15 +359,32 @@ class WorkDispatchService:
                     tenant_id=subject.tenant_id,
                     ai_user_id=subject.ai_user_id,
                     event_type="user_action",
-                    status="ok",
+                    status="ok" if reason is None else "blocked",
                     error_code=None,
                     capability_id=None,
-                    attributes={"operation": operation, "stage": "authorized"},
+                    attributes={
+                        "operation": operation,
+                        "stage": "authorized" if reason is None else "denied",
+                        **({"reason_code": reason} if reason is not None else {}),
+                    },
                 )
             )
         except Exception:
             _LOGGER.warning("work_dispatch stage=audit code=work_object_audit_unavailable")
             raise WorkDispatchError("work_object_audit_unavailable") from None
+
+    async def _replay_receipt(
+        self, principal: Principal, receipt: DispatchReceipt
+    ) -> DispatchResult:
+        scope = await self.build_scope(principal)
+        try:
+            return await self._store.replay_dispatch_receipt(receipt, scope)
+        except WorkDispatchError as exc:
+            if exc.code not in {"organization_directory_missing", "organization_directory_stale"}:
+                raise
+        return await self._store.replay_dispatch_receipt(
+            receipt, self._scope(self.subject(principal))
+        )
 
     async def dispatch_for_principal(
         self, principal: Principal, *, request: DispatchRequest, idempotency_key: UUID
@@ -346,19 +400,7 @@ class WorkDispatchService:
             if receipt is not None:
                 if receipt.request_fingerprint != fingerprint(request.model_dump(mode="json")):
                     raise WorkDispatchError("idempotency_key_reused")
-                scope = await self.build_scope(principal)
-                try:
-                    result = await self._store.replay_dispatch_receipt(receipt, scope)
-                except WorkDispatchError as exc:
-                    if exc.code not in {
-                        "organization_directory_missing",
-                        "organization_directory_stale",
-                    }:
-                        raise
-                    # Existing receipt: reduce read authority, never re-run creation policy.
-                    result = await self._store.replay_dispatch_receipt(
-                        receipt, self._scope(subject)
-                    )
+                result = await self._replay_receipt(principal, receipt)
             else:
                 prepared = await self.prepare_dispatch(
                     subject, request=request, idempotency_key=idempotency_key
@@ -366,12 +408,32 @@ class WorkDispatchService:
                 await self._audit(prepared.subject, "dispatch")
                 result = await self._store.create_prepared_dispatch(prepared)
         except WorkDispatchError as exc:
-            _LOGGER.warning(
-                "work_dispatch stage=dispatch code=%s elapsed_ms=%d",
-                exc.code,
-                int((self._monotonic() - started) * 1000),
-            )
-            raise
+            if exc.code == "work_object_audit_unavailable":
+                winner = await self._store.get_dispatch_receipt(
+                    tenant_id=subject.tenant_id,
+                    initiator_ai_user_id=subject.ai_user_id,
+                    idempotency_key=idempotency_key,
+                )
+                if winner is None:
+                    raise
+                if winner.request_fingerprint != fingerprint(request.model_dump(mode="json")):
+                    raise WorkDispatchError("idempotency_key_reused") from None
+                result = await self._replay_receipt(principal, winner)
+            else:
+                if exc.code in {
+                    "directory_membership_missing",
+                    "directory_membership_ambiguous",
+                    "not_department_head",
+                    "cross_department_dispatch_denied",
+                    "dispatch_target_membership_ambiguous",
+                }:
+                    await self._audit(subject, "dispatch", reason=exc.code)
+                _LOGGER.warning(
+                    "work_dispatch stage=dispatch code=%s elapsed_ms=%d",
+                    exc.code,
+                    int((self._monotonic() - started) * 1000),
+                )
+                raise
         _LOGGER.info(
             "work_dispatch stage=%s count=%d replayed=%s elapsed_ms=%d",
             "replayed" if result.replayed else "committed",
@@ -392,10 +454,23 @@ class WorkDispatchService:
         limit: int = 50,
     ) -> DispatchOptionsView:
         subject = self.subject(principal)
+        if subject.tenant_id != "default":
+            raise WorkDispatchError("directory_scope_denied")
         fresh = await self._fresh(subject)
         actor = self._member(subject, fresh)
         if kind not in {"user", "department"} or not 1 <= limit <= 100:
             raise WorkDispatchError("dispatch_options_request_invalid")
+        if kind == "department" and not (is_department_head(actor) or is_leader(actor)):
+            raise WorkDispatchError("not_department_head")
+        if kind == "user" and department_id is not None:
+            if department_id != actor.department_id and not is_leader(actor):
+                raise WorkDispatchError(
+                    "cross_department_dispatch_denied"
+                    if is_department_head(actor)
+                    else "not_department_head"
+                )
+            if department_id not in fresh.departments:
+                raise WorkDispatchError("dispatch_target_department_missing")
         options = []
         unselectable: set[str] = set()
         if kind == "user":
@@ -467,10 +542,12 @@ class WorkDispatchService:
                 raw = base64.urlsafe_b64decode(cursor.encode()).decode()
                 version, offset_text, cursor_kind = raw.split(":")
                 offset = int(offset_text)
-                if int(version) != fresh.view.snapshot_version or cursor_kind != kind or offset < 0:
+                if cursor_kind != kind or offset < 0:
                     raise ValueError
+                if int(version) != fresh.view.snapshot_version:
+                    raise WorkDispatchError("organization_directory_snapshot_changed")
             except (ValueError, UnicodeError):
-                raise WorkDispatchError("dispatch_options_cursor_invalid") from None
+                raise WorkDispatchError("dispatch_options_request_invalid") from None
         page = options[offset : offset + limit]
         next_cursor = (
             None
@@ -494,18 +571,31 @@ class WorkDispatchService:
     async def get_lifecycle_for_principal(
         self, work_object_id: str, principal: Principal
     ) -> LifecycleView:
-        scope = await self.build_scope(principal)
+        scope, reason = await self._read_scope(self.subject(principal))
         try:
-            return await self._store.get_dispatch_lifecycle(work_object_id, scope)
+            view = await self._store.get_dispatch_lifecycle(work_object_id, scope)
         except WorkDispatchError as exc:
             if exc.code not in {"organization_directory_missing", "organization_directory_stale"}:
                 raise
             _LOGGER.info(
                 "work_dispatch stage=read_scope_expired resource=lifecycle code=%s", exc.code
             )
-        return await self._store.get_dispatch_lifecycle(
-            work_object_id, self._scope(self.subject(principal))
-        )
+            reason = exc.code
+            view = await self._store.get_dispatch_lifecycle(
+                work_object_id, self._scope(self.subject(principal))
+            )
+        if reason is not None and not view.frozen:
+            return view.model_copy(
+                update={
+                    "available_commands": [],
+                    "unavailable_reason": reason,
+                    "relations": [
+                        relation.model_copy(update={"available_commands": []})
+                        for relation in view.relations
+                    ],
+                }
+            )
+        return view
 
     async def command_lifecycle_for_principal(
         self,
@@ -521,11 +611,13 @@ class WorkDispatchService:
         member = self._member(subject, fresh)
         scope = self._scope(subject, fresh)
         record = await self._store.get_for_scope(work_object_id, scope)
+        if record is None:
+            raise WorkDispatchError("work_object_not_found")
         if (
             not isinstance(record, InternalWorkObjectRecord)
             or record.source_kind != "manual_dispatch"
         ):
-            raise WorkDispatchError("work_object_not_found")
+            raise WorkDispatchError("work_object_lifecycle_unsupported")
         legacy_conversion_relation = None
         if record.dispatch_model_version is None and record.status not in {
             "completed",
@@ -564,6 +656,14 @@ class WorkDispatchService:
             replacement = tuple(
                 r.model_copy(update={"work_object_id": work_object_id}) for r in prepared.relations
             )
+        existing_event = await self._store.get_lifecycle_event_for_scope(
+            work_object_id,
+            scope,
+            actor_ai_user_id=subject.ai_user_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing_event is None:
+            await self._audit(subject, command.operation)
         self._recheck(fresh)
         result = await self._store.command_dispatch_lifecycle(
             work_object_id,

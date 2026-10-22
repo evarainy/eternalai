@@ -99,7 +99,7 @@ export interface CompleteCommand {
   operation: 'complete';
   /**
    * @minLength 1
-   * @maxLength 10000
+   * @maxLength 2000
    */
   text: string;
 }
@@ -260,7 +260,7 @@ export interface FeedbackCommand {
   operation: 'feedback';
   /**
    * @minLength 1
-   * @maxLength 10000
+   * @maxLength 2000
    */
   text: string;
 }
@@ -1037,7 +1037,7 @@ export interface SubmitCommand {
   operation: 'submit';
   /**
    * @minLength 1
-   * @maxLength 10000
+   * @maxLength 2000
    */
   text: string;
 }
@@ -1048,7 +1048,7 @@ export interface SubmitSummaryCommand {
   operation: 'submit_summary';
   /**
    * @minLength 1
-   * @maxLength 10000
+   * @maxLength 2000
    */
   text: string;
 }
@@ -1132,16 +1132,25 @@ export type CreateSeriesApiV1WorkObjectSeriesPostHeaders = {
 
 export type UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
 export type DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
 export type EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
@@ -1182,6 +1191,8 @@ export const ListWorkObjectsApiV1WorkObjectsGetOaView = {
   unconfirmed: 'unconfirmed',
   all: 'all',
 } as const;
+
+export type ListWorkObjectsApiV1WorkObjectsGet422 = WorkObjectError | HTTPValidationError;
 
 export type UploadAttachmentApiV1WorkObjectsAttachmentsPostParams = {
 /**
@@ -1242,11 +1253,17 @@ export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView |
 
 export type LinkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPostHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
 export type DetachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDeleteHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
@@ -1254,6 +1271,9 @@ export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPat
 
 export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 
@@ -1273,6 +1293,9 @@ limit?: number;
 
 export type EditRemarkApiV1WorkObjectsWorkObjectIdRemarksPatchHeaders = {
 'Idempotency-Key': string;
+/**
+ * @pattern "worm-[0-9a-f]{64}"
+ */
 'If-Match': string;
 };
 

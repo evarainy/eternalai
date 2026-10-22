@@ -11,12 +11,14 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.event_loop import make_event_loop
 from app.infra.auth.crypto import HMACSessionToken
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
+from app.ports.work_object_dispatch import WorkDispatchError
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS, make_session_binder
 
@@ -24,6 +26,7 @@ from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS, make_
 @pytest.fixture
 def lifecycle_http(dispatch_db):
     db = dispatch_db
+    db.service.dispatch._clock = lambda: datetime.now(UTC)
     clock = [datetime.now(UTC).timestamp()]
     tokens = HMACSessionToken(
         signing_key=bytes(range(32)), ttl_seconds=3600, clock=lambda: clock[0], tenant_id="default"
@@ -78,6 +81,8 @@ def publish(client, *, department=False, key=None):
             "due_at": None,
             "reminder_choices": [],
             "targets": [target],
+            "dispatch_mode": "independent",
+            "completion_mode": "submit_completes",
         },
         headers={**TEST_CSRF_HEADERS, "Idempotency-Key": key or str(uuid4())},
     )
@@ -85,13 +90,23 @@ def publish(client, *, department=False, key=None):
     return response.json()
 
 
-def command(client, object_id, operation, *, message=None, key=None, etag=None):
+def command(client, object_id, operation, *, message=None, key=None, etag=None, **details):
     base = f"/api/v1/work-objects/{object_id}/lifecycle"
+    view = client.get(base)
     if etag is None:
-        view = client.get(base)
-        assert view.status_code == 200
-        etag = view.headers["etag"]
+        etag = view.headers["etag"] if view.status_code == 200 else '"wolc-' + "0" * 64 + '"'
     body = {"operation": operation}
+    if (
+        operation in {"accept", "feedback", "submit", "assign", "department_review"}
+        and view.status_code == 200
+    ):
+        body["handling_relation_id"] = view.json()["relations"][0]["relation_id"]
+    if (
+        operation in {"accept", "feedback", "submit", "assign", "department_review"}
+        and "handling_relation_id" not in body
+    ):
+        body["handling_relation_id"] = str(uuid4())
+    body.update(details)
     if message is not None:
         body["text"] = message
     return client.post(
@@ -123,21 +138,33 @@ def test_authentication_store_read_failure_is_503_without_business_calls(
     base = f"/api/v1/work-objects/{object_id}/lifecycle"
     spies = []
     for name in (
-        "get_lifecycle_for_principal", "list_lifecycle_events_for_principal",
+        "get_lifecycle_for_principal",
+        "list_lifecycle_events_for_principal",
         "command_lifecycle_for_principal",
     ):
-        spy = Mock(wraps=getattr(db.service, name))
-        monkeypatch.setattr(db.service, name, spy)
+        spy = Mock(wraps=getattr(db.service.dispatch, name))
+        monkeypatch.setattr(db.service.dispatch, name, spy)
         spies.append(spy)
 
     def request_arguments():
         view = client.get(base)
         assert view.status_code == 200
-        return {} if method == "GET" else {
-            "json": {"operation": "feedback", "text": "SYNTHETIC_FEEDBACK_INPUT"},
-            "headers": {**TEST_CSRF_HEADERS, "Idempotency-Key": str(uuid4()),
-                        "If-Match": view.headers["etag"]},
-        }
+        return (
+            {}
+            if method == "GET"
+            else {
+                "json": {
+                    "operation": "feedback",
+                    "text": "SYNTHETIC_FEEDBACK_INPUT",
+                    "handling_relation_id": view.json()["relations"][0]["relation_id"],
+                },
+                "headers": {
+                    **TEST_CSRF_HEADERS,
+                    "Idempotency-Key": str(uuid4()),
+                    "If-Match": view.headers["etag"],
+                },
+            }
+        )
 
     healthy = client.request(method, base + suffix, **request_arguments())
     assert healthy.status_code == 200
@@ -148,9 +175,10 @@ def test_authentication_store_read_failure_is_503_without_business_calls(
 
     def event_count():
         with db.sql.connect() as connection:
-            return connection.execute(text(
-                "SELECT count(*) FROM work_object_lifecycle_events WHERE work_object_id=:id"
-            ), {"id": object_id}).scalar_one()
+            return connection.execute(
+                text("SELECT count(*) FROM work_object_lifecycle_events WHERE work_object_id=:id"),
+                {"id": object_id},
+            ).scalar_one()
 
     count_before = event_count()
     for spy in spies:
@@ -166,18 +194,23 @@ def test_authentication_store_read_failure_is_503_without_business_calls(
     try:
         failed = client.request(method, base + suffix, **arguments)
         assert failed.status_code == 503
-        assert failed.json() == {"detail": {
-            "code": "authentication_unavailable",
-            "message": "Authentication is temporarily unavailable.",
-        }}
+        assert failed.json() == {
+            "detail": {
+                "code": "authentication_unavailable",
+                "message": "Authentication is temporarily unavailable.",
+            }
+        }
         assert failed.headers.get("cache-control") == "no-store"
         assert hits == [True]
         assert [spy.call_count for spy in spies] == [0, 0, 0]
         assert db.rows("work_objects") == before
         assert event_count() == count_before
         observed = failed.text + str(dict(failed.headers)) + caplog.text
-        for marker in ("SYNTHETIC_REVOCATION_READ_FAULT", "SYNTHETIC_FEEDBACK_INPUT",
-                       client.cookies.get("eternalai_session")):
+        for marker in (
+            "SYNTHETIC_REVOCATION_READ_FAULT",
+            "SYNTHETIC_FEEDBACK_INPUT",
+            client.cookies.get("eternalai_session"),
+        ):
             assert marker not in observed
     finally:
         event.remove(db.engine.sync_engine, "before_cursor_execute", fail_revocation_read)
@@ -252,7 +285,7 @@ def test_event_insert_failure_returns_503_and_rolls_back(lifecycle_http):
 
     def reject_event(_connection, _cursor, statement, _parameters, _context, _many):
         if statement.startswith("INSERT INTO work_object_lifecycle_events"):
-            raise RuntimeError("Synthetic HTTP event insert failure")
+            raise SQLAlchemyError("Synthetic HTTP event insert failure")
 
     event.listen(db.engine.sync_engine, "before_cursor_execute", reject_event)
     try:
@@ -282,11 +315,11 @@ def test_real_http_publish_accept_feedback_complete_and_initiator_readback(lifec
     publication_key = str(uuid4())
     initial = publish(client, key=publication_key)
     object_id = initial["items"][0]["work_object_id"]
-    assert "accepted_at" not in initial["items"][0]
+    assert initial["items"][0]["accepted_at"] is None
     actor("local-recipient")
     base = f"/api/v1/work-objects/{object_id}/lifecycle"
     first = client.get(base)
-    assert first.json()["available_commands"] == ["accept"]
+    assert first.json()["relations"][0]["available_commands"] == ["accept"]
     digest = hashlib.sha256(
         json.dumps(first.json(), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     ).hexdigest()
@@ -314,6 +347,10 @@ def test_real_http_publish_accept_feedback_complete_and_initiator_readback(lifec
     assert view.json()["status"] == "completed"
     assert view.json()["available_commands"] == []
     assert view.json()["completed_at"].endswith("Z")
+    shared = client.get(base + "/events").json()
+    assert [event["operation"] for event in shared["items"]] == ["complete"]
+    assert [event["text"] for event in shared["items"]] == ["合成办结说明"]
+    actor("local-recipient")
     events = client.get(base + "/events").json()
     assert [item["operation"] for item in events["items"]] == ["accept", "feedback", "complete"]
     assert [item["text"] for item in events["items"]] == [
@@ -332,10 +369,15 @@ def test_real_http_publish_accept_feedback_complete_and_initiator_readback(lifec
             "result_version",
             "occurred_at",
             "text",
-            "actor_role",
+            "actor_ai_user_id",
+            "handling_relation_id",
+            "relation_from_status",
+            "relation_to_status",
+            "payload",
         }
         for item in events["items"]
     )
+    actor("sender")
     detail = client.get(f"/api/v1/work-objects/{object_id}")
     assert detail.json()["status"] == "completed"
     assert "accepted_by_ai_user_id" not in detail.json()
@@ -349,6 +391,8 @@ def test_real_http_publish_accept_feedback_complete_and_initiator_readback(lifec
             "receipt_requirement": "Synthetic evidence",
             "due_at": None,
             "reminder_choices": [],
+            "dispatch_mode": "independent",
+            "completion_mode": "submit_completes",
             "targets": [
                 {
                     "kind": "user",
@@ -360,7 +404,10 @@ def test_real_http_publish_accept_feedback_complete_and_initiator_readback(lifec
         headers={**TEST_CSRF_HEADERS, "Idempotency-Key": publication_key},
     )
     assert replay_publication.status_code == 200
-    assert replay_publication.json() == {**initial, "replayed": True}
+    assert replay_publication.json()["replayed"] is True
+    assert replay_publication.json()["items"][0]["status"] == "completed"
+    assert replay_publication.json()["items"][0]["version"] == 4
+    assert replay_publication.json()["items"][0]["work_object_id"] == object_id
     with db.sql.connect() as connection:
         row = connection.execute(
             text(
@@ -400,6 +447,8 @@ def test_events_http_cursor_and_fresh_scope_each_page(lifecycle_http):
         "UPDATE organization_user_memberships SET department_id='office-b' "
         "WHERE user_id='local-recipient'"
     )
+    assert client.get(endpoint, params={"after_version": 2}).status_code == 200
+    actor("outsider", "office-b")
     assert_error(client.get(endpoint, params={"after_version": 2}), 404, "work_object_not_found")
 
 
@@ -408,13 +457,15 @@ def test_user_target_only_named_recipient_may_accept(lifecycle_http):
     object_id = publish(client)["items"][0]["work_object_id"]
     for user in ("sender", "coworker"):
         actor(user)
-        assert_error(command(client, object_id, "accept"), 403, "work_object_action_forbidden")
+        assert_error(
+            command(client, object_id, "accept"),
+            403 if user == "sender" else 404,
+            "work_object_action_forbidden" if user == "sender" else "work_object_not_found",
+        )
     actor("local-recipient")
     assert command(client, object_id, "accept").status_code == 200
     actor("coworker")
-    assert_error(
-        command(client, object_id, "feedback", message="No"), 403, "work_object_action_forbidden"
-    )
+    assert_error(command(client, object_id, "feedback", message="No"), 404, "work_object_not_found")
     with db.sql.connect() as connection:
         assert (
             connection.execute(
@@ -428,15 +479,33 @@ def test_department_claim_has_one_current_handler(lifecycle_http):
     _db, client, actor, _clock = lifecycle_http
     object_id = publish(client, department=True)["items"][0]["work_object_id"]
     actor("member-b")
+    assert_error(command(client, object_id, "accept"), 404, "work_object_not_found")
+    actor("sender")
+    assert command(client, object_id, "assign", directory_user_id="member-b").status_code == 200
+    actor("member-b")
     assert command(client, object_id, "accept").status_code == 200
     actor("member-c")
-    assert_error(command(client, object_id, "accept"), 409, "work_object_transition_invalid")
-    for operation in ("feedback", "complete"):
+    for operation in ("accept", "feedback", "complete"):
         assert_error(
-            command(client, object_id, operation, message="No"), 403, "work_object_action_forbidden"
+            command(client, object_id, operation, message="No" if operation != "accept" else None),
+            404,
+            "work_object_not_found",
         )
     actor("member-b")
-    assert command(client, object_id, "complete", message="Done").status_code == 200
+    assert_error(
+        command(client, object_id, "complete", message="Done"),
+        409,
+        "work_object_transition_invalid",
+    )
+    assert command(client, object_id, "submit", message="Done").status_code == 200
+    assert (
+        client.get(f"/api/v1/work-objects/{object_id}/lifecycle").json()["status"]
+        == "awaiting_department_review"
+    )
+    actor("sender")
+    assert command(client, object_id, "department_review", approved=True).status_code == 200
+    finished = client.get(f"/api/v1/work-objects/{object_id}/lifecycle").json()
+    assert finished["status"] == "completed" and finished["frozen"] is True
 
 
 def test_all_new_routes_require_auth_and_command_csrf(lifecycle_http):
@@ -473,14 +542,22 @@ def test_headers_body_errors_are_closed_and_do_not_echo_input(lifecycle_http, ca
     object_id = publish(client)["items"][0]["work_object_id"]
     actor("local-recipient")
     base = f"/api/v1/work-objects/{object_id}/lifecycle"
-    tag = client.get(base).headers["etag"]
+    current = client.get(base)
+    tag = current.headers["etag"]
+    relation_id = current.json()["relations"][0]["relation_id"]
+    valid_accept = {"operation": "accept", "handling_relation_id": relation_id}
     headers = {**TEST_CSRF_HEADERS, "Idempotency-Key": str(uuid4()), "If-Match": tag}
     for body in (
-        {"operation": "accept", "text": "extra"},
-        {"operation": "feedback", "text": " "},
+        {**valid_accept, "text": "extra"},
+        {"operation": "feedback", "handling_relation_id": relation_id, "text": " "},
         {"operation": "complete", "text": "x" * 2001},
         {"operation": "accept", "actor": "forged"},
-        {"operation": "feedback", "text": "access_token=synthetic-not-real-value"},
+        {
+            "operation": "feedback",
+            "handling_relation_id": relation_id,
+            "text": "access_token=synthetic-not-real-value",
+            "extra": True,
+        },
     ):
         response = client.post(base + "/commands", json=body, headers=headers)
         assert_error(response, 422, "work_object_lifecycle_request_invalid")
@@ -492,23 +569,21 @@ def test_headers_body_errors_are_closed_and_do_not_echo_input(lifecycle_http, ca
         ("Idempotency-Key", "invalid"),
     ):
         assert_error(
-            client.post(
-                base + "/commands", json={"operation": "accept"}, headers={**headers, name: value}
-            ),
+            client.post(base + "/commands", json=valid_accept, headers={**headers, name: value}),
             422,
             "work_object_lifecycle_request_invalid",
         )
     for name in ("If-Match", "Idempotency-Key"):
         duplicate = list(headers.items()) + [(name, headers[name])]
         assert_error(
-            client.post(base + "/commands", json={"operation": "accept"}, headers=duplicate),
+            client.post(base + "/commands", json=valid_accept, headers=duplicate),
             422,
             "work_object_lifecycle_request_invalid",
         )
     assert_error(
         client.post(
             base + "/commands",
-            json={"operation": "accept"},
+            json=valid_accept,
             headers={k: v for k, v in headers.items() if k != "If-Match"},
         ),
         428,
@@ -607,10 +682,11 @@ def test_same_key_replay_reauthorizes_current_actor(lifecycle_http, monkeypatch)
         409,
         "idempotency_key_reused",
     )
-    assert_error(
-        command(client, object_id, "accept", key=key, etag='"wolc-' + "0" * 64 + '"'),
-        409,
-        "idempotency_key_reused",
+    assert (
+        command(client, object_id, "accept", key=key, etag='"wolc-' + "0" * 64 + '"').json()[
+            "replayed"
+        ]
+        is True
     )
     db.execute(
         (
@@ -618,9 +694,7 @@ def test_same_key_replay_reauthorizes_current_actor(lifecycle_http, monkeypatch)
             "' WHERE user_id='local-recipient'"
         )
     )
-    assert_error(
-        command(client, object_id, "accept", key=key, etag=tag), 404, "work_object_not_found"
-    )
+    assert command(client, object_id, "accept", key=key, etag=tag).json()["replayed"] is True
     db.execute(
         (
             "UPDATE organization_user_memberships SET department_id='office-a"
@@ -629,8 +703,10 @@ def test_same_key_replay_reauthorizes_current_actor(lifecycle_http, monkeypatch)
     )
     assert command(client, object_id, "accept", key=key, etag=tag).json()["replayed"] is True
     # Advance the request-local clock while the real receipt query runs.
-    monotonic = [100.0]
-    monkeypatch.setattr(db.service, "_monotonic", lambda: monotonic[0])
+    import time
+
+    monotonic = [time.monotonic()]
+    monkeypatch.setattr(db.service.dispatch, "_monotonic", lambda: monotonic[0])
     original = db.store.get_lifecycle_event_for_scope
 
     async def delayed(*args, **kwargs):
@@ -653,15 +729,17 @@ def test_lost_response_and_audit_failure_preserve_committed_result(lifecycle_htt
     object_id = publish(client)["items"][0]["work_object_id"]
     actor("local-recipient")
     tag = client.get(f"/api/v1/work-objects/{object_id}/lifecycle").headers["etag"]
-    original = db.store.apply_lifecycle_command_for_scope
+    original = db.store.command_dispatch_lifecycle
     committed = []
 
     async def lose_reply(*args, **kwargs):
         result = await original(*args, **kwargs)
-        committed.append(result.event)
-        raise RuntimeError("Synthetic lost commit reply")
+        if not result.replayed:
+            committed.append(result.event)
+            raise WorkDispatchError("work_object_lifecycle_failed")
+        return result
 
-    monkeypatch.setattr(db.store, "apply_lifecycle_command_for_scope", lose_reply)
+    monkeypatch.setattr(db.store, "command_dispatch_lifecycle", lose_reply)
     key = str(uuid4())
     assert_error(
         command(client, object_id, "accept", key=key, etag=tag), 503, "work_object_lifecycle_failed"
@@ -781,7 +859,8 @@ def test_etag_includes_state_and_permission_projection(lifecycle_http):
     assert command(client, object_id, "accept", etag=initial.headers["etag"]).status_code == 200
     db.execute(
         (
-            "UPDATE work_objects SET accepted_at=date_trunc('second',accepted"
+            "UPDATE work_objects SET created_at=date_trunc('second',created_at), "
+            "accepted_at=date_trunc('second',accepted"
             "_at) + interval '1 microsecond', updated_at=GREATEST(updated_at,"
             "date_trunc('second',accepted_at) + interval '1 microsecond') WHE"
             "RE work_object_id=:id"

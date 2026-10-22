@@ -47,32 +47,38 @@ export interface RemarkHistoryEntry { work_object_id: string; remark_version: nu
 export interface RemarkHistoryPage { items: RemarkHistoryEntry[]; next_cursor: string | null }
 export interface PendingRemark { text: string; key: string; etag: string }
 const path = (id: string) => `/api/v1/work-objects/${encodeURIComponent(id)}`;
-const needEtag = (etag: string | null) => {
-  if (!etag) throw new ApiError(502, 'work_object_response_invalid', '事项响应缺少版本，请重新读取。');
+const invalidLifecycle = () => new ApiError(502, 'lifecycle_response_invalid', '事项响应无效，请重新读取。');
+const needEtag = (etag: string | null, resource: 'wolc' | 'worm' = 'wolc') => {
+  if (!etag || !new RegExp(`^"${resource}-[0-9a-f]{64}"$`).test(etag)) throw invalidLifecycle();
   return etag;
 };
 export async function readLifecycle(id: string, signal?: AbortSignal) {
   const result = await requestWorkDispatch<LifecycleView>({ url: `${path(id)}/lifecycle`, method: 'GET', signal });
+  if (result.data.work_object_id !== id || !Number.isInteger(result.data.version) || !Array.isArray(result.data.relations)
+    || !Array.isArray(result.data.available_commands)) throw invalidLifecycle();
   return { view: result.data, etag: needEtag(result.etag) };
 }
 export async function readLifecycleEvents(id: string, afterVersion = 0) {
   return (await requestWorkDispatch<LifecycleEventsPage>({ url: `${path(id)}/lifecycle/events`, method: 'GET', params: { after_version: afterVersion, limit: 50 } })).data;
 }
 export async function sendLifecycleCommand(id: string, command: PendingLifecycleCommand) {
-  return (await requestWorkDispatch<{ event: LifecycleEventView; replayed: boolean }>({ url: `${path(id)}/lifecycle/commands`, method: 'POST',
-    headers: { 'Idempotency-Key': command.key, 'If-Match': command.etag }, data: command.body })).data;
+  const { data } = await requestWorkDispatch<{ event: LifecycleEventView; replayed: boolean }>({ url: `${path(id)}/lifecycle/commands`, method: 'POST',
+    headers: { 'Idempotency-Key': command.key, 'If-Match': command.etag }, data: command.body });
+  if (typeof data.replayed !== 'boolean' || data.event?.work_object_id !== id || data.event.operation !== command.body.operation
+    || !Number.isInteger(data.event.result_version)) throw invalidLifecycle();
+  return data;
 }
 export async function readAttachments(id: string) {
   return (await requestWorkDispatch<AttachmentView[]>({ url: `${path(id)}/attachments`, method: 'GET' })).data;
 }
 export async function readRemark(id: string) {
   const response = await requestWorkDispatch<RemarkView>({ url: `${path(id)}/remarks`, method: 'GET' });
-  return { view: response.data, etag: needEtag(response.etag) };
+  return { view: response.data, etag: needEtag(response.etag, 'worm') };
 }
 export async function editRemark(id: string, request: PendingRemark) {
   const response = await requestWorkDispatch<{ remark: RemarkView; replayed: boolean }>({ url: `${path(id)}/remarks`, method: 'PATCH',
     headers: { 'If-Match': request.etag, 'Idempotency-Key': request.key }, data: { text: request.text } });
-  return { ...response.data, etag: needEtag(response.etag) };
+  return { ...response.data, etag: needEtag(response.etag, 'worm') };
 }
 export async function readRemarkHistory(id: string, cursor?: string) {
   return (await requestWorkDispatch<RemarkHistoryPage>({ url: `${path(id)}/remarks/history`, method: 'GET', params: { ...(cursor ? { cursor } : {}), limit: 50 } })).data;

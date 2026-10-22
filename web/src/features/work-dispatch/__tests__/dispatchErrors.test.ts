@@ -42,7 +42,10 @@ for (const method of ['GET', 'POST'] as const) {
     expect(dispatchFailure(method, new ApiError(418, code, text))).toEqual(dispatchFailure(method, new Error('offline')));
   });
   it.each(method === 'GET' ? postOnly : getOnly)(`E1 ${method} does not consume the other method code %s %s`, (status, code) => {
-    expect(dispatchFailure(method, new ApiError(status, code, ''))).toEqual(dispatchFailure(method, new Error('offline')));
+    expect(dispatchFailure(method, new ApiError(status, code, ''))).toEqual(status === 403
+      ? { text: '当前身份不能访问该对象或执行此操作，已清除原引用，请重新读取核对。', category: 'reject' }
+      : status === 422 ? { text: '请求信息有误，请核对输入后重新提交。', category: 'reject' }
+      : dispatchFailure(method, new Error('offline')));
   });
 }
 it('E1 unknown errors distinguish directory reads from uncertain writes', () => {

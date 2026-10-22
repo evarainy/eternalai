@@ -249,7 +249,7 @@ function LifecyclePanel({ id, token, onAccessLost, onChanged }: { id: string; to
           {choices.length > 1 ? <Select aria-label="截止偏移" value={chosenInstant || undefined} options={choices.map((choice) => ({ label: choice.offset, value: choice.instant }))} onChange={setChosenInstant} /> : null}</> : null}
         {action.operation === 'department_review' ? <Radio.Group disabled={changing} value={approved} onChange={(event) => setApproved(event.target.value)}><Radio value={true}>审核通过并对外提交</Radio><Radio value={false}>退回补充</Radio></Radio.Group> : null}
         {['feedback', 'submit', 'complete', 'department_review', 'submit_summary', 'return', 'withdraw'].includes(action.operation) ? <label>{['return', 'withdraw', 'department_review'].includes(action.operation) ? '原因 / 审核意见' : '办理进展 / 正式结果'}
-          <Input.TextArea rows={4} value={text} maxLength={['return', 'withdraw', 'department_review'].includes(action.operation) ? 2000 : 10000} disabled={changing} onChange={(event) => setText(event.target.value)} /></label> : null}
+          <Input.TextArea rows={4} value={text} maxLength={2000} disabled={changing} onChange={(event) => setText(event.target.value)} /></label> : null}
         {action.operation === 'submit' || action.operation === 'submit_summary' ? <AttachmentsPanel purpose="result" visibility={activeRelation?.target.kind === 'department' ? 'department_internal' : 'shared'} value={resultAttachments}
           onChange={setResultAttachments} readOnly={changing} onAccessLost={clearPrivate} /> : null}
         {action.operation === 'confirm' ? <p>请核对正式结果，确认后整体办结冻结。</p> : null}

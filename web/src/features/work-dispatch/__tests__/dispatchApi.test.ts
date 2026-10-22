@@ -2,18 +2,21 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { postDispatch, readOptions, validOptions, validReceipt, optionKey } from '../dispatchApi';
 
 afterEach(() => vi.unstubAllGlobals());
+class JsonResponse extends Response {
+  constructor(body: BodyInit | null, init: ResponseInit = {}) { super(body, { ...init, headers: { 'Content-Type': 'application/json', ...Object.fromEntries(new Headers(init.headers)) } }); }
+}
 it('P1 uses_existing_transport_and_one_key', async () => {
-  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], kind: 'department', has_more: false, next_cursor: null, snapshot_version: 1, unselectable_count: 0 })));
+  const fetch = vi.fn().mockResolvedValue(new JsonResponse(JSON.stringify({ items: [], kind: 'department', has_more: false, next_cursor: null, snapshot_version: 1, unselectable_count: 0 })));
   vi.stubGlobal('fetch', fetch);
-  const body = { kind: '通知' as const, title: 'synthetic', requirement: '', receipt_requirement: '', due_at: null, reminder_choices: [], targets: [{ kind: 'department' as const, department_id: 'd1' }] };
+  const body = { kind: '通知' as const, title: 'synthetic', requirement: '', receipt_requirement: '', due_at: null, reminder_choices: [], targets: [{ kind: 'department' as const, department_id: 'd1' }], dispatch_mode: 'independent' as const, completion_mode: 'submit_completes' as const, lead_target: null, attachment_ids: [] };
   const key = '00000000-0000-4000-8000-000000000001';
   await postDispatch(body, key);
   expect(fetch).toHaveBeenLastCalledWith('/api/v1/work-objects/dispatch', {
     method: 'POST', headers: { 'Idempotency-Key': key, 'Content-Type': 'application/json', 'X-EternalAI-CSRF': '1' }, body: JSON.stringify(body), signal: undefined,
   });
-  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ items: [], kind: 'department', has_more: false, next_cursor: null, snapshot_version: 1, unselectable_count: 0 })));
+  fetch.mockResolvedValueOnce(new JsonResponse(JSON.stringify({ items: [], kind: 'department', has_more: false, next_cursor: null, snapshot_version: 1, unselectable_count: 0 })));
   await readOptions({ kind: 'department' });
-  expect(fetch).toHaveBeenLastCalledWith('/api/v1/work-objects/dispatch-options?kind=department&limit=50', { method: 'GET', headers: {}, body: undefined, signal: undefined });
+  expect(fetch).toHaveBeenLastCalledWith('/api/v1/work-objects/dispatch-options?kind=department&query=&limit=50', { method: 'GET', headers: {}, body: undefined, signal: undefined });
 });
 it('C7 rejects user fields that could select the wrong identity', () => {
   const user = { kind: 'user' as const, department_id: 'd1', department_display_name: 'D', directory_user_id: 'u1', display_name: 'N' };

@@ -71,7 +71,8 @@ def _load_missing_environment(path: Path) -> None:
         os.environ.setdefault(name, value)
 
 
-_load_missing_environment(_repository_env_path())
+if "DATABASE_URL" not in os.environ:
+    _load_missing_environment(_repository_env_path())
 
 
 @pytest.fixture(scope="module")

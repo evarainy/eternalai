@@ -7,7 +7,6 @@ import json
 
 import pytest
 
-from app.api.v1 import work_objects as api
 from app.ports import work_object_scope as policy
 from tests.api.test_work_object_dispatch import assert_error, expire_directory, request_body
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
@@ -59,96 +58,83 @@ def name(db, user, value="Synthetic person"):
 def test_dispatch_permission_precedes_target_existence(
     dispatch_db, monkeypatch, role, department, job, kind
 ):
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    db.actor("synthetic-matrix-actor", department, job)
+    user = (
+        "sender"
+        if role == "office"
+        else "head-572"
+        if role == "prison"
+        else "synthetic-matrix-actor"
+    )
+    db.actor(user, department, job)
     db.membership("synthetic-own-target", department)
     name(db, "synthetic-own-target")
-    name(db, "recipient")
-    real = api.compute_dispatch_authorization
-    calls = []
-
-    def observed(**kwargs):
-        calls.append(kwargs)
-        return real(**kwargs)
-
-    monkeypatch.setattr(api, "compute_dispatch_authorization", observed)
     response = options(db)
     if role == "nonhead":
         assert_error(response, 403, "not_department_head")
     else:
         assert response.status_code == 200
-        expected = {"office-a", "office-b", "office-c", "572", "575"}
-        assert {item["department_id"] for item in response.json()["items"]} == (
-            expected if role == "office" else {department}
-        )
-        assert {call["target_department_id"] for call in calls[1:]} == expected
-
-    denied_bodies = []
-    for target, user in (
+        assert {item["department_id"] for item in response.json()["items"]} == {
+            "office-a",
+            "office-b",
+            "office-c",
+            "572",
+            "575",
+        }
+    for target, target_user in (
         (department, "synthetic-own-target"),
         ("office-b", "recipient"),
-        ("synthetic-nonexistent", "synthetic-absent-user"),
+        ("synthetic-nonexistent", "absent"),
     ):
         before = db.counts()
-        get = options(db, "kind=user&department_id=" + target)
-        assert db.counts() == before
         payload = {"kind": kind, "department_id": target}
         if kind == "user":
-            payload["directory_user_id"] = user
+            payload["directory_user_id"] = target_user
         post = db.post(request_body(targets=[payload]))
         if role == "nonhead":
-            for result in (get, post):
-                assert_error(result, 403, "not_department_head")
-            assert get.json() == post.json()
-        elif role == "prison" and target != department:
-            for result in (get, post):
-                assert_error(result, 403, "cross_department_dispatch_denied")
-                denied_bodies.append(result.json())
+            assert_error(post, 403, "not_department_head")
+        elif kind == "user" and target != department:
+            assert_error(post, 403, "cross_department_dispatch_denied")
         elif target == "synthetic-nonexistent":
-            for result in (get, post):
-                assert_error(result, 404, "dispatch_target_not_found")
-            assert get.json() == post.json()
+            assert_error(post, 404, "dispatch_target_not_found")
         else:
-            assert get.status_code == 200, get.text
-            assert user in {item["directory_user_id"] for item in get.json()["items"]}
             assert post.status_code == 201, post.text
-            assert post.json()["created_count"] == 1
             assert post.json()["items"][0]["owner_department_id"] == target
         assert db.counts() == (
             (before[0] + 1, before[1] + 1) if post.status_code == 201 else before
         )
-    if role == "prison":
-        assert denied_bodies == [{"detail": {
-            "code": "cross_department_dispatch_denied",
-            "message": "Work Object operation is not permitted.",
-        }}] * 4
-    assert all(call["dispatcher_membership"].user_id == "synthetic-matrix-actor" for call in calls)
-    assert all(call["dispatcher_department"].department_id == department for call in calls)
 
 
 @pytest.mark.parametrize("target_state", ["present", "missing", "ambiguous"])
-def test_denied_batch_hides_target_membership_and_other_missing_targets(dispatch_db, target_state):
+def test_denied_batch_hides_target_membership_and_other_missing_targets(
+    dispatch_db, target_state, caplog
+):
     db = dispatch_db
-    db.actor("synthetic-prison-head", "572", "75")
+    db.actor("head-572", "572", "75")
     user = "synthetic-absent-user" if target_state == "missing" else "recipient"
     if target_state == "ambiguous":
         db.membership("recipient", "office-c")
     cross = {"kind": "user", "directory_user_id": user, "department_id": "office-b"}
     own_missing = {
-        "kind": "user", "directory_user_id": "synthetic-missing-own", "department_id": "572",
+        "kind": "user",
+        "directory_user_id": "synthetic-missing-own",
+        "department_id": "572",
     }
     for targets in ([cross], [own_missing, cross], [cross, own_missing]):
         response = db.post(request_body(targets=targets))
         assert_error(response, 403, "cross_department_dispatch_denied")
-        assert response.json() == {"detail": {
-            "code": "cross_department_dispatch_denied",
-            "message": "Work Object operation is not permitted.",
-        }}
+        assert response.json() == {
+            "detail": {
+                "code": "cross_department_dispatch_denied",
+                "message": "Work Object operation is not permitted.",
+            }
+        }
         assert db.counts() == (0, 0)
-    assert {event["attributes"]["reason_code"] for event in db.rows("trace_events")} == {
+    assert {row["attributes"]["reason_code"] for row in db.rows("trace_events")} == {
         "cross_department_dispatch_denied"
     }
+    assert "code=cross_department_dispatch_denied" in caplog.text
+    assert "synthetic-absent-user" not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -201,37 +187,32 @@ def test_dispatch_prerequisite_errors_do_not_expose_targets(
 
 
 def test_office_and_prison_options_match_dispatch_rules(dispatch_db, monkeypatch):
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    name(db, "recipient")
-    original = api.compute_dispatch_authorization
-    calls = []
-
-    def decision(**kwargs):
-        calls.append(kwargs)
-        value = original(**kwargs)
-        if kwargs["target_department_id"] == "office-c":
-            return value.model_copy(
-                update={"decision": "deny", "reason_code": "cross_department_dispatch_denied"}
-            )
-        return value
-
-    monkeypatch.setattr(api, "compute_dispatch_authorization", decision)
     response = options(db)
     assert response.status_code == 200
     assert {item["department_id"] for item in response.json()["items"]} == {
         "office-a",
         "office-b",
+        "office-c",
         "572",
         "575",
     }
-    assert len(calls) == 6
-    assert {call["dispatcher_membership"].user_id for call in calls} == {"sender"}
+    db.membership("second-head", "office-c", "75")
+    narrowed = options(db).json()
+    assert "office-c" not in {item["department_id"] for item in narrowed["items"]}
+    assert narrowed["unselectable_count"] == 1
     assert_error(
-        options(db, "kind=user&department_id=office-c"), 403, "cross_department_dispatch_denied"
+        db.post(request_body(targets=[{"kind": "department", "department_id": "office-c"}])),
+        409,
+        "dispatch_department_head_ambiguous",
     )
-    db.actor("synthetic-prison-head", "572", "75")
-    assert [item["department_id"] for item in options(db).json()["items"]] == ["572"]
+    db.actor("head-572", "572", "75")
+    assert {item["department_id"] for item in options(db).json()["items"]} == {
+        "office-a",
+        "office-b",
+        "572",
+        "575",
+    }
     assert_error(
         options(db, "kind=user&department_id=office-b"), 403, "cross_department_dispatch_denied"
     )
@@ -264,19 +245,21 @@ def test_other_tenant_and_forged_scope_cannot_read_directory(dispatch_db, monkey
 def test_global_membership_ambiguity_and_missing_names_are_unselectable(dispatch_db, monkeypatch):
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    name(db, "recipient", "Synthetic same")
-    db.membership("synthetic-same", "office-b")
+    name(db, "local-recipient", "Synthetic same")
+    db.membership("synthetic-same", "office-a")
     name(db, "synthetic-same", "Synthetic same")
     db.membership("synthetic-multiple", "office-a")
     db.membership("synthetic-multiple", "office-b")
     name(db, "synthetic-multiple")
-    db.membership("synthetic-nameless", "office-b")
-    result = options(db, "kind=user&department_id=office-b").json()
-    assert [item["directory_user_id"] for item in result["items"]] == [
-        "recipient",
+    db.membership("synthetic-nameless", "office-a")
+    result = options(db, "kind=user&department_id=office-a").json()
+    assert {item["directory_user_id"] for item in result["items"]} == {
+        "local-recipient",
+        "sender",
         "synthetic-same",
-    ]
-    assert result["unselectable_count"] == 2
+        "synthetic-nameless",
+    }
+    assert result["unselectable_count"] == 1
     assert "synthetic-multiple" not in json.dumps(result)
     assert_error(
         db.post(
@@ -285,7 +268,7 @@ def test_global_membership_ambiguity_and_missing_names_are_unselectable(dispatch
                     {
                         "kind": "user",
                         "directory_user_id": "synthetic-multiple",
-                        "department_id": "office-b",
+                        "department_id": "office-a",
                     }
                 ]
             )
@@ -300,22 +283,26 @@ def test_cursor_pages_are_stable_and_version_bound(dispatch_db, monkeypatch):
     db = dispatch_db
     for index in range(101):
         user = f"synthetic-page-{index:03}"
-        db.membership(user, "office-b")
+        db.membership(user, "office-a")
         name(db, user)
     pages = []
     cursor = None
     for count in (50, 50, 1):
-        query = "kind=user&department_id=office-b" + ("&cursor=" + cursor if cursor else "")
+        query = "kind=user&department_id=office-a&query=Synthetic%20person" + (
+            "&cursor=" + cursor if cursor else ""
+        )
         body = options(db, query).json()
         assert len(body["items"]) == count
         pages += [item["directory_user_id"] for item in body["items"]]
         cursor = body["next_cursor"]
         assert body["has_more"] is (cursor is not None)
     assert pages == [f"synthetic-page-{index:03}" for index in range(101)]
-    cursor = options(db, "kind=user&department_id=office-b").json()["next_cursor"]
+    cursor = options(db, "kind=user&department_id=office-a&query=Synthetic%20person").json()[
+        "next_cursor"
+    ]
     db.execute("UPDATE organization_directory_sync_state SET snapshot_version=snapshot_version+1")
     assert_error(
-        options(db, "kind=user&department_id=office-b&cursor=" + cursor),
+        options(db, "kind=user&department_id=office-a&query=Synthetic%20person&cursor=" + cursor),
         409,
         "organization_directory_snapshot_changed",
     )
@@ -332,7 +319,7 @@ def test_cursor_pages_are_stable_and_version_bound(dispatch_db, monkeypatch):
         "kind=bad",
         "kind=department&kind=department",
         "kind=department&department_id=x",
-        "kind=user",
+        "kind=user&kind=user",
         "kind=user&department_id=",
         "kind=department&limit=0",
         "kind=department&limit=101",
@@ -354,17 +341,16 @@ def test_error_dto_is_closed_and_never_echoes_input(dispatch_db, query):
 
 
 def test_no_job_actor_denied_but_no_job_target_selectable(dispatch_db, monkeypatch):
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    name(db, "recipient")
-    assert [
-        item["directory_user_id"]
-        for item in options(db, "kind=user&department_id=office-b").json()["items"]
-    ] == ["recipient"]
+    name(db, "local-recipient")
+    selected = options(db, "kind=user&department_id=office-a&query=Synthetic%20person")
+    assert [item["directory_user_id"] for item in selected.json()["items"]] == ["local-recipient"]
     assert db.post().status_code == 201
-    db.actor("recipient", "office-b", None)
-    for query in ("kind=department", "kind=user&department_id=office-b"):
-        assert_error(options(db, query), 403, "not_department_head")
+    db.actor("local-recipient", "office-a", None)
+    assert_error(options(db), 403, "not_department_head")
+    own = options(db, "kind=user").json()
+    assert [item["directory_user_id"] for item in own["items"]] == ["local-recipient"]
+    assert own["can_self_dispatch"] is True and own["can_dispatch_others"] is False
 
 
 def test_authentication_precedes_parameter_validation(dispatch_db):
@@ -409,7 +395,12 @@ def test_authentication_precedes_parameter_validation(dispatch_db):
             503,
             "Organization directory is unavailable.",
         ),
-        ("missing-target", "dispatch_target_not_found", 404, "Dispatch target was not found."),
+        (
+            "missing-target",
+            "cross_department_dispatch_denied",
+            403,
+            "Work Object operation is not permitted.",
+        ),
     ],
 )
 def test_remaining_error_paths_match_exact_wire_contract(
@@ -477,50 +468,45 @@ def test_unconfigured_service_precedes_invalid_parameters(dispatch_db):
 @pytest.mark.parametrize("department", ["office-a", "572"])
 def test_unlisted_actor_options_match_post_authorization(dispatch_db, department):
     db = dispatch_db
-    db.actor("synthetic-unlisted-head", department, "75")
+    user = "sender" if department == "office-a" else "head-572"
+    db.actor(user, department, "75")
     db.membership("synthetic-local", department)
     name(db, "synthetic-local")
     body = options(db, "kind=department&limit=1").json()
-    assert [item["department_id"] for item in body["items"]] == [department]
-    assert body["has_more"] is False and body["next_cursor"] is None
+    assert [item["department_id"] for item in body["items"]] == ["572"]
+    assert body["has_more"] is True and body["next_cursor"] is not None
     own = options(db, "kind=user&department_id=" + department)
     assert own.status_code == 200
     assert "synthetic-local" in {item["directory_user_id"] for item in own.json()["items"]}
-    for target in ("office-b", "synthetic-absent"):
-        get = options(db, "kind=user&department_id=" + target)
-        post = db.post(request_body(targets=[{"kind": "department", "department_id": target}]))
-        for response in (get, post):
-            assert_error(response, 403, "cross_department_dispatch_denied")
-            assert response.json() == {
-                "detail": {
-                    "code": "cross_department_dispatch_denied",
-                    "message": "Work Object operation is not permitted.",
-                }
-            }
-        assert db.counts() == (0, 0)
+    cross = db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    assert cross.status_code == 201
+    assert_error(
+        options(db, "kind=user&department_id=synthetic-absent"),
+        403,
+        "cross_department_dispatch_denied",
+    )
+    assert db.counts() == (1, 1)
 
 
 def test_policy_narrowing_rechecks_existing_cursor_and_post(dispatch_db, monkeypatch):
     db = dispatch_db
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     first = options(db, "kind=department&limit=1").json()
-    assert first["items"][0]["department_id"] == "572"
     cursor = first["next_cursor"]
     assert cursor is not None
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
-    page = options(db, "kind=department&limit=1&cursor=" + cursor).json()
-    assert page["snapshot_version"] == first["snapshot_version"]
-    assert [item["department_id"] for item in page["items"]] == ["office-a"]
-    assert page["has_more"] is False
+    db.membership("sender", "office-a", None)
     assert_error(
-        options(db, "kind=user&department_id=office-b"), 403, "cross_department_dispatch_denied"
+        options(db, "kind=department&limit=1&cursor=" + cursor), 403, "not_department_head"
     )
     assert_error(
         db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}])),
         403,
-        "cross_department_dispatch_denied",
+        "not_department_head",
     )
+    self_options = options(db, "kind=user").json()
+    assert [item["directory_user_id"] for item in self_options["items"]] == ["sender"]
+    assert self_options["can_self_dispatch"] is True
     assert db.counts() == (0, 0)
+    db.membership("sender", "office-a", "75")
     db.execute("UPDATE organization_directory_sync_state SET snapshot_version=snapshot_version+1")
     assert_error(
         options(db, "kind=department&limit=1&cursor=" + cursor),

@@ -97,7 +97,9 @@ def compute_dispatch_authorization(
     """
     department_id = dispatcher_membership.department_id if dispatcher_membership else None
     resolved = (
-        dispatcher_department is not None and dispatcher_department.department_id == department_id
+        bool(department_id and department_id.strip())
+        and dispatcher_department is not None
+        and dispatcher_department.department_id == department_id
     )
     reason: (
         Literal[

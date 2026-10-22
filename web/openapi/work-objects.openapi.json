@@ -238,7 +238,7 @@
             "type": "string"
           },
           "text": {
-            "maxLength": 10000,
+            "maxLength": 2000,
             "minLength": 1,
             "title": "Text",
             "type": "string"
@@ -664,7 +664,7 @@
             "type": "string"
           },
           "text": {
-            "maxLength": 10000,
+            "maxLength": 2000,
             "minLength": 1,
             "title": "Text",
             "type": "string"
@@ -2846,7 +2846,7 @@
             "type": "string"
           },
           "text": {
-            "maxLength": 10000,
+            "maxLength": 2000,
             "minLength": 1,
             "title": "Text",
             "type": "string"
@@ -2878,7 +2878,7 @@
             "type": "string"
           },
           "text": {
-            "maxLength": 10000,
+            "maxLength": 2000,
             "minLength": 1,
             "title": "Text",
             "type": "string"
@@ -3517,6 +3517,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -3661,6 +3662,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -3795,6 +3797,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -4318,7 +4321,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -4328,7 +4339,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -4338,7 +4357,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -4348,7 +4375,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -4358,7 +4393,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -4368,7 +4411,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -4378,17 +4429,41 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkObjectError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkObjectError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Invalid completion uses WorkObjectError without input echo and with Cache-Control: no-store. Other query validation retains HTTPValidationError.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Present on fixed completion validation failures.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -4398,7 +4473,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4408,7 +4491,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "List Work Objects"
@@ -4483,7 +4574,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -4493,7 +4592,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -4503,7 +4610,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -4513,7 +4628,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -4523,7 +4646,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -4533,7 +4664,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -4543,7 +4682,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -4553,7 +4700,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -4563,7 +4718,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4573,7 +4736,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Upload Attachment"
@@ -4604,6 +4775,24 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchWorkObjectsResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "201": {
             "content": {
               "application/json": {
@@ -4622,7 +4811,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -4632,7 +4829,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -4642,7 +4847,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -4652,7 +4865,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -4662,7 +4883,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -4672,7 +4901,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -4682,7 +4919,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -4692,7 +4937,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4702,7 +4955,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Dispatch Work Objects"
@@ -4793,7 +5054,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -4803,7 +5072,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -4813,7 +5090,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -4823,7 +5108,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -4833,7 +5126,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -4843,7 +5144,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -4853,7 +5162,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -4863,7 +5180,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -4873,7 +5198,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -4883,7 +5216,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "List Dispatch Options"
@@ -4945,7 +5286,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -4955,7 +5304,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -4965,7 +5322,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -4975,7 +5340,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -4985,7 +5358,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -4995,7 +5376,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5005,7 +5394,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5015,7 +5412,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5025,7 +5430,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5035,7 +5448,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Get Work Object"
@@ -5068,7 +5489,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -5078,7 +5507,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5088,7 +5525,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5098,7 +5543,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5108,7 +5561,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5118,7 +5579,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5128,7 +5597,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5138,7 +5615,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5148,7 +5633,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5158,7 +5651,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "List Attachments"
@@ -5189,6 +5690,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -5214,8 +5716,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"wolc-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -5229,7 +5738,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5239,7 +5756,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5249,7 +5774,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5259,7 +5792,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5269,7 +5810,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5279,7 +5828,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5289,7 +5846,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5299,7 +5864,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5309,7 +5882,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Link Attachments"
@@ -5352,6 +5933,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -5367,8 +5949,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"wolc-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -5382,7 +5971,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5392,7 +5989,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5402,7 +6007,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5412,7 +6025,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5422,7 +6043,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5432,7 +6061,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5442,7 +6079,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5452,7 +6097,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5462,7 +6115,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Detach Attachment"
@@ -5512,7 +6173,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5522,7 +6191,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5532,7 +6209,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5542,7 +6227,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5552,7 +6245,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5562,7 +6263,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5572,7 +6281,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5582,7 +6299,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5592,7 +6317,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Download Attachment"
@@ -5687,8 +6420,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"wolc-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -5702,7 +6442,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5712,7 +6460,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5722,7 +6478,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5732,7 +6496,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5742,7 +6514,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5752,7 +6532,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5762,7 +6550,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5772,7 +6568,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5782,7 +6586,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Get Work Object Lifecycle"
@@ -5815,6 +6627,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"wolc-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -5899,8 +6712,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"wolc-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -5914,7 +6734,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -5924,7 +6752,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -5934,7 +6770,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -5944,7 +6788,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -5954,7 +6806,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -5964,7 +6824,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -5974,7 +6842,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -5984,7 +6860,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -5994,7 +6878,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Command Work Object Lifecycle"
@@ -6046,7 +6938,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -6056,7 +6956,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -6066,7 +6974,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -6076,7 +6992,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -6086,7 +7010,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -6096,7 +7028,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -6106,7 +7046,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -6116,7 +7064,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -6126,7 +7082,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6136,7 +7100,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "List Work Object Lifecycle Events"
@@ -6167,8 +7139,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"worm-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -6182,7 +7161,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -6192,7 +7179,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -6202,7 +7197,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -6212,7 +7215,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -6222,7 +7233,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -6232,7 +7251,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -6242,7 +7269,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -6252,7 +7287,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6262,7 +7305,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Get Remark"
@@ -6293,6 +7344,7 @@
             "name": "If-Match",
             "required": true,
             "schema": {
+              "pattern": "\"worm-[0-9a-f]{64}\"",
               "type": "string"
             }
           }
@@ -6318,8 +7370,15 @@
             },
             "description": "Successful Response",
             "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
               "ETag": {
                 "schema": {
+                  "pattern": "\"worm-[0-9a-f]{64}\"",
                   "type": "string"
                 }
               }
@@ -6333,7 +7392,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -6343,7 +7410,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -6353,7 +7428,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -6363,7 +7446,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -6373,7 +7464,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -6383,7 +7482,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -6393,7 +7500,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -6403,7 +7518,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6413,7 +7536,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Edit Remark"
@@ -6471,7 +7602,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -6481,7 +7620,15 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -6491,7 +7638,15 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -6501,7 +7656,15 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
             "content": {
@@ -6511,7 +7674,15 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "412": {
             "content": {
@@ -6521,7 +7692,15 @@
                 }
               }
             },
-            "description": "Precondition Failed"
+            "description": "Precondition Failed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -6531,7 +7710,15 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -6541,7 +7728,15 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "428": {
             "content": {
@@ -6551,7 +7746,15 @@
                 }
               }
             },
-            "description": "Precondition Required"
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {
@@ -6561,7 +7764,15 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "List Remark History"

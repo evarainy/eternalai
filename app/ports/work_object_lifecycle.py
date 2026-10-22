@@ -70,7 +70,7 @@ class LifecycleActor:
 class _Command(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    @field_validator("reason", mode="before", check_fields=False)
+    @field_validator("reason", "text", mode="before", check_fields=False)
     @classmethod
     def normalize_reason(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
@@ -90,19 +90,19 @@ class AcceptCommand(_Command):
 class FeedbackCommand(_Command):
     operation: Literal["feedback"]
     handling_relation_id: UUID
-    text: str = Field(min_length=1, max_length=10000)
+    text: str = Field(min_length=1, max_length=2000)
 
 
 class SubmitCommand(_Command):
     operation: Literal["submit"]
     handling_relation_id: UUID
-    text: str = Field(min_length=1, max_length=10000)
+    text: str = Field(min_length=1, max_length=2000)
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=10)
 
 
 class CompleteCommand(_Command):
     operation: Literal["complete"]
-    text: str = Field(min_length=1, max_length=10000)
+    text: str = Field(min_length=1, max_length=2000)
 
 
 class DepartmentReviewCommand(_Command):
@@ -120,7 +120,7 @@ class DepartmentReviewCommand(_Command):
 
 class SubmitSummaryCommand(_Command):
     operation: Literal["submit_summary"]
-    text: str = Field(min_length=1, max_length=10000)
+    text: str = Field(min_length=1, max_length=2000)
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=10)
 
 

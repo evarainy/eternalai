@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
@@ -607,8 +608,19 @@ class ProtectedWorkRoute(APIRoute):
                 return result
             except WorkDispatchError as exc:
                 _LOGGER.warning("work_dispatch stage=http code=%s", exc.code)
+                if self.name in {"dispatch_work_objects", "list_dispatch_options"}:
+                    _raise_dispatch_error(_DISPATCH_HTTP.get(exc.code, 503), exc.code)
                 _lifecycle_error(exc.code)
             except RequestValidationError:
+                if self.name == "set_work_object_handling_mark":
+                    raise
+                if self.name == "list_work_objects":
+                    completion_values = request.query_params.getlist("completion")
+                    if not completion_values or (
+                        len(completion_values) == 1
+                        and completion_values[0] in {"active", "completed", "withdrawn"}
+                    ):
+                        raise
                 code = {
                     "dispatch_work_objects": "dispatch_request_invalid",
                     "list_dispatch_options": "dispatch_options_request_invalid",
@@ -616,6 +628,8 @@ class ProtectedWorkRoute(APIRoute):
                 }.get(self.name, "work_object_lifecycle_request_invalid")
                 if "series" in self.name:
                     code = "work_object_series_request_invalid"
+                if self.name in {"dispatch_work_objects", "list_dispatch_options"}:
+                    _raise_dispatch_error(422, code)
                 _lifecycle_error(code)
             except HTTPException as exc:
                 exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
@@ -638,7 +652,7 @@ def request_etag(request: Request) -> str:
     values = request.headers.getlist("if-match")
     if not values:
         _lifecycle_error("work_object_precondition_required")
-    if len(values) != 1 or not values[0].startswith('"') or not values[0].endswith('"'):
+    if len(values) != 1 or re.fullmatch(r'"(?:wolc|worm|wosr)-[0-9a-f]{64}"', values[0]) is None:
         _lifecycle_error("work_object_lifecycle_request_invalid")
     return values[0]
 
@@ -678,12 +692,16 @@ _VERSION_PARAMETER = {
     "name": "If-Match",
     "in": "header",
     "required": True,
-    "schema": {"type": "string"},
+    "schema": {"type": "string", "pattern": '"wolc-[0-9a-f]{64}"'},
 }
 
 
-def mutation_schema(*, versioned: bool = True) -> dict[str, Any]:
-    return {"parameters": [_IDEMPOTENCY_PARAMETER, *([_VERSION_PARAMETER] if versioned else [])]}
+def mutation_schema(*, versioned: bool = True, prefix: str = "wolc") -> dict[str, Any]:
+    version = {
+        **_VERSION_PARAMETER,
+        "schema": {"type": "string", "pattern": f'"{prefix}-[0-9a-f]{{64}}"'},
+    }
+    return {"parameters": [_IDEMPOTENCY_PARAMETER, *([version] if versioned else [])]}
 
 
 def make_router(
@@ -703,11 +721,49 @@ def make_router(
         return result
 
     errors: dict[int | str, dict[str, Any]] = {
-        code: {"model": WorkObjectError} for code in (401, 403, 404, 409, 412, 413, 422, 428, 503)
+        **{
+            code: {
+                "model": WorkObjectError,
+                "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}},
+            }
+            for code in (401, 403, 404, 409, 412, 413, 422, 428, 503)
+        },
     }
 
-    @router.get("", response_model=WorkObjectListResponse, responses=errors)
+    @router.get(
+        "",
+        response_model=WorkObjectListResponse,
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}}
+            },
+            422: {
+                "description": (
+                    "Invalid completion uses WorkObjectError without input echo and with "
+                    "Cache-Control: no-store. Other query validation retains HTTPValidationError."
+                ),
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "oneOf": [
+                                {"$ref": "#/components/schemas/WorkObjectError"},
+                                {"$ref": "#/components/schemas/HTTPValidationError"},
+                            ]
+                        }
+                    }
+                },
+                "headers": {
+                    "Cache-Control": {
+                        "description": "Present on fixed completion validation failures.",
+                        "schema": {"type": "string", "const": "no-store"},
+                    }
+                },
+            },
+        },
+    )
     async def list_work_objects(
+        request: Request,
         q: str | None = None,
         oa_view: OAView = "active",
         completion: CompletionFilter | None = None,
@@ -720,6 +776,8 @@ def make_router(
         cursor: Annotated[str | None, Query(max_length=2048)] = None,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectListResponse:
+        if len(request.query_params.getlist("completion")) > 1:
+            _lifecycle_error("work_object_lifecycle_request_invalid")
         if any(t is not None and t.utcoffset() is None for t in (history_from, history_to)):
             _lifecycle_error("work_object_lifecycle_request_invalid")
         if history_from is not None and history_to is not None and history_from >= history_to:
@@ -745,7 +803,13 @@ def make_router(
         "/dispatch",
         response_model=DispatchWorkObjectsResponse,
         status_code=201,
-        responses=errors,
+        responses={
+            **errors,
+            200: {
+                "model": DispatchWorkObjectsResponse,
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}},
+            },
+        },
         openapi_extra=mutation_schema(versioned=False),
     )
     async def dispatch_work_objects(
@@ -758,16 +822,40 @@ def make_router(
         response.status_code = 200 if result.replayed else 201
         return result
 
-    @router.get("/dispatch-options", response_model=DispatchOptionsResponse, responses=errors)
+    @router.get(
+        "/dispatch-options",
+        response_model=DispatchOptionsResponse,
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
+    )
     async def list_dispatch_options(
+        request: Request,
         kind: Literal["user", "department"],
         query: Annotated[str, Query(max_length=200)] = "",
         cursor: Annotated[str | None, Query(max_length=2048)] = None,
         department_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         principal: Principal = Depends(require_principal),
+        configured_service: WorkObjectService = Depends(configured),
     ) -> DispatchOptionsResponse:
-        result = await configured().dispatch.list_dispatch_options(
+        active = configured_service.dispatch
+        params = request.query_params
+        if (
+            any(
+                k not in {"kind", "query", "cursor", "department_id", "limit"}
+                or len(params.getlist(k)) != 1
+                for k in params
+            )
+            or (kind == "department" and department_id is not None)
+            or ("cursor" in params and not cursor)
+            or ("limit" in params and params["limit"] != str(limit))
+        ):
+            _raise_dispatch_error(422, "dispatch_options_request_invalid")
+        result = await active.list_dispatch_options(
             principal,
             kind=kind,
             query=query,
@@ -781,7 +869,12 @@ def make_router(
         "/attachments",
         response_model=AttachmentView,
         status_code=201,
-        responses=errors,
+        responses={
+            **errors,
+            201: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
         openapi_extra={
             **mutation_schema(versioned=False),
             "requestBody": {
@@ -819,7 +912,13 @@ def make_router(
         response_model=LifecycleView,
         responses={
             **errors,
-            200: {"model": LifecycleView, "headers": {"ETag": {"schema": {"type": "string"}}}},
+            200: {
+                "model": LifecycleView,
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"wolc-[0-9a-f]{64}"'}},
+                },
+            },
         },
     )
     async def get_work_object_lifecycle(
@@ -836,7 +935,10 @@ def make_router(
             **errors,
             200: {
                 "model": LifecycleCommandResponse,
-                "headers": {"ETag": {"schema": {"type": "string"}}},
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"wolc-[0-9a-f]{64}"'}},
+                },
             },
         },
         openapi_extra=mutation_schema(),
@@ -849,12 +951,16 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> LifecycleCommandResponse:
         active = configured().dispatch
+        try:
+            command_key = request_key(request)
+        except HTTPException:
+            _lifecycle_error("work_object_lifecycle_request_invalid")
         result = await active.command_lifecycle_for_principal(
             work_object_id,
             principal,
             command=body,
             if_match=request_etag(request),
-            idempotency_key=request_key(request),
+            idempotency_key=command_key,
         )
         response.headers["ETag"] = (
             await active.get_lifecycle_for_principal(work_object_id, principal)
@@ -866,14 +972,29 @@ def make_router(
     @router.get(
         "/{work_object_id}/lifecycle/events",
         response_model=LifecycleEventsResponse,
-        responses=errors,
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
     )
     async def list_work_object_lifecycle_events(
         work_object_id: str,
+        request: Request,
         after_version: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         principal: Principal = Depends(require_principal),
     ) -> LifecycleEventsResponse:
+        params = request.query_params
+        if any(k not in {"after_version", "limit"} or len(params.getlist(k)) != 1 for k in params):
+            _lifecycle_error("work_object_lifecycle_request_invalid")
+        if any(
+            params[k] != str(v)
+            for k, v in (("after_version", after_version), ("limit", limit))
+            if k in params
+        ):
+            _lifecycle_error("work_object_lifecycle_request_invalid")
         result = await configured().dispatch.list_lifecycle_events_for_principal(
             work_object_id, principal, after_version=after_version, limit=limit
         )
@@ -888,7 +1009,13 @@ def make_router(
         response_model=RemarkView,
         responses={
             **errors,
-            200: {"model": RemarkView, "headers": {"ETag": {"schema": {"type": "string"}}}},
+            200: {
+                "model": RemarkView,
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"worm-[0-9a-f]{64}"'}},
+                },
+            },
         },
     )
     async def get_remark(
@@ -903,9 +1030,15 @@ def make_router(
         response_model=RemarkResponse,
         responses={
             **errors,
-            200: {"model": RemarkResponse, "headers": {"ETag": {"schema": {"type": "string"}}}},
+            200: {
+                "model": RemarkResponse,
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"worm-[0-9a-f]{64}"'}},
+                },
+            },
         },
-        openapi_extra=mutation_schema(),
+        openapi_extra=mutation_schema(prefix="worm"),
     )
     async def edit_remark(
         work_object_id: str,
@@ -925,7 +1058,14 @@ def make_router(
         return RemarkResponse(remark=result.remark, replayed=result.replayed)
 
     @router.get(
-        "/{work_object_id}/remarks/history", response_model=RemarkHistoryPage, responses=errors
+        "/{work_object_id}/remarks/history",
+        response_model=RemarkHistoryPage,
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
     )
     async def list_remark_history(
         work_object_id: str,
@@ -938,7 +1078,14 @@ def make_router(
         )
 
     @router.get(
-        "/{work_object_id}/attachments", response_model=list[AttachmentView], responses=errors
+        "/{work_object_id}/attachments",
+        response_model=list[AttachmentView],
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
     )
     async def list_attachments(
         work_object_id: str, principal: Principal = Depends(require_principal)
@@ -952,7 +1099,10 @@ def make_router(
             **errors,
             200: {
                 "model": AttachmentMutationResult,
-                "headers": {"ETag": {"schema": {"type": "string"}}},
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"wolc-[0-9a-f]{64}"'}},
+                },
             },
         },
         openapi_extra=mutation_schema(),
@@ -981,7 +1131,10 @@ def make_router(
             **errors,
             200: {
                 "model": AttachmentMutationResult,
-                "headers": {"ETag": {"schema": {"type": "string"}}},
+                "headers": {
+                    "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+                    "ETag": {"schema": {"type": "string", "pattern": '"wolc-[0-9a-f]{64}"'}},
+                },
             },
         },
         openapi_extra=mutation_schema(),
@@ -1031,7 +1184,16 @@ def make_router(
             },
         )
 
-    @router.get("/{work_object_id}", response_model=WorkObjectView, responses=errors)
+    @router.get(
+        "/{work_object_id}",
+        response_model=WorkObjectView,
+        responses={
+            **errors,
+            200: {
+                "headers": {"Cache-Control": {"schema": {"const": "no-store", "type": "string"}}}
+            },
+        },
+    )
     async def get_work_object(
         work_object_id: str, response: Response, principal: Principal = Depends(require_principal)
     ) -> WorkObjectView:
@@ -1300,6 +1462,7 @@ _DISPATCH_HTTP = {
     "directory_membership_missing": 403,
     "directory_membership_ambiguous": 403,
     "cross_department_dispatch_denied": 403,
+    "not_department_head": 403,
     "dispatch_target_department_missing": 422,
     "dispatch_target_membership_missing": 422,
     "dispatch_options_cursor_invalid": 422,
@@ -1335,6 +1498,26 @@ _DISPATCH_HTTP = {
 }
 
 
+_LIFECYCLE_MESSAGES = {
+    "work_object_lifecycle_request_invalid": "Invalid work object lifecycle request.",
+    "work_object_precondition_required": "A current work object lifecycle ETag is required.",
+    "work_object_not_found": "Work Object was not found.",
+    "work_object_lifecycle_unsupported": "Work object lifecycle is not supported for this object.",
+    "directory_membership_missing": "Organization directory membership is missing.",
+    "directory_membership_ambiguous": "Organization directory membership is ambiguous.",
+    "work_object_action_forbidden": "Work object action is not permitted.",
+    "work_object_transition_invalid": "Work object state does not permit this action.",
+    "idempotency_key_reused": "Idempotency key was used for a different request.",
+    "work_object_version_conflict": "Work object lifecycle has changed.",
+    "organization_directory_missing": "Organization directory has no trusted snapshot.",
+    "organization_directory_stale": "Organization directory snapshot is stale.",
+    "organization_directory_unavailable": "Organization directory is unavailable.",
+    "work_object_unavailable": "Work Object provider is not configured.",
+    "work_object_audit_unavailable": "Work object audit is unavailable.",
+    "work_object_lifecycle_failed": "Work object lifecycle operation failed.",
+}
+
+
 def _lifecycle_error(code: str) -> NoReturn:
     code = {
         "precondition_required": "work_object_precondition_required",
@@ -1343,14 +1526,47 @@ def _lifecycle_error(code: str) -> NoReturn:
     }.get(code, code)
     raise HTTPException(
         _DISPATCH_HTTP.get(code, 503),
-        detail={"code": code, "message": "Work Object request could not be completed."},
+        detail={
+            "code": code,
+            "message": _LIFECYCLE_MESSAGES.get(code, "Work Object request could not be completed."),
+        },
         headers={"Cache-Control": "no-store"},
     )
 
 
 def _raise_dispatch_error(http_status: int, code: str) -> NoReturn:
+    code = {
+        "dispatch_target_department_missing": "dispatch_target_not_found",
+        "dispatch_target_membership_missing": "dispatch_target_not_found",
+    }.get(code, code)
+    if code == "dispatch_target_not_found":
+        http_status = 404
+    messages = {
+        "dispatch_options_request_invalid": "Dispatch options request is invalid.",
+        "organization_directory_snapshot_changed": (
+            "Organization directory has changed; reload the selection."
+        ),
+        "organization_directory_missing": (
+            "Organization directory has not completed its first successful synchronization."
+        ),
+        "organization_directory_stale": (
+            "Organization directory is stale; directory-dependent authorization is unavailable."
+        ),
+        "organization_directory_unavailable": "Organization directory is unavailable.",
+        "directory_scope_denied": "Directory access is not permitted for this identity.",
+        "work_object_unavailable": "Work Object provider is not configured.",
+        "work_object_dispatch_failed": "Dispatch could not be completed; retry with the same key.",
+        "work_object_audit_unavailable": "Dispatch audit is unavailable; retry with the same key.",
+        "dispatch_target_not_found": "Dispatch target was not found.",
+        "idempotency_key_reused": "Idempotency key belongs to a different request.",
+        "idempotency_key_invalid": "One UUID idempotency key is required.",
+        "dispatch_request_invalid": "Dispatch request is invalid.",
+    }
     raise HTTPException(
         http_status,
-        detail={"code": code, "message": "Work Object request could not be completed."},
+        detail={
+            "code": code,
+            "message": messages.get(code, "Work Object operation is not permitted."),
+        },
         headers={"Cache-Control": "no-store"},
     )

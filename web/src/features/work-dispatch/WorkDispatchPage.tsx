@@ -15,11 +15,12 @@ import type { DispatchDraft, DispatchKind } from './dispatchDraft';
 import AttachmentsPanel from './AttachmentsPanel';
 import type { AttachmentView } from './AttachmentsPanel';
 import styles from './WorkDispatchPage.module.css';
+import { Icon } from '../../shared/ui/Icon';
 
 type Selected = { option: DispatchOption; confirmed: boolean };
-type Submission = { body: DispatchRequest; key: string };
+type Submission = { body: DispatchRequest; key: string; uncertain: boolean };
 const labelOf = (option: DispatchOption) => option.kind === 'user'
-  ? `${option.display_name}（${option.department_display_name}）` : option.department_display_name;
+  ? `${option.display_name}（${option.department_display_name}，目录编号 ${option.directory_user_id}）` : option.department_display_name;
 
 export default function WorkDispatchPage() {
   const token = useDraftSession();
@@ -31,7 +32,8 @@ export default function WorkDispatchPage() {
       if (!validReceipt(result, count)) throw new Error('invalid_receipt');
       if (isCurrentDraftSession(token)) {
         clearDraft(token);
-        void queryClient.invalidateQueries({ queryKey: ['work-objects', token.generation] });
+        try { await queryClient.invalidateQueries({ queryKey: ['work-objects', token.generation] }, { throwOnError: true }); }
+        catch { return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。列表刷新失败，请到工作事项重新读取。`; }
       }
       return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。`;
     }} />;
@@ -75,7 +77,7 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
   const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeError, setNoticeError] = useState(false);
-  const [phase, setPhase] = useState<'editing' | 'pending' | 'uncertain' | 'success'>('editing');
+  const [phase, setPhase] = useState<'editing' | 'pending' | 'uncertain' | 'success' | 'stopped'>('editing');
   const [chosenInstant, setChosenInstant] = useState(draft.dueInstant ?? '');
   const [legacyConfirmed, setLegacyConfirmed] = useState(false);
   const [timeConfirmed, setTimeConfirmed] = useState(!draft.dueAt || !!draft.dueInstant);
@@ -150,11 +152,14 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
       setNoticeError(true);
       if (accessLost(error)) clearPrivate();
       const definite = error instanceof ApiError && error.status >= 400 && error.status < 500;
-      if (definite) {
+      if (failure.category === 'stop' || definite && submission.uncertain) {
+        frozen.current = null; setPhase('stopped');
+        setNotice(`${failure.text}${submission.uncertain ? ' 先前提交结果仍待确认，请先到工作事项核对。' : ''}`);
+      } else if (definite) {
         frozen.current = null; setPhase('editing');
         setNotice(error instanceof ApiError && error.status === 412 ? '规则已更新，请重新读取后再编辑。' : failure.text);
       } else {
-        frozen.current = submission; setPhase('uncertain');
+        submission.uncertain = true; frozen.current = submission; setPhase('uncertain');
         setNotice(`${failure.text} 请重试原请求或先核对结果。`);
       }
     } finally { sending.current = false; }
@@ -174,7 +179,7 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
       targets: selected.map((item) => targetOf(item.option)), dispatch_mode: draft.dispatchMode,
       completion_mode: draft.completionMode, lead_target: draft.dispatchMode === 'collaborative' && lead ? targetOf(lead.option) : null,
       attachment_ids: attachments.map((item) => item.attachment_id) };
-    const submission = { body, key: crypto.randomUUID() }; frozen.current = submission; void send(submission);
+    const submission = { body, key: crypto.randomUUID(), uncertain: false }; frozen.current = submission; void send(submission);
   };
   const store = () => {
     const choice = choices.find((value) => value.instant === instant);
@@ -184,33 +189,33 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
   return <div className={styles.page}>
     {!series ? <div className={styles.toolbar}><h1>任务交办</h1><Link to="/work-object-series">周期任务规则</Link></div> : null}
     <section className={styles.panel}>
-      <div className={styles.draftNotice}>发布前请核对要求与目标。草稿仅在本次会话内暂存，刷新后需到工作事项核对先前发布结果。</div>
+      <div className={styles.draftNotice}>发布前请核对要求与目标。草稿仅在本次会话内暂存，刷新后需到工作事项核对先前发布结果。 <Link to="/work-objects">核对工作事项</Link></div>
       <div className={styles.form}>
         {typeof children === 'function' ? children(locked) : children}
         <h2 className={styles.sectionHead}>基本信息</h2>
         <div className={styles.gridKindTitle}>
-          <div className={styles.field}><label htmlFor="dispatch-kind">类型</label><Select<DispatchKind> id="dispatch-kind"
+          <div className={styles.field}><label htmlFor="dispatch-kind">类型</label><Select<DispatchKind> id="dispatch-kind" virtual={false}
             value={draft.kind} disabled={locked} options={DISPATCH_KINDS.map((value) => ({ label: value, value }))}
             onChange={(value) => update('kind', value)} /></div>
           <div className={styles.field}><label htmlFor="dispatch-title">标题</label><Input id="dispatch-title" maxLength={200}
             value={draft.title} disabled={locked} onChange={(event) => update('title', event.target.value)} /></div>
         </div>
         <div className={styles.gridRequirement}>
-          <div className={styles.field}><label>办理方式</label><Radio.Group value={draft.dispatchMode} disabled={locked}
+          <div className={styles.field}><label>办理方式</label><Radio.Group name="dispatch-mode" value={draft.dispatchMode} disabled={locked}
             onChange={(event) => update('dispatchMode', event.target.value)}>
             <Radio value="independent">各自独立办理</Radio><Radio value="collaborative">主协办协作</Radio></Radio.Group>
             <p className={styles.caption}>{draft.dispatchMode === 'independent' ? '每个目标分别生成一个工作事项，分别办结。' : '共同生成一个工作事项，所有协办对外提交后由唯一主办汇总。'}</p></div>
-          <div className={styles.field}><label>完成模式</label><Radio.Group value={draft.completionMode} disabled={locked}
+          <div className={styles.field}><label>完成模式</label><Radio.Group name="dispatch-completion-mode" value={draft.completionMode} disabled={locked}
             onChange={(event) => update('completionMode', event.target.value)}><Radio value="submit_completes">正式提交即完成</Radio>
             <Radio value="confirm_required">派发人确认后完成</Radio></Radio.Group>
             <p className={styles.caption}>部门目标须先由负责人审核；本人自办也可选择提交即完成。</p></div>
         </div>
         <h2 className={styles.sectionHead}>交办对象</h2>
         <p className={styles.caption}>候选由服务端按当前身份提供；普通人员仅本人、负责人可派部门及本部门人员。领导岗位名单未配置时不会开放领导权限。</p>
-        <div className={styles.chipWell} aria-label="已选对象">
+        <div className={styles.chipWell} role="group" aria-label="交办对象（目录选择）">
           {selected.length === 0 ? <span>尚未选择对象</span> : selected.map((item) => <span className={styles.chip} key={optionKey(item.option)}>
             {labelOf(item.option)}{item.confirmed ? '' : '（待重新确认）'}
-            <Button type="text" disabled={locked} aria-label={`移除 ${labelOf(item.option)}`} onClick={() => setSelected((items) => items.filter((entry) => optionKey(entry.option) !== optionKey(item.option)))}>×</Button>
+            <Button type="text" disabled={locked} aria-label={`移除 ${labelOf(item.option)}`} onClick={() => setSelected((items) => items.filter((entry) => optionKey(entry.option) !== optionKey(item.option)))}><Icon name="close" size={14} /></Button>
           </span>)}
         </div>
         <div className={styles.directory}>
@@ -228,8 +233,8 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
             {page.items.length === 0 ? <p>当前范围没有可选对象。</p> : null}
             {page.unselectable_count > 0 ? <p>有 {page.unselectable_count} 个对象当前不能唯一解析，请核对目录。</p> : null}
             <ul className={styles.optionList}>{page.items.map((option) => <li key={optionKey(option)}><span>{labelOf(option)}</span>
-              {option.kind === 'department' ? <Button disabled={locked} onClick={() => void load({ kind: 'user', department_id: option.department_id }, undefined, '')}>查看人员</Button> : null}
-              <Button disabled={locked || selected.length >= 100 && !selected.some((item) => optionKey(item.option) === optionKey(option))}
+              {option.kind === 'department' ? <Button aria-label={`查看 ${option.department_display_name} 人员`} disabled={locked} onClick={() => void load({ kind: 'user', department_id: option.department_id }, undefined, '')}>查看人员</Button> : null}
+              <Button aria-label={`选择 ${labelOf(option)}`} disabled={locked || selected.length >= 100 && !selected.some((item) => optionKey(item.option) === optionKey(option))}
                 onClick={() => addTarget(option)}>{selected.some((item) => optionKey(item.option) === optionKey(option)) ? '重新确认' : '选择'}</Button>
             </li>)}</ul>
             {page.has_more ? <Button disabled={locked} onClick={() => void load(scope, page.next_cursor!)}>加载下一页</Button> : null}
@@ -239,12 +244,12 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
           <Select id="dispatch-lead" value={leadKey || undefined} placeholder="从已选对象选择一名主办" disabled={locked}
             options={selected.map((item) => ({ value: optionKey(item.option), label: labelOf(item.option) }))} onChange={setLeadKey} /></div> : null}
         {legacy ? <label><Checkbox checked={legacyConfirmed} disabled={locked} onChange={(event) => setLegacyConfirmed(event.target.checked)} />已核对旧草稿意图并重新选择目标：{draft.assignee} {draft.visibility} {draft.targets.join('、')}</label> : null}
-        {!series ? <div className={styles.field}><label htmlFor="dispatch-due">截止时间（可留空）</label>
+        {!series ? <div className={styles.field}><label htmlFor="dispatch-due">截止时间</label>
           <input className={styles.dateInput} id="dispatch-due" type="datetime-local" value={draft.dueAt} disabled={locked}
-            onChange={(event) => { setChosenInstant(''); setTimeConfirmed(true); setDraft((old) => ({ ...old, dueAt: event.target.value, dueInstant: undefined })); }} />
+            onChange={(event) => { setChosenInstant(''); setTimeConfirmed(true); setDraft((old) => ({ ...old, dueAt: event.target.value, dueInstant: undefined, reminders: event.target.value ? old.reminders : [] })); }} />
           <p className={styles.caption}>时区：{zone} {choices.map((choice) => choice.offset).join(' / ')}</p>
           {draft.dueAt && choices.length === 0 ? <p role="alert">该本地日期时间不存在，请重新选择。</p> : null}
-          {choices.length > 1 ? <Select aria-label="截止时间偏移" value={chosenInstant || undefined} disabled={locked}
+          {choices.length > 1 ? <Select aria-label="选择截止时间偏移" virtual={false} value={chosenInstant || undefined} disabled={locked}
             options={choices.map((choice) => ({ label: choice.offset, value: choice.instant }))} onChange={setChosenInstant} /> : null}
           {!timeConfirmed ? <Button disabled={locked} onClick={() => setTimeConfirmed(true)}>确认旧截止时间与时区</Button> : null}
         </div> : null}
@@ -255,8 +260,8 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
           <div className={styles.field}><label htmlFor="dispatch-receipt">回执要求</label><Input.TextArea id="dispatch-receipt"
             rows={4} maxLength={2000} value={draft.receipt} disabled={locked} onChange={(event) => update('receipt', event.target.value)} /></div>
         </div>
-        <AttachmentsPanel purpose="task_material" visibility="shared" value={attachments} onChange={setAttachments} readOnly={locked} onAccessLost={clearPrivate} />
-        <div className={styles.field}><label>站内到期提示</label><Checkbox.Group disabled={locked || !series && !draft.dueAt} options={[...REMINDER_CHOICES]}
+        <div role="group" aria-label="附件"><AttachmentsPanel purpose="task_material" visibility="shared" value={attachments} onChange={setAttachments} readOnly={locked} onAccessLost={clearPrivate} /></div>
+        <div className={styles.field}><label>站内到期提示</label><Checkbox.Group aria-label="站内到期提示" role="group" disabled={locked || !series && !draft.dueAt} options={[...REMINDER_CHOICES]}
           value={[...draft.reminders]} onChange={(values) => update('reminders', REMINDER_CHOICES.filter((choice) => values.includes(choice)))} />
           <p className={styles.caption}>提示显示在站内工作台，不代表已发送邮件、短信或 IM。</p></div>
       </div>
@@ -264,13 +269,13 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
         <span className={styles.caption}>已选择 {selected.length} 个目标 · {draft.dispatchMode === 'collaborative' ? '共同协作' : '分别办理'}</span>
         <div className={styles.footerActions}>
           {!series ? <Button disabled={locked} onClick={store}>暂存草稿</Button> : null}
-          {phase === 'editing' ? <Button type="primary" onClick={publish}>{submitLabel}</Button> : null}
+          {phase === 'editing' ? <Button type="primary" disabled={directoryState !== 'ready' || selected.length === 0 || selected.some((item) => !item.confirmed) || legacy && !legacyConfirmed || !timeValid} onClick={publish}>{submitLabel}</Button> : null}
           {phase === 'pending' ? <Button loading>正在提交</Button> : null}
           {phase === 'uncertain' && frozen.current ? <Button onClick={() => void send(frozen.current!)}>重试原请求</Button> : null}
           {phase === 'success' && !series ? <><Link to="/work-objects">查看工作事项</Link><Button onClick={() => { setDraft({ ...EMPTY_DRAFT }); setSelected([]); setAttachments([]); setLeadKey(''); setPhase('editing'); setNotice(null); }}>继续创建</Button></> : null}
         </div>
       </div>
-      {notice ? <p className={styles.notice} role={noticeError ? 'alert' : 'status'}>{notice}</p> : null}
+      {notice ? <p aria-label="交办状态" className={styles.notice} role={noticeError ? 'alert' : 'status'}>{notice}</p> : null}
     </section>
   </div>;
 }

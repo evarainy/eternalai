@@ -202,7 +202,7 @@ export const dispatchWorkObjectsApiV1WorkObjectsDispatchPost = (
     dispatchWorkObjectsRequest: DispatchWorkObjectsRequest,
     headers: DispatchWorkObjectsApiV1WorkObjectsDispatchPostHeaders,
  ) => {
-      return customInstance<DispatchWorkObjectsResponse>(
+      return customInstance<DispatchWorkObjectsResponse | DispatchWorkObjectsResponse>(
       {url: `/api/v1/work-objects/dispatch`, method: 'POST',
       headers: {'Content-Type': 'application/json', ...headers},
       data: dispatchWorkObjectsRequest

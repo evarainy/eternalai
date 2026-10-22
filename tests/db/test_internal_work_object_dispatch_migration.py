@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from itertools import combinations
 from uuid import uuid4
 
@@ -51,19 +53,87 @@ def _migration():
 
 
 def _apply(db, direction):
-    with db.sql.begin() as connection:
-        with Operations.context(MigrationContext.configure(connection)):
-            getattr(_migration(), direction)()
+    _apply_revision(db, "20260910_120000", direction)
 
 
 def _lifecycle(db, direction):
-    # Test the historical revision at its own schema, then restore columns needed by today's API.
+    _apply_revision(db, "20260920_120000", direction)
+
+
+def _isolate_connection(db, connection):
+    assert re.fullmatch(r"dispatch_test_[0-9a-f]{32}", db.schema)
+    connection.execute(text('SET LOCAL search_path TO "' + db.schema + '"'))
+    assert connection.execute(text("SELECT current_schema()")).scalar_one() == db.schema
+
+
+def _apply_revision(db, revision, direction):
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
-    module = ScriptDirectory.from_config(config).get_revision("20260920_120000").module
+    module = ScriptDirectory.from_config(config).get_revision(revision).module
     with db.sql.begin() as connection:
+        _isolate_connection(db, connection)
         with Operations.context(MigrationContext.configure(connection)):
             getattr(module, direction)()
+
+
+def _historical_schema(db):
+    # Only this empty fixture schema is rolled back; public remains at current head.
+    _apply_revision(db, "20261022_120000", "downgrade")
+
+
+def _publish_legacy(db, body=None):
+    """Insert actual legacy publication/receipt facts, without a v2 HTTP/old-DDL mix."""
+    body = request_body() if body is None else body
+    before_objects, before_receipts = db.counts()
+    object_ids = []
+    for target in body["targets"]:
+        personal = target["kind"] == "user"
+        due_at = body["due_at"]
+        if isinstance(due_at, str):
+            due_at = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+        row = {
+            **_legacy_row(external=False),
+            "source_kind": "manual_dispatch",
+            "assignee_ai_user_id": None,
+            "assignee_display_name": None if personal else "Synthetic department",
+            "tenant_id": "default",
+            "owner_department_id": "office-a",
+            "initiator_ai_user_id": "ai-sender",
+            "target_kind": target["kind"],
+            "assignee_directory_user_id": target["directory_user_id"] if personal else None,
+            "title": body["title"],
+            "kind": body["kind"],
+            "requirement": body["requirement"],
+            "receipt_requirement": body["receipt_requirement"],
+            "due_at": due_at,
+            "status": "assigned" if personal else "department_pending",
+            "reminder_choices": body["reminder_choices"],
+            "version": 1,
+        }
+        insert_synthetic_row(db, row)
+        object_ids.append(row["work_object_id"])
+    statement = text(
+        "INSERT INTO work_object_dispatch_receipts "
+        "(tenant_id,initiator_ai_user_id,operation,idempotency_key,request_fingerprint,"
+        "result,authorization_summary,created_at) VALUES "
+        "('default','ai-sender','dispatch',:key,:fingerprint,:result,:authorization,:now)"
+    ).bindparams(bindparam("result", type_=JSONB), bindparam("authorization", type_=JSONB))
+    with db.sql.begin() as connection:
+        _isolate_connection(db, connection)
+        inserted = connection.execute(
+            statement,
+            {
+                "key": uuid4(),
+                "fingerprint": "a" * 64,
+                "result": {"items": [{"work_object_id": item} for item in object_ids]},
+                "authorization": {"synthetic": True},
+                "now": NOW,
+            },
+        )
+        assert inserted.rowcount == 1
+    assert db.counts() == (before_objects + len(body["targets"]), before_receipts + 1)
+    assert set(object_ids) <= {item["work_object_id"] for item in db.rows("work_objects")}
+    return object_ids
 
 
 def _legacy_row(*, external):
@@ -116,11 +186,9 @@ def _reject(db, base, updates, constraint, *, sql_null=False):
     assert row["work_object_id"] not in {item["work_object_id"] for item in db.rows("work_objects")}
 
 
-def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, monkeypatch):
-    from app.ports import work_object_scope as policy
-
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
+def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db):
     db = dispatch_db
+    _historical_schema(db)
     assert db.counts() == (0, 0)
     _lifecycle(db, "downgrade")
     _apply(db, "downgrade")
@@ -147,7 +215,8 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
         assert all(row[name] is None for name in NEW_COLUMNS)
     _lifecycle(db, "upgrade")
     for kind in ("通知", "督办令", "工作任务", "提醒"):
-        response = db.post(
+        object_ids = _publish_legacy(
+            db,
             request_body(
                 kind=kind,
                 targets=[
@@ -156,8 +225,7 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
                 ],
             )
         )
-        assert response.status_code == 201, response.text
-        assert response.json()["created_count"] == 2
+        assert len(object_ids) == 2
     _lifecycle(db, "downgrade")
     rows = db.rows("work_objects")
     assert len(rows) == 10
@@ -223,6 +291,7 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
 @pytest.mark.parametrize("populated", ["object", "receipt"])
 def test_dispatch_downgrade_refuses_populated_rows(dispatch_db, populated):
     db = dispatch_db
+    _historical_schema(db)
     _lifecycle(db, "downgrade")
     _apply(db, "downgrade")
     assert not CHECKS.intersection(
@@ -231,13 +300,14 @@ def test_dispatch_downgrade_refuses_populated_rows(dispatch_db, populated):
     )
     _apply(db, "upgrade")
     _lifecycle(db, "upgrade")
-    assert db.post().status_code == 201
+    assert len(_publish_legacy(db)) == 1
     original_objects = db.rows("work_objects")
     original_receipts = db.rows("work_object_dispatch_receipts")
     # Isolate the two refusal arms inside a transaction which is always rolled back.
     with db.sql.connect() as connection:
         transaction = connection.begin()
         try:
+            _isolate_connection(db, connection)
             other = "work_object_dispatch_receipts" if populated == "object" else "work_objects"
             connection.execute(text("DELETE FROM " + other))
             with Operations.context(MigrationContext.configure(connection)):
@@ -261,8 +331,8 @@ def test_dispatch_downgrade_refuses_populated_rows(dispatch_db, populated):
 
 def test_dispatch_reminder_check_accepts_only_canonical_subsets(dispatch_db):
     db = dispatch_db
-    response = db.post(request_body(due_at="2026-09-11T12:00:00Z"))
-    assert response.status_code == 201
+    _historical_schema(db)
+    assert len(_publish_legacy(db, request_body(due_at="2026-09-11T12:00:00Z"))) == 1
     source = db.rows("work_objects")[0]
     for size in range(5):
         for subset in combinations(REMINDERS, size):

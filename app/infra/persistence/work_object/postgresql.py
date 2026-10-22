@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from sqlalchemy import bindparam
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infra.persistence.work_object.authorization import (
@@ -877,8 +878,15 @@ class PostgreSQLWorkObjectStore:
     async def create_prepared_dispatch(self, prepared: PreparedDispatch) -> DispatchResult:
         from app.infra.persistence.work_object.dispatch_insert import insert_prepared_dispatch
 
-        async with self._session_factory() as session, session.begin():
-            return await insert_prepared_dispatch(session, prepared)
+        try:
+            async with self._session_factory() as session, session.begin():
+                return await insert_prepared_dispatch(session, prepared)
+        except SQLAlchemyError:
+            _LOGGER.warning(
+                "work_dispatch stage=persistence operation=create_prepared_dispatch "
+                "code=work_object_dispatch_failed"
+            )
+            raise WorkDispatchError("work_object_dispatch_failed") from None
 
     async def get_dispatch_lifecycle(
         self,
@@ -905,339 +913,362 @@ class PostgreSQLWorkObjectStore:
         replacement_department_name: str | None = None,
         legacy_conversion_relation: HandlingRelationRecord | None = None,
     ) -> LifecycleMutationResult:
-        async with self._session_factory() as session, session.begin():
-            record = await load_manual_root_in_session(
-                session, work_object_id, scope, for_update=True
-            )
-            recheck_scope(scope)
-            relations = await load_relations_in_session(session, record, scope)
-            virtual = (
-                legacy_relation_for_scope(record, scope)
-                if record.dispatch_model_version is None
-                else None
-            )
-            current = project_lifecycle(record, [virtual] if virtual else relations, scope)
-            prior = (
-                (
-                    await session.execute(
-                        sql_text(
-                            "SELECT event_id,request_fingerprint FROM work_object_lifecycle_events "
-                            "WHERE tenant_id=:tenant "
-                            "AND work_object_id=:task AND actor_ai_user_id=:actor AND idemp"
-                            "otency_key=:key"
-                        ),
-                        {
-                            "tenant": scope.principal_tenant_id,
-                            "task": work_object_id,
-                            "actor": scope.principal_ai_user_id,
-                            "key": idempotency_key,
-                        },
+        try:
+            async with self._session_factory() as session, session.begin():
+                record = await load_manual_root_in_session(
+                    session, work_object_id, scope, for_update=True
+                )
+                recheck_scope(scope)
+                relations = await load_relations_in_session(session, record, scope)
+                virtual = (
+                    legacy_relation_for_scope(record, scope)
+                    if record.dispatch_model_version is None
+                    else None
+                )
+                current = project_lifecycle(record, [virtual] if virtual else relations, scope)
+                prior = (
+                    (
+                        await session.execute(
+                            sql_text(
+                                "SELECT event_id,request_fingerprint FROM "
+                                "work_object_lifecycle_events WHERE tenant_id=:tenant "
+                                "AND work_object_id=:task AND actor_ai_user_id=:actor AND idemp"
+                                "otency_key=:key"
+                            ),
+                            {
+                                "tenant": scope.principal_tenant_id,
+                                "task": work_object_id,
+                                "actor": scope.principal_ai_user_id,
+                                "key": idempotency_key,
+                            },
+                        )
                     )
+                    .mappings()
+                    .one_or_none()
                 )
-                .mappings()
-                .one_or_none()
-            )
-            if prior is not None:
-                if prior["request_fingerprint"] != request_fingerprint:
-                    raise WorkDispatchError("idempotency_key_reused")
-                if not await event_visible_in_session(session, prior["event_id"], scope):
-                    raise WorkDispatchError("work_object_action_forbidden")
-                event = await load_event_in_session(session, prior["event_id"])
-                return LifecycleMutationResult(event, True)
-            check_etag(expected_etag, current.etag)
-            if current.frozen:
-                raise WorkDispatchError("work_object_transition_invalid")
-            if record.dispatch_model_version is None:
-                record, relations = await convert_legacy_in_session(
-                    session, record, scope, now, legacy_conversion_relation
-                )
-                current = project_lifecycle(record, relations, scope)
-            command_value: Any = command
-            relation_id = getattr(command_value, "handling_relation_id", None)
-            relation = next((r for r in relations if r.relation_id == relation_id), None)
-            operation = command_value.operation
-            if operation == "complete":
-                # Compatibility is only an unambiguous personal submit, never review bypass.
-                if len(relations) != 1 or relations[0].target_kind != "user":
-                    raise WorkDispatchError("work_object_transition_invalid")
-                relation = relations[0]
-                operation = "submit"
-            if relation_id is not None and relation is None:
-                raise WorkDispatchError("work_object_action_forbidden")
-            allowed = (
-                relation_actions(relation, scope, frozen=False)
-                if relation is not None
-                else current.available_commands
-            )
-            if operation not in allowed:
-                raise WorkDispatchError("work_object_action_forbidden")
-            root_changes: dict[str, Any] = {
-                "version": cast(int, record.version) + 1,
-                "updated_at": now,
-            }
-            changed_relations = list(relations)
-            event_relation = relation
-            relation_before = relation.status if relation else None
-            visibility: Literal["shared", "department_internal"] = "shared"
-            event_text = getattr(command, "text", None)
-            payload: dict[str, Any] = {}
-            if relation is not None:
-                changes: dict[str, Any] = {"updated_at": now}
-                if operation == "assign":
-                    if relation.target_kind != "department" or not relation_head_allowed(
-                        relation, scope
-                    ):
+                if prior is not None:
+                    if prior["request_fingerprint"] != request_fingerprint:
+                        raise WorkDispatchError("idempotency_key_reused")
+                    if not await event_visible_in_session(session, prior["event_id"], scope):
                         raise WorkDispatchError("work_object_action_forbidden")
-                    # Supersession revokes prior actor and private history atomically.
-                    await supersede_relation(session, relation, now)
-                    new_relation = relation.model_copy(
-                        update={
-                            "relation_id": uuid4(),
-                            "assignee_directory_user_id": command_value.directory_user_id,
-                            "assignee_ai_user_id": None,
-                            "status": "assigned",
-                            "accepted_at": None,
-                            "accepted_by_ai_user_id": None,
-                            "submitted_at": None,
-                            "submitted_by_ai_user_id": None,
-                            "submitted_result": None,
-                            "reviewed_at": None,
-                            "reviewed_by_ai_user_id": None,
-                            "review_result": None,
-                            "review_reason": None,
-                            "created_at": now,
-                            "updated_at": now,
+                    event = await load_event_in_session(session, prior["event_id"])
+                    return LifecycleMutationResult(event, True)
+                if current.frozen:
+                    raise WorkDispatchError("work_object_transition_invalid")
+                check_etag(expected_etag, current.etag)
+                if record.dispatch_model_version is None:
+                    record, relations = await convert_legacy_in_session(
+                        session, record, scope, now, legacy_conversion_relation
+                    )
+                    current = project_lifecycle(record, relations, scope)
+                command_value: Any = command
+                relation_id = getattr(command_value, "handling_relation_id", None)
+                relation = next((r for r in relations if r.relation_id == relation_id), None)
+                operation = command_value.operation
+                if operation == "complete":
+                    # Compatibility is only an unambiguous personal submit, never review bypass.
+                    if len(relations) != 1 or relations[0].target_kind != "user":
+                        raise WorkDispatchError("work_object_transition_invalid")
+                    relation = relations[0]
+                    operation = "submit"
+                if relation_id is not None and relation is None:
+                    raise WorkDispatchError("work_object_action_forbidden")
+                allowed = (
+                    relation_actions(relation, scope, frozen=False)
+                    if relation is not None
+                    else current.available_commands
+                )
+                if operation not in allowed:
+                    raise WorkDispatchError("work_object_action_forbidden")
+                root_changes: dict[str, Any] = {
+                    "version": cast(int, record.version) + 1,
+                    "updated_at": now,
+                }
+                changed_relations = list(relations)
+                event_relation = relation
+                relation_before = relation.status if relation else None
+                visibility: Literal["shared", "department_internal"] = "shared"
+                event_text = getattr(command, "text", None)
+                payload: dict[str, Any] = {}
+                if relation is not None:
+                    changes: dict[str, Any] = {"updated_at": now}
+                    if operation == "assign":
+                        if relation.target_kind != "department" or not relation_head_allowed(
+                            relation, scope
+                        ):
+                            raise WorkDispatchError("work_object_action_forbidden")
+                        # Supersession revokes prior actor and private history atomically.
+                        await supersede_relation(session, relation, now)
+                        new_relation = relation.model_copy(
+                            update={
+                                "relation_id": uuid4(),
+                                "assignee_directory_user_id": command_value.directory_user_id,
+                                "assignee_ai_user_id": None,
+                                "status": "assigned",
+                                "accepted_at": None,
+                                "accepted_by_ai_user_id": None,
+                                "submitted_at": None,
+                                "submitted_by_ai_user_id": None,
+                                "submitted_result": None,
+                                "reviewed_at": None,
+                                "reviewed_by_ai_user_id": None,
+                                "review_result": None,
+                                "review_reason": None,
+                                "created_at": now,
+                                "updated_at": now,
+                            }
+                        )
+                        await insert_relation_in_session(session, new_relation)
+                        changed_relations = [
+                            new_relation if r.relation_id == relation.relation_id else r
+                            for r in relations
+                        ]
+                        event_relation = new_relation
+                        changes = {}
+                        payload = {
+                            "previous_relation_id": str(relation.relation_id),
+                            "replacement_relation_id": str(new_relation.relation_id),
                         }
-                    )
-                    await insert_relation_in_session(session, new_relation)
-                    changed_relations = [
-                        new_relation if r.relation_id == relation.relation_id else r
-                        for r in relations
-                    ]
-                    event_relation = new_relation
-                    changes = {}
-                    payload = {
-                        "previous_relation_id": str(relation.relation_id),
-                        "replacement_relation_id": str(new_relation.relation_id),
-                    }
-                    visibility = "department_internal"
-                elif operation == "accept":
-                    changes.update(
-                        status="in_progress",
-                        accepted_at=now,
-                        accepted_by_ai_user_id=scope.principal_ai_user_id,
-                        assignee_ai_user_id=scope.principal_ai_user_id,
-                    )
-                    if record.accepted_at is None:
-                        root_changes.update(
-                            accepted_at=now, accepted_by_ai_user_id=scope.principal_ai_user_id
-                        )
-                    visibility = "department_internal"
-                elif operation == "feedback":
-                    visibility = "department_internal"
-                elif operation == "submit":
-                    changes.update(
-                        status="awaiting_department_review"
-                        if relation.target_kind == "department"
-                        else "submitted",
-                        submitted_at=now,
-                        submitted_by_ai_user_id=scope.principal_ai_user_id,
-                        submitted_result=command_value.text,
-                        reviewed_at=None,
-                        reviewed_by_ai_user_id=None,
-                        review_result=None,
-                        review_reason=None,
-                    )
-                    visibility = (
-                        "department_internal" if relation.target_kind == "department" else "shared"
-                    )
-                elif operation == "department_review":
-                    changes.update(
-                        status="submitted" if command_value.approved else "in_progress",
-                        reviewed_at=now,
-                        reviewed_by_ai_user_id=scope.principal_ai_user_id,
-                        review_result=command_value.approved,
-                        review_reason=command_value.reason,
-                    )
-                    if not command_value.approved:
+                        visibility = "department_internal"
+                    elif operation == "accept":
                         changes.update(
-                            submitted_at=None, submitted_by_ai_user_id=None, submitted_result=None
+                            status="in_progress",
+                            accepted_at=now,
+                            accepted_by_ai_user_id=scope.principal_ai_user_id,
+                            assignee_ai_user_id=scope.principal_ai_user_id,
                         )
-                    event_text = command_value.reason or None
-                    visibility = "department_internal"
-                    payload = {"approved": command_value.approved}
-                    if command_value.approved:
+                        if record.accepted_at is None:
+                            root_changes.update(
+                                accepted_at=now, accepted_by_ai_user_id=scope.principal_ai_user_id
+                            )
+                        visibility = "department_internal"
+                    elif operation == "feedback":
+                        visibility = "department_internal"
+                    elif operation == "submit":
+                        changes.update(
+                            status="awaiting_department_review"
+                            if relation.target_kind == "department"
+                            else "submitted",
+                            submitted_at=now,
+                            submitted_by_ai_user_id=scope.principal_ai_user_id,
+                            submitted_result=command_value.text,
+                            reviewed_at=None,
+                            reviewed_by_ai_user_id=None,
+                            review_result=None,
+                            review_reason=None,
+                        )
+                        visibility = (
+                            "department_internal"
+                            if relation.target_kind == "department"
+                            else "shared"
+                        )
+                    elif operation == "department_review":
+                        changes.update(
+                            status="submitted" if command_value.approved else "in_progress",
+                            reviewed_at=now,
+                            reviewed_by_ai_user_id=scope.principal_ai_user_id,
+                            review_result=command_value.approved,
+                            review_reason=command_value.reason,
+                        )
+                        if not command_value.approved:
+                            changes.update(
+                                submitted_at=None,
+                                submitted_by_ai_user_id=None,
+                                submitted_result=None,
+                            )
+                        event_text = command_value.reason or None
+                        visibility = "department_internal"
+                        payload = {"approved": command_value.approved}
+                        if command_value.approved:
+                            from app.infra.persistence.work_object.attachments import (
+                                publish_relation_results_in_session,
+                            )
+
+                            await publish_relation_results_in_session(
+                                session,
+                                scope=scope,
+                                work_object_id=work_object_id,
+                                handling_relation_id=relation.relation_id,
+                                now=now,
+                            )
+                    if changes:
+                        updated = relation.model_copy(update=changes)
+                        await update_relation_in_session(session, updated)
+                        changed_relations = [
+                            updated if r.relation_id == updated.relation_id else r
+                            for r in relations
+                        ]
+                        event_relation = updated
+                    attachment_ids = getattr(command, "attachment_ids", [])
+                    if attachment_ids:
                         from app.infra.persistence.work_object.attachments import (
-                            publish_relation_results_in_session,
+                            link_attachments_in_session,
                         )
 
-                        await publish_relation_results_in_session(
+                        await link_attachments_in_session(
                             session,
                             scope=scope,
                             work_object_id=work_object_id,
-                            handling_relation_id=relation.relation_id,
+                            handling_relation_id=cast(
+                                HandlingRelationRecord, event_relation
+                            ).relation_id,
+                            attachment_ids=attachment_ids,
+                            purpose="result",
+                            visibility=visibility,
                             now=now,
                         )
-                if changes:
-                    updated = relation.model_copy(update=changes)
-                    await update_relation_in_session(session, updated)
-                    changed_relations = [
-                        updated if r.relation_id == updated.relation_id else r for r in relations
-                    ]
-                    event_relation = updated
-                attachment_ids = getattr(command, "attachment_ids", [])
-                if attachment_ids:
-                    from app.infra.persistence.work_object.attachments import (
-                        link_attachments_in_session,
-                    )
-
-                    await link_attachments_in_session(
-                        session,
-                        scope=scope,
-                        work_object_id=work_object_id,
-                        handling_relation_id=cast(
-                            HandlingRelationRecord, event_relation
-                        ).relation_id,
-                        attachment_ids=attachment_ids,
-                        purpose="result",
-                        visibility=visibility,
-                        now=now,
-                    )
-                if operation == "assign" and record.status == "awaiting_acceptance":
-                    await invalidate_submissions(session, changed_relations, now)
-                    changed_relations = await load_relations_in_session(session, record, scope)
-                if record.dispatch_mode == "independent":
-                    only = changed_relations[0]
-                    if only.status == "submitted":
-                        root_changes["status"] = final_submission_status(record)
-                    elif only.status == "awaiting_department_review":
-                        root_changes["status"] = "awaiting_department_review"
-                    elif only.status == "assigned" and only.target_kind == "user":
-                        root_changes["status"] = "assigned"
-                    elif only.status == "department_pending":
-                        root_changes["status"] = "department_pending"
+                    if operation == "assign" and record.status == "awaiting_acceptance":
+                        await invalidate_submissions(session, changed_relations, now)
+                        changed_relations = await load_relations_in_session(session, record, scope)
+                    if record.dispatch_mode == "independent":
+                        only = changed_relations[0]
+                        if only.status == "submitted":
+                            root_changes["status"] = final_submission_status(record)
+                        elif only.status == "awaiting_department_review":
+                            root_changes["status"] = "awaiting_department_review"
+                        elif only.status == "assigned" and only.target_kind == "user":
+                            root_changes["status"] = "assigned"
+                        elif only.status == "department_pending":
+                            root_changes["status"] = "department_pending"
+                        else:
+                            root_changes["status"] = "in_progress"
                     else:
-                        root_changes["status"] = "in_progress"
-                else:
-                    lead = next(r for r in changed_relations if r.role == "lead")
-                    root_changes["status"] = (
-                        "awaiting_department_review"
-                        if lead.status == "awaiting_department_review"
-                        else "in_progress"
-                    )
-            elif operation == "submit_summary":
-                if record.dispatch_mode != "collaborative" or any(
-                    r.status != "submitted" for r in relations
-                ):
-                    raise WorkDispatchError("work_object_transition_invalid")
-                root_changes["status"] = final_submission_status(record)
-                payload = {"submitted_relation_ids": [str(r.relation_id) for r in relations]}
-                if command_value.attachment_ids:
-                    from app.infra.persistence.work_object.attachments import (
-                        link_attachments_in_session,
-                    )
+                        lead = next(r for r in changed_relations if r.role == "lead")
+                        root_changes["status"] = (
+                            "awaiting_department_review"
+                            if lead.status == "awaiting_department_review"
+                            else "in_progress"
+                        )
+                elif operation == "submit_summary":
+                    if record.dispatch_mode != "collaborative" or any(
+                        r.status != "submitted" for r in relations
+                    ):
+                        raise WorkDispatchError("work_object_transition_invalid")
+                    root_changes["status"] = final_submission_status(record)
+                    payload = {"submitted_relation_ids": [str(r.relation_id) for r in relations]}
+                    if command_value.attachment_ids:
+                        from app.infra.persistence.work_object.attachments import (
+                            link_attachments_in_session,
+                        )
 
-                    await link_attachments_in_session(
-                        session,
-                        scope=scope,
-                        work_object_id=work_object_id,
-                        handling_relation_id=None,
-                        attachment_ids=command_value.attachment_ids,
-                        purpose="result",
-                        visibility="shared",
-                        now=now,
-                    )
-            elif operation == "confirm":
-                root_changes["status"] = "completed"
-            elif operation == "return":
-                root_changes["status"] = "in_progress"
-                event_text = command_value.reason
-                await invalidate_submissions(session, relations, now)
-            elif operation == "revise":
-                payload = {
-                    "before": {
-                        k: getattr(record, k)
-                        for k in ("title", "requirement", "receipt_requirement", "completion_mode")
-                    },
-                    "after": command_value.model_dump(mode="json", exclude={"operation"}),
-                }
-                root_changes.update(
-                    title=command_value.title,
-                    requirement=command_value.requirement,
-                    receipt_requirement=command_value.receipt_requirement,
-                    completion_mode=command_value.completion_mode,
-                )
-                await invalidate_submissions(session, relations, now)
-                if record.status in {"awaiting_acceptance", "awaiting_department_review"}:
+                        await link_attachments_in_session(
+                            session,
+                            scope=scope,
+                            work_object_id=work_object_id,
+                            handling_relation_id=None,
+                            attachment_ids=command_value.attachment_ids,
+                            purpose="result",
+                            visibility="shared",
+                            now=now,
+                        )
+                elif operation == "confirm":
+                    root_changes["status"] = "completed"
+                elif operation == "return":
                     root_changes["status"] = "in_progress"
-            elif operation == "withdraw":
-                root_changes.update(
-                    status="withdrawn",
-                    withdrawn_at=now,
-                    withdrawn_by_ai_user_id=scope.principal_ai_user_id,
+                    event_text = command_value.reason
+                    await invalidate_submissions(session, relations, now)
+                elif operation == "revise":
+                    payload = {
+                        "before": {
+                            k: getattr(record, k)
+                            for k in (
+                                "title",
+                                "requirement",
+                                "receipt_requirement",
+                                "completion_mode",
+                            )
+                        },
+                        "after": command_value.model_dump(mode="json", exclude={"operation"}),
+                    }
+                    root_changes.update(
+                        title=command_value.title,
+                        requirement=command_value.requirement,
+                        receipt_requirement=command_value.receipt_requirement,
+                        completion_mode=command_value.completion_mode,
+                    )
+                    await invalidate_submissions(session, relations, now)
+                    if record.status in {"awaiting_acceptance", "awaiting_department_review"}:
+                        root_changes["status"] = "in_progress"
+                elif operation == "withdraw":
+                    root_changes.update(
+                        status="withdrawn",
+                        withdrawn_at=now,
+                        withdrawn_by_ai_user_id=scope.principal_ai_user_id,
+                    )
+                    event_text = command_value.reason
+                elif operation == "extend":
+                    if record.due_at is not None and command_value.due_at <= record.due_at:
+                        raise WorkDispatchError("work_object_transition_invalid")
+                    root_changes["due_at"] = command_value.due_at
+                    payload = {
+                        "before_due_at": None
+                        if record.due_at is None
+                        else record.due_at.isoformat(),
+                        "after_due_at": command_value.due_at.isoformat(),
+                    }
+                elif operation == "reassign":
+                    if not replacement_relations:
+                        raise WorkDispatchError("work_object_lifecycle_request_invalid")
+                    for old in relations:
+                        await supersede_relation(session, old, now)
+                    for new in replacement_relations:
+                        await insert_relation_in_session(session, new)
+                    lead = next(r for r in replacement_relations if r.role in {"single", "lead"})
+                    if lead.target_kind == "department" and replacement_department_name is None:
+                        raise WorkDispatchError("dispatch_target_department_missing")
+                    root_changes.update(
+                        target_kind=lead.target_kind,
+                        owner_department_id=lead.target_department_id,
+                        assignee_directory_user_id=lead.target_directory_user_id,
+                        assignee_display_name=None
+                        if lead.target_kind == "user"
+                        else replacement_department_name,
+                        status="assigned" if lead.target_kind == "user" else "department_pending",
+                        accepted_at=None,
+                        accepted_by_ai_user_id=None,
+                    )
+                    payload = {
+                        "previous_relation_ids": [str(r.relation_id) for r in relations],
+                        "replacement_relation_ids": [
+                            str(r.relation_id) for r in replacement_relations
+                        ],
+                    }
+                if root_changes.get("status") == "completed":
+                    root_changes.update(
+                        completed_at=now, completed_by_ai_user_id=scope.principal_ai_user_id
+                    )
+                recheck_scope(scope)
+                await update_root_in_session(session, record, root_changes)
+                event = LifecycleEventRecord(
+                    event_id=event_id,
+                    tenant_id=scope.principal_tenant_id,
+                    work_object_id=work_object_id,
+                    actor_ai_user_id=scope.principal_ai_user_id,
+                    operation=command_value.operation,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    from_status=cast(LifecycleStatus, record.status),
+                    to_status=cast(LifecycleStatus, root_changes.get("status", record.status)),
+                    result_version=cast(int, record.version) + 1,
+                    occurred_at=now,
+                    text=event_text,
+                    event_model_version=2,
+                    handling_relation_id=None
+                    if event_relation is None
+                    else event_relation.relation_id,
+                    relation_from_status=relation_before,
+                    relation_to_status=None if event_relation is None else event_relation.status,
+                    payload=payload,
+                    visibility=visibility,
                 )
-                event_text = command_value.reason
-            elif operation == "extend":
-                if record.due_at is not None and command_value.due_at <= record.due_at:
-                    raise WorkDispatchError("work_object_transition_invalid")
-                root_changes["due_at"] = command_value.due_at
-                payload = {
-                    "before_due_at": None if record.due_at is None else record.due_at.isoformat(),
-                    "after_due_at": command_value.due_at.isoformat(),
-                }
-            elif operation == "reassign":
-                if not replacement_relations:
-                    raise WorkDispatchError("work_object_lifecycle_request_invalid")
-                for old in relations:
-                    await supersede_relation(session, old, now)
-                for new in replacement_relations:
-                    await insert_relation_in_session(session, new)
-                lead = next(r for r in replacement_relations if r.role in {"single", "lead"})
-                if lead.target_kind == "department" and replacement_department_name is None:
-                    raise WorkDispatchError("dispatch_target_department_missing")
-                root_changes.update(
-                    target_kind=lead.target_kind,
-                    owner_department_id=lead.target_department_id,
-                    assignee_directory_user_id=lead.target_directory_user_id,
-                    assignee_display_name=None
-                    if lead.target_kind == "user"
-                    else replacement_department_name,
-                    status="assigned" if lead.target_kind == "user" else "department_pending",
-                    accepted_at=None,
-                    accepted_by_ai_user_id=None,
-                )
-                payload = {
-                    "previous_relation_ids": [str(r.relation_id) for r in relations],
-                    "replacement_relation_ids": [str(r.relation_id) for r in replacement_relations],
-                }
-            if root_changes.get("status") == "completed":
-                root_changes.update(
-                    completed_at=now, completed_by_ai_user_id=scope.principal_ai_user_id
-                )
-            recheck_scope(scope)
-            await update_root_in_session(session, record, root_changes)
-            event = LifecycleEventRecord(
-                event_id=event_id,
-                tenant_id=scope.principal_tenant_id,
-                work_object_id=work_object_id,
-                actor_ai_user_id=scope.principal_ai_user_id,
-                operation=command_value.operation,
-                idempotency_key=idempotency_key,
-                request_fingerprint=request_fingerprint,
-                from_status=cast(LifecycleStatus, record.status),
-                to_status=cast(LifecycleStatus, root_changes.get("status", record.status)),
-                result_version=cast(int, record.version) + 1,
-                occurred_at=now,
-                text=event_text,
-                event_model_version=2,
-                handling_relation_id=None if event_relation is None else event_relation.relation_id,
-                relation_from_status=relation_before,
-                relation_to_status=None if event_relation is None else event_relation.status,
-                payload=payload,
-                visibility=visibility,
+                await insert_event_in_session(session, event)
+                return LifecycleMutationResult(event, False)
+        except SQLAlchemyError:
+            _LOGGER.warning(
+                "work_dispatch stage=persistence operation=command_dispatch_lifecycle "
+                "code=work_object_lifecycle_failed"
             )
-            await insert_event_in_session(session, event)
-            return LifecycleMutationResult(event, False)
+            raise WorkDispatchError("work_object_lifecycle_failed") from None
 
     async def get_dispatch_events(
         self,
@@ -1563,6 +1594,19 @@ async def load_manual_root_in_session(
         )
     ).one_or_none()
     if row is None:
+        nonmanual, nonmanual_params = _visibility_predicate(scope)
+        unsupported = (
+            await session.execute(
+                sql_text(
+                    "SELECT 1 FROM work_objects WHERE work_object_id=:task AND "
+                    "(state_authority<>'internal' OR source_kind<>'manual_dispatch') AND "
+                    + nonmanual
+                ),
+                {**nonmanual_params, "task": work_object_id},
+            )
+        ).scalar_one_or_none()
+        if unsupported is not None:
+            raise WorkDispatchError("work_object_lifecycle_unsupported")
         raise WorkDispatchError("work_object_not_found")
     return InternalWorkObjectRecord.model_validate(dict(row._mapping))
 

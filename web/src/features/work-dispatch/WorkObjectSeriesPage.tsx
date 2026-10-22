@@ -180,7 +180,8 @@ function SeriesEditor({ token, existing, onSaved, onCancel, onAccessLost }: {
         throw new ApiError(422, 'work_object_series_request_invalid', 'Invalid series schedule.');
       }
       setScheduleError(null);
-      const { due_at: _dueAt, ...template } = request;
+      const template = { ...request };
+      delete template.due_at;
       frozen.current = { key, body: { weekdays: [...weekdays].sort((a, b) => a - b), local_time: time, timezone: zone,
         start_date: start, deadline_spec: { days_after: days, local_time: deadlineTime }, template, enabled },
         existing: existing ? { id: existing.series.series_id, etag: existing.etag } : undefined };

@@ -3,37 +3,34 @@
 from uuid import uuid4
 
 import pytest
-from alembic.config import Config
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
-from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from tests.api.test_work_object_dispatch import ROOT, insert_synthetic_row, request_body
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
-from tests.db.test_internal_work_object_dispatch_migration import _legacy_row
+from tests.api.test_work_object_dispatch import insert_synthetic_row, request_body
+from tests.db.test_internal_work_object_dispatch_migration import (
+    _apply_revision,
+    _historical_schema,
+    _legacy_row,
+    _publish_legacy,
+)
 
 NEW_COLUMNS = {"accepted_by_ai_user_id", "accepted_at", "completed_by_ai_user_id", "completed_at"}
 
 
 def apply(db, direction):
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    migration = ScriptDirectory.from_config(config).get_revision("20260920_120000").module
-    with db.sql.begin() as connection, Operations.context(MigrationContext.configure(connection)):
-        getattr(migration, direction)()
+    _apply_revision(db, "20260920_120000", direction)
 
 
 def test_upgrade_preserves_oa_legacy_dispatch_and_receipt(dispatch_db):
     db = dispatch_db
+    _historical_schema(db)
     apply(db, "downgrade")
     for external in (True, False):
         insert_synthetic_row(db, _legacy_row(external=external))
-    # Publishing needs the new projection columns; create the initial row before the roundtrip.
+    # Historical row/receipt facts are created at the revision being tested, not via the v2 API.
     apply(db, "upgrade")
-    response = db.post()
-    assert response.status_code == 201
+    assert len(_publish_legacy(db)) == 1
     before = db.rows("work_objects")
     receipts = db.rows("work_object_dispatch_receipts")
     apply(db, "downgrade")
@@ -55,9 +52,10 @@ def test_upgrade_preserves_oa_legacy_dispatch_and_receipt(dispatch_db):
 @pytest.mark.parametrize("completed", [False, True])
 def test_empty_downgrade_roundtrip_and_populated_refusal(dispatch_db, completed):
     db = dispatch_db
-    response = db.post()
-    assert response.status_code == 201
-    object_id = response.json()["items"][0]["work_object_id"]
+    _historical_schema(db)
+    object_ids = _publish_legacy(db)
+    assert len(object_ids) == 1
+    object_id = object_ids[0]
     with db.sql.begin() as connection:
         connection.execute(
             text(
@@ -130,12 +128,13 @@ def test_empty_downgrade_roundtrip_and_populated_refusal(dispatch_db, completed)
 @pytest.mark.parametrize("target", ["user", "department"])
 def test_constraints_reject_invalid_rows_and_allow_both_targets(dispatch_db, target):
     db = dispatch_db
+    _historical_schema(db)
     body = request_body()
     if target == "department":
         body["targets"] = [{"kind": "department", "department_id": "office-a"}]
-    response = db.post(body)
-    assert response.status_code == 201
-    object_id = response.json()["items"][0]["work_object_id"]
+    object_ids = _publish_legacy(db, body)
+    assert len(object_ids) == 1
+    object_id = object_ids[0]
     initial = "assigned" if target == "user" else "department_pending"
 
     def update(expression):

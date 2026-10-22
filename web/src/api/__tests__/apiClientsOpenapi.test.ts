@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -102,43 +103,31 @@ const PROJECTS = [
     input: './openapi/work-objects.openapi.json',
     target: './src/generated/work-objects/work-objects.ts',
     operations: [
-      {
-        path: '/api/v1/work-objects',
-        method: 'get',
-        operationId: 'list_work_objects_api_v1_work_objects_get',
-      },
-      {
-        path: '/api/v1/work-objects/dispatch',
-        method: 'post',
-        operationId: 'dispatch_work_objects_api_v1_work_objects_dispatch_post',
-      },
-      {
-        path: '/api/v1/work-objects/dispatch-options',
-        method: 'get',
-        operationId: 'list_dispatch_options_api_v1_work_objects_dispatch_options_get',
-      },
-      {
-        path: '/api/v1/work-objects/sync',
-        method: 'post',
-        operationId: 'sync_work_objects_api_v1_work_objects_sync_post',
-      },
-      {
-        path: '/api/v1/work-objects/{work_object_id}',
-        method: 'get',
-        operationId: 'get_work_object_api_v1_work_objects__work_object_id__get',
-      },
-      {
-        path: '/api/v1/work-objects/{work_object_id}/handling-mark',
-        method: 'patch',
-        operationId:
-          'set_work_object_handling_mark_api_v1_work_objects__work_object_id__handling_mark_patch',
-      },
-      { path: '/api/v1/work-objects/{work_object_id}/lifecycle', method: 'get',
-        operationId: 'get_work_object_lifecycle_api_v1_work_objects_work_object_id_lifecycle_get' },
-      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/commands', method: 'post',
-        operationId: 'command_work_object_lifecycle_api_v1_work_objects_work_object_id_lifecycle_commands_post' },
-      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/events', method: 'get',
-        operationId: 'list_work_object_lifecycle_events_api_v1_work_objects_work_object_id_lifecycle_events_get' },
+      { path: '/api/v1/work-object-series', method: 'get', operationId: 'list_series_api_v1_work_object_series_get' },
+      { path: '/api/v1/work-object-series', method: 'post', operationId: 'create_series_api_v1_work_object_series_post' },
+      { path: '/api/v1/work-object-series/{series_id}', method: 'get', operationId: 'get_series_api_v1_work_object_series__series_id__get' },
+      { path: '/api/v1/work-object-series/{series_id}', method: 'put', operationId: 'update_series_api_v1_work_object_series__series_id__put' },
+      { path: '/api/v1/work-object-series/{series_id}/disable', method: 'post', operationId: 'disable_series_api_v1_work_object_series__series_id__disable_post' },
+      { path: '/api/v1/work-object-series/{series_id}/enable', method: 'post', operationId: 'enable_series_api_v1_work_object_series__series_id__enable_post' },
+      { path: '/api/v1/work-object-series/{series_id}/history', method: 'get', operationId: 'series_history_api_v1_work_object_series__series_id__history_get' },
+      { path: '/api/v1/work-object-series/{series_id}/occurrences', method: 'get', operationId: 'series_occurrences_api_v1_work_object_series__series_id__occurrences_get' },
+      { path: '/api/v1/work-objects', method: 'get', operationId: 'list_work_objects_api_v1_work_objects_get' },
+      { path: '/api/v1/work-objects/attachments', method: 'post', operationId: 'upload_attachment_api_v1_work_objects_attachments_post' },
+      { path: '/api/v1/work-objects/dispatch', method: 'post', operationId: 'dispatch_work_objects_api_v1_work_objects_dispatch_post' },
+      { path: '/api/v1/work-objects/dispatch-options', method: 'get', operationId: 'list_dispatch_options_api_v1_work_objects_dispatch_options_get' },
+      { path: '/api/v1/work-objects/sync', method: 'post', operationId: 'sync_work_objects_api_v1_work_objects_sync_post' },
+      { path: '/api/v1/work-objects/{work_object_id}', method: 'get', operationId: 'get_work_object_api_v1_work_objects__work_object_id__get' },
+      { path: '/api/v1/work-objects/{work_object_id}/attachments', method: 'get', operationId: 'list_attachments_api_v1_work_objects__work_object_id__attachments_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/attachments', method: 'post', operationId: 'link_attachments_api_v1_work_objects__work_object_id__attachments_post' },
+      { path: '/api/v1/work-objects/{work_object_id}/attachments/{attachment_id}', method: 'delete', operationId: 'detach_attachment_api_v1_work_objects__work_object_id__attachments__attachment_id__delete' },
+      { path: '/api/v1/work-objects/{work_object_id}/attachments/{attachment_id}/content', method: 'get', operationId: 'download_attachment_api_v1_work_objects__work_object_id__attachments__attachment_id__content_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/handling-mark', method: 'patch', operationId: 'set_work_object_handling_mark_api_v1_work_objects__work_object_id__handling_mark_patch' },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle', method: 'get', operationId: 'get_work_object_lifecycle_api_v1_work_objects__work_object_id__lifecycle_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/commands', method: 'post', operationId: 'command_work_object_lifecycle_api_v1_work_objects__work_object_id__lifecycle_commands_post' },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/events', method: 'get', operationId: 'list_work_object_lifecycle_events_api_v1_work_objects__work_object_id__lifecycle_events_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/remarks', method: 'get', operationId: 'get_remark_api_v1_work_objects__work_object_id__remarks_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/remarks', method: 'patch', operationId: 'edit_remark_api_v1_work_objects__work_object_id__remarks_patch' },
+      { path: '/api/v1/work-objects/{work_object_id}/remarks/history', method: 'get', operationId: 'list_remark_history_api_v1_work_objects__work_object_id__remarks_history_get' },
     ],
   },
   {
@@ -204,34 +193,43 @@ function project(name: (typeof PROJECTS)[number]['project']) {
 const EXPORT_SCRIPT = String.raw`
 from __future__ import annotations
 
-import base64
 import copy
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
+from fastapi import FastAPI
+from app.api.v1.admin import make_router as admin_router
+from app.api.v1.auth import make_router as auth_router, make_require_principal
+from app.api.v1.csrf import make_require_csrf, make_csrf_protected_principal
+from app.api.v1.credential_bindings import make_router as bindings_router
+from app.api.v1.mcp import make_router as mcp_router
+from app.api.v1.me import make_router as me_router
+from app.api.v1.runtime import make_router as runtime_router
+from app.api.v1.work_objects import make_router as work_router
+from app.api.v1.work_object_series import make_router as series_router
 
-key = base64.b64encode(bytes(range(32))).decode("ascii")
-os.environ.update({
-    "ENV": "testing",
-    "OA_SOURCE_PROFILE_ID": "openapi-export",
-    "OA_TENANT_ID": "default",
-    "DATABASE_URL": "postgresql+psycopg://database.invalid/eternalai",
-    "REDIS_URL": "redis://redis.invalid:6379/0",
-    "OA_BASE_URL": "https://oa.invalid",
-    "OA_CREDENTIAL_TTL_S": "3600",
-    "SESSION_COOKIE_TTL_S": "3600",
-    "CSRF_ALLOWED_ORIGINS": "https://testserver",
-    "LLM_BASE_URL": "https://vllm.invalid/v1",
-    "LLM_MODEL": "openapi-export",
-    "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": key,
-    "ETERNALAI_IDENTITY_HMAC_KEY_B64": key,
-    "ETERNALAI_SESSION_SIGNING_KEY_B64": key,
-    "ETERNALAI_SESSION_BINDING_KEY_B64": key,
-})
 
-from app.main import create_app
+def create_app(*, work_object_service=None, session_tokens=None, session_revocations=None,
+               session_binder=None, session_cookie_ttl_seconds=3600,
+               csrf_allowed_origins=("https://testserver",)):
+    # Same HTTP factories and dependency signature, with no production composition,
+    # settings, background jobs, database engine, or application lifespan.
+    app = FastAPI(title="EternalAI", version="0.1.0")
+    principal = make_require_principal(session_tokens, session_revocations)
+    csrf = make_require_csrf(csrf_allowed_origins)
+    protected = make_csrf_protected_principal(principal, csrf)
+    app.include_router(mcp_router(None, protected), prefix="/api/v1/mcp")
+    app.include_router(auth_router(None, session_tokens, require_csrf=csrf,
+        session_revocations=session_revocations, session_cookie_ttl_seconds=session_cookie_ttl_seconds,
+        session_cookie_secure=False), prefix="/api/v1/auth")
+    app.include_router(runtime_router(None, protected, session_binder), prefix="/api/v1/runtime")
+    app.include_router(admin_router(None, protected), prefix="/api/v1/admin")
+    app.include_router(work_router(work_object_service, protected), prefix="/api/v1/work-objects")
+    app.include_router(series_router(None, protected), prefix="/api/v1/work-object-series")
+    app.include_router(me_router(None, protected), prefix="/api/v1/me")
+    app.include_router(bindings_router(None, protected), prefix="/api/v1/credential-bindings")
+    return app
 
 
 def component_refs(value: Any) -> set[tuple[str, str]]:
@@ -309,6 +307,7 @@ for target in targets:
 const webRoot = process.cwd();
 const repositoryRoot = resolve(webRoot, '..');
 const mutatorPath = './src/api/mutator.ts';
+const python = resolve(repositoryRoot, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
 
 it('maps actual completion 422 to ApiError', async () => {
   const script = EXPORT_SCRIPT.split('output_dir = Path(sys.argv[1])')[0] + String.raw`
@@ -324,8 +323,8 @@ with TestClient(create_app(
     response = client.get("/api/v1/work-objects", params={"completion": "SYNTHETIC_UNKNOWN"})
     print(json.dumps({"status": response.status_code, "body": response.json()}))
 `;
-  const result = spawnSync(process.platform === 'win32' ? 'uv.exe' : 'uv',
-    ['run', 'python', '-c', script],
+  const result = spawnSync(python,
+    ['-c', script],
     { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
@@ -359,9 +358,7 @@ it('classifies the actual Work Object directory failure by its backend code', as
 from fastapi.testclient import TestClient
 from app.api.v1.work_objects import WorkObjectService
 from app.ports.auth import Principal, PrincipalOrgContext
-from tests.api.test_work_objects import MemoryWorkObjectStore, RecordingGateway
 from tests.auth_fakes import StaticSessionTokens, MemorySessionRevocations, auth_cookies, make_session_binder
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 class FailedDirectory:
     async def read_view(self):
@@ -373,8 +370,8 @@ tokens.principal = Principal(
     org_ctx=PrincipalOrgContext(tenant_id="default", directory_user_id="synthetic-key"),
 )
 service = WorkObjectService(
-    store=MemoryWorkObjectStore(), gateway=RecordingGateway(),
-    capability_registry=StaticCapabilityRegistry(), organization_directory=FailedDirectory(),
+    store=object(), gateway=object(),
+    capability_registry=object(), organization_directory=FailedDirectory(),
 )
 with TestClient(create_app(
     work_object_service=service, session_tokens=tokens, session_revocations=MemorySessionRevocations(), session_binder=make_session_binder(),
@@ -384,8 +381,8 @@ with TestClient(create_app(
     response = client.get("/api/v1/work-objects")
     print(json.dumps({"status": response.status_code, "body": response.json()}))
 `;
-  const result = spawnSync(process.platform === 'win32' ? 'uv.exe' : 'uv',
-    ['run', 'python', '-c', script],
+  const result = spawnSync(python,
+    ['-c', script],
     { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
@@ -442,29 +439,38 @@ function relativeFiles(root: string, current = root): string[] {
     .sort();
 }
 
+function removeExportTemporaryRoot(root: string) {
+  const resolvedRoot = realpathSync(root);
+  if (dirname(resolvedRoot) !== realpathSync(tmpdir()) || !basename(resolvedRoot).startsWith('eternalai-openapi-')) {
+    throw new Error('Unexpected OpenAPI temporary directory');
+  }
+  rmSync(resolvedRoot, { recursive: true, force: true });
+}
+
 function readOpenApi(path: string): OpenApiDocument {
   return JSON.parse(readFileSync(path, 'utf8')) as OpenApiDocument;
 }
 
 describe('FastAPI-derived Orval clients', () => {
   it('declares_lifecycle_headers_errors_and_closed_command_contract', () => {
-    const document = readOpenApi(resolve(webRoot, 'openapi/work-objects.openapi.json'));
+    const document = JSON.parse(readFileSync(resolve(webRoot, 'openapi/work-objects.openapi.json'), 'utf8'));
     const base = '/api/v1/work-objects/{work_object_id}/lifecycle';
     const command = document.paths[`${base}/commands`]!.post!;
-    expect(command.parameters?.filter((parameter) => parameter.in === 'header')).toEqual([
+    expect(command.parameters?.filter((parameter: { in: string }) => parameter.in === 'header')).toEqual([
       { name: 'Idempotency-Key', in: 'header', required: true, schema: { format: 'uuid', type: 'string' } },
       { name: 'If-Match', in: 'header', required: true, schema: { pattern: '"wolc-[0-9a-f]{64}"', type: 'string' } },
     ]);
+    const commandModels = ['AssignCommand', 'AcceptCommand', 'FeedbackCommand', 'SubmitCommand', 'CompleteCommand', 'DepartmentReviewCommand', 'SubmitSummaryCommand', 'ConfirmCommand', 'ReturnCommand', 'ReviseCommand', 'WithdrawCommand', 'ExtendCommand', 'ReassignCommand'];
     expect(command.requestBody?.content?.['application/json']?.schema).toMatchObject({
       discriminator: { propertyName: 'operation' },
-      oneOf: [
-        { additionalProperties: false, properties: { operation: { const: 'accept' } }, required: ['operation'] },
-        { additionalProperties: false, properties: { operation: { const: 'feedback' }, text: { minLength: 1, maxLength: 2000 } }, required: ['text', 'operation'] },
-        { additionalProperties: false, properties: { operation: { const: 'complete' }, text: { minLength: 1, maxLength: 2000 } }, required: ['text', 'operation'] },
-      ],
+      oneOf: commandModels.map((name) => ({ $ref: `#/components/schemas/${name}` })),
     });
+    for (const name of commandModels) expect(document.components.schemas[name].additionalProperties).toBe(false);
+    expect(document.components.schemas.AcceptCommand).toMatchObject({ properties: { operation: { const: 'accept' }, handling_relation_id: { format: 'uuid' } }, required: ['operation', 'handling_relation_id'] });
+    expect(document.components.schemas.FeedbackCommand).toMatchObject({ properties: { operation: { const: 'feedback' }, text: { minLength: 1, maxLength: 2000 } }, required: ['operation', 'handling_relation_id', 'text'] });
+    expect(document.components.schemas.CompleteCommand).toMatchObject({ properties: { operation: { const: 'complete' }, text: { minLength: 1, maxLength: 2000 } }, required: ['operation', 'text'] });
     for (const operation of [document.paths[base]!.get!, command, document.paths[`${base}/events`]!.get!]) {
-      expect(Object.keys(operation.responses!)).toEqual(['200', '401', '403', '404', '409', '412', '422', '428', '503']);
+      expect(Object.keys(operation.responses!)).toEqual(['200', '401', '403', '404', '409', '412', '413', '422', '428', '503']);
       for (const response of Object.values(operation.responses!)) expect(response).toMatchObject({ headers: { 'Cache-Control': { schema: { const: 'no-store' } } } });
     }
     expect(document.paths[base]!.get!.responses!['200']).toMatchObject({ headers: { ETag: { schema: { pattern: '"wolc-[0-9a-f]{64}"' } } } });
@@ -504,10 +510,8 @@ describe('FastAPI-derived Orval clients', () => {
         }));
 
         run(
-          process.platform === 'win32' ? 'uv.exe' : 'uv',
+          python,
           [
-            'run',
-            'python',
             '-c',
             EXPORT_SCRIPT,
             temporaryOpenApi,
@@ -523,7 +527,7 @@ describe('FastAPI-derived Orval clients', () => {
         for (const target of PROJECTS) {
           const trackedSpec = resolve(webRoot, target.input);
           const regeneratedSpec = resolve(temporaryWeb, target.input);
-          expect(readFileSync(regeneratedSpec)).toEqual(readFileSync(trackedSpec));
+          expect(readFileSync(regeneratedSpec), target.project).toEqual(readFileSync(trackedSpec));
 
           const document = readOpenApi(regeneratedSpec);
           expect(Object.keys(document.paths)).toEqual(
@@ -633,13 +637,13 @@ describe('FastAPI-derived Orval clients', () => {
           const trackedFiles = relativeFiles(trackedDirectory);
           expect(relativeFiles(regeneratedDirectory)).toEqual(trackedFiles);
           for (const file of trackedFiles) {
-            expect(readFileSync(join(regeneratedDirectory, file))).toEqual(
+            expect(readFileSync(join(regeneratedDirectory, file)), `${target.project}/${file}`).toEqual(
               readFileSync(join(trackedDirectory, file)),
             );
           }
         }
       } finally {
-        rmSync(temporaryRoot, { recursive: true, force: true });
+        removeExportTemporaryRoot(temporaryRoot);
       }
     },
     120_000,
