@@ -588,7 +588,9 @@ class WorkObjectService:
             request=body,
             idempotency_key=key,
         )
-        items = [InternalWorkObjectView.model_validate(item) for item in result.items]
+        items = [
+            InternalWorkObjectView.model_validate_json(json.dumps(item)) for item in result.items
+        ]
         return DispatchWorkObjectsResponse(
             items=items, created_count=result.created_count, replayed=result.replayed
         )

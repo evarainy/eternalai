@@ -212,6 +212,9 @@ class PreparedDispatch:
 
 
 class WorkDispatchStorePort(Protocol):
+    async def replay_dispatch_receipt(
+        self, receipt: DispatchReceipt, scope: AuthorizedWorkObjectScope
+    ) -> DispatchResult: ...
     async def create_prepared_dispatch(self, prepared: PreparedDispatch) -> DispatchResult: ...
     async def get_dispatch_lifecycle(
         self, work_object_id: str, scope: AuthorizedWorkObjectScope

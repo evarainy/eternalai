@@ -70,6 +70,11 @@ class LifecycleActor:
 class _Command(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    @field_validator("reason", mode="before", check_fields=False)
+    @classmethod
+    def normalize_reason(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
 
 class AssignCommand(_Command):
     operation: Literal["assign"]
@@ -108,7 +113,7 @@ class DepartmentReviewCommand(_Command):
 
     @model_validator(mode="after")
     def rejection_reason(self) -> DepartmentReviewCommand:
-        if not self.approved and not self.reason.strip():
+        if not self.approved and not self.reason:
             raise ValueError("rejection requires a reason")
         return self
 

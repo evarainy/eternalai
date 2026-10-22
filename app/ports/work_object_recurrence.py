@@ -179,14 +179,29 @@ def local_instant(day: date, clock: time, timezone: str) -> datetime:
     return instant
 
 
-def next_scheduled(request: SeriesRequest, after: datetime, *, inclusive: bool = False) -> datetime:
+def next_scheduled(
+    request: SeriesRequest,
+    after: datetime,
+    *,
+    inclusive: bool = False,
+    skip_nonexistent: bool = False,
+    skipped_dates: list[date] | None = None,
+) -> datetime:
+    """Strict for rule edits; worker may omit gap dates and collect their calendar evidence."""
     zone = ZoneInfo(request.timezone)
     day = max(request.start_date, after.astimezone(zone).date())
     while True:
         if day.isoweekday() in request.weekdays:
-            candidate = local_instant(day, request.local_time, request.timezone)
-            if candidate > after or (inclusive and candidate == after):
-                return candidate
+            try:
+                candidate = local_instant(day, request.local_time, request.timezone)
+            except WorkDispatchError as exc:
+                if not skip_nonexistent or exc.code != "work_object_series_local_time_invalid":
+                    raise
+                if skipped_dates is not None:
+                    skipped_dates.append(day)
+            else:
+                if candidate > after or (inclusive and candidate == after):
+                    return candidate
         day += timedelta(days=1)
 
 

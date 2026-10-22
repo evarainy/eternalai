@@ -14,12 +14,14 @@ from app.infra.persistence.work_object.postgresql import (
     load_lifecycle_view_in_session,
     load_manual_root_in_session,
 )
+from app.ports.work_object import DispatchReceipt
 from app.ports.work_object_dispatch import (
     DispatchResult,
     PreparedDispatch,
     WorkDispatchError,
     dispatch_public_item,
 )
+from app.ports.work_object_scope import AuthorizedWorkObjectScope
 
 
 async def insert_prepared_dispatch(
@@ -54,7 +56,7 @@ async def insert_prepared_dispatch(
             (
                 await session.execute(
                     text(
-                        "SELECT request_fingerprint,result FROM work_object_dispatch_receip"
+                        "SELECT * FROM work_object_dispatch_receip"
                         "ts WHERE tenant_id=:tenant_id "
                         "AND initiator_ai_user_id=:initiator_ai_user_id AND operation='disp"
                         "atch' AND idempotency_key=:idempotency_key"
@@ -65,25 +67,10 @@ async def insert_prepared_dispatch(
             .mappings()
             .one()
         )
-        if winner["request_fingerprint"] != prepared.request_fingerprint:
+        committed_receipt = DispatchReceipt.model_validate(dict(winner))
+        if committed_receipt.request_fingerprint != prepared.request_fingerprint:
             raise WorkDispatchError("idempotency_key_reused")
-        # Rebuild with current scope; historical receipts cannot restore revoked relations.
-        items = []
-        for item in winner["result"]["items"]:
-            root = await load_manual_root_in_session(
-                session, item["work_object_id"], prepared.scope, for_update=True
-            )
-            lifecycle = await load_lifecycle_view_in_session(
-                session, root.work_object_id, prepared.scope
-            )
-            items.append(
-                dispatch_public_item(
-                    root.model_dump(mode="json"),
-                    [r.model_dump(mode="json") for r in lifecycle.relations],
-                )
-            )
-        recheck_scope(prepared.scope)
-        return DispatchResult(items=items, created_count=len(items), replayed=True)
+        return await replay_dispatch_receipt(session, committed_receipt, prepared.scope)
     for record in prepared.records:
         values = record.model_dump()
         await session.execute(
@@ -124,3 +111,30 @@ async def insert_prepared_dispatch(
     )
     recheck_scope(prepared.scope)
     return result
+
+
+async def replay_dispatch_receipt(
+    session: AsyncSession,
+    receipt: DispatchReceipt,
+    scope: AuthorizedWorkObjectScope,
+) -> DispatchResult:
+    """Project committed task IDs through current root/child authority, not saved results."""
+    if (
+        receipt.tenant_id != scope.principal_tenant_id
+        or receipt.initiator_ai_user_id != scope.principal_ai_user_id
+    ):
+        raise WorkDispatchError("work_object_not_found")
+    items = []
+    for item in receipt.result["items"]:
+        root = await load_manual_root_in_session(
+            session, item["work_object_id"], scope, for_update=True
+        )
+        lifecycle = await load_lifecycle_view_in_session(session, root.work_object_id, scope)
+        items.append(
+            dispatch_public_item(
+                root.model_dump(mode="json"),
+                [relation.model_dump(mode="json") for relation in lifecycle.relations],
+            )
+        )
+    recheck_scope(scope)
+    return DispatchResult(items=items, created_count=len(items), replayed=True)

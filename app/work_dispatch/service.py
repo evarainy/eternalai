@@ -336,12 +336,35 @@ class WorkDispatchService:
         self, principal: Principal, *, request: DispatchRequest, idempotency_key: UUID
     ) -> DispatchResult:
         started = self._monotonic()
+        subject = self.subject(principal)
         try:
-            prepared = await self.prepare_dispatch(
-                self.subject(principal), request=request, idempotency_key=idempotency_key
+            receipt = await self._store.get_dispatch_receipt(
+                tenant_id=subject.tenant_id,
+                initiator_ai_user_id=subject.ai_user_id,
+                idempotency_key=idempotency_key,
             )
-            await self._audit(prepared.subject, "dispatch")
-            result = await self._store.create_prepared_dispatch(prepared)
+            if receipt is not None:
+                if receipt.request_fingerprint != fingerprint(request.model_dump(mode="json")):
+                    raise WorkDispatchError("idempotency_key_reused")
+                scope = await self.build_scope(principal)
+                try:
+                    result = await self._store.replay_dispatch_receipt(receipt, scope)
+                except WorkDispatchError as exc:
+                    if exc.code not in {
+                        "organization_directory_missing",
+                        "organization_directory_stale",
+                    }:
+                        raise
+                    # Existing receipt: reduce read authority, never re-run creation policy.
+                    result = await self._store.replay_dispatch_receipt(
+                        receipt, self._scope(subject)
+                    )
+            else:
+                prepared = await self.prepare_dispatch(
+                    subject, request=request, idempotency_key=idempotency_key
+                )
+                await self._audit(prepared.subject, "dispatch")
+                result = await self._store.create_prepared_dispatch(prepared)
         except WorkDispatchError as exc:
             _LOGGER.warning(
                 "work_dispatch stage=dispatch code=%s elapsed_ms=%d",
@@ -350,7 +373,8 @@ class WorkDispatchService:
             )
             raise
         _LOGGER.info(
-            "work_dispatch stage=committed count=%d replayed=%s elapsed_ms=%d",
+            "work_dispatch stage=%s count=%d replayed=%s elapsed_ms=%d",
+            "replayed" if result.replayed else "committed",
             result.created_count,
             result.replayed,
             int((self._monotonic() - started) * 1000),
@@ -517,7 +541,9 @@ class WorkDispatchService:
             if not memberships or memberships[0].department_id != member.department_id:
                 raise WorkDispatchError("work_object_action_forbidden")
         if isinstance(command, ReassignCommand):
-            if record.dispatch_mode == "independent" and len(command.targets) != 1:
+            if (record.dispatch_mode or "independent") == "independent" and len(
+                command.targets
+            ) != 1:
                 raise WorkDispatchError("work_object_lifecycle_request_invalid")
             request = DispatchRequest(
                 kind=cast(DispatchKind, record.kind),
@@ -571,6 +597,8 @@ class WorkDispatchService:
             raise WorkDispatchError("work_object_legacy_conversion_blocked")
         assignee = record.assignee_directory_user_id
         if record.target_kind == "user":
+            # Legacy user accept already bound accepted AI to this explicit directory target.
+            # Preserve that historical pair even when the initiator performs this mutation.
             members = fresh.memberships.get(assignee or "", [])
             if len(members) != 1 or members[0].department_id != department:
                 raise WorkDispatchError("work_object_legacy_conversion_blocked")
@@ -590,11 +618,6 @@ class WorkDispatchService:
                 ):
                     raise WorkDispatchError("work_object_legacy_conversion_blocked")
                 assignee = scope.principal_directory_user_id
-        if record.accepted_by_ai_user_id is not None and (
-            record.accepted_by_ai_user_id != scope.principal_ai_user_id
-            or assignee != scope.principal_directory_user_id
-        ):
-            raise WorkDispatchError("work_object_legacy_conversion_blocked")
         return HandlingRelationRecord(
             relation_id=uuid5(
                 NAMESPACE_URL,

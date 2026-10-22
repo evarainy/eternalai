@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -643,7 +643,9 @@ class PostgreSQLWorkObjectSeriesStore:
 
     async def generate_due(self, now: datetime, prepare: PrepareOccurrence) -> GenerationSummary:
         generated = blocked = 0
+        failed_series: set[UUID] = set()
         while True:
+            row = None
             try:
                 async with self._session_factory() as session, session.begin():
                     row = (
@@ -652,9 +654,10 @@ class PostgreSQLWorkObjectSeriesStore:
                                 text(
                                     "SELECT * FROM work_object_series "
                                     "WHERE enabled AND next_due_at<=:now "
+                                    "AND NOT(series_id=ANY(CAST(:failed_series AS UUID[]))) "
                                     "ORDER BY next_due_at,series_id LIMIT 1 FOR UPDATE SKIP LOCKED"
                                 ),
-                                {"now": now},
+                                {"now": now, "failed_series": list(failed_series)},
                             )
                         )
                         .mappings()
@@ -751,11 +754,14 @@ class PostgreSQLWorkObjectSeriesStore:
                                         "occurrence": occurrence_id,
                                     },
                                 )
-                        if code is not None:
-                            blocked += 1
-                        else:
-                            generated += 1
-                    next_due = next_scheduled(_request(view), scheduled)
+                    # Advance separately: a future calendar gap is not this period's failure.
+                    skipped_dates: list[date] = []
+                    next_due = next_scheduled(
+                        _request(view),
+                        scheduled,
+                        skip_nonexistent=True,
+                        skipped_dates=skipped_dates,
+                    )
                     await session.execute(
                         text(
                             "UPDATE work_object_series SET next_due_at=:next_due "
@@ -767,7 +773,18 @@ class PostgreSQLWorkObjectSeriesStore:
                             "next_due": next_due,
                         },
                     )
+                for skipped_day in skipped_dates:
+                    _LOGGER.warning(
+                        "work_series stage=calendar_date_skipped series_id=%s local_date=%s "
+                        "code=work_object_series_local_time_invalid",
+                        view.series_id,
+                        skipped_day.isoformat(),
+                    )
                 if existing is None:
+                    if code is not None:
+                        blocked += 1
+                    else:
+                        generated += 1
                     _LOGGER.info(
                         "work_series stage=occurrence_committed series_id=%s occurrence_id=%s "
                         "state=%s code=%s",
@@ -778,7 +795,30 @@ class PostgreSQLWorkObjectSeriesStore:
                     )
             except SQLAlchemyError as exc:
                 _LOGGER.error(
-                    "work_series stage=transaction_failed code=work_object_store_unavailable"
+                    "work_series stage=transaction_rolled_back series_id=%s "
+                    "code=work_object_store_unavailable",
+                    row["series_id"] if row else None,
                 )
-                raise WorkDispatchError("work_object_store_unavailable") from exc
+                if row is None:
+                    raise WorkDispatchError("work_object_store_unavailable") from exc
+                failed_series.add(row["series_id"])
+            except WorkDispatchError as exc:
+                _LOGGER.error(
+                    "work_series stage=transaction_rolled_back series_id=%s code=%s",
+                    row["series_id"] if row else None,
+                    exc.code,
+                )
+                if row is None:
+                    raise
+                failed_series.add(row["series_id"])
+            except Exception as exc:
+                # Unknown defects do not create business blocked facts or hold up other rules.
+                _LOGGER.error(
+                    "work_series stage=series_defect_rolled_back series_id=%s error_type=%s",
+                    row["series_id"] if row else None,
+                    type(exc).__name__,
+                )
+                if row is None:
+                    raise
+                failed_series.add(row["series_id"])
         return GenerationSummary(generated=generated, blocked=blocked)

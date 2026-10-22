@@ -864,6 +864,16 @@ class PostgreSQLWorkObjectStore:
                     )
         return receipt, True
 
+    async def replay_dispatch_receipt(
+        self,
+        receipt: DispatchReceipt,
+        scope: AuthorizedWorkObjectScope,
+    ) -> DispatchResult:
+        from app.infra.persistence.work_object.dispatch_insert import replay_dispatch_receipt
+
+        async with self._session_factory() as session:
+            return await replay_dispatch_receipt(session, receipt, scope)
+
     async def create_prepared_dispatch(self, prepared: PreparedDispatch) -> DispatchResult:
         from app.infra.persistence.work_object.dispatch_insert import insert_prepared_dispatch
 

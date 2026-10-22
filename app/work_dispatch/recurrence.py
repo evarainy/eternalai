@@ -240,14 +240,19 @@ class WorkObjectSeriesScheduler:
     async def _run(self) -> None:
         _LOGGER.info("work_series stage=scheduler_started")
         while not self._stop.is_set():
-            # An infrastructure error ends this worker visibly; no silent retry-success loop.
             try:
                 await self._service.generate_due(self._clock())
-            except Exception:
-                _LOGGER.error(
-                    "work_series stage=scheduler_failed code=work_object_series_generation_failed"
-                )
+            except asyncio.CancelledError:
                 raise
+            except WorkDispatchError as exc:
+                _LOGGER.error("work_series stage=tick_failed code=%s", exc.code)
+            except Exception as exc:
+                _LOGGER.error(
+                    "work_series stage=tick_failed code=work_object_series_generation_failed "
+                    "error_type=%s",
+                    type(exc).__name__,
+                )
+            # Every failed tick waits the ordinary interval; its rolled-back work is not success.
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
             except TimeoutError:

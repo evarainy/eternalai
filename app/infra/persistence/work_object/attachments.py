@@ -115,16 +115,28 @@ async def link_attachments_in_session(
     tenant = scope.principal_tenant_id
     if handling_relation_id is not None:
         relation = (
-            await session.execute(
-                text(
-                    "SELECT relation_id FROM work_object_handling_relations "
-                    "WHERE tenant_id=:tenant "
-                    "AND work_object_id=:task AND relation_id=:relation AND superseded_at IS NULL"
-                ),
-                {"tenant": tenant, "task": work_object_id, "relation": handling_relation_id},
+            (
+                await session.execute(
+                    text(
+                        "SELECT relation_id,target_kind "
+                        "FROM work_object_handling_relations "
+                        "WHERE tenant_id=:tenant "
+                        "AND work_object_id=:task AND relation_id=:relation "
+                        "AND superseded_at IS NULL"
+                    ),
+                    {"tenant": tenant, "task": work_object_id, "relation": handling_relation_id},
+                )
             )
-        ).scalar_one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if relation is None:
+            raise WorkDispatchError("work_object_action_forbidden")
+        if (
+            purpose == "result"
+            and relation["target_kind"] == "department"
+            and visibility != "department_internal"
+        ):
             raise WorkDispatchError("work_object_action_forbidden")
     if visibility == "department_internal" and handling_relation_id is None:
         raise WorkDispatchError("work_object_attachment_invalid")
@@ -203,7 +215,7 @@ async def link_attachments_in_session(
                     await session.execute(
                         text(
                             "UPDATE work_object_attachments "
-                            "SET visibility=:visibility,linked_at=:now,"
+                            "SET linked_at=:now,"
                             "version=version+1 WHERE tenant_id=:tenant AND work_object_id=:task "
                             "AND attachment_id=:source RETURNING " + ", ".join(_META)
                         ),
@@ -582,6 +594,31 @@ class PostgreSQLWorkObjectAttachmentStore:
                         raise WorkDispatchError("precondition_required")
                     if if_match != view.etag:
                         raise WorkDispatchError("version_conflict")
+                    if request is not None and request.purpose == "result" and relation_id is None:
+                        raise WorkDispatchError("work_object_action_forbidden")
+                    if (
+                        detach_id is not None
+                        and rows[0].purpose == "result"
+                        and view.status == "awaiting_acceptance"
+                    ):
+                        raise WorkDispatchError("transition_invalid")
+                    if relation_id is not None:
+                        status = (
+                            await session.execute(
+                                text(
+                                    "SELECT status FROM work_object_handling_relations "
+                                    "WHERE tenant_id=:tenant AND work_object_id=:task "
+                                    "AND relation_id=:relation AND superseded_at IS NULL"
+                                ),
+                                {
+                                    "tenant": scope.principal_tenant_id,
+                                    "task": task,
+                                    "relation": relation_id,
+                                },
+                            )
+                        ).scalar_one()
+                        if status in {"awaiting_department_review", "submitted"}:
+                            raise WorkDispatchError("transition_invalid")
                     if request is not None:
                         await link_attachments_in_session(
                             session,
