@@ -12,6 +12,7 @@ function response(body: unknown, init?: { ok?: boolean; status?: number; statusT
     ok: init?.ok ?? true,
     status: init?.status ?? 200,
     statusText: init?.statusText ?? 'OK',
+    headers: new Headers({ 'Content-Type': 'application/json' }),
     json: vi.fn().mockResolvedValue(body),
   } as unknown as Response;
 }
@@ -211,10 +212,11 @@ it('rejects_a_draft_write_from_a_late_success_response', async () => {
     const b = draftToken();
     saveDraft(parseDraft({ title: 'B' }), b);
     saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'B' }), b);
-    release(response({ title: 'late A' }));
-    const result = await pending;
-    expect(saveDraft(parseDraft(result), a)).toBe(false);
-    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: result.title }), a)).toBe(false);
+    const latePayload = { title: 'late A' };
+    release(response(latePayload));
+    await expect(pending).rejects.toMatchObject({ status: 409, code: 'identity_changed' });
+    expect(saveDraft(parseDraft(latePayload), a)).toBe(false);
+    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: latePayload.title }), a)).toBe(false);
     expect(loadDraft(b).title).toBe('B');
     expect(loadNewSoftwareDraft(b).name).toBe('B');
   } finally { fetchSpy.mockRestore(); }
@@ -231,7 +233,7 @@ describe('logout status boundary', () => {
     await expect(customInstance({ url: '/api/v1/auth/logout', method: 'POST' })).rejects.toMatchObject({ status, code: 'logout_unconfirmed' });
     expect(useAuthStore.getState().status).toBe('authenticated');
     for (const [url, method] of [['/api/v1/auth/login', 'POST'], ['/other', 'POST'], ['/other', 'GET'], ['/api/v1/auth/logout', 'GET']] as const) {
-      await expect(customInstance({ url, method })).resolves.toEqual(payload);
+      await expect(customInstance({ url, method })).resolves.toEqual(status === 204 ? null : payload);
     }
     fetchSpy.mockRestore();
   });

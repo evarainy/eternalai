@@ -424,7 +424,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       '../../features/work-dispatch/WorkDispatchPage.tsx',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '.chipWell:focus-within {',
-      'aria-labelledby="dispatch-target-label" role="group"',
+      'role="group" aria-label="交办对象（目录选择）"',
     ],
     [
       'AI 助手页输入卡',
@@ -435,7 +435,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
     ],
   ])('%s：焦点标记符合当前控件结构，子树里也确实有人画环', (_name, tsx, css, selector, structure) => {
     expect(readSource(tsx)).toContain(structure);
-    if (structure === 'aria-labelledby="dispatch-target-label" role="group"') {
+    if (structure === 'role="group" aria-label="交办对象（目录选择）"') {
       expect(readSource(tsx)).not.toContain('data-focus-ring="host"');
     }
     expect(rule(readSource(css), selector)).toContain(
