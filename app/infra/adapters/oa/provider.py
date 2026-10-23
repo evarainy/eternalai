@@ -1426,6 +1426,10 @@ def _consume_pending_workflow_value(
         error_kind = "identity_expired"
     except OALivePermissionDenied:
         error_kind = "permission_denied"
+    except OALivePayloadInvalid as error:
+        # Record the specific code before the message is folded into a generic kind.
+        _record_pending_payload_failure("provider_transport", error)
+        error_kind = "payload_invalid"
     except OALiveProviderError:
         error_kind = "payload_invalid"
     except Exception:
