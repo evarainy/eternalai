@@ -13,7 +13,6 @@ from sqlalchemy import text
 from app.api.v1.work_objects import (
     OAWorkObjectView,
     WorkObjectService,
-    _lifecycle_view,
     _resolve_handling_capability,
     _view_from_record,
 )
@@ -62,11 +61,12 @@ from app.ports.work_object_lifecycle import (
     LifecycleMutationResult,
     LifecycleStoreError,
     can_replay_lifecycle_event,
+    compute_lifecycle_actions,
     lifecycle_etag,
     lifecycle_role_allowed,
     lifecycle_transition_allowed,
 )
-from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
+from app.ports.work_object_scope import AuthorizedWorkObjectScope
 from app.ports.work_object_search import normalize_search_query, normalize_search_value
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
@@ -95,37 +95,68 @@ class MemoryWorkObjectStore:
     @staticmethod
     def _project(record: WorkObjectRecord, scope: AuthorizedWorkObjectScope) -> WorkObjectRecord:
         if scope.principal_tenant_id != "default" and record.state_authority == "external_snapshot":
-            return record.model_copy(update={"oa_observation": OAObservation(
-                pending_state="legacy_unverified", revision=0,
-                last_seen_at=record.source_fetched_at, last_checked_at=None,
-            )})
+            return record.model_copy(
+                update={
+                    "oa_observation": OAObservation(
+                        pending_state="legacy_unverified",
+                        revision=0,
+                        last_seen_at=record.source_fetched_at,
+                        last_checked_at=None,
+                    )
+                }
+            )
         return record
 
     async def get_oa_sync_status(
         self, subject: OASyncSubject, stream: OASyncStream
     ) -> OASyncStatus:
-        return self.states.get((subject.ai_user_id, stream), OASyncStatus(
-            subject=subject, stream=stream, issued_generation=0, applied_generation=0,
-            last_attempt_status="never", last_attempt_started_at=None,
-            last_attempt_finished_at=None, last_success_at=None, last_error_code=None,
-        ))
+        return self.states.get(
+            (subject.ai_user_id, stream),
+            OASyncStatus(
+                subject=subject,
+                stream=stream,
+                issued_generation=0,
+                applied_generation=0,
+                last_attempt_status="never",
+                last_attempt_started_at=None,
+                last_attempt_finished_at=None,
+                last_success_at=None,
+                last_error_code=None,
+            ),
+        )
 
     async def begin_oa_sync(
-        self, subject: OASyncSubject, stream: OASyncStream, started_at: datetime,
+        self,
+        subject: OASyncSubject,
+        stream: OASyncStream,
+        started_at: datetime,
     ) -> OASyncTicket:
         state = await self.get_oa_sync_status(subject, stream)
-        ticket = OASyncTicket(subject=subject, stream=stream,
-                              generation=state.issued_generation + 1, started_at=started_at)
-        self.states[(subject.ai_user_id, stream)] = OASyncStatus.model_validate({
-            **state.model_dump(), "issued_generation": ticket.generation,
-            "last_attempt_status": "running", "last_attempt_started_at": started_at,
-            "last_attempt_finished_at": None, "last_error_code": None,
-        })
+        ticket = OASyncTicket(
+            subject=subject,
+            stream=stream,
+            generation=state.issued_generation + 1,
+            started_at=started_at,
+        )
+        self.states[(subject.ai_user_id, stream)] = OASyncStatus.model_validate(
+            {
+                **state.model_dump(),
+                "issued_generation": ticket.generation,
+                "last_attempt_status": "running",
+                "last_attempt_started_at": started_at,
+                "last_attempt_finished_at": None,
+                "last_error_code": None,
+            }
+        )
         return ticket
 
     async def apply_oa_pending_snapshot(
-        self, ticket: OASyncTicket, *, assignee_display_name: str,
-        collection: OAPendingWorkSnapshotCollection, fetched_at: datetime,
+        self,
+        ticket: OASyncTicket,
+        *,
+        assignee_display_name: str,
+        collection: OAPendingWorkSnapshotCollection,
+        fetched_at: datetime,
     ) -> str:
         self.apply_calls += 1
         collection = OAPendingWorkSnapshotCollection.model_validate(collection.model_dump())
@@ -135,14 +166,19 @@ class MemoryWorkObjectStore:
             or ticket.generation <= state.applied_generation
         ):
             return "superseded"
-        owned = [r for r in self.records.values() if r.state_authority == "external_snapshot"
-                 and r.assignee_ai_user_id == ticket.subject.ai_user_id]
+        owned = [
+            r
+            for r in self.records.values()
+            if r.state_authority == "external_snapshot"
+            and r.assignee_ai_user_id == ticket.subject.ai_user_id
+        ]
         if fetched_at < ticket.started_at or any(fetched_at < r.source_fetched_at for r in owned):
             raise OASyncClockInvalid()
         await self.upsert_oa_pending_workflows(
             assignee_ai_user_id=ticket.subject.ai_user_id,
             assignee_display_name=assignee_display_name,
-            snapshots=collection.workflows, fetched_at=fetched_at,
+            snapshots=collection.workflows,
+            fetched_at=fetched_at,
         )
         refs = {item.source_ref for item in collection.workflows}
         for key, record in list(self.records.items()):
@@ -150,20 +186,34 @@ class MemoryWorkObjectStore:
                 record.state_authority == "external_snapshot"
                 and record.assignee_ai_user_id == ticket.subject.ai_user_id
             ):
-                self.records[key] = record.model_copy(update={"oa_observation": OAObservation(
-                    pending_state="current" if record.source_ref in refs else "unconfirmed",
-                    revision=ticket.generation, last_seen_at=record.source_fetched_at,
-                    last_checked_at=fetched_at,
-                )})
-        self.states[(ticket.subject.ai_user_id, ticket.stream)] = OASyncStatus.model_validate({
-            **state.model_dump(), "applied_generation": ticket.generation,
-            "last_attempt_status": "succeeded", "last_attempt_finished_at": fetched_at,
-            "last_success_at": fetched_at, "last_error_code": None,
-        })
+                self.records[key] = record.model_copy(
+                    update={
+                        "oa_observation": OAObservation(
+                            pending_state="current" if record.source_ref in refs else "unconfirmed",
+                            revision=ticket.generation,
+                            last_seen_at=record.source_fetched_at,
+                            last_checked_at=fetched_at,
+                        )
+                    }
+                )
+        self.states[(ticket.subject.ai_user_id, ticket.stream)] = OASyncStatus.model_validate(
+            {
+                **state.model_dump(),
+                "applied_generation": ticket.generation,
+                "last_attempt_status": "succeeded",
+                "last_attempt_finished_at": fetched_at,
+                "last_success_at": fetched_at,
+                "last_error_code": None,
+            }
+        )
         return "applied"
 
     async def finish_oa_sync_failure(
-        self, ticket: OASyncTicket, *, failure_code: OASyncFailureCode, finished_at: datetime,
+        self,
+        ticket: OASyncTicket,
+        *,
+        failure_code: OASyncFailureCode,
+        finished_at: datetime,
     ) -> None:
         state = await self.get_oa_sync_status(ticket.subject, ticket.stream)
         if (
@@ -189,9 +239,21 @@ class MemoryWorkObjectStore:
         oa_view: OAView = "active",
         limit: int = 201,
         completion: CompletionFilter | None = None,
+        queue: str | None = None,
+        history_from: datetime | None = None,
+        history_to: datetime | None = None,
+        cursor: str | None = None,
     ) -> WorkObjectReadBatch:
         records = await self.list_for_scope(
-            scope, search_term=search_term, limit=limit, oa_view=oa_view, completion=completion
+            scope,
+            search_term=search_term,
+            limit=limit,
+            oa_view=oa_view,
+            completion=completion,
+            queue=queue,
+            history_from=history_from,
+            history_to=history_to,
+            cursor=cursor,
         )
         if scope.principal_tenant_id == "default":
             state = await self.get_oa_sync_status(
@@ -258,8 +320,10 @@ class MemoryWorkObjectStore:
                 source_workflow_type_id=snapshot.workflow_type_id,
                 source_fetched_at=fetched_at,
                 oa_observation=OAObservation(
-                    pending_state="legacy_unverified", revision=0,
-                    last_seen_at=fetched_at, last_checked_at=None,
+                    pending_state="legacy_unverified",
+                    revision=0,
+                    last_seen_at=fetched_at,
+                    last_checked_at=None,
                 ),
                 handling_mark=current.handling_mark if current else None,
                 handling_marked_by_ai_user_id=(
@@ -279,7 +343,12 @@ class MemoryWorkObjectStore:
         limit: int = 201,
         oa_view: OAView = "all",
         completion: CompletionFilter | None = None,
+        queue: str | None = None,
+        history_from: datetime | None = None,
+        history_to: datetime | None = None,
+        cursor: str | None = None,
     ) -> list[WorkObjectRecord]:
+        assert queue is None and cursor is None, "Queue/history cursors use the real Store fixture"
         self.list_calls.append(
             {
                 "assignee_ai_user_id": scope.principal_ai_user_id,
@@ -331,7 +400,8 @@ class MemoryWorkObjectStore:
             records = [
                 r
                 for r in records
-                if not isinstance(r, InternalWorkObjectRecord) or r.status != "completed"
+                if not isinstance(r, InternalWorkObjectRecord)
+                or r.status not in {"completed", "withdrawn"}
             ]
         elif completion == "completed":
             now = datetime.now(UTC)
@@ -341,7 +411,8 @@ class MemoryWorkObjectStore:
                 if isinstance(r, InternalWorkObjectRecord)
                 and r.status == "completed"
                 and r.completed_at is not None
-                and now - timedelta(days=30) <= r.completed_at <= now
+                and (history_from or now - timedelta(days=30)) <= r.completed_at
+                and r.completed_at < (history_to or now)
             ]
         return records[:limit]
 
@@ -429,8 +500,10 @@ class MemoryWorkObjectStore:
         if time.monotonic() > actor.valid_until:
             raise LifecycleStoreError("organization_directory_stale")
         previous = await self.get_lifecycle_event_for_scope(
-            work_object_id, scope, actor_ai_user_id=actor.ai_user_id,
-            idempotency_key=idempotency_key
+            work_object_id,
+            scope,
+            actor_ai_user_id=actor.ai_user_id,
+            idempotency_key=idempotency_key,
         )
         if previous is not None:
             if previous.request_fingerprint != request_fingerprint:
@@ -441,7 +514,19 @@ class MemoryWorkObjectStore:
         if not lifecycle_transition_allowed(record, command.operation):
             raise LifecycleStoreError("work_object_transition_invalid")
         if (
-            lifecycle_etag(_lifecycle_view(record, actor, None).model_dump(mode="json"))
+            lifecycle_etag(
+                {
+                    "work_object_id": record.work_object_id,
+                    "status": record.status,
+                    "version": record.version,
+                    "accepted_at": record.accepted_at.isoformat() if record.accepted_at else None,
+                    "completed_at": record.completed_at.isoformat()
+                    if record.completed_at
+                    else None,
+                    "available_commands": compute_lifecycle_actions(record, actor),
+                    "unavailable_reason": None,
+                }
+            )
             != expected_etag
         ):
             raise LifecycleStoreError("work_object_version_conflict")
@@ -507,8 +592,13 @@ class MemoryWorkObjectStore:
                 and record.owner_department_id is not None
                 and record.initiator_ai_user_id is not None
                 and (
-                    record.owner_department_id == scope.principal_department_id
-                    or record.initiator_ai_user_id == scope.principal_ai_user_id
+                    record.initiator_ai_user_id == scope.principal_ai_user_id
+                    or (
+                        record.dispatch_model_version is None
+                        and record.target_kind == "user"
+                        and record.assignee_directory_user_id == scope.principal_directory_user_id
+                        and scope.principal_directory_user_id is not None
+                    )
                 )
             )
         return record.assignee_ai_user_id == scope.principal_ai_user_id
@@ -616,14 +706,17 @@ def test_sync_keeps_unfiltered_completion_contract(dispatch_db, monkeypatch):
     assert completed.status_code == 200 and calls[-1] == "completed"
     assert [item["work_object_id"] for item in completed.json()["items"]] == [ids[1]]
     # A view expiring during projection must preserve the filter on its self-scope retry.
-    monkeypatch.setattr(db.service, "_read_expired", lambda _fresh: True)
+    monkeypatch.setattr(db.service, "_monotonic", lambda: float("inf"))
     for completion, expected in (("active", {ids[0]}), ("completed", {ids[1]})):
         calls.clear()
         fallback = db.client.get("/api/v1/work-objects", params={"completion": completion})
         assert fallback.status_code == 200
         assert calls == [completion, completion]
-        assert {item["work_object_id"] for item in fallback.json()["items"]
-                if item["state_authority"] == "internal"} == expected
+        assert {
+            item["work_object_id"]
+            for item in fallback.json()["items"]
+            if item["state_authority"] == "internal"
+        } == expected
 
 
 def _success_result(*, title: str = "Pending approval") -> ExecutionResult:
@@ -670,8 +763,10 @@ def _record(
         source_workflow_type_id="workflow-1",
         source_fetched_at=NOW - timedelta(minutes=index),
         oa_observation=OAObservation(
-            pending_state="legacy_unverified", revision=0,
-            last_seen_at=NOW - timedelta(minutes=index), last_checked_at=None,
+            pending_state="legacy_unverified",
+            revision=0,
+            last_seen_at=NOW - timedelta(minutes=index),
+            last_checked_at=None,
         ),
         handling_mark=None,
         handling_marked_by_ai_user_id=None,
@@ -806,6 +901,13 @@ def test_api_serializes_the_internal_arm_without_oa_snapshot_fields() -> None:
             "work_object_id": "work-internal-1",
             "accepted_at": None,
             "completed_at": None,
+            "dispatch_model_version": None,
+            "dispatch_mode": None,
+            "completion_mode": None,
+            "withdrawn_at": None,
+            "relations": [],
+            "frozen": False,
+            "series_id": None,
             "title": None,
             "requirement": None,
             "receipt_requirement": None,
@@ -1397,6 +1499,7 @@ def test_visibility_reads_current_directory_on_each_request(
     class Directory:
         async def read_view(self):
             from app.ports.organization_directory import OrganizationDirectoryReadView
+
             now = datetime.now(UTC)
             lookups.append("synthetic-directory-user")
             return OrganizationDirectoryReadView(
@@ -1421,11 +1524,11 @@ def test_visibility_reads_current_directory_on_each_request(
             return OrganizationDepartment(department_id=department_id, display_name="Synthetic")
 
     def capture_scope(**kwargs: Any) -> AuthorizedWorkObjectScope:
-        scope = compute_visibility_scope(**kwargs)
+        scope = AuthorizedWorkObjectScope(**kwargs)
         scopes.append(scope)
         return scope
 
-    monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", capture_scope)
+    monkeypatch.setattr("app.work_dispatch.service.AuthorizedWorkObjectScope", capture_scope)
     service = WorkObjectService(
         store=MemoryWorkObjectStore([_record()]),
         gateway=RecordingGateway(_success_result()),
@@ -1477,7 +1580,7 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
             principal_department_id=None,
         )
 
-    monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", inject_scope)
+    monkeypatch.setattr("app.work_dispatch.service.AuthorizedWorkObjectScope", inject_scope)
     service = WorkObjectService(
         store=MemoryWorkObjectStore([_record(), _record(owner="user-b")]),
         gateway=RecordingGateway(_success_result()),
@@ -1504,6 +1607,10 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
                 "principal_tenant_id": "default",
                 "principal_ai_user_id": "user-a",
                 "principal_department_id": None,
+                "principal_directory_user_id": None,
+                "responsible_department_ids": frozenset(),
+                "directory_snapshot_version": None,
+                "valid_until": None,
             }
         ]
         * 3
@@ -1574,7 +1681,7 @@ def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) 
 def test_directory_failure_does_not_expose_join_key_or_return_success(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from fastapi import HTTPException
+    from app.ports.work_object_dispatch import WorkDispatchError
 
     class FailedDirectory:
         async def read_view(self):
@@ -1598,24 +1705,35 @@ def test_directory_failure_does_not_expose_join_key_or_return_success(
             directory_user_id="synthetic-private-join-key", tenant_id="default"
         ),
     )
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(WorkDispatchError) as error:
         asyncio.run(service.list_for_principal(principal))
-    assert error.value.status_code == 503
-    assert error.value.detail == {
+    assert error.value.code == "organization_directory_unavailable"
+    assert error.value.__suppress_context__ is True
+    tokens = StaticSessionTokens(roles=("user",))
+    tokens.principal = principal
+    client = TestClient(
+        create_app(
+            work_object_service=service,
+            session_revocations=MemorySessionRevocations(),
+            session_tokens=tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+    response = client.get("/api/v1/work-objects")
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
         "code": "organization_directory_unavailable",
         "message": "Organization directory is unavailable.",
     }
-    assert error.value.__suppress_context__ is True
-    assert "synthetic-private-join-key" not in str(error.value) + caplog.text
+    assert "synthetic-private-join-key" not in str(error.value) + response.text + caplog.text
     assert store.list_calls == []
 
 
-def test_department_and_initiator_scope_reaches_real_store(dispatch_db, monkeypatch) -> None:
-    from app.ports import work_object_scope as policy
-
-    monkeypatch.setattr(
-        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
-    )
+def test_department_and_initiator_scope_reaches_real_store(dispatch_db) -> None:
     from tests.api.test_work_object_dispatch import (
         assert_created,
         cross_department_body,
@@ -1625,53 +1743,60 @@ def test_department_and_initiator_scope_reaches_real_store(dispatch_db, monkeypa
     )
 
     db = dispatch_db
-    sent = assert_created(db, db.post(cross_department_body()))
+    sent = assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
     db.actor("other-head", "office-c", "75")
     local_response = db.post(
         request_body(targets=[{"kind": "department", "department_id": "office-a"}])
     )
     assert local_response.status_code == 201
     local_id = local_response.json()["items"][0]["work_object_id"]
-    unrelated = assert_created(db, db.post(cross_department_body()))
-    insert_synthetic_row(db, manual_row(
-        db, work_object_id="synthetic-other-tenant", tenant_id="synthetic-other",
-        owner_department_id="office-a", initiator_ai_user_id="ai-sender",
-    ))
-    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
+    unrelated = assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
+    insert_synthetic_row(
+        db,
+        manual_row(
+            db,
+            work_object_id="synthetic-other-tenant",
+            tenant_id="synthetic-other",
+            owner_department_id="office-a",
+            initiator_ai_user_id="ai-sender",
+        ),
+    )
     db.actor("sender", "office-a", "75")
     own = assert_created(db, db.post())
     denied = db.post(cross_department_body())
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "cross_department_dispatch_denied"
+    assert {
+        item["work_object_id"] for item in db.client.get("/api/v1/work-objects").json()["items"]
+    } == {sent["work_object_id"], local_id, own["work_object_id"]}
     db.actor("sender", "office-a", None)
     visible = db.client.get("/api/v1/work-objects")
     assert visible.status_code == 200
     assert {item["work_object_id"] for item in visible.json()["items"]} == {
         sent["work_object_id"],
-        local_id,
         own["work_object_id"],
     }
-    for item_id in (sent["work_object_id"], local_id):
-        assert db.client.get("/api/v1/work-objects/" + item_id).status_code == 200
+    assert db.client.get("/api/v1/work-objects/" + sent["work_object_id"]).status_code == 200
+    assert db.client.get("/api/v1/work-objects/" + local_id).status_code == 404
     assert db.client.get("/api/v1/work-objects/" + unrelated["work_object_id"]).status_code == 404
     assert db.client.get("/api/v1/work-objects/synthetic-other-tenant").status_code == 404
 
 
 @pytest.mark.parametrize("missing", [False, True])
 def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, monkeypatch, missing):
-    from app.ports import work_object_scope as policy
-
-    monkeypatch.setattr(
-        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
-    )
     from tests.api.test_work_object_dispatch import assert_created, expire_directory, request_body
+
     db = dispatch_db
     own = assert_created(db, db.post())["work_object_id"]
     db.actor("synthetic-other-sender", "office-c", "75")
     result = db.post(request_body(targets=[{"kind": "department", "department_id": "office-a"}]))
     assert result.status_code == 201
     departmental = result.json()["items"][0]["work_object_id"]
-    db.actor("sender", "office-a", None)
+    db.actor("sender", "office-a", "75")
     assert {
         item["work_object_id"] for item in db.client.get("/api/v1/work-objects").json()["items"]
     } == {own, departmental}
@@ -1685,12 +1810,13 @@ def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, monkeypatc
     else:
         expire_directory(db)
     for suffix in ("", "?q=Synthetic"):
-        response = db.client.get("/api/v1/work-objects"+suffix)
+        response = db.client.get("/api/v1/work-objects" + suffix)
         assert response.status_code == 200
         assert [item["work_object_id"] for item in response.json()["items"]] == [own]
-    assert db.client.get("/api/v1/work-objects/"+own).status_code == 200
-    assert db.client.get("/api/v1/work-objects/"+departmental).status_code == 404
+    assert db.client.get("/api/v1/work-objects/" + own).status_code == 200
+    assert db.client.get("/api/v1/work-objects/" + departmental).status_code == 404
     from tests.auth_fakes import TEST_CSRF_HEADERS
+
     db.service._gateway = RecordingGateway(_success_result())
     synced = db.client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
     assert synced.status_code == 200
@@ -1700,71 +1826,71 @@ def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, monkeypatc
 
 
 def test_expiry_before_read_response_requeries_self_scope(dispatch_db, monkeypatch):
-    from app.ports import work_object_scope as policy
-
-    monkeypatch.setattr(
-        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
-    )
     from tests.api.test_work_object_dispatch import assert_created, request_body
+
     db = dispatch_db
     own = assert_created(db, db.post())["work_object_id"]
     db.actor("synthetic-other-sender", "office-c", "75")
     result = db.post(request_body(targets=[{"kind": "department", "department_id": "office-a"}]))
     assert result.status_code == 201
-    db.actor("sender", "office-a", None)
-    ticks = [0.0]
+    db.actor("sender", "office-a", "75")
+    initial_tick = time.monotonic()
+    ticks = [initial_tick]
     db.service._monotonic = lambda: ticks[0]
+    db.service.dispatch._monotonic = lambda: ticks[0]
     calls = []
     original = db.store.list_with_oa_sync_for_scope
+
     async def delayed(scope, **kwargs):
         calls.append((scope, kwargs))
         records = await original(scope, **kwargs)
-        ticks[0] = 172801.0
+        ticks[0] = initial_tick + 172801.0
         return records
+
     monkeypatch.setattr(db.store, "list_with_oa_sync_for_scope", delayed)
     response = db.client.get("/api/v1/work-objects?q=Synthetic")
     assert response.status_code == 200
     assert [item["work_object_id"] for item in response.json()["items"]] == [own]
-    assert [scope.principal_department_id for scope, _ in calls] == ["office-a", None]
+    assert [scope.responsible_department_ids for scope, _ in calls] == [
+        frozenset({"office-a"}), frozenset()
+    ]
+    assert all(scope.principal_directory_user_id == "sender" for scope, _ in calls)
     assert calls[0][1] == calls[1][1]
     original_get = db.store.get_for_scope
     detail_calls = []
+
     async def delayed_get(identity, scope):
-        detail_calls.append(scope.principal_department_id)
+        detail_calls.append(scope.responsible_department_ids)
         record = await original_get(identity, scope)
-        ticks[0] = 172801.0
+        ticks[0] = initial_tick + 172801.0
         return record
+
     monkeypatch.setattr(db.store, "get_for_scope", delayed_get)
-    ticks[0] = 0.0
-    assert db.client.get("/api/v1/work-objects/"+own).status_code == 200
-    assert detail_calls == ["office-a", None]
-    ticks[0] = 0.0
+    ticks[0] = initial_tick
+    assert db.client.get("/api/v1/work-objects/" + own).status_code == 200
+    assert detail_calls == [frozenset({"office-a"}), frozenset()]
+    ticks[0] = initial_tick
     detail_calls.clear()
     departmental = result.json()["items"][0]["work_object_id"]
-    assert db.client.get("/api/v1/work-objects/"+departmental).status_code == 404
-    assert detail_calls == ["office-a", None]
+    assert db.client.get("/api/v1/work-objects/" + departmental).status_code == 404
+    assert detail_calls == [frozenset({"office-a"}), frozenset()]
 
 
 def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(
     dispatch_db, monkeypatch
 ) -> None:
-    from app.ports import work_object_scope as policy
-
-    monkeypatch.setattr(
-        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
-    )
     from uuid import uuid4
 
     from tests.api.test_work_object_dispatch import request_body, run
 
     db = dispatch_db
-    db.membership("recipient-two", "office-b")
+    db.membership("recipient-two", "office-a")
     key = uuid4()
     response = db.post(
         request_body(
             targets=[
-                {"kind": "user", "directory_user_id": user, "department_id": "office-b"}
-                for user in ("recipient", "recipient-two")
+                {"kind": "user", "directory_user_id": user, "department_id": "office-a"}
+                for user in ("local-recipient", "recipient-two")
             ]
         ),
         key=str(key),
@@ -2001,10 +2127,18 @@ def test_background_sync_keeps_auth_upstream_and_local_failure_classes(
 
 def _default_client(store, gateway) -> TestClient:
     tokens = StaticSessionTokens(roles=("user",))
-    tokens.principal = Principal(ai_user_id="user-a", display_name="User A", roles=("user",),
-                                 org_ctx=PrincipalOrgContext(tenant_id="default"))
-    service = WorkObjectService(store=store, gateway=gateway,
-                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    tokens.principal = Principal(
+        ai_user_id="user-a",
+        display_name="User A",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
+    )
+    service = WorkObjectService(
+        store=store,
+        gateway=gateway,
+        capability_registry=StaticCapabilityRegistry(),
+        clock=lambda: NOW,
+    )
     client = TestClient(
         create_app(
             work_object_service=service,
@@ -2022,9 +2156,16 @@ def _default_client(store, gateway) -> TestClient:
 
 
 def _empty_success_result() -> ExecutionResult:
-    return ExecutionResult(status="completed", trace_id="trace-empty", data={
-        "workflows": [], "returned_count": 0, "authoritative_count": 0, "is_complete": True,
-    })
+    return ExecutionResult(
+        status="completed",
+        trace_id="trace-empty",
+        data={
+            "workflows": [],
+            "returned_count": 0,
+            "authoritative_count": 0,
+            "is_complete": True,
+        },
+    )
 
 
 def test_complete_empty_snapshot_history_search_default_and_reappearance() -> None:
@@ -2056,8 +2197,11 @@ def test_complete_empty_snapshot_history_search_default_and_reappearance() -> No
     assert detail.json()["source_fetched_at"] == original.source_fetched_at.isoformat().replace(
         "+00:00", "Z"
     )
-    marked = client.patch(f"/api/v1/work-objects/{original.work_object_id}/handling-mark",
-                          json={"mark": "handled_elsewhere"}, headers=TEST_CSRF_HEADERS)
+    marked = client.patch(
+        f"/api/v1/work-objects/{original.work_object_id}/handling-mark",
+        json={"mark": "handled_elsewhere"},
+        headers=TEST_CSRF_HEADERS,
+    )
     assert marked.status_code == 200
     assert marked.json()["handling_action"] == "view_only"
     assert marked.json()["oa_observation"]["pending_state"] == "unconfirmed"
@@ -2068,14 +2212,19 @@ def test_complete_empty_snapshot_history_search_default_and_reappearance() -> No
     assert returned.json()["items"][0]["handling_mark"] == "handled_elsewhere"
     assert returned.json()["items"][0]["oa_observation"]["pending_state"] == "current"
     assert store.apply_calls == 2
-    assert "cache-control" not in result.headers
-    assert "cache-control" not in detail.headers
+    assert result.headers["cache-control"] == "no-store"
+    assert detail.headers["cache-control"] == "no-store"
 
 
-@pytest.mark.parametrize("changes", [
-    {"is_complete": False}, {"returned_count": 2}, {"authoritative_count": 2},
-    {"workflows": [{"todo_id": "bad"}]},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"is_complete": False},
+        {"returned_count": 2},
+        {"authoritative_count": 2},
+        {"workflows": [{"todo_id": "bad"}]},
+    ],
+)
 def test_partial_and_malformed_batches_preserve_facts_and_report_diagnostic(changes) -> None:
     original = _record()
     store = MemoryWorkObjectStore([original])
@@ -2088,9 +2237,14 @@ def test_partial_and_malformed_batches_preserve_facts_and_report_diagnostic(chan
     assert store.records == {original.work_object_id: original}
     assert store.apply_calls == 0
     sync = client.get("/api/v1/work-objects").json()["oa_sync"]
-    assert sync == {"status": "failed", "revision": 0, "attempt_revision": 1,
-                    "last_attempt_at": NOW.isoformat().replace("+00:00", "Z"),
-                    "last_success_at": None, "failure_code": "invalid_response"}
+    assert sync == {
+        "status": "failed",
+        "revision": 0,
+        "attempt_revision": 1,
+        "last_attempt_at": NOW.isoformat().replace("+00:00", "Z"),
+        "last_success_at": None,
+        "failure_code": "invalid_response",
+    }
 
 
 def test_commit_ack_loss_reports_unknown_without_reapplying_or_recording_failure() -> None:
@@ -2134,10 +2288,18 @@ def test_background_default_reconciliation_does_not_read_directory_or_list() -> 
             raise AssertionError("background must not list")
 
     store = NoReads([_record()])
-    service = WorkObjectService(store=store, gateway=RecordingGateway(_empty_success_result()),
-                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
-    principal = Principal(ai_user_id="user-a", display_name="A", roles=("user",),
-                           org_ctx=PrincipalOrgContext(tenant_id="default"))
+    service = WorkObjectService(
+        store=store,
+        gateway=RecordingGateway(_empty_success_result()),
+        capability_registry=StaticCapabilityRegistry(),
+        clock=lambda: NOW,
+    )
+    principal = Principal(
+        ai_user_id="user-a",
+        display_name="A",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
+    )
     asyncio.run(service.sync_for_background(principal))
     assert store.records[_record().work_object_id].oa_observation.pending_state == "unconfirmed"
     assert store.states[("user-a", "pending")].last_attempt_status == "succeeded"
@@ -2178,9 +2340,13 @@ def test_online_diagnostic_write_failure_remains_fixed_503(error_code):
 
     original = _record()
     store = DiagnosticFailure([original])
-    gateway = RecordingGateway(ExecutionResult(
-        status="failed", trace_id="synthetic-trace", error_code=error_code,
-    ))
+    gateway = RecordingGateway(
+        ExecutionResult(
+            status="failed",
+            trace_id="synthetic-trace",
+            error_code=error_code,
+        )
+    )
     client = _default_client(store, gateway)
     response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
     assert response.status_code == 503
@@ -2222,9 +2388,15 @@ def test_http_real_commit_ack_loss_reloads_published_empty_snapshot(dispatch_db,
         return await original_finish(*args, **kwargs)
 
     monkeypatch.setattr(db.store, "finish_oa_sync_failure", record_finish)
-    monkeypatch.setattr(db.store, "_session_factory", async_sessionmaker(
-        db.engine, class_=LostApplyAcknowledgement, expire_on_commit=False,
-    ))
+    monkeypatch.setattr(
+        db.store,
+        "_session_factory",
+        async_sessionmaker(
+            db.engine,
+            class_=LostApplyAcknowledgement,
+            expire_on_commit=False,
+        ),
+    )
     gateway.result = _empty_success_result()
     response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
     assert response.status_code == 503
@@ -2243,12 +2415,18 @@ def test_http_real_commit_ack_loss_reloads_published_empty_snapshot(dispatch_db,
     assert [r["work_object_id"] for r in history.json()["items"]] == [work_id]
     assert history.json()["items"][0]["oa_observation"]["revision"] == 2
     with db.sql.connect() as connection:
-        assert connection.execute(text(
-            "SELECT last_attempt_status FROM oa_work_sync_state"
-        )).scalar_one() == "succeeded"
-        assert connection.execute(text(
-            "SELECT pending_state FROM oa_work_pending_observations"
-        )).scalar_one() == "unconfirmed"
+        assert (
+            connection.execute(
+                text("SELECT last_attempt_status FROM oa_work_sync_state")
+            ).scalar_one()
+            == "succeeded"
+        )
+        assert (
+            connection.execute(
+                text("SELECT pending_state FROM oa_work_pending_observations")
+            ).scalar_one()
+            == "unconfirmed"
+        )
 
 
 def test_real_commit_ack_loss_preserves_published_state_and_late_failure(dispatch_db):
@@ -2270,9 +2448,14 @@ def test_real_commit_ack_loss_preserves_published_state_and_late_failure(dispatc
             async_sessionmaker(db.engine, class_=LostAcknowledgement)
         )
         with pytest.raises(OASyncOutcomeUnknown):
-            await uncertain.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
-                collection=OAPendingWorkSnapshotCollection(workflows=[], returned_count=0,
-                    authoritative_count=0, is_complete=True), fetched_at=NOW)
+            await uncertain.apply_oa_pending_snapshot(
+                ticket,
+                assignee_display_name="Synthetic",
+                collection=OAPendingWorkSnapshotCollection(
+                    workflows=[], returned_count=0, authoritative_count=0, is_complete=True
+                ),
+                fetched_at=NOW,
+            )
         await db.store.finish_oa_sync_failure(
             ticket, failure_code="storage_unavailable", finished_at=NOW
         )
@@ -2288,15 +2471,25 @@ def test_nondefault_legacy_sync_never_touches_default_observation_state(dispatch
     from tests.api.test_work_object_dispatch import run
 
     db = dispatch_db
-    principal = Principal(ai_user_id="user-a", display_name="Synthetic", roles=(),
-                          org_ctx=PrincipalOrgContext(tenant_id="default"))
-    service = WorkObjectService(store=db.store, gateway=RecordingGateway(),
-                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    principal = Principal(
+        ai_user_id="user-a",
+        display_name="Synthetic",
+        roles=(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
+    )
+    service = WorkObjectService(
+        store=db.store,
+        gateway=RecordingGateway(),
+        capability_registry=StaticCapabilityRegistry(),
+        clock=lambda: NOW,
+    )
 
     def side_tables():
         with db.sql.connect() as connection:
-            return [list(connection.execute(text("SELECT * FROM " + table)).mappings())
-                    for table in ("oa_work_sync_state", "oa_work_pending_observations")]
+            return [
+                list(connection.execute(text("SELECT * FROM " + table)).mappings())
+                for table in ("oa_work_sync_state", "oa_work_pending_observations")
+            ]
 
     run(service.sync_for_background(principal))
     before = side_tables()

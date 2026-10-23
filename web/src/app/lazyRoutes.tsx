@@ -15,6 +15,7 @@ const LazyMessagesPage = lazy(() => import('../features/messages/MessagesPage'))
 const LazyWorkDispatchPage = lazy(() =>
   import('../features/work-dispatch/WorkDispatchPage'),
 );
+const LazyWorkObjectSeriesPage = lazy(() => import('../features/work-dispatch/WorkObjectSeriesPage'));
 const LazyWorkObjectSearchPage = lazy(() =>
   import('../features/work-dispatch/WorkObjectSearchPage'),
 );
@@ -38,6 +39,7 @@ export interface LazyRouteComponents {
   LazyTasksPage: ComponentType;
   LazyWorkDispatchPage: ComponentType;
   LazyWorkObjectSearchPage: ComponentType;
+  LazyWorkObjectSeriesPage: ComponentType;
   LazyWorkObjectsPage: ComponentType;
 }
 
@@ -54,5 +56,6 @@ export const lazyRouteComponents: LazyRouteComponents = {
   LazyTasksPage,
   LazyWorkDispatchPage,
   LazyWorkObjectSearchPage,
+  LazyWorkObjectSeriesPage,
   LazyWorkObjectsPage,
 };

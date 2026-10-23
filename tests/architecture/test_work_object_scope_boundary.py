@@ -67,7 +67,13 @@ def test_scope_allowlists_are_exact_module_level_frozenset_literals() -> None:
     assert isinstance(expression, ast.Call)
     assert isinstance(expression.func, ast.Name) and expression.func.id == "frozenset"
     assert expression.args == [] and expression.keywords == []
+    for name in ("_UNIT_LEADER_JOBTITLE_IDS", "_SUPERVISING_LEADER_JOBTITLE_IDS"):
+        expression = assignments[name]
+        assert isinstance(expression, ast.Call)
+        assert isinstance(expression.func, ast.Name) and expression.func.id == "frozenset"
+        assert expression.args == [] and expression.keywords == []
     from app.ports import work_object_scope as policy
+
     assert policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS == frozenset()
     assert not (policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS & policy._PRISON_AREA_DEPARTMENT_IDS)
 
@@ -86,6 +92,8 @@ def test_scope_module_has_no_environment_configuration_or_io_dependencies() -> N
         "bool",
         "DispatchAuthorizationDecision",
         "AuthorizedWorkObjectScope",
+        "is_department_head",
+        "is_leader",
     }
     for node in ast.walk(tree):
         assert not isinstance(node, (ast.Import, ast.Await, ast.AsyncFunctionDef))
@@ -135,12 +143,6 @@ def test_work_object_routes_and_store_calls_use_scoped_boundary() -> None:
     for method_name, store_call, scope_position in (
         ("list_for_principal", "list_with_oa_sync_for_scope", 0),
         ("get_for_principal", "get_for_scope", 1),
-        ("get_lifecycle_for_principal", "get_for_scope", 1),
-        ("list_lifecycle_events_for_principal", "get_for_scope", 1),
-        ("list_lifecycle_events_for_principal", "list_lifecycle_events_for_scope", 1),
-        ("command_lifecycle_for_principal", "get_for_scope", 1),
-        ("command_lifecycle_for_principal", "get_lifecycle_event_for_scope", 1),
-        ("command_lifecycle_for_principal", "apply_lifecycle_command_for_scope", 1),
         ("set_handling_mark_for_principal", "set_handling_mark_for_scope", 1),
     ):
         method = next(
@@ -158,3 +160,48 @@ def test_work_object_routes_and_store_calls_use_scoped_boundary() -> None:
         assert len(calls) == 1
         argument = calls[0].args[scope_position]
         assert isinstance(argument, ast.Name) and argument.id == "scope"
+    neutral = ast.parse((root / "app/work_dispatch/service.py").read_text(encoding="utf-8"))
+    service = next(
+        node
+        for node in neutral.body
+        if isinstance(node, ast.ClassDef) and node.name == "WorkDispatchService"
+    )
+    for method_name, store_call, expected_calls in (
+        ("get_lifecycle_for_principal", "get_dispatch_lifecycle", 2),
+        ("list_lifecycle_events_for_principal", "get_dispatch_events", 2),
+        ("command_lifecycle_for_principal", "get_for_scope", 1),
+        ("command_lifecycle_for_principal", "get_lifecycle_event_for_scope", 1),
+        ("command_lifecycle_for_principal", "command_dispatch_lifecycle", 1),
+        ("get_remark", "get_remark", 2),
+        ("edit_remark", "edit_remark", 1),
+        ("list_remark_history", "list_remark_history", 2),
+    ):
+        method = next(
+            node
+            for node in service.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == method_name
+        )
+        calls = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == store_call
+        ]
+        assert len(calls) == expected_calls
+        for call in calls:
+            argument = call.args[1]
+            assert (
+                (isinstance(argument, ast.Name) and argument.id == "scope")
+                or (
+                    isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Attribute)
+                    and argument.func.attr in {"_scope", "build_scope"}
+                )
+                or (
+                    isinstance(argument, ast.Await)
+                    and isinstance(argument.value, ast.Call)
+                    and isinstance(argument.value.func, ast.Attribute)
+                    and argument.value.func.attr == "build_scope"
+                )
+            )

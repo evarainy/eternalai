@@ -167,3 +167,7 @@
   font-size: var(--workbench-font-auxiliary);
   line-height: var(--workbench-line-height);
 }
+.historyFilters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.historyFilters :global(.ant-select) { min-width: 240px; }
+.historyFilters label { display: flex; align-items: center; gap: 8px; }
+.historyFilters input[type='date'] { min-height: 36px; padding: 5px 9px; border: 1px solid var(--workbench-edge); border-radius: var(--workbench-radius-control); color: var(--workbench-text); background: var(--workbench-field-fill); font: inherit; }

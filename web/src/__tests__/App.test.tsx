@@ -720,9 +720,8 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: '任务交办' }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText('刷新前如已点过发布：结果待确认，请先到工作事项核对。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。'),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/草稿仅在本次会话内暂存，刷新后需到工作事项核对先前发布结果/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '核对工作事项' })).toHaveAttribute('href', '/work-objects');
     expect(screen.getByLabelText('截止时间')).toHaveAttribute(
       'type',
       'datetime-local',

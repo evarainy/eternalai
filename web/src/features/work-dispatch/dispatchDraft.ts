@@ -1,5 +1,6 @@
 import { createSessionDraftStore, LEGACY_DISPATCH_DRAFT_KEY } from '../../stores/sessionDraftStore';
 import type { DraftSessionToken } from '../../stores/sessionDraftStore';
+import type { CompletionMode, DispatchMode } from './dispatchApi';
 
 /** 草稿字段规范化与当前认证会话内的显式快照；不持久化。 */
 
@@ -25,6 +26,8 @@ export const DEFAULT_REMINDERS: readonly ReminderChoice[] = [
 ];
 
 export interface DispatchDraft {
+  dispatchMode: DispatchMode;
+  completionMode: CompletionMode;
   /** 顶部一句话输入。 */
   brief: string;
   kind: DispatchKind;
@@ -48,6 +51,8 @@ export interface DispatchDraft {
 }
 
 export const EMPTY_DRAFT: DispatchDraft = {
+  dispatchMode: 'independent',
+  completionMode: 'submit_completes',
   brief: '',
   kind: '通知',
   title: '',
@@ -95,6 +100,8 @@ export function parseDraft(raw: unknown): DispatchDraft {
       )
     : [...DEFAULT_REMINDERS];
   return {
+    dispatchMode: candidate.dispatchMode === 'collaborative' ? 'collaborative' : 'independent',
+    completionMode: candidate.completionMode === 'confirm_required' ? 'confirm_required' : 'submit_completes',
     brief: textField(candidate.brief),
     kind: isDispatchKind(candidate.kind) ? candidate.kind : EMPTY_DRAFT.kind,
     title: textField(candidate.title),

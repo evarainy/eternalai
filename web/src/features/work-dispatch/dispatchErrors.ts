@@ -9,6 +9,10 @@ const shared: Record<string, DispatchFailure> = {
   '403:not_department_head': { text: '当前账号没有任务派发权限；请联系管理员核对。', category: 'reject' },
   '403:cross_department_dispatch_denied': { text: '所选对象不在可派发范围；请重新读取候选并核对。', category: 'reject' },
   '404:dispatch_target_not_found': { text: '部分对象已无法确认；请返回部门首页重载核对。', category: 'reject' },
+  '403:dispatch_department_head_missing': { text: '所选部门没有唯一可解析负责人，本批未创建，请核对目录。', category: 'reject' },
+  '403:dispatch_department_head_ambiguous': { text: '所选部门存在多名负责人，本批未创建，请核对目录。', category: 'reject' },
+  '409:dispatch_department_head_missing': { text: '所选部门没有可解析负责人，本批未创建，请核对目录。', category: 'reject' },
+  '409:dispatch_department_head_ambiguous': { text: '所选部门存在多名负责人，本批未创建，请核对目录。', category: 'reject' },
   '503:organization_directory_missing': { text: '目录尚未完成首次同步；暂不能选人或发布，请联系维护人员。', category: 'directory' },
   '503:organization_directory_stale': { text: '目录已过期；请等待同步恢复后重载并核对。', category: 'directory' },
   '503:organization_directory_unavailable': { text: '部门和人员目录暂时不可用；请主动重试读取目录。', category: 'directory' },
@@ -33,7 +37,37 @@ const postErrors: Record<string, DispatchFailure> = {
 
 export function dispatchFailure(method: 'GET' | 'POST', error: unknown): DispatchFailure {
   const match = error instanceof ApiError ? (method === 'GET' ? getErrors : postErrors)[`${error.status}:${error.code}`] : undefined;
-  return match ?? (method === 'GET'
+  if (match) return match;
+  if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+    return { text: '当前身份不能访问该对象或执行此操作，已清除原引用，请重新读取核对。', category: 'reject' };
+  }
+  if (error instanceof ApiError && error.status === 422) {
+    return { text: '请求信息有误，请核对输入后重新提交。', category: 'reject' };
+  }
+  return method === 'GET'
     ? { text: '目录读取失败；请重载目录或联系维护人员。', category: 'read' }
-    : { text: '结果待确认；请主动重试原请求，或到工作事项核对。', category: 'uncertain' });
+    : { text: '结果待确认；请主动重试原请求，或到工作事项核对。', category: 'uncertain' };
+}
+
+export function accessLost(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 404);
+}
+
+/** Only bounded request metadata. Never pass server messages or business values. */
+export function logDispatchFailure(operation: string, error: unknown): void {
+  console.warn('[work-dispatch]', { stage: 'request_failed', operation,
+    status: error instanceof ApiError ? error.status : undefined,
+    code: error instanceof ApiError ? error.code : 'transport_or_contract_error' });
+}
+
+export function seriesFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return '登录状态已失效，请重新登录。';
+    if (error.status === 403 || error.status === 404) return '周期规则或关联事项当前不可访问，已清除原展示。';
+    if (error.status === 412) return '规则已更新，请重新读取后修改；尚未覆盖最新内容。';
+    if (error.code === 'idempotency_key_reused') return '请求标识与内容不一致，请核对原操作结果。';
+    if (error.status === 422) return '请核对规则时区、星期、日期、截止表达及派发模板。';
+    if (error.code.startsWith('organization_directory') || error.code.startsWith('dispatch_')) return dispatchFailure('POST', error).text;
+  }
+  return '请求未确认成功，请主动重试原请求或重新读取核对。';
 }

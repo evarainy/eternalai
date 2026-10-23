@@ -12,6 +12,7 @@ from app.ports.work_object_scope import (
     DispatchAuthorizationDecision,
     compute_dispatch_authorization,
     compute_visibility_scope,
+    may_dispatch_to,
 )
 
 
@@ -46,6 +47,21 @@ def test_non_head_jobtitle_denied(monkeypatch, job_title: str | None, department
     decision = _decision(job_title=job_title, department_id=department_id)
     assert decision.decision == "deny"
     assert decision.reason_code == "not_department_head"
+    member = OrganizationUserMembership(
+        user_id="self", department_id=department_id, job_title=job_title
+    )
+    assert may_dispatch_to(
+        member,
+        target_kind="user",
+        target_department_id=department_id,
+        target_directory_user_id="self",
+    )
+    assert not may_dispatch_to(
+        member,
+        target_kind="user",
+        target_department_id=department_id,
+        target_directory_user_id="other",
+    )
     assert (
         _decision(job_title="75", department_id=department_id, target=department_id).decision
         == "allow"
@@ -53,11 +69,11 @@ def test_non_head_jobtitle_denied(monkeypatch, job_title: str | None, department
 
 
 @pytest.mark.parametrize("job_title", ["75", "380", "1405", "1701", "1999"])
-def test_prison_area_head_cross_department_denied(job_title: str) -> None:
+def test_all_confirmed_head_jobs_can_dispatch_across_departments(job_title: str) -> None:
     decision = _decision(job_title=job_title)
-    assert decision.decision == "deny"
-    assert decision.reason_code == "cross_department_dispatch_denied"
-    assert decision.dispatcher_department_type == "prison_area"
+    assert decision.decision == "allow"
+    assert decision.reason_code is None
+    assert decision.dispatcher_department_type == "office"
 
 
 @pytest.mark.parametrize("job_title", ["75", "380", "1405", "1701", "1999"])
@@ -96,6 +112,10 @@ def test_visibility_scope_signature_excludes_dispatch_history() -> None:
         "principal_tenant_id",
         "principal_ai_user_id",
         "principal_department_id",
+        "principal_directory_user_id",
+        "responsible_department_ids",
+        "directory_snapshot_version",
+        "valid_until",
     }
 
 
@@ -104,6 +124,10 @@ def test_visibility_scope_does_not_inherit_department_subtree() -> None:
         "principal_tenant_id",
         "principal_ai_user_id",
         "principal_department_id",
+        "principal_directory_user_id",
+        "responsible_department_ids",
+        "directory_snapshot_version",
+        "valid_until",
     }
     scope = compute_visibility_scope(
         principal_tenant_id="tenant-dispatch-a",
@@ -114,6 +138,10 @@ def test_visibility_scope_does_not_inherit_department_subtree() -> None:
         "principal_tenant_id": "tenant-dispatch-a",
         "principal_ai_user_id": "synthetic-principal",
         "principal_department_id": "synthetic-child",
+        "principal_directory_user_id": None,
+        "responsible_department_ids": frozenset(),
+        "directory_snapshot_version": None,
+        "valid_until": None,
     }
 
 
@@ -123,7 +151,7 @@ def test_undeterminable_department_is_unknown(department_id: str) -> None:
     assert decision.dispatcher_department_type == "unknown"
     assert decision.matched_rule == "department_unresolved"
     assert decision.decision == "deny"
-    assert decision.reason_code == "cross_department_dispatch_denied"
+    assert decision.reason_code == "directory_membership_missing"
 
 
 def test_mismatched_department_lookup_does_not_grant_office_authority() -> None:
@@ -144,10 +172,10 @@ def test_mismatched_department_lookup_does_not_grant_office_authority() -> None:
 
 
 @pytest.mark.parametrize("job_title", ["75", "380", "1405", "1701", "1999"])
-def test_unlisted_resolved_head_is_same_department_only(job_title):
-    for target, expected in (("new-unregistered", "allow"), ("572", "deny")):
+def test_unlisted_resolved_head_can_dispatch_department_targets(job_title):
+    for target, expected in (("new-unregistered", "allow"), ("572", "allow")):
         decision = _decision(department_id="new-unregistered", job_title=job_title, target=target)
-        assert decision.dispatcher_department_type == "unknown"
+        assert decision.dispatcher_department_type == "office"
         assert decision.matched_rule == "department_not_allowlisted"
         assert decision.decision == expected
         assert decision.reason_code == (
@@ -168,12 +196,15 @@ def test_unknown_join_key_denies_dispatch_and_alerts() -> None:
     assert decision.dispatcher_department_type == "unknown"
 
 
-@pytest.mark.parametrize("department_id,resolved,expected_type,rule", [
-    ("572", True, "prison_area", "prison_area_id"),
-    ("synthetic-office", True, "unknown", "department_not_allowlisted"),
-    ("office-approved", True, "office", "cross_department_allowlist"),
-    ("office-approved", False, "unknown", "department_unresolved"),
-])
+@pytest.mark.parametrize(
+    "department_id,resolved,expected_type,rule",
+    [
+        ("572", True, "office", "department_not_allowlisted"),
+        ("synthetic-office", True, "office", "department_not_allowlisted"),
+        ("office-approved", True, "office", "department_not_allowlisted"),
+        ("office-approved", False, "unknown", "department_unresolved"),
+    ],
+)
 def test_trace_attributes_exclude_join_key_and_job_title(
     monkeypatch, department_id, resolved, expected_type, rule
 ) -> None:
@@ -190,15 +221,15 @@ def test_trace_attributes_exclude_join_key_and_job_title(
     assert "75" not in repr(decision.trace_attributes)
 
 
-def test_undeterminable_department_allows_only_same_department() -> None:
+def test_undeterminable_department_denies_department_dispatch() -> None:
     same = _decision(
         department_id="synthetic-unresolved", target="synthetic-unresolved", resolved=False
     )
     other = _decision(
         department_id="synthetic-unresolved", target="synthetic-other", resolved=False
     )
-    assert same.decision == "allow" and same.reason_code is None
-    assert other.decision == "deny" and other.reason_code == "cross_department_dispatch_denied"
+    assert same.decision == "deny" and same.reason_code == "directory_membership_missing"
+    assert other.decision == "deny" and other.reason_code == "directory_membership_missing"
     for decision in (same, other):
         assert decision.dispatcher_department_type == "unknown"
         assert decision.matched_rule == "department_unresolved"
@@ -230,29 +261,28 @@ def test_decision_reason_and_rule_are_closed() -> None:
 
 
 @pytest.mark.parametrize("department", ["new-unregistered", "synthetic-office", "another-office"])
-def test_empty_allowlist_never_grants_cross_department(department):
+def test_legacy_empty_allowlist_does_not_restrict_head_authority(department):
     assert policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS == frozenset()
-    assert _decision(department_id=department, target="572").decision == "deny"
+    assert _decision(department_id=department, target="572").decision == "allow"
     assert _decision(department_id=department, target=department).decision == "allow"
 
 
 @pytest.mark.parametrize(
     "department,resolved", [("572", True), ("office-approved", False), ("", True), (" ", True)]
 )
-def test_allowlist_conflict_and_unresolved_department_cannot_cross(
-    monkeypatch, department, resolved
-):
+def test_legacy_allowlist_cannot_resolve_missing_department(monkeypatch, department, resolved):
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({department}))
     result = _decision(department_id=department, resolved=resolved, target="external")
-    assert result.decision == "deny"
+    valid_department = resolved and bool(department.strip())
+    assert result.decision == ("allow" if valid_department else "deny")
     assert result.matched_rule == (
-        "prison_area_id" if department == "572" else "department_unresolved"
+        "department_not_allowlisted" if valid_department else "department_unresolved"
     )
     same = _decision(department_id=department, resolved=resolved, target=department)
-    assert same.decision == ("allow" if department.strip() else "deny")
+    assert same.decision == ("allow" if valid_department else "deny")
 
 
-def test_allowlist_revocation_and_trace_classification(monkeypatch):
+def test_legacy_allowlist_revocation_does_not_change_current_matrix(monkeypatch):
     monkeypatch.setattr(
         policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-approved"})
     )
@@ -261,7 +291,7 @@ def test_allowlist_revocation_and_trace_classification(monkeypatch):
     assert allowed.trace_attributes == {
         "department_id": "office-approved",
         "department_type": "office",
-        "matched_rule": "cross_department_allowlist",
+        "matched_rule": "department_not_allowlisted",
     }
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
-    assert _decision(department_id="office-approved").decision == "deny"
+    assert _decision(department_id="office-approved").decision == "allow"

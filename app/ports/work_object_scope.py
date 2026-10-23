@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict
 from app.ports.organization_directory import OrganizationDepartment, OrganizationUserMembership
 
 _DEPARTMENT_HEAD_JOBTITLE_IDS: frozenset[str] = frozenset({"75", "380", "1405", "1701", "1999"})
+_UNIT_LEADER_JOBTITLE_IDS: frozenset[str] = frozenset()
+_SUPERVISING_LEADER_JOBTITLE_IDS: frozenset[str] = frozenset()
 _CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS: frozenset[str] = frozenset()
 _PRISON_AREA_DEPARTMENT_IDS: frozenset[str] = frozenset(
     {
@@ -66,7 +68,9 @@ class DispatchAuthorizationDecision(BaseModel):
     department_id: str | None
     dispatcher_department_type: Literal["prison_area", "office", "unknown"]
     matched_rule: Literal[
-        "department_unresolved", "prison_area_id", "cross_department_allowlist",
+        "department_unresolved",
+        "prison_area_id",
+        "cross_department_allowlist",
         "department_not_allowlisted",
     ]
     alert_code: Literal["directory_membership_missing"] | None = None
@@ -88,9 +92,8 @@ def compute_dispatch_authorization(
 ) -> DispatchAuthorizationDecision:
     """Use lookup results, never token-baked department/job title or caller labels.
 
-    A missing/mismatched department is unresolved, even when the membership's
-    department ID is explicitly allowlisted. Known prison areas always remain
-    same-department only. Missing membership is a distinct fail-closed alert.
+    This compatibility entry handles department targets. The complete user/department
+    matrix is may_dispatch_to; historical department allowlists do not grant authority.
     """
     department_id = dispatcher_membership.department_id if dispatcher_membership else None
     resolved = (
@@ -98,21 +101,6 @@ def compute_dispatch_authorization(
         and dispatcher_department is not None
         and dispatcher_department.department_id == department_id
     )
-    department_type: Literal["prison_area", "office", "unknown"] = "unknown"
-    matched_rule: Literal[
-        "department_unresolved", "prison_area_id", "cross_department_allowlist",
-        "department_not_allowlisted",
-    ] = "department_unresolved"
-    if resolved:
-        if department_id in _PRISON_AREA_DEPARTMENT_IDS:
-            department_type = "prison_area"
-            matched_rule = "prison_area_id"
-        elif department_id in _CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS:
-            department_type = "office"
-            matched_rule = "cross_department_allowlist"
-        else:
-            matched_rule = "department_not_allowlisted"
-
     reason: (
         Literal[
             "directory_membership_missing",
@@ -121,23 +109,43 @@ def compute_dispatch_authorization(
         ]
         | None
     ) = None
-    alert: Literal["directory_membership_missing"] | None = None
-    if dispatcher_membership is None:
+    if dispatcher_membership is None or not resolved:
         reason = "directory_membership_missing"
-        alert = "directory_membership_missing"
-    elif dispatcher_membership.job_title not in _DEPARTMENT_HEAD_JOBTITLE_IDS:
+    elif not is_department_head(dispatcher_membership) and not is_leader(dispatcher_membership):
         reason = "not_department_head"
-    elif department_type != "office" and not (
-        department_id and department_id.strip() and department_id == target_department_id
-    ):
-        reason = "cross_department_dispatch_denied"
     return DispatchAuthorizationDecision(
         decision="allow" if reason is None else "deny",
         reason_code=reason,
         department_id=department_id,
-        dispatcher_department_type=department_type,
-        matched_rule=matched_rule,
-        alert_code=alert,
+        dispatcher_department_type="office" if resolved else "unknown",
+        matched_rule="department_not_allowlisted" if resolved else "department_unresolved",
+        alert_code="directory_membership_missing"
+        if reason == "directory_membership_missing"
+        else None,
+    )
+
+
+def is_department_head(membership: OrganizationUserMembership) -> bool:
+    return membership.job_title in _DEPARTMENT_HEAD_JOBTITLE_IDS
+
+
+def is_leader(membership: OrganizationUserMembership) -> bool:
+    return membership.job_title in (_UNIT_LEADER_JOBTITLE_IDS | _SUPERVISING_LEADER_JOBTITLE_IDS)
+
+
+def may_dispatch_to(
+    membership: OrganizationUserMembership,
+    *,
+    target_kind: str,
+    target_department_id: str,
+    target_directory_user_id: str | None = None,
+) -> bool:
+    if is_leader(membership):
+        return True
+    if target_kind == "user" and target_directory_user_id == membership.user_id:
+        return True
+    return is_department_head(membership) and (
+        target_kind == "department" or target_department_id == membership.department_id
     )
 
 
@@ -147,6 +155,10 @@ class AuthorizedWorkObjectScope(BaseModel):
     principal_tenant_id: str
     principal_ai_user_id: str
     principal_department_id: str | None
+    principal_directory_user_id: str | None = None
+    responsible_department_ids: frozenset[str] = frozenset()
+    directory_snapshot_version: int | None = None
+    valid_until: float | None = None
 
 
 def compute_visibility_scope(
@@ -154,6 +166,10 @@ def compute_visibility_scope(
     principal_tenant_id: str,
     principal_ai_user_id: str,
     principal_department_id: str | None,
+    principal_directory_user_id: str | None = None,
+    responsible_department_ids: frozenset[str] = frozenset(),
+    directory_snapshot_version: int | None = None,
+    valid_until: float | None = None,
 ) -> AuthorizedWorkObjectScope:
     """No subtree inheritance or authority derived from dispatch history.
 
@@ -163,4 +179,8 @@ def compute_visibility_scope(
         principal_tenant_id=principal_tenant_id,
         principal_ai_user_id=principal_ai_user_id,
         principal_department_id=principal_department_id,
+        principal_directory_user_id=principal_directory_user_id,
+        responsible_department_ids=responsible_department_ids,
+        directory_snapshot_version=directory_snapshot_version,
+        valid_until=valid_until,
     )

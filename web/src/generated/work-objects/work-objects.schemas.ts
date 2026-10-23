@@ -4,6 +4,117 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+export interface AcceptCommand {
+  handling_relation_id: string;
+  operation: 'accept';
+}
+
+export interface AssignCommand {
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  directory_user_id: string;
+  handling_relation_id: string;
+  operation: 'assign';
+}
+
+export type AttachmentLinkRequestHandlingRelationId = string | null;
+
+export type AttachmentLinkRequestPurpose = typeof AttachmentLinkRequestPurpose[keyof typeof AttachmentLinkRequestPurpose];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AttachmentLinkRequestPurpose = {
+  task_material: 'task_material',
+  result: 'result',
+} as const;
+
+export type AttachmentLinkRequestVisibility = typeof AttachmentLinkRequestVisibility[keyof typeof AttachmentLinkRequestVisibility];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AttachmentLinkRequestVisibility = {
+  shared: 'shared',
+  department_internal: 'department_internal',
+} as const;
+
+export interface AttachmentLinkRequest {
+  /**
+   * @minItems 1
+   * @maxItems 10
+   */
+  attachment_ids: string[];
+  handling_relation_id?: AttachmentLinkRequestHandlingRelationId;
+  purpose: AttachmentLinkRequestPurpose;
+  visibility: AttachmentLinkRequestVisibility;
+}
+
+export interface AttachmentMutationResult {
+  etag: string;
+  items: AttachmentView[];
+  replayed: boolean;
+}
+
+export type AttachmentViewHandlingRelationId = string | null;
+
+export type AttachmentViewLinkedAt = string | null;
+
+export type AttachmentViewPurpose = typeof AttachmentViewPurpose[keyof typeof AttachmentViewPurpose];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AttachmentViewPurpose = {
+  task_material: 'task_material',
+  result: 'result',
+} as const;
+
+export type AttachmentViewVisibility = typeof AttachmentViewVisibility[keyof typeof AttachmentViewVisibility];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AttachmentViewVisibility = {
+  shared: 'shared',
+  department_internal: 'department_internal',
+} as const;
+
+export type AttachmentViewWorkObjectId = string | null;
+
+export interface AttachmentView {
+  attachment_id: string;
+  created_at: string;
+  filename: string;
+  handling_relation_id: AttachmentViewHandlingRelationId;
+  linked_at: AttachmentViewLinkedAt;
+  media_type: string;
+  purpose: AttachmentViewPurpose;
+  sha256: string;
+  size_bytes: number;
+  version: number;
+  visibility: AttachmentViewVisibility;
+  work_object_id: AttachmentViewWorkObjectId;
+}
+
+export interface CompleteCommand {
+  operation: 'complete';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
+}
+
+export const ConfirmCommandValue = {
+  operation: 'confirm',
+} as const;
+export type ConfirmCommand = typeof ConfirmCommandValue;
+
+export interface DeadlineSpec {
+  /** @minimum 0 */
+  days_after: number;
+  local_time: string;
+}
+
 export interface DepartmentDispatchOption {
   department_display_name: string;
   department_id: string;
@@ -19,98 +130,12 @@ export interface DepartmentDispatchTarget {
   kind: 'department';
 }
 
-export type DispatchInitialWorkObjectViewAssigneeDisplayName = string | null;
-
-export type DispatchInitialWorkObjectViewCreatedAt = string | null;
-
-export type DispatchInitialWorkObjectViewDueAt = string | null;
-
-export type DispatchInitialWorkObjectViewHandlingAction = typeof DispatchInitialWorkObjectViewHandlingAction[keyof typeof DispatchInitialWorkObjectViewHandlingAction];
-
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const DispatchInitialWorkObjectViewHandlingAction = {
-  ai_draft: 'ai_draft',
-  self_serve: 'self_serve',
-  go_source_system: 'go_source_system',
-  view_only: 'view_only',
-} as const;
-
-export type DispatchInitialWorkObjectViewHandlingCapabilityId = string | null;
-
-export type DispatchInitialWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
-
-export type DispatchInitialWorkObjectViewHandlingMarkedAt = string | null;
-
-export type DispatchInitialWorkObjectViewInitiatorAiUserId = string | null;
-
-export type DispatchInitialWorkObjectViewKind = '通知' | '督办令' | '工作任务' | '提醒' | null;
-
-export type DispatchInitialWorkObjectViewOwnerDepartmentId = string | null;
-
-export type DispatchInitialWorkObjectViewReceiptRequirement = string | null;
-
-export type DispatchInitialWorkObjectViewReminderChoicesAnyOfItem = typeof DispatchInitialWorkObjectViewReminderChoicesAnyOfItem[keyof typeof DispatchInitialWorkObjectViewReminderChoicesAnyOfItem];
-
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const DispatchInitialWorkObjectViewReminderChoicesAnyOfItem = {
-  提前_7_天: '提前 7 天',
-  提前_3_天: '提前 3 天',
-  提前_1_天: '提前 1 天',
-  逾期当天: '逾期当天',
-} as const;
-
-export type DispatchInitialWorkObjectViewReminderChoices = DispatchInitialWorkObjectViewReminderChoicesAnyOfItem[] | null;
-
-export type DispatchInitialWorkObjectViewReminderDelivery = 'not_enabled' | null;
-
-export type DispatchInitialWorkObjectViewRequirement = string | null;
-
-export type DispatchInitialWorkObjectViewStatus = 'assigned' | 'department_pending' | null;
-
-export type DispatchInitialWorkObjectViewTargetKind = 'user' | 'department' | null;
-
-export type DispatchInitialWorkObjectViewTaskRecordId = string | null;
-
-export type DispatchInitialWorkObjectViewTitle = string | null;
-
-export type DispatchInitialWorkObjectViewUpdatedAt = string | null;
-
-export type DispatchInitialWorkObjectViewVersion = number | null;
-
-export interface DispatchInitialWorkObjectView {
-  assignee_display_name: DispatchInitialWorkObjectViewAssigneeDisplayName;
-  created_at: DispatchInitialWorkObjectViewCreatedAt;
-  due_at: DispatchInitialWorkObjectViewDueAt;
-  handling_action: DispatchInitialWorkObjectViewHandlingAction;
-  handling_capability_id: DispatchInitialWorkObjectViewHandlingCapabilityId;
-  handling_mark: DispatchInitialWorkObjectViewHandlingMark;
-  handling_marked_at: DispatchInitialWorkObjectViewHandlingMarkedAt;
-  initiator_ai_user_id: DispatchInitialWorkObjectViewInitiatorAiUserId;
-  kind: DispatchInitialWorkObjectViewKind;
-  owner_department_id: DispatchInitialWorkObjectViewOwnerDepartmentId;
-  receipt_requirement: DispatchInitialWorkObjectViewReceiptRequirement;
-  reminder_choices: DispatchInitialWorkObjectViewReminderChoices;
-  reminder_delivery: DispatchInitialWorkObjectViewReminderDelivery;
-  requirement: DispatchInitialWorkObjectViewRequirement;
-  source_created_at: null;
-  source_fetched_at: null;
-  source_kind: string;
-  source_received_at: null;
-  source_ref: null;
-  source_status: null;
-  source_system: string;
-  source_title: null;
-  source_workflow_type_id: null;
-  state_authority: 'internal';
-  status: DispatchInitialWorkObjectViewStatus;
-  target_kind: DispatchInitialWorkObjectViewTargetKind;
-  task_record_id: DispatchInitialWorkObjectViewTaskRecordId;
-  title: DispatchInitialWorkObjectViewTitle;
-  updated_at: DispatchInitialWorkObjectViewUpdatedAt;
-  version: DispatchInitialWorkObjectViewVersion;
-  work_object_id: string;
+export interface DepartmentReviewCommand {
+  approved: boolean;
+  handling_relation_id: string;
+  operation: 'department_review';
+  /** @maxLength 2000 */
+  reason?: string;
 }
 
 export type DispatchOptionsResponseItems = DepartmentDispatchOption[] | UserDispatchOption[];
@@ -127,6 +152,9 @@ export const DispatchOptionsResponseKind = {
 export type DispatchOptionsResponseNextCursor = string | null;
 
 export interface DispatchOptionsResponse {
+  can_dispatch_departments: boolean;
+  can_dispatch_others: boolean;
+  can_self_dispatch: boolean;
   has_more: boolean;
   items: DispatchOptionsResponseItems;
   kind: DispatchOptionsResponseKind;
@@ -136,6 +164,24 @@ export interface DispatchOptionsResponse {
   /** @minimum 0 */
   unselectable_count: number;
 }
+
+export type DispatchWorkObjectsRequestCompletionMode = typeof DispatchWorkObjectsRequestCompletionMode[keyof typeof DispatchWorkObjectsRequestCompletionMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchWorkObjectsRequestCompletionMode = {
+  submit_completes: 'submit_completes',
+  confirm_required: 'confirm_required',
+} as const;
+
+export type DispatchWorkObjectsRequestDispatchMode = typeof DispatchWorkObjectsRequestDispatchMode[keyof typeof DispatchWorkObjectsRequestDispatchMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchWorkObjectsRequestDispatchMode = {
+  independent: 'independent',
+  collaborative: 'collaborative',
+} as const;
 
 export type DispatchWorkObjectsRequestDueAt = string | null;
 
@@ -149,6 +195,10 @@ export const DispatchWorkObjectsRequestKind = {
   工作任务: '工作任务',
   提醒: '提醒',
 } as const;
+
+export type DispatchWorkObjectsRequestLeadTargetAnyOf = UserDispatchTarget | DepartmentDispatchTarget;
+
+export type DispatchWorkObjectsRequestLeadTarget = DispatchWorkObjectsRequestLeadTargetAnyOf | null;
 
 export type DispatchWorkObjectsRequestReminderChoicesItem = typeof DispatchWorkObjectsRequestReminderChoicesItem[keyof typeof DispatchWorkObjectsRequestReminderChoicesItem];
 
@@ -164,12 +214,17 @@ export const DispatchWorkObjectsRequestReminderChoicesItem = {
 export type DispatchWorkObjectsRequestTargetsItem = UserDispatchTarget | DepartmentDispatchTarget;
 
 export interface DispatchWorkObjectsRequest {
-  due_at: DispatchWorkObjectsRequestDueAt;
+  /** @maxItems 10 */
+  attachment_ids?: string[];
+  completion_mode: DispatchWorkObjectsRequestCompletionMode;
+  dispatch_mode: DispatchWorkObjectsRequestDispatchMode;
+  due_at?: DispatchWorkObjectsRequestDueAt;
   kind: DispatchWorkObjectsRequestKind;
+  lead_target?: DispatchWorkObjectsRequestLeadTarget;
   /** @maxLength 2000 */
   receipt_requirement: string;
   /** @maxItems 4 */
-  reminder_choices: DispatchWorkObjectsRequestReminderChoicesItem[];
+  reminder_choices?: DispatchWorkObjectsRequestReminderChoicesItem[];
   /** @maxLength 10000 */
   requirement: string;
   /**
@@ -186,16 +241,85 @@ export interface DispatchWorkObjectsRequest {
 
 export interface DispatchWorkObjectsResponse {
   created_count: number;
-  /**
-   * @minItems 1
-   * @maxItems 100
-   */
-  items: DispatchInitialWorkObjectView[];
+  items: InternalWorkObjectView[];
   replayed: boolean;
+}
+
+export interface EditRemarkRequest {
+  /** @maxLength 2000 */
+  text: string;
+}
+
+export interface ExtendCommand {
+  due_at: string;
+  operation: 'extend';
+}
+
+export interface FeedbackCommand {
+  handling_relation_id: string;
+  operation: 'feedback';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
 }
 
 export interface HTTPValidationError {
   detail?: ValidationError[];
+}
+
+export type HandlingRelationViewAcceptedAt = string | null;
+
+export type HandlingRelationViewAssigneeDirectoryUserId = string | null;
+
+export type HandlingRelationViewReviewReason = string | null;
+
+export type HandlingRelationViewReviewResult = boolean | null;
+
+export type HandlingRelationViewReviewedAt = string | null;
+
+export type HandlingRelationViewRole = typeof HandlingRelationViewRole[keyof typeof HandlingRelationViewRole];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const HandlingRelationViewRole = {
+  single: 'single',
+  lead: 'lead',
+  collaborator: 'collaborator',
+} as const;
+
+export type HandlingRelationViewStatus = typeof HandlingRelationViewStatus[keyof typeof HandlingRelationViewStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const HandlingRelationViewStatus = {
+  department_pending: 'department_pending',
+  assigned: 'assigned',
+  in_progress: 'in_progress',
+  awaiting_department_review: 'awaiting_department_review',
+  submitted: 'submitted',
+} as const;
+
+export type HandlingRelationViewSubmittedAt = string | null;
+
+export type HandlingRelationViewSubmittedResult = string | null;
+
+export type HandlingRelationViewTarget = UserDispatchTarget | DepartmentDispatchTarget;
+
+export interface HandlingRelationView {
+  accepted_at?: HandlingRelationViewAcceptedAt;
+  assignee_directory_user_id?: HandlingRelationViewAssigneeDirectoryUserId;
+  available_commands?: string[];
+  relation_id: string;
+  review_reason?: HandlingRelationViewReviewReason;
+  review_result?: HandlingRelationViewReviewResult;
+  reviewed_at?: HandlingRelationViewReviewedAt;
+  role: HandlingRelationViewRole;
+  status: HandlingRelationViewStatus;
+  submitted_at?: HandlingRelationViewSubmittedAt;
+  submitted_result?: HandlingRelationViewSubmittedResult;
+  target: HandlingRelationViewTarget;
 }
 
 export type InternalWorkObjectViewAcceptedAt = string | null;
@@ -204,7 +328,13 @@ export type InternalWorkObjectViewAssigneeDisplayName = string | null;
 
 export type InternalWorkObjectViewCompletedAt = string | null;
 
+export type InternalWorkObjectViewCompletionMode = 'submit_completes' | 'confirm_required' | null;
+
 export type InternalWorkObjectViewCreatedAt = string | null;
+
+export type InternalWorkObjectViewDispatchMode = 'independent' | 'collaborative' | null;
+
+export type InternalWorkObjectViewDispatchModelVersion = number | null;
 
 export type InternalWorkObjectViewDueAt = string | null;
 
@@ -250,7 +380,9 @@ export type InternalWorkObjectViewReminderDelivery = 'not_enabled' | null;
 
 export type InternalWorkObjectViewRequirement = string | null;
 
-export type InternalWorkObjectViewStatus = 'assigned' | 'department_pending' | 'in_progress' | 'completed' | null;
+export type InternalWorkObjectViewSeriesId = string | null;
+
+export type InternalWorkObjectViewStatus = 'assigned' | 'department_pending' | 'in_progress' | 'completed' | 'awaiting_department_review' | 'awaiting_acceptance' | 'withdrawn' | null;
 
 export type InternalWorkObjectViewTargetKind = 'user' | 'department' | null;
 
@@ -262,12 +394,18 @@ export type InternalWorkObjectViewUpdatedAt = string | null;
 
 export type InternalWorkObjectViewVersion = number | null;
 
+export type InternalWorkObjectViewWithdrawnAt = string | null;
+
 export interface InternalWorkObjectView {
   accepted_at?: InternalWorkObjectViewAcceptedAt;
   assignee_display_name: InternalWorkObjectViewAssigneeDisplayName;
   completed_at?: InternalWorkObjectViewCompletedAt;
+  completion_mode?: InternalWorkObjectViewCompletionMode;
   created_at: InternalWorkObjectViewCreatedAt;
+  dispatch_mode?: InternalWorkObjectViewDispatchMode;
+  dispatch_model_version?: InternalWorkObjectViewDispatchModelVersion;
   due_at: InternalWorkObjectViewDueAt;
+  frozen?: boolean;
   handling_action: InternalWorkObjectViewHandlingAction;
   handling_capability_id: InternalWorkObjectViewHandlingCapabilityId;
   handling_mark: InternalWorkObjectViewHandlingMark;
@@ -276,9 +414,11 @@ export interface InternalWorkObjectView {
   kind: InternalWorkObjectViewKind;
   owner_department_id: InternalWorkObjectViewOwnerDepartmentId;
   receipt_requirement: InternalWorkObjectViewReceiptRequirement;
+  relations?: HandlingRelationView[];
   reminder_choices: InternalWorkObjectViewReminderChoices;
   reminder_delivery: InternalWorkObjectViewReminderDelivery;
   requirement: InternalWorkObjectViewRequirement;
+  series_id?: InternalWorkObjectViewSeriesId;
   source_created_at: null;
   source_fetched_at: null;
   source_kind: string;
@@ -295,6 +435,7 @@ export interface InternalWorkObjectView {
   title: InternalWorkObjectViewTitle;
   updated_at: InternalWorkObjectViewUpdatedAt;
   version: InternalWorkObjectViewVersion;
+  withdrawn_at?: InternalWorkObjectViewWithdrawnAt;
   work_object_id: string;
 }
 
@@ -312,17 +453,40 @@ export const LifecycleEventViewFromStatus = {
   department_pending: 'department_pending',
   in_progress: 'in_progress',
   completed: 'completed',
+  awaiting_department_review: 'awaiting_department_review',
+  awaiting_acceptance: 'awaiting_acceptance',
+  withdrawn: 'withdrawn',
 } as const;
+
+export type LifecycleEventViewHandlingRelationId = string | null;
 
 export type LifecycleEventViewOperation = typeof LifecycleEventViewOperation[keyof typeof LifecycleEventViewOperation];
 
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const LifecycleEventViewOperation = {
+  assign: 'assign',
   accept: 'accept',
   feedback: 'feedback',
   complete: 'complete',
+  submit: 'submit',
+  department_review: 'department_review',
+  submit_summary: 'submit_summary',
+  confirm: 'confirm',
+  return: 'return',
+  revise: 'revise',
+  withdraw: 'withdraw',
+  extend: 'extend',
+  reassign: 'reassign',
 } as const;
+
+export type LifecycleEventViewPayloadAnyOf = { [key: string]: unknown };
+
+export type LifecycleEventViewPayload = LifecycleEventViewPayloadAnyOf | null;
+
+export type LifecycleEventViewRelationFromStatus = string | null;
+
+export type LifecycleEventViewRelationToStatus = string | null;
 
 export type LifecycleEventViewText = string | null;
 
@@ -335,15 +499,21 @@ export const LifecycleEventViewToStatus = {
   department_pending: 'department_pending',
   in_progress: 'in_progress',
   completed: 'completed',
+  awaiting_department_review: 'awaiting_department_review',
+  awaiting_acceptance: 'awaiting_acceptance',
+  withdrawn: 'withdrawn',
 } as const;
 
 export interface LifecycleEventView {
-  actor_role: 'assignee';
+  actor_ai_user_id: string;
   event_id: string;
   from_status: LifecycleEventViewFromStatus;
+  handling_relation_id?: LifecycleEventViewHandlingRelationId;
   occurred_at: string;
   operation: LifecycleEventViewOperation;
-  /** @minimum 2 */
+  payload?: LifecycleEventViewPayload;
+  relation_from_status?: LifecycleEventViewRelationFromStatus;
+  relation_to_status?: LifecycleEventViewRelationToStatus;
   result_version: number;
   text: LifecycleEventViewText;
   to_status: LifecycleEventViewToStatus;
@@ -360,17 +530,13 @@ export interface LifecycleEventsResponse {
 
 export type LifecycleViewAcceptedAt = string | null;
 
-export type LifecycleViewAvailableCommandsItem = typeof LifecycleViewAvailableCommandsItem[keyof typeof LifecycleViewAvailableCommandsItem];
-
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const LifecycleViewAvailableCommandsItem = {
-  accept: 'accept',
-  feedback: 'feedback',
-  complete: 'complete',
-} as const;
-
 export type LifecycleViewCompletedAt = string | null;
+
+export type LifecycleViewCompletionMode = 'submit_completes' | 'confirm_required' | null;
+
+export type LifecycleViewDispatchMode = 'independent' | 'collaborative' | null;
+
+export type LifecycleViewDueAt = string | null;
 
 export type LifecycleViewStatus = typeof LifecycleViewStatus[keyof typeof LifecycleViewStatus];
 
@@ -381,17 +547,27 @@ export const LifecycleViewStatus = {
   department_pending: 'department_pending',
   in_progress: 'in_progress',
   completed: 'completed',
+  awaiting_department_review: 'awaiting_department_review',
+  awaiting_acceptance: 'awaiting_acceptance',
+  withdrawn: 'withdrawn',
 } as const;
 
-export type LifecycleViewUnavailableReason = 'work_object_lifecycle_request_invalid' | 'work_object_precondition_required' | 'work_object_not_found' | 'work_object_lifecycle_unsupported' | 'directory_membership_missing' | 'directory_membership_ambiguous' | 'work_object_action_forbidden' | 'work_object_transition_invalid' | 'idempotency_key_reused' | 'work_object_version_conflict' | 'organization_directory_missing' | 'organization_directory_stale' | 'organization_directory_unavailable' | 'work_object_unavailable' | 'work_object_audit_unavailable' | 'work_object_lifecycle_failed' | null;
+export type LifecycleViewUnavailableReason = string | null;
 
 export interface LifecycleView {
-  accepted_at: LifecycleViewAcceptedAt;
-  available_commands: LifecycleViewAvailableCommandsItem[];
-  completed_at: LifecycleViewCompletedAt;
+  accepted_at?: LifecycleViewAcceptedAt;
+  available_commands: string[];
+  completed_at?: LifecycleViewCompletedAt;
+  completion_mode?: LifecycleViewCompletionMode;
+  dispatch_mode?: LifecycleViewDispatchMode;
+  due_at?: LifecycleViewDueAt;
+  frozen: boolean;
+  receipt_requirement: string;
+  relations: HandlingRelationView[];
+  requirement: string;
   status: LifecycleViewStatus;
-  unavailable_reason: LifecycleViewUnavailableReason;
-  /** @minimum 1 */
+  title: string;
+  unavailable_reason?: LifecycleViewUnavailableReason;
   version: number;
   work_object_id: string;
 }
@@ -488,6 +664,359 @@ export interface OAWorkObjectView {
   work_object_id: string;
 }
 
+export type ReassignCommandLeadTargetAnyOf = UserDispatchTarget | DepartmentDispatchTarget;
+
+export type ReassignCommandLeadTarget = ReassignCommandLeadTargetAnyOf | null;
+
+export type ReassignCommandTargetsItem = UserDispatchTarget | DepartmentDispatchTarget;
+
+export interface ReassignCommand {
+  lead_target?: ReassignCommandLeadTarget;
+  operation: 'reassign';
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  targets: ReassignCommandTargetsItem[];
+}
+
+export interface RemarkHistoryEntry {
+  actor_ai_user_id: string;
+  occurred_at: string;
+  remark_version: number;
+  text: string;
+  work_object_id: string;
+}
+
+export type RemarkHistoryPageNextCursor = string | null;
+
+export interface RemarkHistoryPage {
+  items: RemarkHistoryEntry[];
+  next_cursor?: RemarkHistoryPageNextCursor;
+}
+
+export interface RemarkResponse {
+  remark: RemarkView;
+  replayed: boolean;
+}
+
+export type RemarkViewUpdatedAt = string | null;
+
+export type RemarkViewUpdatedBy = string | null;
+
+export interface RemarkView {
+  editable: boolean;
+  /** @maxLength 2000 */
+  text: string;
+  updated_at?: RemarkViewUpdatedAt;
+  updated_by?: RemarkViewUpdatedBy;
+  /** @minimum 0 */
+  version: number;
+  work_object_id: string;
+}
+
+export interface ReturnCommand {
+  operation: 'return';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  reason: string;
+}
+
+export type ReviseCommandCompletionMode = typeof ReviseCommandCompletionMode[keyof typeof ReviseCommandCompletionMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ReviseCommandCompletionMode = {
+  submit_completes: 'submit_completes',
+  confirm_required: 'confirm_required',
+} as const;
+
+export interface ReviseCommand {
+  completion_mode: ReviseCommandCompletionMode;
+  operation: 'revise';
+  /** @maxLength 2000 */
+  receipt_requirement: string;
+  /** @maxLength 10000 */
+  requirement: string;
+  /**
+   * @minLength 1
+   * @maxLength 200
+   */
+  title: string;
+}
+
+export type SeriesHistoryEntryOperation = typeof SeriesHistoryEntryOperation[keyof typeof SeriesHistoryEntryOperation];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesHistoryEntryOperation = {
+  create: 'create',
+  update: 'update',
+  enable: 'enable',
+  disable: 'disable',
+} as const;
+
+export interface SeriesHistoryEntry {
+  occurred_at: string;
+  operation: SeriesHistoryEntryOperation;
+  snapshot: SeriesView;
+  version: number;
+}
+
+export type SeriesHistoryPageNextCursor = string | null;
+
+export interface SeriesHistoryPage {
+  items: SeriesHistoryEntry[];
+  next_cursor?: SeriesHistoryPageNextCursor;
+}
+
+export interface SeriesMutationResult {
+  replayed: boolean;
+  series: SeriesView;
+}
+
+export type SeriesOccurrenceItemDueAt = string | null;
+
+export interface SeriesOccurrenceItem {
+  due_at: SeriesOccurrenceItemDueAt;
+  status: string;
+  title: string;
+  work_object_id: string;
+}
+
+export type SeriesOccurrencePageNextCursor = string | null;
+
+export interface SeriesOccurrencePage {
+  items: SeriesOccurrenceView[];
+  next_cursor?: SeriesOccurrencePageNextCursor;
+}
+
+export type SeriesOccurrenceViewBlockedCode = string | null;
+
+export type SeriesOccurrenceViewGeneratedAt = string | null;
+
+export type SeriesOccurrenceViewState = typeof SeriesOccurrenceViewState[keyof typeof SeriesOccurrenceViewState];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesOccurrenceViewState = {
+  generated: 'generated',
+  blocked: 'blocked',
+} as const;
+
+export interface SeriesOccurrenceView {
+  blocked_code: SeriesOccurrenceViewBlockedCode;
+  generated_at: SeriesOccurrenceViewGeneratedAt;
+  items: SeriesOccurrenceItem[];
+  occurrence_id: string;
+  scheduled_at: string;
+  series_version: number;
+  state: SeriesOccurrenceViewState;
+  visible_count: number;
+}
+
+export type SeriesPageNextCursor = string | null;
+
+export interface SeriesPage {
+  items: SeriesView[];
+  next_cursor?: SeriesPageNextCursor;
+}
+
+export interface SeriesRequest {
+  deadline_spec: DeadlineSpec;
+  enabled?: boolean;
+  local_time: string;
+  start_date: string;
+  template: SeriesTemplateInput;
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  timezone: string;
+  /**
+   * @minItems 1
+   * @maxItems 7
+   */
+  weekdays: number[];
+}
+
+export type SeriesTemplateInputCompletionMode = typeof SeriesTemplateInputCompletionMode[keyof typeof SeriesTemplateInputCompletionMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateInputCompletionMode = {
+  submit_completes: 'submit_completes',
+  confirm_required: 'confirm_required',
+} as const;
+
+export type SeriesTemplateInputDispatchMode = typeof SeriesTemplateInputDispatchMode[keyof typeof SeriesTemplateInputDispatchMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateInputDispatchMode = {
+  independent: 'independent',
+  collaborative: 'collaborative',
+} as const;
+
+export type SeriesTemplateInputKind = typeof SeriesTemplateInputKind[keyof typeof SeriesTemplateInputKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateInputKind = {
+  通知: '通知',
+  督办令: '督办令',
+  工作任务: '工作任务',
+  提醒: '提醒',
+} as const;
+
+export type SeriesTemplateInputLeadTargetAnyOf = UserDispatchTarget | DepartmentDispatchTarget;
+
+export type SeriesTemplateInputLeadTarget = SeriesTemplateInputLeadTargetAnyOf | null;
+
+export type SeriesTemplateInputReminderChoicesItem = typeof SeriesTemplateInputReminderChoicesItem[keyof typeof SeriesTemplateInputReminderChoicesItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateInputReminderChoicesItem = {
+  提前_7_天: '提前 7 天',
+  提前_3_天: '提前 3 天',
+  提前_1_天: '提前 1 天',
+  逾期当天: '逾期当天',
+} as const;
+
+export type SeriesTemplateInputTargetsItem = UserDispatchTarget | DepartmentDispatchTarget;
+
+/**
+ * Dispatch shape with occurrence-owned due time, never a saved absolute due date.
+ */
+export interface SeriesTemplateInput {
+  /** @maxItems 10 */
+  attachment_ids?: string[];
+  completion_mode: SeriesTemplateInputCompletionMode;
+  dispatch_mode: SeriesTemplateInputDispatchMode;
+  due_at?: null;
+  kind: SeriesTemplateInputKind;
+  lead_target?: SeriesTemplateInputLeadTarget;
+  /** @maxLength 2000 */
+  receipt_requirement: string;
+  /** @maxItems 4 */
+  reminder_choices?: SeriesTemplateInputReminderChoicesItem[];
+  /** @maxLength 10000 */
+  requirement: string;
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  targets: SeriesTemplateInputTargetsItem[];
+  /**
+   * @minLength 1
+   * @maxLength 200
+   */
+  title: string;
+}
+
+export type SeriesTemplateOutputCompletionMode = typeof SeriesTemplateOutputCompletionMode[keyof typeof SeriesTemplateOutputCompletionMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateOutputCompletionMode = {
+  submit_completes: 'submit_completes',
+  confirm_required: 'confirm_required',
+} as const;
+
+export type SeriesTemplateOutputDispatchMode = typeof SeriesTemplateOutputDispatchMode[keyof typeof SeriesTemplateOutputDispatchMode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateOutputDispatchMode = {
+  independent: 'independent',
+  collaborative: 'collaborative',
+} as const;
+
+export type SeriesTemplateOutputKind = typeof SeriesTemplateOutputKind[keyof typeof SeriesTemplateOutputKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateOutputKind = {
+  通知: '通知',
+  督办令: '督办令',
+  工作任务: '工作任务',
+  提醒: '提醒',
+} as const;
+
+export type SeriesTemplateOutputLeadTargetAnyOf = UserDispatchTarget | DepartmentDispatchTarget;
+
+export type SeriesTemplateOutputLeadTarget = SeriesTemplateOutputLeadTargetAnyOf | null;
+
+export type SeriesTemplateOutputReminderChoicesItem = typeof SeriesTemplateOutputReminderChoicesItem[keyof typeof SeriesTemplateOutputReminderChoicesItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const SeriesTemplateOutputReminderChoicesItem = {
+  提前_7_天: '提前 7 天',
+  提前_3_天: '提前 3 天',
+  提前_1_天: '提前 1 天',
+  逾期当天: '逾期当天',
+} as const;
+
+export type SeriesTemplateOutputTargetsItem = UserDispatchTarget | DepartmentDispatchTarget;
+
+/**
+ * Dispatch shape with occurrence-owned due time, never a saved absolute due date.
+ */
+export interface SeriesTemplateOutput {
+  /** @maxItems 10 */
+  attachment_ids?: string[];
+  completion_mode: SeriesTemplateOutputCompletionMode;
+  dispatch_mode: SeriesTemplateOutputDispatchMode;
+  kind: SeriesTemplateOutputKind;
+  lead_target?: SeriesTemplateOutputLeadTarget;
+  /** @maxLength 2000 */
+  receipt_requirement: string;
+  /** @maxItems 4 */
+  reminder_choices?: SeriesTemplateOutputReminderChoicesItem[];
+  /** @maxLength 10000 */
+  requirement: string;
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  targets: SeriesTemplateOutputTargetsItem[];
+  /**
+   * @minLength 1
+   * @maxLength 200
+   */
+  title: string;
+}
+
+export type SeriesViewNextDueAt = string | null;
+
+export interface SeriesView {
+  attachments?: AttachmentView[];
+  created_at: string;
+  deadline_spec: DeadlineSpec;
+  enabled?: boolean;
+  local_time: string;
+  next_due_at: SeriesViewNextDueAt;
+  series_id: string;
+  start_date: string;
+  template: SeriesTemplateOutput;
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  timezone: string;
+  updated_at: string;
+  version: number;
+  /**
+   * @minItems 1
+   * @maxItems 7
+   */
+  weekdays: number[];
+}
+
 export type SetHandlingMarkRequestMark = typeof SetHandlingMarkRequestMark[keyof typeof SetHandlingMarkRequestMark];
 
 
@@ -499,6 +1028,29 @@ export const SetHandlingMarkRequestMark = {
 
 export interface SetHandlingMarkRequest {
   mark: SetHandlingMarkRequestMark;
+}
+
+export interface SubmitCommand {
+  /** @maxItems 10 */
+  attachment_ids?: string[];
+  handling_relation_id: string;
+  operation: 'submit';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
+}
+
+export interface SubmitSummaryCommand {
+  /** @maxItems 10 */
+  attachment_ids?: string[];
+  operation: 'submit_summary';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
 }
 
 export interface UserDispatchOption {
@@ -535,6 +1087,15 @@ export interface ValidationError {
   type: string;
 }
 
+export interface WithdrawCommand {
+  operation: 'withdraw';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  reason: string;
+}
+
 export interface WorkObjectError {
   detail: WorkObjectErrorDetail;
 }
@@ -546,17 +1107,79 @@ export interface WorkObjectErrorDetail {
 
 export type WorkObjectListResponseItemsItem = OAWorkObjectView | InternalWorkObjectView;
 
+export type WorkObjectListResponseNextCursor = string | null;
+
 export interface WorkObjectListResponse {
   items: WorkObjectListResponseItemsItem[];
   limit: number;
   limit_exceeded: boolean;
+  next_cursor?: WorkObjectListResponseNextCursor;
   oa_sync: OASyncStatusView;
 }
+
+export type ListSeriesApiV1WorkObjectSeriesGetParams = {
+cursor?: string | null;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type CreateSeriesApiV1WorkObjectSeriesPostHeaders = {
+'Idempotency-Key': string;
+};
+
+export type UpdateSeriesApiV1WorkObjectSeriesSeriesIdPutHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wosr-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type DisableSeriesApiV1WorkObjectSeriesSeriesIdDisablePostHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wosr-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type EnableSeriesApiV1WorkObjectSeriesSeriesIdEnablePostHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wosr-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type SeriesHistoryApiV1WorkObjectSeriesSeriesIdHistoryGetParams = {
+cursor?: string | null;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type SeriesOccurrencesApiV1WorkObjectSeriesSeriesIdOccurrencesGetParams = {
+cursor?: string | null;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
 
 export type ListWorkObjectsApiV1WorkObjectsGetParams = {
 q?: string | null;
 oa_view?: ListWorkObjectsApiV1WorkObjectsGetOaView;
-completion?: 'active' | 'completed' | null;
+completion?: 'active' | 'completed' | 'withdrawn' | null;
+queue?: 'mine_sent' | 'department_unassigned' | 'department_review' | 'awaiting_acceptance' | null;
+history_from?: string | null;
+history_to?: string | null;
+cursor?: string | null;
 };
 
 export type ListWorkObjectsApiV1WorkObjectsGetOaView = typeof ListWorkObjectsApiV1WorkObjectsGetOaView[keyof typeof ListWorkObjectsApiV1WorkObjectsGetOaView];
@@ -571,23 +1194,50 @@ export const ListWorkObjectsApiV1WorkObjectsGetOaView = {
 
 export type ListWorkObjectsApiV1WorkObjectsGet422 = WorkObjectError | HTTPValidationError;
 
-export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams = {
-kind: ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind;
+export type UploadAttachmentApiV1WorkObjectsAttachmentsPostParams = {
+/**
+ * @minLength 1
+ * @maxLength 255
+ */
+filename: string;
 /**
  * @minLength 1
  * @maxLength 128
  */
-department_id?: string;
+media_type: string;
+purpose: UploadAttachmentApiV1WorkObjectsAttachmentsPostPurpose;
+};
+
+export type UploadAttachmentApiV1WorkObjectsAttachmentsPostPurpose = typeof UploadAttachmentApiV1WorkObjectsAttachmentsPostPurpose[keyof typeof UploadAttachmentApiV1WorkObjectsAttachmentsPostPurpose];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const UploadAttachmentApiV1WorkObjectsAttachmentsPostPurpose = {
+  task_material: 'task_material',
+  result: 'result',
+} as const;
+
+export type UploadAttachmentApiV1WorkObjectsAttachmentsPostHeaders = {
+'Idempotency-Key': string;
+};
+
+export type DispatchWorkObjectsApiV1WorkObjectsDispatchPostHeaders = {
+'Idempotency-Key': string;
+};
+
+export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams = {
+kind: ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind;
+/**
+ * @maxLength 200
+ */
+query?: string;
+cursor?: string | null;
+department_id?: string | null;
 /**
  * @minimum 1
  * @maximum 100
  */
 limit?: number;
-/**
- * @minLength 1
- * @maxLength 2048
- */
-cursor?: string;
 };
 
 export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = typeof ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind[keyof typeof ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind];
@@ -595,11 +1245,27 @@ export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = typeof L
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = {
-  department: 'department',
   user: 'user',
+  department: 'department',
 } as const;
 
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView | InternalWorkObjectView;
+
+export type LinkAttachmentsApiV1WorkObjectsWorkObjectIdAttachmentsPostHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type DetachAttachmentApiV1WorkObjectsWorkObjectIdAttachmentsAttachmentIdDeleteHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
 
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200 = OAWorkObjectView | InternalWorkObjectView;
 
@@ -611,35 +1277,30 @@ export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleComma
 'If-Match': string;
 };
 
-export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOf = {
-  operation: 'accept';
-};
-
-export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfTwo = {
-  operation: 'feedback';
-  /**
-   * @minLength 1
-   * @maxLength 2000
-   */
-  text: string;
-};
-
-export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfThree = {
-  operation: 'complete';
-  /**
-   * @minLength 1
-   * @maxLength 2000
-   */
-  text: string;
-};
-
-export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody = CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOf | CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfTwo | CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfThree;
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody = AssignCommand | AcceptCommand | FeedbackCommand | SubmitCommand | CompleteCommand | DepartmentReviewCommand | SubmitSummaryCommand | ConfirmCommand | ReturnCommand | ReviseCommand | WithdrawCommand | ExtendCommand | ReassignCommand;
 
 export type ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetParams = {
 /**
  * @minimum 0
  */
 after_version?: number;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type EditRemarkApiV1WorkObjectsWorkObjectIdRemarksPatchHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "worm-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type ListRemarkHistoryApiV1WorkObjectsWorkObjectIdRemarksHistoryGetParams = {
+cursor?: string | null;
 /**
  * @minimum 1
  * @maximum 100

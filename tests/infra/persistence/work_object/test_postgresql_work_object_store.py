@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta, timezone
@@ -10,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.v1.work_objects import WorkObjectService
 from app.db.session import make_async_engine, make_async_session_factory
@@ -53,8 +56,7 @@ def _snapshot(
 
 
 _STABLE_LIST_ORDER_BY = (
-    "ORDER BY due_at ASC NULLS LAST, created_at DESC NULLS LAST, "
-    'work_object_id COLLATE "C" ASC'
+    'ORDER BY due_at ASC NULLS LAST, created_at DESC NULLS LAST, work_object_id COLLATE "C" ASC'
 )
 
 
@@ -426,7 +428,9 @@ def test_postgresql_search_matches_normalized_fields_without_cross_user_leak() -
                 assert {row.source_ref for row in rows} == expected
             assert statements
             assert all(
-                "assignee_ai_user_id =" in sql and "tenant_id =" in sql for sql in statements
+                "assignee_ai_user_id=" in sql.replace(" ", "")
+                and "tenant_id=" in sql.replace(" ", "")
+                for sql in statements
             )
             assert all("regexp_replace" in sql for sql in statements if "STRPOS" in sql)
 
@@ -458,7 +462,9 @@ def test_postgresql_search_applies_match_before_limit() -> None:
             assert [item.source_ref for item in response.items] == ["LATE-HIT"]
             assert response.limit_exceeded is False
             sql = statements[-1]
-            assert "assignee_ai_user_id =" in sql and "tenant_id =" in sql
+            assert "assignee_ai_user_id=" in sql.replace(" ", "") and "tenant_id=" in sql.replace(
+                " ", ""
+            )
             _assert_list_sql_orders_before_limit(sql)
             upper = sql.upper()
             assert upper.index("STRPOS") < upper.index("ORDER BY") < upper.index("LIMIT")
@@ -539,23 +545,39 @@ def test_no_job_keeps_only_existing_visibility(dispatch_db) -> None:
         ("other-department", "office-c", "default"),
         ("other-tenant", "office-a", "synthetic-other"),
     ):
-        insert_synthetic_row(db, manual_row(
-            db, work_object_id=item_id, owner_department_id=department,
-            initiator_ai_user_id="ai-other", tenant_id=tenant,
-        ))
+        insert_synthetic_row(
+            db,
+            manual_row(
+                db,
+                work_object_id=item_id,
+                owner_department_id=department,
+                initiator_ai_user_id="ai-other",
+                tenant_id=tenant,
+            ),
+        )
     for user in ("ai-sender", "ai-other"):
         oa = _record(owner=user).model_dump(exclude={"oa_observation"})
         insert_synthetic_row(db, oa)
         legacy = {
-            **oa, "work_object_id": "legacy-" + user, "state_authority": "internal",
-            "source_system": "eternalai", "source_kind": "internal_task",
+            **oa,
+            "work_object_id": "legacy-" + user,
+            "state_authority": "internal",
+            "source_system": "eternalai",
+            "source_kind": "internal_task",
         }
-        for field in ("source_ref", "source_title", "source_status", "source_received_at",
-                      "source_created_at", "source_workflow_type_id", "source_fetched_at"):
+        for field in (
+            "source_ref",
+            "source_title",
+            "source_status",
+            "source_received_at",
+            "source_created_at",
+            "source_workflow_type_id",
+            "source_fetched_at",
+        ):
             legacy[field] = None
         insert_synthetic_row(db, legacy)
     db.actor("sender", "office-a", None)
-    expected = {own_outgoing, "local", "work-ai-sender-1", "legacy-ai-sender"}
+    expected = {own_outgoing, "work-ai-sender-1", "legacy-ai-sender"}
     response = db.client.get("/api/v1/work-objects")
     assert response.status_code == 200
     assert {item["work_object_id"] for item in response.json()["items"]} == expected
@@ -566,13 +588,29 @@ def test_no_job_keeps_only_existing_visibility(dispatch_db) -> None:
         )
         marked = db.client.patch(
             "/api/v1/work-objects/" + item_id + "/handling-mark",
-            json={"mark": "handled_elsewhere"}, headers=TEST_CSRF_HEADERS,
+            json={"mark": "handled_elsewhere"},
+            headers=TEST_CSRF_HEADERS,
         )
         assert marked.status_code == (200 if item_id == "work-ai-sender-1" else 404)
     assert {
-        row["work_object_id"] for row in db.rows("work_objects")
-        if row["handling_mark"] is not None
+        row["work_object_id"] for row in db.rows("work_objects") if row["handling_mark"] is not None
     } == {"work-ai-sender-1"}
+
+
+def _clone_department_relation(db, source_id, task_id, department_id):
+    db.execute(
+        "INSERT INTO work_object_handling_relations "
+        "SELECT (jsonb_populate_record(NULL::work_object_handling_relations, "
+        "to_jsonb(r)||jsonb_build_object('relation_id',CAST(:relation AS TEXT), "
+        "'work_object_id',CAST(:task AS TEXT),'target_department_id',"
+        "CAST(:department AS TEXT)))).* "
+        "FROM work_object_handling_relations r WHERE r.work_object_id=:source "
+        "AND r.superseded_at IS NULL",
+        relation=str(uuid4()),
+        task=task_id,
+        department=department_id,
+        source=source_id,
+    )
 
 
 def test_internal_scope_consumes_department_and_initiator_before_limit(
@@ -581,15 +619,17 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(
     from app.ports import work_object_scope as policy
     from tests.api.test_work_object_dispatch import (
         assert_created,
-        cross_department_body,
         insert_synthetic_row,
         manual_row,
+        request_body,
         run,
     )
 
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    assert_created(db, db.post(cross_department_body()))
+    source = assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )["work_object_id"]
     base = manual_row(db)
     # Insert unrelated rows before visible rows so a pre-filter LIMIT loses valid results.
     for index in range(205):
@@ -612,6 +652,7 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(
             "initiator_ai_user_id": "ai-neighbor",
         },
     )
+    _clone_department_relation(db, source, "same-department", "office-a")
     insert_synthetic_row(
         db,
         {
@@ -625,8 +666,9 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(
         item_id = f"visible-{index}"
         expected.add(item_id)
         insert_synthetic_row(
-            db, {**base, "work_object_id": item_id, "owner_department_id": "office-a"}
+            db, {**base, "work_object_id": item_id, "owner_department_id": "office-c"}
         )
+        _clone_department_relation(db, source, item_id, "office-a")
     insert_synthetic_row(
         db,
         {
@@ -641,6 +683,9 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(
         principal_tenant_id="default",
         principal_ai_user_id="ai-reader",
         principal_department_id="office-a",
+        responsible_department_ids=frozenset({"office-a"}),
+        directory_snapshot_version=1,
+        valid_until=time.monotonic() + 3600,
     )
     rows = run(db.store.list_for_scope(scope))
     assert {row.work_object_id for row in rows} == expected
@@ -649,6 +694,7 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(
     insert_synthetic_row(
         db, {**base, "work_object_id": "visible-201", "owner_department_id": "office-a"}
     )
+    _clone_department_relation(db, source, "visible-201", "office-a")
     rows = run(db.store.list_for_scope(scope))
     assert {row.work_object_id for row in rows} == expected | {"visible-201"}
     assert len(rows) == 201
@@ -660,16 +706,18 @@ def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(
     from app.ports import work_object_scope as policy
     from tests.api.test_work_object_dispatch import (
         assert_created,
-        cross_department_body,
         insert_synthetic_row,
         manual_row,
+        request_body,
         run,
     )
     from tests.api.test_work_objects import _record
 
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    created = assert_created(db, db.post(cross_department_body()))
+    assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
     oa = _record(owner="ai-private-owner").model_dump(exclude={"oa_observation"})
     insert_synthetic_row(db, oa)
     legacy = {
@@ -718,7 +766,7 @@ def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(
             principal_department_id="office-b",
         )
         visible = {row.work_object_id for row in run(db.store.list_for_scope(scope))}
-        expected = {created["work_object_id"]}
+        expected = set()
         if actor == "ai-private-owner":
             expected |= {oa["work_object_id"], "legacy-private"}
         assert visible == expected
@@ -763,6 +811,7 @@ def test_internal_search_filters_scope_and_title_before_limit(dispatch_db, query
         {
             **base,
             "work_object_id": "visible-title",
+            "initiator_ai_user_id": "ai-reader",
             "title": "MiXeD\u3000 100%_Ready",
             "owner_department_id": "office-a",
         },
@@ -783,7 +832,7 @@ def test_internal_search_filters_scope_and_title_before_limit(dispatch_db, query
 
 
 def test_dispatch_concurrent_idempotency_and_restart_replay(dispatch_db, monkeypatch) -> None:
-    from app.api.v1.work_objects import DispatchWorkObjectsRequest
+    from app.api.v1.work_objects import DispatchWorkObjectsRequest, DispatchWorkObjectsResponse
     from tests.api.test_work_object_dispatch import request_body, run
 
     db = dispatch_db
@@ -821,8 +870,14 @@ def test_dispatch_concurrent_idempotency_and_restart_replay(dispatch_db, monkeyp
             tenant_id="default", initiator_ai_user_id="ai-sender", idempotency_key=key
         )
         assert saved is not None
-        assert saved.result["items"] == first.model_dump(mode="json")["items"]
+        assert (
+            DispatchWorkObjectsResponse.model_validate_json(json.dumps(saved.result)).model_dump(
+                mode="json"
+            )["items"]
+            == first.model_dump(mode="json")["items"]
+        )
         db.service._store = restarted
+        db.service.dispatch._store = restarted
         replay = await db.service.dispatch_for_principal(principal, body, key)
         assert replay.replayed is True and replay.items == first.items
 
@@ -841,10 +896,10 @@ def test_dispatch_batch_failure_rolls_back_objects_and_receipt(dispatch_db, monk
 
     def fail_second(_connection, _cursor, statement, _parameters, _context, _executemany):
         nonlocal inserts
-        if statement.startswith("INSERT INTO work_objects "):
+        if statement.startswith("INSERT INTO work_objects("):
             inserts += 1
             if inserts == 2:
-                raise RuntimeError("synthetic second insert failure")
+                raise SQLAlchemyError("synthetic second insert failure")
 
     event.listen(db.engine.sync_engine, "before_cursor_execute", fail_second)
     key = str(uuid4())
@@ -872,9 +927,8 @@ def test_dispatch_batch_failure_rolls_back_objects_and_receipt(dispatch_db, monk
 def test_dispatch_trace_failure_recovers_concurrent_receipt(
     dispatch_db, monkeypatch, caplog, different_fingerprint
 ) -> None:
-    from fastapi import HTTPException
-
     from app.api.v1.work_objects import DispatchWorkObjectsRequest, WorkObjectService
+    from app.ports.work_object_dispatch import WorkDispatchError
     from tests.api.test_work_object_dispatch import request_body, run
 
     db = dispatch_db
@@ -901,7 +955,7 @@ def test_dispatch_trace_failure_recovers_concurrent_receipt(
         class FailingTrace:
             record_event = staticmethod(delayed_failure)
 
-        monkeypatch.setattr(db.service, "_trace_port", FailingTrace())
+        monkeypatch.setattr(db.service.dispatch, "_trace_port", FailingTrace())
         pending = asyncio.create_task(db.service.dispatch_for_principal(principal, body, key))
         await asyncio.wait_for(trace_reached.wait(), timeout=15)
         winner_body = (
@@ -912,12 +966,9 @@ def test_dispatch_trace_failure_recovers_concurrent_receipt(
         winner = await second_service.dispatch_for_principal(principal, winner_body, key)
         winner_committed.set()
         if different_fingerprint:
-            with pytest.raises(HTTPException) as error:
+            with pytest.raises(WorkDispatchError) as error:
                 await asyncio.wait_for(pending, timeout=15)
-            assert (
-                error.value.status_code == 409
-                and error.value.detail["code"] == "idempotency_key_reused"
-            )
+            assert error.value.code == "idempotency_key_reused"
         else:
             recovered = await asyncio.wait_for(pending, timeout=15)
             assert recovered.replayed is True
@@ -928,9 +979,11 @@ def test_dispatch_trace_failure_recovers_concurrent_receipt(
 
     run(exercise())
     assert db.counts() == (1, 1)
-    assert [
-        record.getMessage() for record in caplog.records if record.name == "app.api.v1.work_objects"
-    ] == ["work_object_audit_unavailable"]
+    assert any(
+        record.name == "app.work_dispatch.service"
+        and "code=work_object_audit_unavailable" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 _PLUS8 = timezone(timedelta(hours=8))
@@ -1004,7 +1057,7 @@ def _insert_sorted_row(
             **base,
             "work_object_id": item_id,
             "owner_department_id": extra.get("owner_department_id", "office-c"),
-            "initiator_ai_user_id": extra.get("initiator_ai_user_id", "ai-neighbor"),
+            "initiator_ai_user_id": extra.get("initiator_ai_user_id", "ai-sorter"),
             "due_at": due_at,
             "created_at": created_at,
             "updated_at": extra.get("updated_at", created_at),

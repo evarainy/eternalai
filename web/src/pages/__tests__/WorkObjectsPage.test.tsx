@@ -37,6 +37,14 @@ vi.mock('../../generated/work-objects/work-objects', async (importOriginal) => (
   syncWorkObjectsApiV1WorkObjectsSyncPost: apiMocks.syncWorkObjects,
 }));
 
+class JsonResponse extends Response {
+  constructor(body: BodyInit | null, init: ResponseInit = {}) { super(body, { ...init, headers: { 'Content-Type': 'application/json', ...Object.fromEntries(new Headers(init.headers)) } }); }
+}
+vi.mock('../../features/work-dispatch/workObjectLifecycleApi', async (original) => ({
+  ...await original<typeof import('../../features/work-dispatch/workObjectLifecycleApi')>(),
+  readWorkQueue: async () => listResponse({ items: [] }),
+}));
+
 const WORK_OBJECT: OAWorkObjectView = {
   assignee_display_name: '雨爷',
   due_at: '2026-08-20T08:00:00Z',
@@ -138,7 +146,7 @@ function renderPage(
     <ConfigProvider theme={{ token: { motion: false } }}>
       <AntApp>
         <QueryClientProvider client={queryClient}>
-          <WorkObjectsPage />
+          <MemoryRouter><WorkObjectsPage /></MemoryRouter>
           {withDock ? <AIDock /> : null}
         </QueryClientProvider>
       </AntApp>
@@ -149,7 +157,7 @@ function renderPage(
 
 function AuthenticatedWorkObjects() {
   const status = useAuthStore((state) => state.status);
-  return <><AuthenticationEffects />{status === 'authenticated' ? <WorkObjectsPage /> : <p>合成退出状态</p>}</>;
+  return <><AuthenticationEffects />{status === 'authenticated' ? <MemoryRouter><WorkObjectsPage /></MemoryRouter> : <p>合成退出状态</p>}</>;
 }
 
 describe('WorkObjectsPage', () => {
@@ -198,7 +206,7 @@ describe('WorkObjectsPage', () => {
     const generations = trackAuthGenerations(useAuthStore);
     onTestFinished(generations.stop);
     const client = makeClient();
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new JsonResponse(JSON.stringify({
       authenticated: true, display_name: 'Synthetic A', org: null, org_status: 'unavailable', avatar_path: null,
     })));
     let mounted: ReturnType<typeof render> | undefined;
@@ -211,7 +219,7 @@ describe('WorkObjectsPage', () => {
       fireEvent.click(within(screen.getByText(WORK_OBJECT.source_title!).closest('tr')!).getByRole('button'));
       await waitFor(() => expect(apiMocks.getWorkObject).toHaveBeenCalled());
       await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })
-        .filter((query) => query.state.data !== undefined)).toHaveLength(4));
+        .filter((query) => query.state.data !== undefined)).toHaveLength(5));
       const activeKey = ['work-objects', 1, 'list', 'active', 'active'];
       const completedKey = ['work-objects', 1, 'list', 'active', 'completed'];
       const newer = listResponse({
@@ -239,7 +247,7 @@ describe('WorkObjectsPage', () => {
       apiMocks.listWorkObjects.mockReturnValueOnce(new Promise<WorkObjectListResponse>((done) => { release = done; }));
       const late = client.refetchQueries({ queryKey: ['work-objects', 1, 'list', 'active', 'active'] });
       await waitFor(() => expect(client.isFetching()).toBe(1));
-      fetchSpy.mockResolvedValueOnce(new Response('', { status: 401 }));
+      fetchSpy.mockResolvedValueOnce(new JsonResponse('', { status: 401 }));
       await act(async () => {
         await expect(customInstance({ url: '/api/v1/me', method: 'GET' })).rejects.toMatchObject({ status: 401 });
       });
@@ -253,7 +261,7 @@ describe('WorkObjectsPage', () => {
       apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
       apiMocks.syncWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
       apiMocks.completedWorkObjects.mockResolvedValue(listResponse({ items: [] }));
-      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({
+      fetchSpy.mockImplementation(async () => new JsonResponse(JSON.stringify({
         authenticated: true, display_name: 'Synthetic B', org: null, org_status: 'unavailable', avatar_path: null,
       })));
       act(() => useAuthStore.getState().markAuthenticated());
@@ -267,9 +275,10 @@ describe('WorkObjectsPage', () => {
           expect(query.state.data).toMatchObject({ display_name: 'Synthetic B' });
         } else {
           expect(query.queryKey[0]).toBe('work-objects');
-          const data = query.state.data as WorkObjectListResponse;
-          expect(data.items).toBeDefined();
-          for (const item of data.items) expect(item).toEqual(OTHER_USER_WORK_OBJECT);
+          const data = query.state.data as WorkObjectListResponse | { pages: WorkObjectListResponse[] };
+          const items = 'pages' in data ? data.pages.flatMap((page) => page.items) : data.items;
+          expect(items).toBeDefined();
+          for (const item of items) expect(item).toEqual(OTHER_USER_WORK_OBJECT);
         }
       }
     } finally {
@@ -442,7 +451,7 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByRole('button', { name: '我自己办' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '去 OA 办' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '先看看' })).toBeInTheDocument();
-    const dataRows = screen.getAllByRole('row').slice(1);
+    const dataRows = within(screen.getByRole('region', { name: '事项分类' })).getAllByRole('row').slice(1);
     for (const row of dataRows) {
       expect(within(row).getAllByRole('button')).toHaveLength(1);
     }
@@ -534,7 +543,7 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByText(/上次OA步骤 待办/)).toBeInTheDocument();
     expect(screen.getAllByText(/^数据截至 /).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('筛选')).toBeInTheDocument();
-    const overdueStatus = within(screen.getByRole('table')).getByText(/已逾期/);
+    const overdueStatus = within(within(screen.getByRole('region', { name: '事项分类' })).getByRole('table')).getByText(/已逾期/);
     expect(overdueStatus.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 
@@ -545,12 +554,12 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(container.querySelector('[data-density="compact"]')).not.toBeNull();
     expect(container.querySelector('.ant-table-body')).toBeNull();
-    expect(screen.getByRole('columnheader', { name: /事项/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '事项分类' })).getByRole('columnheader', { name: /事项/ })).toBeInTheDocument();
     expect(
-      screen.getByRole('columnheader', { name: /责任人 \/ 部门/ }),
+      within(screen.getByRole('region', { name: '事项分类' })).getByRole('columnheader', { name: /责任人 \/ 部门/ }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /截止时间/ })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /下一动作/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '事项分类' })).getByRole('columnheader', { name: /截止时间/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '事项分类' })).getByRole('columnheader', { name: /下一动作/ })).toBeInTheDocument();
   });
 
   it('explains why Urgent is empty and gives a concrete next step', async () => {
@@ -1057,7 +1066,7 @@ describe('internal dispatch integration at fetch boundary', () => {
     apiMocks.getWorkObject.mockReset().mockImplementation(real.getWorkObjectApiV1WorkObjectsWorkObjectIdGet);
     apiMocks.syncWorkObjects.mockReset().mockImplementation(real.syncWorkObjectsApiV1WorkObjectsSyncPost);
     internal = { ...INTERNAL_WORK_OBJECT, title: '合成内部事项', assignee_display_name: null, kind: '通知', target_kind: 'user', status: 'assigned', requirement: '办理正文', receipt_requirement: '回执正文', reminder_choices: ['提前 1 天'], reminder_delivery: 'not_enabled', created_at: '2026-09-14T01:00:00Z', updated_at: '2026-09-14T02:00:00Z', owner_department_id: 'd1', version: 1 };
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(url.includes('/internal-work-object-1') ? internal : listResponse({ items: url.includes('completion=completed') ? [] : [internal] }))))));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => Promise.resolve(new JsonResponse(JSON.stringify(url.includes('/internal-work-object-1') ? internal : listResponse({ items: url.includes('completion=completed') ? [] : [internal] }))))));
   });
   afterEach(() => { vi.stubGlobal('fetch', originalFetch); });
   it('N1 shows_internal_null_rows_and_view_only_detail', async () => {
@@ -1070,7 +1079,7 @@ describe('internal dispatch integration at fetch boundary', () => {
     fireEvent.click(within(row).getByRole('button', { name: '先看看' }));
     expect(await screen.findByText('内部事项')).toBeVisible();
     const drawer = screen.getByRole('dialog');
-    for (const value of ['internal-work-object-1', '办理正文', '回执正文', '已派发']) expect(within(drawer).getByText(value)).toBeVisible();
+    for (const value of ['internal-work-object-1', '办理正文', '回执正文', '待本人接单']) expect(within(drawer).getByText(value)).toBeVisible();
     expect(within(drawer).getByText(/自动提醒尚未启用/)).toHaveTextContent('提前 1 天');
     expect(drawer.querySelector('[data-assignee-value]')).toBeNull();
     expect(within(drawer).queryByRole('button', { name: /标记为|去 OA|认领|转派/ })).toBeNull();
@@ -1080,7 +1089,7 @@ describe('internal dispatch integration at fetch boundary', () => {
   });
   it('N2 filters_and_sorts_null_without_synthetic_values', async () => {
     const items = [internal, { ...internal, work_object_id: 'null2', title: '空名二' }, { ...internal, work_object_id: 'named1', title: '同名一', assignee_display_name: '张三' }, { ...internal, work_object_id: 'named2', title: '同名二', assignee_display_name: '张三' }];
-    vi.mocked(fetch).mockImplementation((url) => Promise.resolve(new Response(JSON.stringify(listResponse({ items: String(url).includes('completion=completed') ? [] : items })))));
+    vi.mocked(fetch).mockImplementation((url) => Promise.resolve(new JsonResponse(JSON.stringify(listResponse({ items: String(url).includes('completion=completed') ? [] : items })))));
     renderPage(); await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('4'));
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
     const rows = () => Array.from(document.querySelectorAll('tbody tr[data-row-key]'), (node) => node.getAttribute('data-row-key'));
@@ -1105,11 +1114,11 @@ describe('internal dispatch integration at fetch boundary', () => {
     const now = new Date(); const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(23, 59, 59, 999);
     const dayAfter = new Date(tomorrow.getTime() + 1);
     const items = [internal, { ...internal, work_object_id: 'past', title: '逾期项', due_at: new Date(now.getTime() - 60000).toISOString() }, { ...internal, work_object_id: 'tomorrow', title: '明日末项', due_at: tomorrow.toISOString() }, { ...internal, work_object_id: 'future', title: '后日零点项', due_at: dayAfter.toISOString(), status: 'department_pending' as const }];
-    vi.mocked(fetch).mockImplementation((url) => Promise.resolve(new Response(JSON.stringify(listResponse({ items: String(url).includes('completion=completed') ? [] : items })))));
+    vi.mocked(fetch).mockImplementation((url) => Promise.resolve(new JsonResponse(JSON.stringify(listResponse({ items: String(url).includes('completion=completed') ? [] : items })))));
     renderPage(); expect(await screen.findByText('逾期项')).toBeVisible(); expect(screen.getByText('明日末项')).toBeVisible();
     expect(screen.getByTestId('work-count-urgent')).toHaveTextContent('2'); expect(screen.getByTestId('work-count-todo')).toHaveTextContent('2');
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
-    expect(screen.getByText('后日零点项')).toBeVisible(); expect(screen.getByText('待部门认领')).toBeVisible();
+    expect(screen.getByText('后日零点项')).toBeVisible(); expect(screen.getByText('待部门分配')).toBeVisible();
     expect(screen.getByText('合成内部事项')).toBeVisible();
     expect(screen.getByText(/数据截至/)).toHaveTextContent('2026');
     expect(screen.getByTestId('work-count-done')).toHaveTextContent('0');
@@ -1119,9 +1128,9 @@ describe('internal dispatch integration at fetch boundary', () => {
   it('N5 keeps_self_reads_when_directory_is_stale and hides denied detail', async () => {
     vi.mocked(fetch).mockImplementation((url) => {
       const path = String(url);
-      return Promise.resolve(path.includes('dispatch-options') ? new Response(JSON.stringify({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }), { status: 503 })
-        : path.includes('/internal-work-object-1') ? new Response(JSON.stringify({ detail: { code: 'work_object_not_found', message: 'synthetic' } }), { status: 404 })
-        : new Response(JSON.stringify(listResponse({ items: [internal] }))));
+      return Promise.resolve(path.includes('dispatch-options') ? new JsonResponse(JSON.stringify({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }), { status: 503 })
+        : path.includes('/internal-work-object-1') ? new JsonResponse(JSON.stringify({ detail: { code: 'work_object_not_found', message: 'synthetic' } }), { status: 404 })
+        : new JsonResponse(JSON.stringify(listResponse({ items: [internal] }))));
     });
     const client = makeClient();
     const dispatch = render(<QueryClientProvider client={client}><MemoryRouter><WorkDispatchPage /></MemoryRouter></QueryClientProvider>);
@@ -1129,10 +1138,10 @@ describe('internal dispatch integration at fetch boundary', () => {
     const list = renderPage(client);
     await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('1'));
     fireEvent.click(screen.getByRole('radio', { name: /待办/ })); fireEvent.click(screen.getByRole('button', { name: '先看看' }));
-    expect(await screen.findByText('详情读取失败')).toBeVisible();
-    expect(within(screen.getByRole('dialog')).queryByText('办理正文')).toBeNull();
-    expect(within(screen.getByRole('dialog')).queryByText('合成内部事项')).toBeNull(); list.unmount();
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'organization_directory_unavailable', message: 'synthetic' } }), { status: 503 }));
+    expect(await screen.findByText('当前访问已失效，已清除事项、计数与上下文引用。请重新读取核对。')).toBeVisible();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText('办理正文')).toBeNull(); expect(screen.queryByText('合成内部事项')).toBeNull(); list.unmount();
+    vi.mocked(fetch).mockResolvedValue(new JsonResponse(JSON.stringify({ detail: { code: 'organization_directory_unavailable', message: 'synthetic' } }), { status: 503 }));
     const failedClient = makeClient(); failedClient.setQueryData(['work-objects', useAuthStore.getState().generation, 'list', 'active', 'active'], listResponse({ items: [internal] }));
     renderPage(failedClient); expect(await screen.findByText('无法读取已保存的工作事项')).toBeVisible();
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
@@ -1237,7 +1246,7 @@ describe('internal completion query isolation', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('3'));
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
-    for (const [status, label] of [['assigned', '已派发'], ['department_pending', '待部门认领'], ['in_progress', '办理中']]) {
+    for (const [status, label] of [['assigned', '待本人接单'], ['department_pending', '待部门分配'], ['in_progress', '办理中']]) {
       expect(within(screen.getByText(status!).closest('tr')!).getByText(label!)).toBeVisible();
     }
     expect(screen.queryByText('合成办结事项')).toBeNull();
@@ -1367,7 +1376,7 @@ describe('completed work-object version merge', () => {
       <ConfigProvider theme={{ token: { motion: false } }}>
         <AntApp>
           <QueryClientProvider client={queryClient}>
-            <WorkObjectsPage />
+            <MemoryRouter><WorkObjectsPage /></MemoryRouter>
           </QueryClientProvider>
         </AntApp>
       </ConfigProvider>,

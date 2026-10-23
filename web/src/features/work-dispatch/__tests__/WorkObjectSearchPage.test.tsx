@@ -17,8 +17,8 @@ const apiMocks = vi.hoisted(() => ({
   listWorkObjects: vi.fn(),
 }));
 
-vi.mock('../../../generated/work-objects/work-objects', () => ({
-  listWorkObjectsApiV1WorkObjectsGet: apiMocks.listWorkObjects,
+vi.mock('../workObjectLifecycleApi', async (original) => ({
+  ...await original<typeof import('../workObjectLifecycleApi')>(), readWorkQueue: apiMocks.listWorkObjects,
 }));
 
 const TITLE_ITEM: OAWorkObjectView = {
@@ -225,7 +225,7 @@ describe('WorkObjectSearchPage', () => {
     expect(
       await screen.findByText('查找失败', { selector: 'strong' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('查找失败：network unavailable。')).toBeInTheDocument();
+    expect(screen.getByText('查找失败：请求失败，请重新读取核对。。')).toBeInTheDocument();
     expect(
       screen.getAllByText(/下一步：稍后重试，或先回到工作事项页检查数据状态/),
     ).toHaveLength(2);

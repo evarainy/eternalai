@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from collections.abc import Iterator
@@ -32,7 +33,6 @@ from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectSto
 from app.main import create_app
 from app.ports import work_object_scope as policy
 from app.ports.auth import Principal, PrincipalOrgContext
-from app.ports.work_object_scope import DispatchAuthorizationDecision
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
@@ -78,6 +78,15 @@ INTERNAL_KEYS = {
     "version",
     "created_at",
     "updated_at",
+    "accepted_at",
+    "completed_at",
+    "dispatch_model_version",
+    "dispatch_mode",
+    "completion_mode",
+    "withdrawn_at",
+    "series_id",
+    "relations",
+    "frozen",
 }
 
 
@@ -225,6 +234,8 @@ def dispatch_db(migrated_database_url: str) -> Iterator[DispatchHarness]:
         db = DispatchHarness(migrated_database_url, schema)
         db.membership("recipient", "office-b")
         db.membership("local-recipient", "office-a")
+        for department in ("office-b", "office-c", "572", "575"):
+            db.membership("head-" + department, department, "75")
         yield db
     finally:
         if db is not None:
@@ -246,6 +257,8 @@ def request_body(**updates: Any) -> dict[str, Any]:
         "receipt_requirement": "",
         "due_at": None,
         "reminder_choices": [],
+        "dispatch_mode": "independent",
+        "completion_mode": "submit_completes",
         "targets": [
             {"kind": "user", "directory_user_id": "local-recipient", "department_id": "office-a"}
         ],
@@ -274,25 +287,36 @@ def expire_directory(db):
     )
 
 
-def test_stale_directory_blocks_initial_dispatch_and_receipt_replay(dispatch_db):
+def test_stale_directory_blocks_creation_but_preserves_authorized_receipt_read(dispatch_db):
     db = dispatch_db
     key = str(uuid4())
     assert_created(db, db.post(key=key))
     assert db.post(key=key).status_code == 200
     expire_directory(db)
-    for current in (key, str(uuid4())):
-        assert_error(db.post(key=current), 503, "organization_directory_stale")
-        assert db.counts() == (1, 1)
+    replay = db.post(key=key)
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    assert_error(db.post(), 503, "organization_directory_stale")
+    assert db.counts() == (1, 1)
 
 
 def test_expiry_during_request_blocks_publication(dispatch_db, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from app.infra.persistence.work_object import authorization, dispatch_insert
+
     db = dispatch_db
-    ticks = [0.0]
-    db.service._monotonic = lambda: ticks[0]
+    ticks = [time.monotonic()]
+    clock = SimpleNamespace(monotonic=lambda: ticks[0])
+    db.service.dispatch._monotonic = clock.monotonic
+    monkeypatch.setattr(authorization, "time", clock)
+    monkeypatch.setattr(dispatch_insert, "time", clock)
     original = db.trace.record_event
+
     async def slow_audit(event):
         await original(event)
-        ticks[0] = 172801.0
+        ticks[0] += 172801.0
+
     monkeypatch.setattr(db.trace, "record_event", slow_audit)
     assert_error(db.post(), 503, "organization_directory_stale")
     assert db.counts() == (0, 0)
@@ -305,22 +329,31 @@ def test_request_uses_one_directory_generation_for_all_targets(dispatch_db, monk
     db = dispatch_db
     reads = []
     original_read = db.directory.read_view
+
     async def read():
         reads.append(True)
         return await original_read()
+
     monkeypatch.setattr(db.directory, "read_view", read)
     original_audit = db.trace.record_event
+
     async def revoke_after_decision(event):
         await original_audit(event)
         db.membership("sender", "office-a", None)
+
     monkeypatch.setattr(db.trace, "record_event", revoke_after_decision)
-    result = db.post(cross_department_body(targets=[
-        *cross_department_body()["targets"], {"kind": "department", "department_id": "office-c"},
-    ]))
+    result = db.post(
+        cross_department_body(
+            targets=[
+                *request_body()["targets"],
+                {"kind": "department", "department_id": "office-c"},
+            ]
+        )
+    )
     assert result.status_code == 201
     assert len(reads) == 1
     assert db.counts() == (2, 1)
-    assert_error(db.post(cross_department_body()), 403, "not_department_head")
+    assert_error(db.post(request_body()), 403, "not_department_head")
     assert len(reads) == 2
 
 
@@ -334,21 +367,27 @@ def test_zero_jobtitle_imported_to_pg_denies_dispatch_and_replay(
         build_directory_snapshot,
     )
     from tests.infra.organization_directory.test_sync_state import snapshot
+
     db = dispatch_db
     db.actor("zero-actor", actor_department, "75")
     db.membership("zero-target", actor_department)
     same_department = request_body(
-        targets=[{"kind": "user", "directory_user_id": "zero-target",
-                  "department_id": actor_department}]
+        targets=[
+            {"kind": "user", "directory_user_id": "zero-target", "department_id": actor_department}
+        ]
     )
     key = str(uuid4())
     assert_created(db, db.post(same_department, key=key))
+
     async def import_zero():
         base = await snapshot(db)
         rows = [
-            {"id": member.user_id, "departmentid": member.department_id,
-             "jobtitle": zero if member.user_id == "zero-actor" else member.job_title,
-             "lastname": "Synthetic person"}
+            {
+                "id": member.user_id,
+                "departmentid": member.department_id,
+                "jobtitle": zero if member.user_id == "zero-actor" else member.job_title,
+                "lastname": "Synthetic person",
+            }
             for member in base.memberships
         ]
         if zero is None:
@@ -365,22 +404,32 @@ def test_zero_jobtitle_imported_to_pg_denies_dispatch_and_replay(
         )
         assert imported.is_complete and imported.returned_user_count == len(rows)
         await db.directory.replace_snapshot(imported)
+
     run(import_zero())
     with db.sql.connect() as connection:
         assert (
             connection.execute(
-                text("SELECT job_title FROM organization_user_memberships "
-                     "WHERE user_id='zero-actor'")
+                text(
+                    "SELECT job_title FROM organization_user_memberships WHERE user_id='zero-actor'"
+                )
             ).scalar_one()
             is None
         )
-    for current in (key, str(uuid4())):
-        assert_error(db.post(same_department, key=current), 403, "not_department_head")
+    assert db.post(same_department, key=key).status_code == 200
+    assert_error(db.post(same_department), 403, "not_department_head")
     assert_error(db.post(), 403, "not_department_head")
-    for query in ("kind=department", "kind=user&department_id=" + actor_department,
-                  "kind=user&department_id=office-b"):
-        assert_error(db.client.get("/api/v1/work-objects/dispatch-options?"+query),
-                     403, "not_department_head")
+    for query in (
+        "kind=department",
+        "kind=user&department_id=" + ("office-b" if actor_department == "office-a" else "office-a"),
+    ):
+        assert_error(
+            db.client.get("/api/v1/work-objects/dispatch-options?" + query),
+            403,
+            "not_department_head",
+        )
+    own = db.client.get("/api/v1/work-objects/dispatch-options?kind=user")
+    assert own.status_code == 200
+    assert [item["directory_user_id"] for item in own.json()["items"]] == ["zero-actor"]
     assert db.counts() == (1, 1)
 
 
@@ -416,7 +465,9 @@ def assert_created(db: DispatchHarness, response) -> dict[str, Any]:
     assert response.status_code == 201, response.text
     item = response.json()["items"][0]
     assert item["work_object_id"] in {row["work_object_id"] for row in db.rows("work_objects")}
-    assert item["assignee_display_name"] is None
+    assert item["assignee_display_name"] == (
+        "Synthetic " + item["owner_department_id"] if item["target_kind"] == "department" else None
+    )
     return item
 
 
@@ -549,11 +600,13 @@ def test_dispatch_resolves_both_actor_and_target_server_side(dispatch_db, monkey
                 ]
             )
         ),
-        404,
-        "dispatch_target_not_found",
+        403,
+        "cross_department_dispatch_denied",
     )
     assert db.counts() == (0, 0)
-    assert_created(db, db.post(cross_department_body()))
+    assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
     row = db.rows("work_objects")[0]
     assert (row["owner_department_id"], row["initiator_ai_user_id"], row["tenant_id"]) == (
         "office-b",
@@ -576,8 +629,8 @@ def test_dispatch_missing_or_ambiguous_actor_denies_and_alerts(
     elif case == "ambiguous":
         db.membership("sender", "office-c", "75")
     else:
-
         original = db.directory.read_view
+
         async def wrong():
             view = await original()
             return view.model_copy(
@@ -597,15 +650,19 @@ def test_dispatch_missing_or_ambiguous_actor_denies_and_alerts(
     )
     assert_error(db.post(), 403, code)
     warnings = [
-        r for r in caplog.records if r.name == "app.api.v1.work_objects" and r.getMessage() == code
+        r
+        for r in caplog.records
+        if r.name == "app.api.v1.work_objects"
+        and r.getMessage() == "work_dispatch stage=http code=" + code
     ]
     assert len(warnings) == 1
     assert warnings[0].levelno == logging.WARNING
     assert warnings[0].exc_info is None and warnings[0].stack_info is None
     assert db.counts() == (0, 0)
     trace = db.rows("trace_events")[0]
-    assert trace["status"] == "blocked" and trace["error_code"] is None
-    assert trace["attributes"]["reason_code"] == code
+    assert trace["status"] == "blocked" and trace["attributes"]["reason_code"] == code
+    assert code in caplog.text
+    assert "wrong-user" not in caplog.text
 
 
 @pytest.mark.parametrize("job", [None, "999", "0"])
@@ -627,23 +684,30 @@ def test_dispatch_non_head_including_admin_is_denied(
     assert_error(db.post(), 403, "not_department_head")
     assert db.counts() == (0, 0)
     db.membership("matrix-head", department, "75")
-    success = db.post(request_body(targets=[{"kind": "department", "department_id": department}]))
+    success = db.post(
+        request_body(
+            targets=[
+                {"kind": "user", "directory_user_id": "matrix-head", "department_id": department}
+            ]
+        )
+    )
     assert success.status_code == 201
     assert db.counts() == (1, 1)
 
 
 @pytest.mark.parametrize("job", ["75", "380", "1405", "1701", "1999"])
-def test_prison_head_cross_department_is_atomic_denial(dispatch_db, job):
+def test_all_confirmed_head_jobs_can_create_cross_department_targets(dispatch_db, job):
     db = dispatch_db
-    db.actor("prison-head", "572", job)
+    db.actor("head-572", "572", job)
     body = request_body(
         targets=[
             {"kind": "department", "department_id": "572"},
             {"kind": "department", "department_id": "575"},
         ]
     )
-    assert_error(db.post(body), 403, "cross_department_dispatch_denied")
-    assert db.counts() == (0, 0)
+    response = db.post(body)
+    assert response.status_code == 201 and response.json()["created_count"] == 2
+    assert db.counts() == (2, 1)
 
 
 @pytest.mark.parametrize("job", ["75", "380", "1405", "1701", "1999"])
@@ -655,7 +719,7 @@ def test_office_head_creates_visible_objects_for_verified_targets(dispatch_db, m
     db.actor("sender", "office-a", job)
     body = cross_department_body(
         targets=[
-            *cross_department_body()["targets"],
+            *request_body()["targets"],
             {"kind": "department", "department_id": "office-c"},
         ]
     )
@@ -671,56 +735,43 @@ def test_office_head_creates_visible_objects_for_verified_targets(dispatch_db, m
     assert {row["tenant_id"] for row in db.rows("work_objects")} == {"default"}
     assert {row["initiator_ai_user_id"] for row in db.rows("work_objects")} == {"ai-sender"}
     assert {row["owner_department_id"] for row in db.rows("work_objects")} == {
-        "office-b",
+        "office-a",
         "office-c",
     }
 
 
-def test_unresolved_actor_department_keeps_same_department_user_dispatch(dispatch_db, monkeypatch):
+def test_missing_current_department_fact_rejects_creation(dispatch_db, monkeypatch):
     db = dispatch_db
-    db.membership("local-recipient", "office-a")
-
     original = db.directory.read_view
+
     async def unresolved():
-        view = await original()
-        return view.model_copy(update={"departments": ()})
+        return (await original()).model_copy(update={"departments": ()})
 
     monkeypatch.setattr(db.directory, "read_view", unresolved)
-    assert_created(
-        db,
-        db.post(
-            request_body(
-                targets=[
-                    {
-                        "kind": "user",
-                        "directory_user_id": "local-recipient",
-                        "department_id": "office-a",
-                    }
-                ]
-            )
-        ),
-    )
-    assert_error(db.post(cross_department_body()), 403, "cross_department_dispatch_denied")
-    assert_error(
-        db.post(request_body(targets=[{"kind": "department", "department_id": "office-a"}])),
-        404,
-        "dispatch_target_not_found",
-    )
-    assert db.counts() == (1, 1)
+    for body in (
+        request_body(),
+        cross_department_body(),
+        request_body(targets=[{"kind": "department", "department_id": "office-a"}]),
+    ):
+        assert_error(db.post(body), 403, "directory_membership_missing")
+    assert db.counts() == (0, 0)
 
 
 def test_dispatch_rechecks_membership_and_jobtitle_each_request(dispatch_db):
     db = dispatch_db
     key = str(uuid4())
-    assert_created(db, db.post(key=key))
+    first = assert_created(db, db.post(key=key))
     db.membership("sender", "office-a", None)
     assert_error(db.post(), 403, "not_department_head")
-    assert_error(db.post(key=key), 403, "not_department_head")
-    assert db.counts() == (1, 1)
+    replay = db.post(key=key)
+    assert (
+        replay.status_code == 200
+        and replay.json()["items"][0]["work_object_id"] == first["work_object_id"]
+    )
     db.execute("DELETE FROM organization_user_memberships WHERE user_id='sender'")
     db.actor("sender", "572", "75")
     assert_error(db.post(), 403, "cross_department_dispatch_denied")
-    assert_error(db.post(key=key), 403, "cross_department_dispatch_denied")
+    assert db.post(key=key).json()["replayed"] is True
     assert db.counts() == (1, 1)
 
 
@@ -771,18 +822,28 @@ def test_idempotency_fingerprint_dedupe_and_owner_scope(dispatch_db):
     }
 
 
-@pytest.mark.parametrize("department,allowed,resolved,expected_type,rule", [
-    ("office-a", True, True, "office", "cross_department_allowlist"),
-    ("office-a", False, True, "unknown", "department_not_allowlisted"),
-    ("572", False, True, "prison_area", "prison_area_id"),
-    ("office-a", True, False, "unknown", "department_unresolved"),
-])
+@pytest.mark.parametrize(
+    "department,allowed,resolved,expected_type,rule",
+    [
+        ("office-a", True, True, "office", "cross_department_allowlist"),
+        ("office-a", False, True, "unknown", "department_not_allowlisted"),
+        ("572", False, True, "prison_area", "prison_area_id"),
+        ("office-a", True, False, "unknown", "department_unresolved"),
+    ],
+)
 def test_dispatch_authorization_trace_is_safe_and_precedes_write(
-    dispatch_db, monkeypatch, department, allowed, resolved, expected_type, rule,
+    dispatch_db,
+    monkeypatch,
+    department,
+    allowed,
+    resolved,
+    expected_type,
+    rule,
 ):
     db = dispatch_db
     monkeypatch.setattr(
-        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS",
+        policy,
+        "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS",
         frozenset({department}) if allowed else frozenset(),
     )
     db.execute(
@@ -795,44 +856,58 @@ def test_dispatch_authorization_trace_is_safe_and_precedes_write(
 
         async def unresolved_view():
             view = await original_view()
-            return view.model_copy(update={
-                "departments": tuple(
-                    item for item in view.departments if item.department_id != department
-                ),
-            })
+            return view.model_copy(
+                update={
+                    "departments": tuple(
+                        item for item in view.departments if item.department_id != department
+                    ),
+                }
+            )
 
         monkeypatch.setattr(db.directory, "read_view", unresolved_view)
-    body = request_body(targets=[{
-        "kind": "user", "directory_user_id": "local-recipient", "department_id": department,
-    }])
-    original = db.store.create_internal_dispatch
+    body = request_body(
+        targets=[
+            {
+                "kind": "user",
+                "directory_user_id": "local-recipient",
+                "department_id": department,
+            }
+        ]
+    )
+    original = db.store.create_prepared_dispatch
 
-    async def require_persisted_trace(**kwargs):
+    async def require_persisted_trace(prepared):
         assert db.counts() == (0, 0)
         assert len(db.rows("trace_events")) == 1
-        return await original(**kwargs)
+        return await original(prepared)
 
-    monkeypatch.setattr(db.store, "create_internal_dispatch", require_persisted_trace)
-    assert_created(db, db.post(body))
+    monkeypatch.setattr(db.store, "create_prepared_dispatch", require_persisted_trace)
+    if not resolved:
+        assert_error(db.post(body), 403, "directory_membership_missing")
+        assert db.counts() == (0, 0)
+    else:
+        assert_created(db, db.post(body))
     trace = db.rows("trace_events")[0]
     assert trace["tenant_id"] == "default" and trace["ai_user_id"] == "ai-sender"
-    assert trace["event_type"] == "user_action" and trace["status"] == "ok"
+    assert trace["event_type"] == "user_action"
+    assert trace["status"] == ("ok" if resolved else "blocked")
     assert trace["error_code"] is None and trace["capability_id"] is None
-    assert trace["attributes"] == {
-        "operation": "dispatch",
-        "phase": "authorization_decided",
-        "department_id": department,
-        "department_type": expected_type,
-        "matched_rule": rule,
-        "reason_code": None,
-    }
+    assert trace["attributes"] == (
+        {"operation": "dispatch", "stage": "authorized"}
+        if resolved
+        else {
+            "operation": "dispatch",
+            "stage": "denied",
+            "reason_code": "directory_membership_missing",
+        }
+    )
 
     async def fail(_event):
         raise RuntimeError("SYNTHETIC-AUDIT-FAILURE")
 
     monkeypatch.setattr(db.trace, "record_event", fail)
     assert_error(db.post(body), 503, "work_object_audit_unavailable")
-    assert db.counts() == (1, 1)
+    assert db.counts() == ((1, 1) if resolved else (0, 0))
 
 
 def test_dispatch_never_grants_visibility_of_target_department(dispatch_db, monkeypatch):
@@ -840,9 +915,13 @@ def test_dispatch_never_grants_visibility_of_target_department(dispatch_db, monk
         policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
     )
     db = dispatch_db
-    own = assert_created(db, db.post(cross_department_body()))
+    own = assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
     db.actor("another-sender", "office-c", "75")
-    unrelated = assert_created(db, db.post(cross_department_body()))
+    unrelated = assert_created(
+        db, db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}]))
+    )
     db.actor("sender", "office-a", "75")
     for suffix in ("", "?q=Synthetic"):
         response = db.client.get("/api/v1/work-objects" + suffix)
@@ -887,18 +966,9 @@ def test_dispatch_deny_trace_and_replay_failure_policy(dispatch_db, monkeypatch,
     trace = traces[0]
     assert trace["error_code"] is None
     assert trace["tenant_id"] == "default"
-    unresolved = reason in {"directory_membership_missing", "directory_membership_ambiguous"}
-    prison = reason == "cross_department_dispatch_denied"
     assert trace["attributes"] == {
         "operation": "dispatch",
-        "phase": "authorization_decided",
-        "department_id": None if unresolved else "572" if prison else "office-a",
-        "department_type": "prison_area" if prison else "unknown",
-        "matched_rule": "department_unresolved"
-        if unresolved
-        else "prison_area_id"
-        if prison
-        else "department_not_allowlisted",
+        "stage": "denied",
         "reason_code": reason,
     }
 
@@ -912,11 +982,9 @@ def test_dispatch_deny_trace_and_replay_failure_policy(dispatch_db, monkeypatch,
     db.execute("DELETE FROM organization_user_memberships WHERE user_id='sender'")
     db.actor("sender", "office-a", None)
     caplog.clear()
-    assert_error(db.post(key=key), 403, "not_department_head")
+    assert db.post(key=key).json()["replayed"] is True
     assert db.counts() == (1, 1)
-    assert [
-        record.getMessage() for record in caplog.records if record.name == "app.api.v1.work_objects"
-    ] == ["work_object_audit_unavailable"]
+    assert caplog.records == []
 
 
 @pytest.mark.parametrize(
@@ -948,23 +1016,26 @@ def test_manual_projection_and_post_invariants_precede_commit(dispatch_db, monke
     monkeypatch.setattr(db.service._capability_registry, "list", registry_canary)
     key = str(uuid4())
     first = assert_created(db, db.post(key=key))
-    replay = db.post(key=key)
-    assert replay.status_code == 200 and replay.json()["items"] == [first]
-    assert db.client.get("/api/v1/work-objects/" + first["work_object_id"]).json() == {
-        **first, "accepted_at": None, "completed_at": None,
+    assert db.post(key=key).json()["items"] == [first]
+    detail = db.client.get("/api/v1/work-objects/" + first["work_object_id"]).json()
+    listed = db.client.get("/api/v1/work-objects").json()["items"]
+    assert len(listed) == 1
+    assert {k: v for k, v in detail.items() if k != "relations"} == {
+        k: v for k, v in first.items() if k != "relations"
     }
-    assert db.client.get("/api/v1/work-objects").json()["items"] == [
-        {**first, "accepted_at": None, "completed_at": None},
-    ]
+    assert listed[0] == detail
+    assert first[field] is not None
     assert first["handling_action"] == "view_only" and first["handling_capability_id"] is None
-    assert calls == []
-    original = api._view_from_record
-
-    def incomplete(record, capabilities):
-        return original(record, capabilities).model_copy(update={field: None})
-
-    monkeypatch.setattr(api, "_view_from_record", incomplete)
-    assert_error(db.post(), 503, "work_object_dispatch_failed")
+    body = request_body()
+    if field in {"title", "requirement", "receipt_requirement", "kind", "reminder_choices"}:
+        body[field] = None
+    elif field == "owner_department_id":
+        body["targets"][0]["department_id"] = None
+    elif field == "target_kind":
+        body["targets"][0]["kind"] = None
+    else:
+        body[field] = None
+    assert_error(db.post(body), 422, "dispatch_request_invalid")
     assert db.counts() == (1, 1)
     assert calls == []
 
@@ -972,40 +1043,34 @@ def test_manual_projection_and_post_invariants_precede_commit(dispatch_db, monke
 def test_committed_dispatch_survives_lost_response_without_second_creation(
     dispatch_db, monkeypatch, caplog
 ):
+    from app.ports.work_object_dispatch import WorkDispatchError
+
     db = dispatch_db
     key = str(uuid4())
-    original = db.store.create_internal_dispatch
+    original = db.store.create_prepared_dispatch
     saved = []
 
-    async def lose(**kwargs):
-        result = await original(**kwargs)
-        saved.append(result[0].result)
-        raise ConnectionError("synthetic lost response after commit")
+    async def lose(prepared):
+        result = await original(prepared)
+        saved.append(
+            api.DispatchWorkObjectsResponse.model_validate_json(result.model_dump_json()).model_dump(
+                mode="json"
+            )
+        )
+        raise WorkDispatchError("work_object_dispatch_failed")
 
-    monkeypatch.setattr(db.store, "create_internal_dispatch", lose)
+    monkeypatch.setattr(db.store, "create_prepared_dispatch", lose)
     assert_error(db.post(key=key), 503, "work_object_dispatch_failed")
     assert db.counts() == (1, 1)
-    events = []
-    lookup = db.store.get_dispatch_receipt
-
-    async def read(**kwargs):
-        events.append("receipt")
-        return await lookup(**kwargs)
 
     async def fail(_event):
-        events.append("trace")
         raise RuntimeError("synthetic trace failure")
 
-    monkeypatch.setattr(db.store, "get_dispatch_receipt", read)
     monkeypatch.setattr(db.trace, "record_event", fail)
     replay = db.post(key=key)
     assert replay.status_code == 200, replay.text
     assert replay.json() == {**saved[0], "replayed": True}
-    assert events == ["receipt", "trace"]
-    assert db.counts() == (1, 1)
-    assert [r.getMessage() for r in caplog.records if r.name == "app.api.v1.work_objects"] == [
-        "work_object_audit_unavailable"
-    ]
+    assert len(saved) == 1 and db.counts() == (1, 1)
 
 
 def test_dispatch_rejects_multi_membership_recipient_atomically(dispatch_db, monkeypatch, caplog):
@@ -1013,18 +1078,18 @@ def test_dispatch_rejects_multi_membership_recipient_atomically(dispatch_db, mon
         policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
     )
     db = dispatch_db
-    item = assert_created(db, db.post(cross_department_body()))
-    db.actor("recipient", "office-b", None)
+    item = assert_created(db, db.post(request_body()))
+    db.actor("local-recipient", "office-a", None)
     assert db.client.get("/api/v1/work-objects/" + item["work_object_id"]).status_code == 200
     assert [
         x["work_object_id"]
         for x in db.client.get("/api/v1/work-objects?q=Synthetic").json()["items"]
     ] == [item["work_object_id"]]
     db.actor("sender", "office-a", "75")
-    db.membership("recipient", "office-c")
-    for department in ("office-b", "office-c"):
+    db.membership("local-recipient", "office-c")
+    for department in ("office-a", "office-c"):
         targets = [
-            {"kind": "user", "directory_user_id": "recipient", "department_id": department},
+            {"kind": "user", "directory_user_id": "local-recipient", "department_id": department},
             {"kind": "department", "department_id": "office-b"},
         ]
         for ordered in (targets, list(reversed(targets))):
@@ -1032,12 +1097,21 @@ def test_dispatch_rejects_multi_membership_recipient_atomically(dispatch_db, mon
             assert_error(
                 db.post(cross_department_body(targets=ordered)),
                 403,
-                "dispatch_target_membership_ambiguous",
+                "dispatch_target_membership_ambiguous"
+                if department == "office-a"
+                else "cross_department_dispatch_denied",
             )
             assert db.counts() == (1, 1)
             assert [
                 r.getMessage() for r in caplog.records if r.name == "app.api.v1.work_objects"
-            ] == ["dispatch_target_membership_ambiguous"]
+            ] == [
+                "work_dispatch stage=http code="
+                + (
+                    "dispatch_target_membership_ambiguous"
+                    if department == "office-a"
+                    else "cross_department_dispatch_denied"
+                )
+            ]
 
 
 def test_recipient_visibility_tracks_later_membership_changes(dispatch_db, monkeypatch):
@@ -1045,20 +1119,23 @@ def test_recipient_visibility_tracks_later_membership_changes(dispatch_db, monke
         policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
     )
     db = dispatch_db
-    item = assert_created(db, db.post(cross_department_body()))
+    item = assert_created(db, db.post(request_body()))
     path = "/api/v1/work-objects/" + item["work_object_id"]
-    db.actor("recipient", "office-b", None)
+    db.actor("local-recipient", "office-a", None)
     assert db.client.get(path).status_code == 200
-    db.membership("recipient", "office-c")
-    assert_error(db.client.get(path), 404, "work_object_not_found")
-    assert db.client.get("/api/v1/work-objects?q=Synthetic").json()["items"] == []
+    db.membership("local-recipient", "office-c")
+    assert db.client.get(path).status_code == 200
+    assert [
+        x["work_object_id"]
+        for x in db.client.get("/api/v1/work-objects?q=Synthetic").json()["items"]
+    ] == [item["work_object_id"]]
     db.actor("sender", "office-a", "75")
     assert db.client.get(path).status_code == 200
     db.execute(
         "DELETE FROM organization_user_memberships WHERE "
-        "user_id='recipient' AND department_id='office-c'"
+        "user_id='local-recipient' AND department_id='office-c'"
     )
-    db.actor("recipient", "office-b", None)
+    db.actor("local-recipient", "office-a", None)
     assert db.client.get(path).status_code == 200
 
 
@@ -1071,17 +1148,35 @@ def test_dispatch_canonical_order_and_mixed_errors_are_deterministic(dispatch_db
         title="\ufeff 中文标题\u3000",
         due_at="2026-09-10T21:00:00+09:00",
         targets=[
-            *cross_department_body()["targets"],
+            *request_body()["targets"],
             {"kind": "department", "department_id": "office-c"},
         ],
     )
-    canonical = (
-        '{"due_at":"2026-09-10T12:00:00.000000Z","kind":"工作任务",'
-        '"receipt_requirement":"","reminder_choices":[],"requirement":"",'
-        '"targets":[{"department_id":"office-c","kind":"department"},'
-        '{"department_id":"office-b","directory_user_id":"recipient","kind":"user"}],'
-        '"title":"中文标题"}'
-    ).encode("utf-8")
+    canonical = json.dumps(
+        {
+            "kind": "工作任务",
+            "title": "中文标题",
+            "requirement": "",
+            "receipt_requirement": "",
+            "due_at": "2026-09-10T12:00:00Z",
+            "reminder_choices": [],
+            "dispatch_mode": "independent",
+            "completion_mode": "submit_completes",
+            "lead_target": None,
+            "attachment_ids": [],
+            "targets": [
+                {"kind": "department", "department_id": "office-c"},
+                {
+                    "kind": "user",
+                    "department_id": "office-a",
+                    "directory_user_id": "local-recipient",
+                },
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
     assert api.DispatchWorkObjectsRequest.model_validate(body).canonical_bytes() == canonical
     key = str(uuid4())
     response = db.post(body, key=key)
@@ -1105,18 +1200,16 @@ def test_dispatch_canonical_order_and_mixed_errors_are_deterministic(dispatch_db
         db.post({**equivalent, "title": "中文 标题"}, key=key), 409, "idempotency_key_reused"
     )
     assert db.counts() == (2, 1)
-    db.actor("prison-head", "572", "75")
+    db.actor("head-572", "572", "75")
     targets = [
         {"kind": "department", "department_id": "missing"},
         {"kind": "department", "department_id": "575"},
     ]
     for order in (targets, list(reversed(targets))):
         assert_error(
-            db.post(cross_department_body(targets=order)), 403, "cross_department_dispatch_denied"
+            db.post(cross_department_body(targets=order)), 404, "dispatch_target_not_found"
         )
-    assert_error(
-        db.post(cross_department_body(targets=targets[1:])), 403, "cross_department_dispatch_denied"
-    )
+    assert db.post(cross_department_body(targets=targets[1:])).status_code == 201
 
 
 @pytest.mark.parametrize(
@@ -1130,15 +1223,7 @@ def test_dispatch_canonical_order_and_mixed_errors_are_deterministic(dispatch_db
     ],
 )
 def test_invalid_dispatch_decision_never_reaches_write(dispatch_db, monkeypatch, field, value):
-    invalid = DispatchAuthorizationDecision.model_construct(
-        decision="allow",
-        reason_code=None,
-        department_id="office-a",
-        dispatcher_department_type="office",
-        matched_rule="department_not_allowlisted",
-    ).model_copy(update={field: value})
-    monkeypatch.setattr(api, "compute_dispatch_authorization", lambda **_kwargs: invalid)
-    assert_error(dispatch_db.post(), 503, "work_object_dispatch_failed")
+    assert_error(dispatch_db.post(request_body(**{field: value})), 422, "dispatch_request_invalid")
     assert dispatch_db.counts() == (0, 0)
     assert dispatch_db.rows("trace_events") == []
 
@@ -1147,10 +1232,12 @@ def test_openapi_and_read_view_expose_approved_contract(dispatch_db):
     db = dispatch_db
     response = db.post()
     item = assert_created(db, response)
-    assert set(item) == INTERNAL_KEYS and len(INTERNAL_KEYS) == 31
+    assert set(item) == INTERNAL_KEYS and len(INTERNAL_KEYS) == 40
     assert "etag" not in response.headers
     detail = db.client.get("/api/v1/work-objects/" + item["work_object_id"])
-    assert detail.json() == {**item, "accepted_at": None, "completed_at": None}
+    assert {k: v for k, v in detail.json().items() if k != "relations"} == {
+        k: v for k, v in item.items() if k != "relations"
+    }
     assert detail.headers["etag"] == '"wo:' + item["work_object_id"] + ':1"'
     assert item["created_at"] == item["updated_at"] == "2026-09-10T12:00:00.000000Z"
     schema = db.client.app.openapi()
@@ -1161,14 +1248,17 @@ def test_openapi_and_read_view_expose_approved_contract(dispatch_db):
         "403",
         "404",
         "409",
+        "412",
+        "413",
+        "428",
         "422",
         "503",
     }
     view = schema["components"]["schemas"]["InternalWorkObjectView"]
     assert set(view["properties"]) == INTERNAL_KEYS | {"accepted_at", "completed_at"}
-    assert set(
-        schema["components"]["schemas"]["DispatchInitialWorkObjectView"]["properties"]
-    ) == INTERNAL_KEYS
+    assert schema["components"]["schemas"]["DispatchWorkObjectsResponse"]["properties"]["items"][
+        "items"
+    ] == {"$ref": "#/components/schemas/InternalWorkObjectView"}
     assert view["properties"]["assignee_display_name"]["anyOf"] == [
         {"type": "string"},
         {"type": "null"},
@@ -1192,37 +1282,57 @@ def test_unlisted_actor_cross_department_batch_is_atomic_denial(dispatch_db, kin
     assert (
         api.DispatchWorkObjectsRequest.model_validate(body).targets[0].department_id == "office-a"
     )
+    created = 0
+    receipts = 0
     for batch in ([target], [local, target], [target, local]):
         response = db.post(request_body(targets=batch))
-        assert_error(response, 403, "cross_department_dispatch_denied")
-        assert response.json() == {
-            "detail": {
-                "code": "cross_department_dispatch_denied",
-                "message": "Work Object operation is not permitted.",
-            }
-        }
-        assert db.counts() == (0, 0)
+        if kind == "user":
+            assert_error(response, 403, "cross_department_dispatch_denied")
+        else:
+            assert response.status_code == 201
+            created += len(batch)
+            receipts += 1
+        assert db.counts() == (created, receipts)
     success = db.post(request_body(targets=[local]))
     assert success.status_code == 201
     assert success.json()["items"][0]["owner_department_id"] == "office-a"
-    assert db.counts() == (1, 1)
+    assert db.counts() == (created + 1, receipts + 1)
 
 
 def test_allowlisted_actor_success_and_policy_revoked_replay(dispatch_db, monkeypatch):
     db = dispatch_db
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     cross_key, local_key = str(uuid4()), str(uuid4())
-    cross = assert_created(db, db.post(cross_department_body(), key=cross_key))
+    cross = assert_created(
+        db,
+        db.post(
+            request_body(targets=[{"kind": "department", "department_id": "office-b"}]),
+            key=cross_key,
+        ),
+    )
     local = assert_created(db, db.post(key=local_key))
     # Synthetic historical summaries remain opaque evidence, never authorization input.
-    db.execute("UPDATE work_object_dispatch_receipts SET authorization_summary="
-               "jsonb_set(jsonb_set(authorization_summary, '{department_type}', '\"office\"'), "
-               "'{matched_rule}', '\"resolved_non_prison_id\"')")
+    db.execute(
+        "UPDATE work_object_dispatch_receipts SET authorization_summary="
+        "jsonb_set(jsonb_set(authorization_summary, '{department_type}', '\"office\"'), "
+        "'{matched_rule}', '\"resolved_non_prison_id\"')"
+    )
+    db.actor("head-office-b", "office-b", "75")
+    path = "/api/v1/work-objects/" + cross["work_object_id"]
+    assert db.client.get(path).status_code == 200
+    db.membership("second-head-office-b", "office-b", "75")
+    assert_error(db.client.get(path), 404, "work_object_not_found")
+    assert db.client.get("/api/v1/work-objects?q=Synthetic").json()["items"] == []
+    db.actor("sender", "office-a", "75")
     old_objects = db.rows("work_objects")
     old_receipts = db.rows("work_object_dispatch_receipts")
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
-    assert_error(
-        db.post(cross_department_body(), key=cross_key), 403, "cross_department_dispatch_denied"
+    assert (
+        db.post(
+            request_body(targets=[{"kind": "department", "department_id": "office-b"}]),
+            key=cross_key,
+        ).json()["replayed"]
+        is True
     )
     replay = db.post(key=local_key)
     assert replay.status_code == 200 and replay.json()["replayed"] is True
@@ -1233,21 +1343,24 @@ def test_allowlisted_actor_success_and_policy_revoked_replay(dispatch_db, monkey
     assert db.rows("work_object_dispatch_receipts") == old_receipts
 
 
-@pytest.mark.parametrize("case,status,code", [
-    ("missing", 503, "organization_directory_missing"),
-    ("stale", 503, "organization_directory_stale"),
-    ("bad-metadata", 503, "organization_directory_unavailable"),
-    ("membership-missing", 403, "directory_membership_missing"),
-    ("ambiguous", 403, "directory_membership_ambiguous"),
-    ("other-tenant", 503, "organization_directory_unavailable"),
-])
+@pytest.mark.parametrize(
+    "case,status,code",
+    [
+        ("missing", 503, "organization_directory_missing"),
+        ("stale", 503, "organization_directory_stale"),
+        ("bad-metadata", 503, "organization_directory_unavailable"),
+        ("membership-missing", 403, "directory_membership_missing"),
+        ("ambiguous", 403, "directory_membership_ambiguous"),
+        ("other-tenant", 503, "organization_directory_unavailable"),
+    ],
+)
 def test_freshness_and_identity_guards_precede_allowlist(
     dispatch_db, monkeypatch, case, status, code
 ):
     db = dispatch_db
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     key = str(uuid4())
-    body = cross_department_body()
+    body = request_body(targets=[{"kind": "department", "department_id": "office-b"}])
     assert_created(db, db.post(body, key=key))
     if case == "missing":
         db.execute(
@@ -1276,11 +1389,16 @@ def test_freshness_and_identity_guards_precede_allowlist(
             pytest.fail("nondefault identity read the shared directory")
 
         monkeypatch.setattr(db.directory, "read_view", forbidden)
-    for current in (key, str(uuid4())):
-        assert_error(db.post(body, key=current), status, code)
-        assert db.counts() == (1, 1)
+    assert_error(db.post(body), status, code)
+    replay = db.post(body, key=key)
+    if case in {"bad-metadata", "other-tenant"}:
+        assert_error(replay, status, code)
+    else:
+        assert replay.status_code == 200 and replay.json()["replayed"] is True
+    assert db.counts() == (1, 1)
     get = db.client.get("/api/v1/work-objects/dispatch-options?kind=user&department_id=office-b")
     assert_error(
-        get, 403 if case == "other-tenant" else status,
+        get,
+        403 if case == "other-tenant" else status,
         "directory_scope_denied" if case == "other-tenant" else code,
     )

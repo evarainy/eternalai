@@ -381,13 +381,13 @@ describe('AppShell and singleton AI Dock', () => {
 describe('AppShell primary navigation', () => {
   beforeEach(resetStores);
 
-  it('lays out the five decided primary items in order above the admin group', () => {
+  it('lays out the six decided primary items in order above the admin group', () => {
     renderShell();
 
     const navigation = screen.getByRole('navigation', { name: '工作区' });
     const links = within(navigation).getAllByRole('link');
     expect(
-      links.slice(0, 5).map((link) => [
+      links.slice(0, 6).map((link) => [
         link.getAttribute('aria-label'),
         link.getAttribute('href'),
       ]),
@@ -395,12 +395,13 @@ describe('AppShell primary navigation', () => {
       ['AI 助手', '/chat'],
       ['工作事项', '/work-objects'],
       ['任务交办', '/work-dispatch'],
+      ['周期任务', '/work-object-series'],
       ['软件中心', '/apps'],
       ['消息', '/messages'],
     ]);
 
     const adminSummary = within(navigation).getByTitle('管理页面');
-    const lastPrimaryLink = links.at(4);
+    const lastPrimaryLink = links.at(5);
     expect(lastPrimaryLink).toBeDefined();
     const relativePosition =
       lastPrimaryLink?.compareDocumentPosition(adminSummary) ?? 0;

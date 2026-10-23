@@ -4,6 +4,16 @@ export function browserZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
+export function validTimeZone(zone: string): boolean {
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }); return zone.length > 0; }
+  catch { return false; }
+}
+
+export function zonedTimestamp(instant: string | null, zone: string): string {
+  if (instant === null) return '—';
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: zone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(instant));
+}
+
 function calendar(instant: number, zone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',

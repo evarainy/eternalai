@@ -1,461 +1,281 @@
-import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
-import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Button, Checkbox, Input, Radio, Select } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../../api/mutator';
+import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
+import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { readOptions, postDispatch, validReceipt, optionKey, targetOf, trimDispatchText } from './dispatchApi';
-import type { DispatchOption, OptionScope } from './dispatchApi';
-import type { DispatchOptionsResponse, DispatchWorkObjectsRequest } from '../../generated/work-objects/work-objects.schemas';
-import { dispatchFailure } from './dispatchErrors';
+import type { DispatchOption, DispatchOptionsResponse, DispatchRequest, OptionScope } from './dispatchApi';
+import { accessLost, dispatchFailure, logDispatchFailure } from './dispatchErrors';
 import { browserZone, localTime, timeChoices } from './dispatchTime';
-import { Button, Input, Select } from 'antd';
-import { Icon } from '../../shared/ui/Icon';
-import {
-  DISPATCH_KINDS,
-  REMINDER_CHOICES,
-  loadDraft,
-  saveDraft,
-} from './dispatchDraft';
-import type { DispatchDraft, DispatchKind, ReminderChoice } from './dispatchDraft';
+import { DISPATCH_KINDS, EMPTY_DRAFT, REMINDER_CHOICES, loadDraft, saveDraft, clearDraft } from './dispatchDraft';
+import type { DispatchDraft, DispatchKind } from './dispatchDraft';
+import AttachmentsPanel from './AttachmentsPanel';
+import type { AttachmentView } from './AttachmentsPanel';
 import styles from './WorkDispatchPage.module.css';
+import { Icon } from '../../shared/ui/Icon';
 
-const SAVE_NOTICE = '草稿已暂存；刷新、关闭页面或退出登录后会丢失。交办对象下次需重新选择。';
-const SAVE_FAILED_NOTICE = '草稿没存上，请确认登录状态后重试。';
+type Selected = { option: DispatchOption; confirmed: boolean };
+type Submission = { body: DispatchRequest; key: string; uncertain: boolean };
 const labelOf = (option: DispatchOption) => option.kind === 'user'
   ? `${option.display_name}（${option.department_display_name}，目录编号 ${option.directory_user_id}）` : option.department_display_name;
-type Selected = { option: DispatchOption; version: number; confirmed: boolean };
-type Frozen = { body: DispatchWorkObjectsRequest; key: string; uncertain: boolean };
 
 export default function WorkDispatchPage() {
   const token = useDraftSession();
-  return token === null ? null : <DispatchForm key={`${token.generation}:${token.revision}`} token={token} />;
+  const queryClient = useQueryClient();
+  return token === null ? null : <DispatchComposer key={`${token.generation}:${token.revision}`} token={token}
+    onSubmit={async (request, key) => {
+      const result = await postDispatch(request, key);
+      const count = request.dispatch_mode === 'collaborative' ? 1 : request.targets.length;
+      if (!validReceipt(result, count)) throw new Error('invalid_receipt');
+      if (isCurrentDraftSession(token)) {
+        clearDraft(token);
+        try { await queryClient.invalidateQueries({ queryKey: ['work-objects', token.generation] }, { throwOnError: true }); }
+        catch { return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。列表刷新失败，请到工作事项重新读取。`; }
+      }
+      return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。`;
+    }} />;
 }
 
-function DispatchForm({ token }: { token: DraftSessionToken }) {
-  const queryClient = useQueryClient();
+export interface DispatchComposerProps {
+  token: DraftSessionToken;
+  initialRequest?: DispatchRequest;
+  initialAttachments?: AttachmentView[];
+  series?: boolean;
+  children?: ReactNode | ((locked: boolean) => ReactNode);
+  submitLabel?: string;
+  onSubmit: (request: DispatchRequest, idempotencyKey: string) => Promise<string>;
+  onAccessLost?: () => void;
+}
+
+/** Ordinary dispatch and recurring templates share the same target and mode fields. */
+export function DispatchComposer({ token, initialRequest, initialAttachments = [], series = false,
+  children, submitLabel = '发布任务', onSubmit, onAccessLost }: DispatchComposerProps) {
   const [zone] = useState(browserZone);
   const [draft, setDraft] = useState<DispatchDraft>(() => {
-    const saved = loadDraft(token);
+    if (initialRequest) return { ...EMPTY_DRAFT, kind: initialRequest.kind, title: initialRequest.title,
+      requirement: initialRequest.requirement, receipt: initialRequest.receipt_requirement,
+      dispatchMode: initialRequest.dispatch_mode, completionMode: initialRequest.completion_mode,
+      dueAt: initialRequest.due_at ? localTime(initialRequest.due_at, zone) : '',
+      dueInstant: initialRequest.due_at ?? undefined, reminders: initialRequest.reminder_choices ?? [] };
+    const saved = series ? { ...EMPTY_DRAFT } : loadDraft(token);
     return saved.dueInstant ? { ...saved, dueAt: localTime(saved.dueInstant, zone) } : saved;
   });
-  const [notice, setNotice] = useState<string | null>(null);
-  const [noticeError, setNoticeError] = useState(false);
-  const [scope, setScope] = useState<OptionScope>({ kind: 'department' });
+  const [selected, setSelected] = useState<Selected[]>(() => initialRequest?.targets.map((target) => ({
+    option: target.kind === 'user' ? { ...target, display_name: target.directory_user_id,
+      department_display_name: target.department_id } : { ...target, department_display_name: target.department_id },
+    confirmed: true,
+  })) ?? []);
+  const [leadKey, setLeadKey] = useState(initialRequest?.lead_target ? optionKey(initialRequest.lead_target) : '');
+  const [attachments, setAttachments] = useState<AttachmentView[]>(initialAttachments);
+  const [scope, setScope] = useState<OptionScope>({ kind: 'user' });
+  const [query, setQuery] = useState('');
   const [page, setPage] = useState<DispatchOptionsResponse | null>(null);
   const [directoryState, setDirectoryState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [directoryError, setDirectoryError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Selected[]>([]);
-  const [legacyConfirmed, setLegacyConfirmed] = useState(false);
-  const [timeConfirmed, setTimeConfirmed] = useState(() => !draft.dueAt || !!draft.dueInstant);
-  const [chosenInstant, setChosenInstant] = useState(draft.dueInstant ?? '');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [noticeError, setNoticeError] = useState(false);
   const [phase, setPhase] = useState<'editing' | 'pending' | 'uncertain' | 'success' | 'stopped'>('editing');
-  const frozen = useRef<Frozen | null>(null);
+  const [chosenInstant, setChosenInstant] = useState(draft.dueInstant ?? '');
+  const [legacyConfirmed, setLegacyConfirmed] = useState(false);
+  const [timeConfirmed, setTimeConfirmed] = useState(!draft.dueAt || !!draft.dueInstant);
+  const frozen = useRef<Submission | null>(null);
   const sending = useRef(false);
   const alive = useRef(true);
   const requestSequence = useRef(0);
-  const version = useRef<number | null>(null);
-  const currentScope = useRef(scope);
+  const snapshotVersion = useRef<number | null>(null);
   const choices = useMemo(() => timeChoices(draft.dueAt, zone), [draft.dueAt, zone]);
-  const instant = draft.dueAt === '' ? null : chosenInstant || (choices.length === 1 ? choices[0]!.instant : null);
-  const timeValid = draft.dueAt === '' || (timeConfirmed && choices.some((choice) => choice.instant === instant));
+  const instant = draft.dueAt ? chosenInstant || (choices.length === 1 ? choices[0]!.instant : null) : null;
+  const timeValid = series || !draft.dueAt || (timeConfirmed && choices.some((choice) => choice.instant === instant));
   const legacy = !!(draft.assignee || draft.visibility || draft.targets.length);
   const locked = phase !== 'editing';
   const current = () => alive.current && isCurrentDraftSession(token);
   const invalidateSelection = () => setSelected((items) => items.map((item) => ({ ...item, confirmed: false })));
-
-  const load = async (nextScope: OptionScope, cursor?: string, recovering = false) => {
+  const clearPrivate = () => {
+    setSelected([]); setAttachments([]); setPage(null); setLeadKey(''); frozen.current = null;
+    onAccessLost?.();
+  };
+  const load = async (nextScope: OptionScope, cursor?: string, search = query) => {
     const sequence = ++requestSequence.current;
-    currentScope.current = nextScope;
-    setScope(nextScope);
-    setDirectoryState('loading');
-    setDirectoryError(null);
+    setScope(nextScope); setDirectoryState('loading'); setDirectoryError(null);
     if (!cursor) setPage(null);
     try {
-      const result = await readOptions(nextScope, cursor);
+      const result = await readOptions(nextScope, cursor, search);
       if (!current() || sequence !== requestSequence.current) return;
-      const changed = version.current !== null && version.current !== result.snapshot_version;
+      const changed = snapshotVersion.current !== null && snapshotVersion.current !== result.snapshot_version;
       if (changed) {
-        invalidateSelection();
-        setDirectoryError('目录已更新，请重新确认所有交办对象。');
+        invalidateSelection(); setDirectoryError('目录已更新，请重新选择或确认所有对象。');
+        if (cursor) { void load(nextScope, undefined, search); return; }
       }
-      version.current = result.snapshot_version;
-      if (changed && cursor) { void load(nextScope); return; }
+      snapshotVersion.current = result.snapshot_version;
       setPage((previous) => cursor && previous && !changed
         ? { ...result, items: [...previous.items, ...result.items] as DispatchOptionsResponse['items'] } : result);
       setDirectoryState('ready');
     } catch (error) {
       if (!current() || sequence !== requestSequence.current) return;
-      const failure = dispatchFailure('GET', error);
-      invalidateSelection();
-      setPage(null);
-      setDirectoryState('failed');
-      setDirectoryError(failure.text);
-      if (failure.category === 'snapshot' && !recovering) void load(nextScope, undefined, true);
+      logDispatchFailure('directory_read', error);
+      if (accessLost(error)) clearPrivate(); else invalidateSelection();
+      setPage(null); setDirectoryState('failed'); setDirectoryError(dispatchFailure('GET', error).text);
     }
   };
-
   useEffect(() => {
     alive.current = true;
-    void load({ kind: 'department' });
+    void load({ kind: 'user' }, undefined, '');
     return () => { alive.current = false; requestSequence.current += 1; frozen.current = null; };
-    // One request chain per mounted authenticated form. No automatic retries.
+    // A fresh authenticated composer starts one directory chain.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const update = <Key extends keyof DispatchDraft>(key: Key, value: DispatchDraft[Key]) => {
-    if (locked) return;
-    setNotice(null);
-    setDraft((previous) => ({ ...previous, [key]: value }));
-  };
-  const changeTime = (value: string) => {
-    if (locked) return;
-    setChosenInstant('');
-    setTimeConfirmed(true);
-    setDraft((previous) => ({ ...previous, dueAt: value, dueInstant: undefined,
-      dueZone: undefined, dueOffset: undefined, reminders: value ? previous.reminders : [] }));
+  const update = <K extends keyof DispatchDraft>(key: K, value: DispatchDraft[K]) => {
+    setNotice(null); setDraft((previous) => ({ ...previous, [key]: value }));
   };
   const addTarget = (option: DispatchOption) => {
-    if (locked || directoryState !== 'ready' || !page) return;
     setSelected((items) => {
-      const found = items.findIndex((item) => optionKey(item.option) === optionKey(option));
-      const confirmed = { option, version: page.snapshot_version, confirmed: true };
-      if (found >= 0) return items.map((item, i) => i === found ? confirmed : item);
-      return items.length >= 100 ? items : [...items, confirmed];
+      const index = items.findIndex((item) => optionKey(item.option) === optionKey(option));
+      return index >= 0 ? items.map((item, i) => i === index ? { option, confirmed: true } : item)
+        : [...items, { option, confirmed: true }];
     });
   };
-  const toggleReminder = (choice: ReminderChoice) => {
-    if (!draft.dueAt) return;
-    update('reminders', REMINDER_CHOICES.filter((item) =>
-      item === choice ? !draft.reminders.includes(item) : draft.reminders.includes(item)));
-  };
-  const send = async (submission: Frozen) => {
+  const send = async (submission: Submission) => {
     if (!current() || sending.current) return;
-    sending.current = true;
-    setPhase('pending');
-    setNotice(null);
+    sending.current = true; setPhase('pending'); setNotice(null);
     try {
-      const result = await postDispatch(submission.body, submission.key);
+      const result = await onSubmit(submission.body, submission.key);
       if (!current()) return;
-      if (!validReceipt(result, submission.body.targets.length)) throw new Error('invalid_receipt');
-      const success = `${result.replayed ? '已确认原提交' : '已发布'}，共${result.created_count}条。`;
-      setPhase('success');
-      setNoticeError(false);
-      setNotice(success);
-      try {
-        await queryClient.invalidateQueries({ queryKey: ['work-objects', token.generation] }, { throwOnError: true });
-      } catch {
-        if (current()) setNotice(`${success}列表刷新失败，请到工作事项重新读取。`);
-      }
+      frozen.current = null; setPhase('success'); setNoticeError(false); setNotice(result);
+      console.info('[work-dispatch]', { stage: 'request_confirmed', operation: series ? 'series_save' : 'dispatch' });
     } catch (error) {
       if (!current()) return;
+      logDispatchFailure(series ? 'series_save' : 'dispatch', error);
       const failure = dispatchFailure('POST', error);
       setNoticeError(true);
-      if (failure.category === 'directory') {
-        setDirectoryState('failed'); setPage(null); invalidateSelection(); setDirectoryError(failure.text);
-      }
-      if (failure.category === 'reject' && !submission.uncertain) {
-        frozen.current = null;
-        setPhase('editing');
-        if (!(error instanceof ApiError && error.status === 422 && error.code === 'dispatch_request_invalid')) {
-          setDirectoryState('failed'); setPage(null); setDirectoryError('请重新读取目录并核对对象。');
-        }
-        invalidateSelection();
-        setNotice(failure.text);
+      if (accessLost(error)) clearPrivate();
+      const definite = error instanceof ApiError && error.status >= 400 && error.status < 500;
+      if (failure.category === 'stop' || definite && submission.uncertain) {
+        frozen.current = null; setPhase('stopped');
+        setNotice(`${failure.text}${submission.uncertain ? ' 先前提交结果仍待确认，请先到工作事项核对。' : ''}`);
+      } else if (definite) {
+        frozen.current = null; setPhase('editing');
+        setNotice(error instanceof ApiError && error.status === 412 ? '规则已更新，请重新读取后再编辑。' : failure.text);
       } else {
-        submission.uncertain = true;
-        setPhase(failure.category === 'stop' ? 'stopped' : 'uncertain');
-        setNotice(`${failure.text} 先前提交结果待确认，请先核对，不能另建同一请求。`);
+        submission.uncertain = true; frozen.current = submission; setPhase('uncertain');
+        setNotice(`${failure.text} 请重试原请求或先核对结果。`);
       }
     } finally { sending.current = false; }
   };
   const publish = () => {
-    if (locked || sending.current || !current()) return;
     const title = trimDispatchText(draft.title);
     const requirement = trimDispatchText(draft.requirement);
     const receipt = trimDispatchText(draft.receipt);
+    const lead = selected.find((item) => optionKey(item.option) === leadKey);
     if (!title || [...title].length > 200 || [...requirement].length > 10000 || [...receipt].length > 2000
-      || directoryState !== 'ready' || selected.length < 1 || selected.length > 100
-      || selected.some((item) => !item.confirmed) || (legacy && !legacyConfirmed) || !timeValid) {
-      setNoticeError(true); setNotice('请核对标题与字段长度、目录对象、旧内容及截止时间后再发布。'); return;
+      || selected.length < 1 || selected.length > 100 || selected.some((item) => !item.confirmed)
+      || (draft.dispatchMode === 'collaborative' && !lead) || (legacy && !legacyConfirmed) || !timeValid) {
+      setNoticeError(true); setNotice('请核对标题、已确认目录对象、唯一主办和截止时间。'); return;
     }
-    const body: DispatchWorkObjectsRequest = { kind: draft.kind, title, requirement, receipt_requirement: receipt,
-      due_at: instant, reminder_choices: instant ? REMINDER_CHOICES.filter((choice) => draft.reminders.includes(choice)) : [],
-      targets: selected.map((item) => targetOf(item.option)) };
-    const submission = { body, key: crypto.randomUUID(), uncertain: false };
-    frozen.current = submission;
-    void send(submission);
+    const body: DispatchRequest = { kind: draft.kind, title, requirement, receipt_requirement: receipt,
+      due_at: series ? null : instant, reminder_choices: series || instant ? [...draft.reminders] : [],
+      targets: selected.map((item) => targetOf(item.option)), dispatch_mode: draft.dispatchMode,
+      completion_mode: draft.completionMode, lead_target: draft.dispatchMode === 'collaborative' && lead ? targetOf(lead.option) : null,
+      attachment_ids: attachments.map((item) => item.attachment_id) };
+    const submission = { body, key: crypto.randomUUID(), uncertain: false }; frozen.current = submission; void send(submission);
   };
   const store = () => {
-    if (!current() || locked) return;
     const choice = choices.find((value) => value.instant === instant);
-    const saved = { ...draft, ...(timeValid && choice ? { dueInstant: choice.instant, dueZone: zone, dueOffset: choice.offset } : {}) };
-    const ok = saveDraft(saved, token);
-    setNoticeError(!ok);
-    setNotice(ok ? SAVE_NOTICE : SAVE_FAILED_NOTICE);
+    const ok = saveDraft({ ...draft, ...(choice ? { dueInstant: choice.instant, dueZone: zone, dueOffset: choice.offset } : {}) }, token);
+    setNoticeError(!ok); setNotice(ok ? '草稿已暂存；刷新、关闭页面或退出登录会丢失。下次需重新选择对象和附件。' : '草稿未保存，请核对登录状态。');
   };
-  const targetCount = selected.length;
-
-  return (
-    <div className={styles.page}>
-      <h1 className={styles.pageTitle}>任务交办</h1>
-
-
-      <section className={styles.brief}>
-        <Input.TextArea
-          aria-label="用一句话说明要交办的事"
-          autoSize={{ maxRows: 6, minRows: 3 }}
-          className={styles.briefInput}
-          disabled={locked}
-          id="dispatch-brief"
-          onChange={(event) => update('brief', event.target.value)}
-          placeholder="例：让各科室 9 月 5 日前报送第三季度政务信息"
-          value={draft.brief}
-          variant="borderless"
-        />
-        <div className={styles.briefBar}>
-          <span className={styles.caption}>
-            生成草稿还没有接进来；可直接在下方逐项填写。
-          </span>
-          <Button className={styles.briefButton} disabled type="primary">
-            <Icon name="spark" size={17} strokeWidth={1.9} />
-            生成草稿
-          </Button>
+  return <div className={styles.page}>
+    {!series ? <div className={styles.toolbar}><h1>任务交办</h1><Link to="/work-object-series">周期任务规则</Link></div> : null}
+    <section className={styles.panel}>
+      <div className={styles.draftNotice}>发布前请核对要求与目标。草稿仅在本次会话内暂存，刷新后需到工作事项核对先前发布结果。 <Link to="/work-objects">核对工作事项</Link></div>
+      <div className={styles.form}>
+        {typeof children === 'function' ? children(locked) : children}
+        <h2 className={styles.sectionHead}>基本信息</h2>
+        <div className={styles.gridKindTitle}>
+          <div className={styles.field}><label htmlFor="dispatch-kind">类型</label><Select<DispatchKind> id="dispatch-kind" virtual={false}
+            value={draft.kind} disabled={locked} options={DISPATCH_KINDS.map((value) => ({ label: value, value }))}
+            onChange={(value) => update('kind', value)} /></div>
+          <div className={styles.field}><label htmlFor="dispatch-title">标题</label><Input id="dispatch-title" maxLength={200}
+            value={draft.title} disabled={locked} onChange={(event) => update('title', event.target.value)} /></div>
         </div>
-      </section>
-
-      <section className={styles.panel}>
-        <div className={styles.draftNotice}>
-          <span className={styles.draftMark}>
-            <Icon name="alert" size={17} strokeWidth={1.9} />
-          </span>
-          <b className={styles.draftTitle}>交办内容</b>
-          <span className={styles.draftHint}>
-            刷新前如已点过发布：结果待确认，请先到工作事项核对。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。 <Link to="/work-objects">核对工作事项</Link>
-          </span>
+        <div className={styles.gridRequirement}>
+          <div className={styles.field}><label>办理方式</label><Radio.Group name="dispatch-mode" value={draft.dispatchMode} disabled={locked}
+            onChange={(event) => update('dispatchMode', event.target.value)}>
+            <Radio value="independent">各自独立办理</Radio><Radio value="collaborative">主协办协作</Radio></Radio.Group>
+            <p className={styles.caption}>{draft.dispatchMode === 'independent' ? '每个目标分别生成一个工作事项，分别办结。' : '共同生成一个工作事项，所有协办对外提交后由唯一主办汇总。'}</p></div>
+          <div className={styles.field}><label>完成模式</label><Radio.Group name="dispatch-completion-mode" value={draft.completionMode} disabled={locked}
+            onChange={(event) => update('completionMode', event.target.value)}><Radio value="submit_completes">正式提交即完成</Radio>
+            <Radio value="confirm_required">派发人确认后完成</Radio></Radio.Group>
+            <p className={styles.caption}>部门目标须先由负责人审核；本人自办也可选择提交即完成。</p></div>
         </div>
-
-        <div className={styles.form}>
-          <h2 className={styles.sectionHead}>
-            <span>基本信息</span>
-            <i aria-hidden="true" />
-          </h2>
-          <div className={styles.gridKindTitle}>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-kind">类型</label>
-              <Select<DispatchKind>
-                className={styles.select}
-                disabled={locked}
-                id="dispatch-kind"
-                onChange={(value) => update('kind', value)}
-                options={DISPATCH_KINDS.map((kind) => ({
-                  label: kind,
-                  value: kind,
-                }))}
-                value={draft.kind}
-                virtual={false}
-              />
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-title">标题</label>
-              <Input
-                disabled={locked}
-                id="dispatch-title"
-                onChange={(event) => update('title', event.target.value)}
-                value={draft.title}
-              />
-            </div>
-          </div>
-
-          <h2 className={styles.sectionHead}>
-            <span>交办范围与时限</span>
-            <i aria-hidden="true" />
-          </h2>
-          <div className={styles.gridScope}>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-assignee">责任人 / 责任部门</label>
-              <Input.TextArea
-                autoSize={{ minRows: 1, maxRows: 4 }}
-                id="dispatch-assignee"
-                readOnly
-                value={selected.map((item) => `${labelOf(item.option)}${item.confirmed ? '' : '（待核对）'}`).join('、')}
-              />
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-due">截止时间</label>
-
-              <input
-                className={styles.dateInput}
-                id="dispatch-due"
-                onChange={(event) => changeTime(event.target.value)}
-                type="datetime-local"
-                value={draft.dueAt}
-                disabled={locked}
-              />
-              <span className={styles.caption}>{zone} {choices.map((choice) => choice.offset).join(' / ')}</span>
-              {draft.dueAt && choices.length === 0 ? <span role="alert">该日期时间不存在或无法确认，请重新选择。</span> : null}
-              {choices.length > 1 ? <select aria-label="选择截止时间偏移" value={chosenInstant} disabled={locked}
-                onChange={(event) => setChosenInstant(event.target.value)}>
-                <option value="">此时间出现两次，请选择偏移</option>
-                {choices.map((choice) => <option key={choice.instant} value={choice.instant}>{choice.offset}</option>)}
-              </select> : null}
-              {!timeConfirmed ? <Button disabled={locked} onClick={() => setTimeConfirmed(true)}>确认旧截止时间与时区</Button> : null}
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-visibility">可见范围</label>
-              <Input
-                id="dispatch-visibility"
-                readOnly
-                value="由系统按部门和发起人确定"
-              />
-            </div>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel} id="dispatch-target-label">交办对象（目录选择）</span>
-            <div aria-labelledby="dispatch-target-label" role="group" className={styles.chipWell}>
-              {selected.map((item) => <span className={styles.chip} key={optionKey(item.option)}>
-                <span>{labelOf(item.option)}{item.confirmed ? '' : '（待核对）'}</span>
-                <button type="button" className={styles.chipRemove} disabled={locked}
-                  aria-label={`移除交办对象 ${labelOf(item.option)}`}
-                  onClick={() => setSelected((items) => items.filter((entry) => optionKey(entry.option) !== optionKey(item.option)))}>
-                  <Icon name="close" size={14} strokeWidth={2.3} />
-                </button>
-              </span>)}
-            </div>
-            <div className={styles.directory}>
-              <div className={styles.directoryActions}>
-                <Button disabled={phase === 'pending'} onClick={() => void load({ kind: 'department' })}>返回部门首页</Button>
-                <Button disabled={phase === 'pending'} onClick={() => void load(currentScope.current)}>重新读取目录</Button>
-              </div>
-              {directoryState === 'loading' ? <p>正在读取目录…</p> : null}
-              {directoryError ? <p role="alert">{directoryError}</p> : null}
-              {directoryState === 'ready' && page?.items.length === 0 ? <p>当前没有可选{scope.kind === 'department' ? '部门' : '人员'}。</p> : null}
-              {page && directoryState === 'ready' ? <>
-                {page.unselectable_count > 0 ? <p>有人员暂不可选，请联系管理员核对目录（{page.unselectable_count} 人）。</p> : null}
-                <ul className={styles.optionList}>
-                  {page.items.map((option) => <li key={optionKey(option)}>
-                    <span>{labelOf(option)}</span>
-                    {option.kind === 'department' ? <Button aria-label={`查看 ${option.department_display_name} 人员`} disabled={phase === 'pending'} onClick={() => void load({ kind: 'user', department_id: option.department_id })}>查看人员</Button> : null}
-                    <Button aria-label={`选择 ${labelOf(option)}`} disabled={locked || (selected.length >= 100 && !selected.some((item) => optionKey(item.option) === optionKey(option)))}
-                      onClick={() => addTarget(option)}>选择</Button>
-                  </li>)}
-                </ul>
-                {page.has_more ? <Button disabled={phase === 'pending'} onClick={() => void load(scope, page.next_cursor!)}>下一页</Button> : null}
-              </> : null}
-            </div>
-            <p className={styles.caption}>{targetCount === 0 ? '还没有交办对象。' : `已选择交办对象 ${targetCount} 个，同一对象只保留一次；最多 100 个。`}</p>
-            {legacy ? <div className={styles.legacy}>
-              <p>旧内容待重新确认：责任人 {draft.assignee}；可见范围 {draft.visibility}；对象 {draft.targets.join('、')}。</p>
-              <label><input type="checkbox" checked={legacyConfirmed} disabled={locked} onChange={(event) => setLegacyConfirmed(event.target.checked)} />我已核对旧意图与新的责任和可见范围摘要，并重新选择对象</label>
-            </div> : null}
-          </div>
-
-          <h2 className={styles.sectionHead}>
-            <span>办理要求与回执</span>
-            <i aria-hidden="true" />
-          </h2>
-          <div className={styles.gridRequirement}>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-requirement">办理要求与交付物</label>
-              <Input.TextArea
-                disabled={locked}
-                id="dispatch-requirement"
-                onChange={(event) => update('requirement', event.target.value)}
-                rows={2}
-                value={draft.requirement}
-              />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel} id="dispatch-attachment-label">
-                附件
-              </span>
-              <div
-                aria-describedby="dispatch-attachment-help"
-                aria-labelledby="dispatch-attachment-label"
-                className={styles.attachmentWell}
-                role="group"
-              >
-                <Button className={styles.chipAdd} disabled>
-                  <Icon name="plus" size={15} strokeWidth={2.2} />
-                  添加附件
-                </Button>
-              </div>
-              <p className={styles.caption} id="dispatch-attachment-help">
-                <Icon name="help" size={14} />
-                Word / PDF / 图片，单个不超过 20 MB；附件还传不上去，可先存草稿。
-              </p>
-            </div>
-            <div className={styles.field}>
-              <label htmlFor="dispatch-receipt">回执要求</label>
-              <Input
-                disabled={locked}
-                id="dispatch-receipt"
-                onChange={(event) => update('receipt', event.target.value)}
-                value={draft.receipt}
-              />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel} id="dispatch-reminder-label">
-                提醒策略（可多选，各提醒一次）
-              </span>
-              <div
-                aria-labelledby="dispatch-reminder-label"
-                className={styles.reminderRow}
-                role="group"
-              >
-                {REMINDER_CHOICES.map((choice) => {
-                  const selected = draft.reminders.includes(choice);
-                  return (
-                    <button
-                      disabled={locked || !draft.dueAt}
-                      aria-pressed={selected}
-                      className={selected ? styles.reminderOn : styles.reminderOff}
-                      key={choice}
-                      onClick={() => toggleReminder(choice)}
-                      type="button"
-                    >
-                      {choice}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className={styles.caption}>仅记录提醒设置，自动提醒尚未启用；清空截止时间将取消提醒。</p>
-            </div>
-          </div>
+        <h2 className={styles.sectionHead}>交办对象</h2>
+        <p className={styles.caption}>候选由服务端按当前身份提供；普通人员仅本人、负责人可派部门及本部门人员。领导岗位名单未配置时不会开放领导权限。</p>
+        <div className={styles.chipWell} role="group" aria-label="交办对象（目录选择）">
+          {selected.length === 0 ? <span>尚未选择对象</span> : selected.map((item) => <span className={styles.chip} key={optionKey(item.option)}>
+            {labelOf(item.option)}{item.confirmed ? '' : '（待重新确认）'}
+            <Button type="text" disabled={locked} aria-label={`移除 ${labelOf(item.option)}`} onClick={() => setSelected((items) => items.filter((entry) => optionKey(entry.option) !== optionKey(item.option)))}><Icon name="close" size={14} /></Button>
+          </span>)}
         </div>
-
-        <footer className={styles.footer}>
-          <div className={styles.footerCopy}>
-            <p className={styles.caption}>
-              {targetCount === 0
-                ? '发布前对方不可见。'
-                : `发布后，${targetCount} 个交办对象的工作事项中各生成一条；发布前对方不可见。`}
-            </p>
+        <div className={styles.directory}>
+          <div className={styles.directoryActions}>
+            <Button disabled={locked} onClick={() => void load({ kind: 'user' }, undefined, '')}>本人 / 可选人员</Button>
+            <Button disabled={locked} onClick={() => void load({ kind: 'department' }, undefined, '')}>可选部门</Button>
+            <Input.Search aria-label="搜索目录对象" placeholder="搜索当前目录" value={query} disabled={locked}
+              onChange={(event) => setQuery(event.target.value)} onSearch={() => void load(scope)} />
+            <Button disabled={locked} onClick={() => void load(scope)}>重新读取目录</Button>
           </div>
-          <div className={styles.footerActions}>
-            <Button className={styles.footerButton} disabled={locked} onClick={store}>
-              存草稿
-            </Button>
-            <Button
-              className={`${styles.footerButton} ${styles.publishButton}`}
-              disabled={locked || directoryState !== 'ready' || selected.length === 0 || selected.some((item) => !item.confirmed) || !timeValid || (legacy && !legacyConfirmed)}
-              onClick={publish}
-            >
-
-              <span>发布</span>
-            </Button>
-            {phase === 'uncertain' ? <Button disabled={directoryState !== 'ready'} onClick={() => { if (frozen.current) void send(frozen.current); }}>重试原请求</Button> : null}
-            {phase === 'success' ? <Button onClick={() => { frozen.current = null; setPhase('editing'); setNotice(null); setSelected([]); }}>新建交办</Button> : null}
-          </div>
-        </footer>
-        {notice === null ? null : (
-          <p className={styles.notice} role={noticeError ? 'alert' : 'status'}>
-            <Icon name={notice === SAVE_NOTICE ? 'check' : 'alert'} size={14} />
-            {notice}
-          </p>
-        )}
-      </section>
-    </div>
-  );
+          {directoryState === 'loading' ? <p role="status">正在读取目录…</p> : null}
+          {directoryError ? <p role="alert">{directoryError}</p> : null}
+          {page && directoryState === 'ready' ? <>
+            <p className={styles.caption}>当前能力：{page.can_self_dispatch ? '本人自办 ' : ''}{page.can_dispatch_departments ? '部门派发 ' : ''}{page.can_dispatch_others ? '人员派发' : ''}</p>
+            {page.items.length === 0 ? <p>当前范围没有可选对象。</p> : null}
+            {page.unselectable_count > 0 ? <p>有 {page.unselectable_count} 个对象当前不能唯一解析，请核对目录。</p> : null}
+            <ul className={styles.optionList}>{page.items.map((option) => <li key={optionKey(option)}><span>{labelOf(option)}</span>
+              {option.kind === 'department' ? <Button aria-label={`查看 ${option.department_display_name} 人员`} disabled={locked} onClick={() => void load({ kind: 'user', department_id: option.department_id }, undefined, '')}>查看人员</Button> : null}
+              <Button aria-label={`选择 ${labelOf(option)}`} disabled={locked || selected.length >= 100 && !selected.some((item) => optionKey(item.option) === optionKey(option))}
+                onClick={() => addTarget(option)}>{selected.some((item) => optionKey(item.option) === optionKey(option)) ? '重新确认' : '选择'}</Button>
+            </li>)}</ul>
+            {page.has_more ? <Button disabled={locked} onClick={() => void load(scope, page.next_cursor!)}>加载下一页</Button> : null}
+          </> : null}
+        </div>
+        {draft.dispatchMode === 'collaborative' ? <div className={styles.field}><label htmlFor="dispatch-lead">唯一主办</label>
+          <Select id="dispatch-lead" value={leadKey || undefined} placeholder="从已选对象选择一名主办" disabled={locked}
+            options={selected.map((item) => ({ value: optionKey(item.option), label: labelOf(item.option) }))} onChange={setLeadKey} /></div> : null}
+        {legacy ? <label><Checkbox checked={legacyConfirmed} disabled={locked} onChange={(event) => setLegacyConfirmed(event.target.checked)} />已核对旧草稿意图并重新选择目标：{draft.assignee} {draft.visibility} {draft.targets.join('、')}</label> : null}
+        {!series ? <div className={styles.field}><label htmlFor="dispatch-due">截止时间</label>
+          <input className={styles.dateInput} id="dispatch-due" type="datetime-local" value={draft.dueAt} disabled={locked}
+            onChange={(event) => { setChosenInstant(''); setTimeConfirmed(true); setDraft((old) => ({ ...old, dueAt: event.target.value, dueInstant: undefined, reminders: event.target.value ? old.reminders : [] })); }} />
+          <p className={styles.caption}>时区：{zone} {choices.map((choice) => choice.offset).join(' / ')}</p>
+          {draft.dueAt && choices.length === 0 ? <p role="alert">该本地日期时间不存在，请重新选择。</p> : null}
+          {choices.length > 1 ? <Select aria-label="选择截止时间偏移" virtual={false} value={chosenInstant || undefined} disabled={locked}
+            options={choices.map((choice) => ({ label: choice.offset, value: choice.instant }))} onChange={setChosenInstant} /> : null}
+          {!timeConfirmed ? <Button disabled={locked} onClick={() => setTimeConfirmed(true)}>确认旧截止时间与时区</Button> : null}
+        </div> : null}
+        <h2 className={styles.sectionHead}>办理要求与回执材料</h2>
+        <div className={styles.gridRequirement}>
+          <div className={styles.field}><label htmlFor="dispatch-requirement">办理要求与交付物</label><Input.TextArea id="dispatch-requirement"
+            rows={4} maxLength={10000} value={draft.requirement} disabled={locked} onChange={(event) => update('requirement', event.target.value)} /></div>
+          <div className={styles.field}><label htmlFor="dispatch-receipt">回执要求</label><Input.TextArea id="dispatch-receipt"
+            rows={4} maxLength={2000} value={draft.receipt} disabled={locked} onChange={(event) => update('receipt', event.target.value)} /></div>
+        </div>
+        <div role="group" aria-label="附件"><AttachmentsPanel purpose="task_material" visibility="shared" value={attachments} onChange={setAttachments} readOnly={locked} onAccessLost={clearPrivate} /></div>
+        <div className={styles.field}><label>站内到期提示</label><Checkbox.Group aria-label="站内到期提示" role="group" disabled={locked || !series && !draft.dueAt} options={[...REMINDER_CHOICES]}
+          value={[...draft.reminders]} onChange={(values) => update('reminders', REMINDER_CHOICES.filter((choice) => values.includes(choice)))} />
+          <p className={styles.caption}>提示显示在站内工作台，不代表已发送邮件、短信或 IM。</p></div>
+      </div>
+      <div className={styles.footer}>
+        <span className={styles.caption}>已选择 {selected.length} 个目标 · {draft.dispatchMode === 'collaborative' ? '共同协作' : '分别办理'}</span>
+        <div className={styles.footerActions}>
+          {!series ? <Button disabled={locked} onClick={store}>暂存草稿</Button> : null}
+          {phase === 'editing' ? <Button type="primary" disabled={directoryState !== 'ready' || selected.length === 0 || selected.some((item) => !item.confirmed) || legacy && !legacyConfirmed || !timeValid} onClick={publish}>{submitLabel}</Button> : null}
+          {phase === 'pending' ? <Button loading>正在提交</Button> : null}
+          {phase === 'uncertain' && frozen.current ? <Button onClick={() => void send(frozen.current!)}>重试原请求</Button> : null}
+          {phase === 'success' && !series ? <><Link to="/work-objects">查看工作事项</Link><Button onClick={() => { setDraft({ ...EMPTY_DRAFT }); setSelected([]); setAttachments([]); setLeadKey(''); setPhase('editing'); setNotice(null); }}>继续创建</Button></> : null}
+        </div>
+      </div>
+      {notice ? <p aria-label="交办状态" className={styles.notice} role={noticeError ? 'alert' : 'status'}>{notice}</p> : null}
+    </section>
+  </div>;
 }

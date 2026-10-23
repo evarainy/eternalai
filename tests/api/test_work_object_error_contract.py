@@ -164,10 +164,14 @@ def test_completion_valid_is_forwarded(http, value):
                 "completion": value,
                 "search_term": "synthetic query",
                 "oa_view": "all",
+                "queue": None,
+                "history_from": None,
+                "history_to": None,
+                "cursor": None,
             },
         )
     ]
-    assert "cache-control" not in response.headers
+    assert response.headers["cache-control"] == "no-store"
     full = client.app.openapi()
     schema = full["paths"][BASE]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
     Draft202012Validator({**schema, "components": full["components"]}).validate(response.json())
@@ -183,6 +187,10 @@ def test_completion_omitted_preserves_default(http):
                 "completion": None,
                 "search_term": "synthetic query",
                 "oa_view": "active",
+                "queue": None,
+                "history_from": None,
+                "history_to": None,
+                "cursor": None,
             },
         )
     ]
@@ -262,14 +270,25 @@ def test_completion_error_matches_runtime_openapi(http):
     full = client.app.openapi()
     operation = full["paths"][BASE]["get"]
     assert operation["operationId"] == "list_work_objects_api_v1_work_objects_get"
-    assert [p["name"] for p in operation["parameters"]] == ["q", "oa_view", "completion"]
+    assert [p["name"] for p in operation["parameters"]] == [
+        "q",
+        "oa_view",
+        "completion",
+        "queue",
+        "history_from",
+        "history_to",
+        "cursor",
+    ]
     completion = operation["parameters"][2]
     assert completion == {
         "name": "completion",
         "in": "query",
         "required": False,
         "schema": {
-            "anyOf": [{"enum": ["active", "completed"], "type": "string"}, {"type": "null"}],
+            "anyOf": [
+                {"enum": ["active", "completed", "withdrawn"], "type": "string"},
+                {"type": "null"},
+            ],
             "title": "Completion",
         },
     }
