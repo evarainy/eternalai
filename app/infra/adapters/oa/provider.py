@@ -1463,6 +1463,48 @@ def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> TypeGuard[str]:
     )
 
 
+_STRUCTURE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,40}")
+# Envelope flags whose bool/small-int value is a fixed enum; strings are never logged.
+_STRUCTURE_FLAG_KEYS = frozenset({
+    "status", "loginstatus", "success", "api_status", "code", "errorCode", "error_code",
+    "flag", "result", "ret", "state",
+})
+
+
+def _log_split_payload_structure(payload: Mapping[str, Any]) -> None:
+    """Temporary diagnostic: top-level key names, value types and enum flags only."""
+
+    try:
+        keys = list(payload.keys())
+        named = sorted(
+            key for key in keys if isinstance(key, str) and _STRUCTURE_KEY.fullmatch(key)
+        )
+        shown = named[:20]
+        types = ",".join(f"{key}:{type(payload[key]).__name__}" for key in shown) or "-"
+        flags = []
+        for key in shown:
+            if key not in _STRUCTURE_FLAG_KEYS:
+                continue
+            value = payload[key]
+            if isinstance(value, bool) or (
+                isinstance(value, int) and -100_000 < value < 100_000
+            ):
+                flags.append(f"{key}={value!r}")
+        _CHAT_STAGE_LOGGER.info(
+            "oa_split_structure key_count=%s other_keys=%s keys=%s flags=%s trace=%s",
+            len(keys), len(keys) - len(shown), types, ",".join(flags) or "-",
+            _structure_trace(),
+        )
+    except Exception:
+        _CHAT_STAGE_LOGGER.info("oa_split_structure unavailable trace=%s", _structure_trace())
+
+
+def _structure_trace() -> str:
+    scope = _oa_stage_scope.get()
+    trace = scope[0] if scope is not None else None
+    return trace if isinstance(trace, str) and re.fullmatch(r"[0-9a-f-]{32,36}", trace) else "none"
+
+
 def _split_data_shape(payload: Mapping[str, Any]) -> str:
     """Classify only the known ``data`` field; never values, lengths or keysets."""
 
@@ -1507,6 +1549,7 @@ def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
             _record_oa_stage(
                 "provider_transport", "failed", reason=_split_data_shape(payload)
             )
+            _log_split_payload_structure(payload)
         sessionkey = None
         raise OALivePayloadInvalid(
             "OA pending-workflow split response session key is invalid"
