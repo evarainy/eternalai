@@ -3243,3 +3243,13 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 **来源与决定**：雨爷当次明确确认：只有唯一可解析负责人才能派发；缺失或多人均在创建前拒绝，批量整体失败。不得任选负责人、先创建无人负责任务或引入未经确认的主副配置。独立派发人/当前承办身份仍按既定规则判权。
 
 **边界**：Q07 不再是未批准项；没有读取真实目录/数据库，现有数据中是否存在缺失或多负责人仍未知。本条不授权数据读取、Schema B、数据库连接/写入或真实业务派发，不连带批准 Q06/Q08。
+
+## 2026-10-23 — 任务派发 Q06/Q08 确认与阶段 D 测试库授权
+
+**来源与范围**：雨爷 2026-10-23 确认 Q06/Q08 业务规则按默认；本条区分已合并代码事实与未实现义务，不把静态核对或 CI 通过当作真实 E01–E10 验收。
+
+1. **Q06 持续委托**：雨爷 2026-10-23 确认业务规则按默认：规则启用代表持续委托，创建人退出登录后继续生成；每期在新鲜目录重新判权，账号停用或失权则该期受阻，规则不自动删除。已实现持久主体生成、不依赖登录会话（`app/work_dispatch/recurrence.py::WorkObjectSeriesService.generate_due`、`app/infra/persistence/work_object/recurrence.py::PostgreSQLWorkObjectSeriesStore.generate_due`）；每期调用 `app/work_dispatch/service.py::WorkDispatchService.prepare_dispatch`，经 `_fresh`、`_validate_targets` 重判，已知目录缺失、歧义或失权记当期 blocked，推进后续期次并保留规则。**账号停用使当期受阻已确认但未实现**：`app/ports/organization_directory.py::OrganizationUserMembership` 及目录合同没有账号启停状态，`app/infra/organization_directory/postgresql.py::PostgreSQLOrganizationDirectory.read_view` 不据启停过滤，生产 `app/composition.py::build_production_components` 的 `transport_factory=None`；不能声称停用判定已生效，见 [PLAN 派发欠债](PHASE2_PLAN.md#既有活欠债)。
+2. **Q08 撤回终态**：雨爷 2026-10-23 确认按默认：withdrawn 停止流转、不计 completed，共用业务冻结，禁止改、撤、延、转、附件关联及重开；当前参与者可读，备注按 Q02 可编辑，历史单独筛选。代码静态核对一致：`app/infra/persistence/work_object/postgresql.py::project_lifecycle` 将 completed/withdrawn 共设 frozen，`PostgreSQLWorkObjectStore.command_dispatch_lifecycle` 拒绝冻结后的新业务动作，withdraw 分支只登记撤回事实、不填办结时间；`app/infra/persistence/work_object/attachments.py::PostgreSQLWorkObjectAttachmentStore._mutate` 拒绝冻结后的关联/解绑，`app/ports/work_object_lifecycle.py::LifecycleOperation` 无重开操作；`app/infra/persistence/work_object/authorization.py::root_visibility_sql` 保留当前参与者读权，`app/infra/persistence/work_object/postgresql.py::load_remark_in_session` / `PostgreSQLWorkObjectStore.edit_remark` 保留 Q02 备注权限，`PostgreSQLWorkObjectStore._list_records` 对 withdrawn 与 completed 分别过滤。此处是源码核对，真实业务仍未验收。
+3. **阶段 D 测试库一次性授权与已合并边界**：雨爷 2026-10-22 批准仅在 `127.0.0.1:15432` 新建专用 `eternalai_dispatch_test`，执行迁移往返及合成数据验证；既有 `eternalai_test` 未修改。按已合并 PR #225 的交付记录，专库迁移往返与 required CI 已通过，真实 E01–E10 未验收。本条补登当批 Schema B 处置，不将其固化为长期数据库授权，不授权本棒连接数据库、执行迁移、写入真实数据或部署。
+
+**替代关系**：Q06/Q08 的“未确认”状态以本条为准；此前 Schema B 未批准的记载保留其历史时点，本条只补登上述专库当批授权。真实 Source、领导岗位与唯一负责人资料、账号/环境/业务动作许可及账号停用判定缺项见 [PLAN](PHASE2_PLAN.md#既有活欠债)，不分配新后继 task_id。
