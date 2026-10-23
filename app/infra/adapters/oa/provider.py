@@ -45,9 +45,7 @@ from app.infra.adapters.oa.contracts import (
 )
 from app.ports.auth import OASessionCredential
 
-_CHAT_STAGE_LOGGER = logging.getLogger("eternalai.chat_stages")
-_CHAT_STAGE_LOGGER.addHandler(logging.NullHandler())
-_CHAT_STAGE_LOGGER.propagate = False
+_CHAT_STAGE_LOGGER = logging.getLogger("uvicorn.error.chat_stages")
 _CHAT_STAGE_NODES = frozenset({
     'candidate', 'catalog', 'credential_read', 'execution', 'fixed_reply', 'identity', 'intent',
     'model', 'normalization', 'oa_result', 'oa_route', 'provider_transport'
@@ -71,6 +69,12 @@ _CHAT_STAGE_REASONS = frozenset({
     'split_key_format', 'split_key_missing', 'split_key_type',
     'structured_output_error', 'timeout', 'unknown', 'unparsed', 'upstream_permission_denied',
     'visible_empty', 'visible_present', 'waiting_user'
+}) | frozenset({
+    'pw_business_payload', 'pw_count_exceeded', 'pw_count_invalid', 'pw_count_limit',
+    'pw_count_mismatch', 'pw_count_page_limit', 'pw_count_status', 'pw_fingerprint', 'pw_json',
+    'pw_normalized_contract', 'pw_page_over_size', 'pw_page_records', 'pw_page_size',
+    'pw_page_status', 'pw_record_id', 'pw_record_repeated', 'pw_record_type',
+    'pw_response_payload', 'pw_split_key',
 })
 # Temporary split diagnostic; accepted only on provider_transport/failed/pending workflows.
 _SPLIT_DATA_SHAPE_REASONS = frozenset({
@@ -150,6 +154,30 @@ _MESSAGE_CENTER_PAYLOAD_REASON_CODES = {
     "OA message-center response status is invalid": "response_status",
     "OA message-center response data is invalid": "response_data",
     "OA message-center response cursor is invalid": "response_cursor",
+}
+# Pending-workflow payload checks by their code-owned message; only the code is logged.
+_PENDING_PAYLOAD_REASON_CODES = {
+    "OA pending-workflow split response session key is invalid": "pw_split_key",
+    "OA pending-workflow count response status is invalid": "pw_count_status",
+    "OA pending-workflow authoritative count is invalid": "pw_count_invalid",
+    "OA pending-workflow authoritative count exceeds the record limit": "pw_count_limit",
+    "OA pending-workflow data response status is invalid": "pw_page_status",
+    "OA pending-workflow data response page size is invalid": "pw_page_size",
+    "OA pending-workflow data response records are invalid": "pw_page_records",
+    "OA pending-workflow page exceeds its declared size": "pw_page_over_size",
+    "OA pending-workflow record must be an object": "pw_record_type",
+    "OA pending-workflow record identifier is invalid": "pw_record_id",
+    "OA pending-workflow record repeated across pages": "pw_record_repeated",
+    "OA pending-workflow response payload is invalid": "pw_business_payload",
+    "OA pending-workflow returned count does not match the authoritative count":
+        "pw_count_mismatch",
+    "OA pending-workflow returned count does not match the authoritative count "
+    "within the page limit": "pw_count_page_limit",
+    "OA pending-workflow returned count exceeds the authoritative count": "pw_count_exceeded",
+    "OA payload structure cannot be fingerprinted": "pw_fingerprint",
+    "OA payload violates the normalized contract": "pw_normalized_contract",
+    "OA response is not valid JSON": "pw_json",
+    "OA response payload is invalid": "pw_response_payload",
 }
 _COOKIE_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _SESSION_EXPIRED_CODES = frozenset(
@@ -401,9 +429,13 @@ class LiveOAReadProvider:
         authoritative_count = 0
 
         try:
-            raw_records, authoritative_count = (
-                await self._list_pending_workflow_records(credential)
-            )
+            try:
+                raw_records, authoritative_count = (
+                    await self._list_pending_workflow_records(credential)
+                )
+            except OALivePayloadInvalid as error:
+                _record_pending_payload_failure("provider_transport", error)
+                raise
             _record_oa_stage("normalization", "start")
             try:
                 actual_fingerprint = (
@@ -414,9 +446,9 @@ class LiveOAReadProvider:
                     actual_fingerprint,
                 )
             except (TypeError, ValueError):
-                raise OALivePayloadInvalid(
-                    "OA payload structure cannot be fingerprinted"
-                ) from None
+                failure = OALivePayloadInvalid("OA payload structure cannot be fingerprinted")
+                _record_pending_payload_failure("normalization", failure)
+                raise failure from None
             except Exception:
                 _log_provider_failure("structural_fingerprint")
                 raise OALiveRequestError(
@@ -432,9 +464,9 @@ class LiveOAReadProvider:
                     authoritative_count=authoritative_count,
                 )
             except (TypeError, ValueError):
-                raise OALivePayloadInvalid(
-                    "OA payload violates the normalized contract"
-                ) from None
+                failure = OALivePayloadInvalid("OA payload violates the normalized contract")
+                _record_pending_payload_failure("normalization", failure)
+                raise failure from None
             except Exception:
                 _log_provider_failure("normalization")
                 raise OALiveRequestError(
@@ -1193,6 +1225,13 @@ def _http_error_kind(status_code: int) -> str:
     if 500 <= status_code < 600:
         return "http_server"
     return "request_error"
+
+
+def _record_pending_payload_failure(node: str, error: OALivePayloadInvalid) -> None:
+    # The message is a code-owned constant; only its mapped code is recorded.
+    _record_oa_stage(
+        node, "failed", reason=_PENDING_PAYLOAD_REASON_CODES.get(str(error), "payload_invalid")
+    )
 
 
 def _log_provider_failure(stage: str) -> None:

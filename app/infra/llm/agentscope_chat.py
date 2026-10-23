@@ -79,9 +79,9 @@ _TURN_DEADLINE: ContextVar[float | None] = ContextVar("eternalai_turn_deadline",
 # so a single turn can be followed across loggers; carries no request data.
 _TURN_ID: ContextVar[str | None] = ContextVar("eternalai_turn_id", default=None)
 
-_MODEL_LOGGER = logging.getLogger("eternalai.agentscope_model")
-_MODEL_LOGGER.addHandler(logging.NullHandler())
-_MODEL_LOGGER.propagate = False
+# Same convention as uvicorn.error.mcp_stages: lines reach the server log through
+# uvicorn's handler. Only codes, counts, timings and ids are ever logged here.
+_MODEL_LOGGER = logging.getLogger("uvicorn.error.agentscope_model")
 
 
 class AgentScopeModelError(Exception):

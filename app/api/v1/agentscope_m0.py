@@ -29,7 +29,7 @@ M0TurnRunner = Callable[
 ]
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _DISCONNECT_POLL_SECONDS = 0.5
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("uvicorn.error.agentscope_m0_turn")
 
 
 class ExpectedToolCall(BaseModel):

@@ -81,9 +81,8 @@ _HALTED_TEXT = "本轮已停止工具调用，请先向用户澄清。"
 _SCOPE_TEXT = "需要用户补充范围（账套、资源范围或设备域），请先向用户确认，不要猜测。"
 _ALLOW = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="approved read")
 
-_TOOL_LOGGER = logging.getLogger("eternalai.agentscope_read_tools")
-_TOOL_LOGGER.addHandler(logging.NullHandler())
-_TOOL_LOGGER.propagate = False
+# Server-log convention shared with uvicorn.error.mcp_stages; code-owned values only.
+_TOOL_LOGGER = logging.getLogger("uvicorn.error.agentscope_read_tools")
 
 
 @dataclass(frozen=True, slots=True)
