@@ -74,7 +74,7 @@ _CHAT_STAGE_REASONS = frozenset({
     'pw_count_mismatch', 'pw_count_page_limit', 'pw_count_status', 'pw_fingerprint', 'pw_json',
     'pw_normalized_contract', 'pw_page_over_size', 'pw_page_records', 'pw_page_size',
     'pw_page_status', 'pw_record_id', 'pw_record_repeated', 'pw_record_type',
-    'pw_response_payload', 'pw_split_key',
+    'pw_response_payload', 'pw_split_key', 'oa_business_rejected',
 })
 # Temporary split diagnostic; accepted only on provider_transport/failed/pending workflows.
 _SPLIT_DATA_SHAPE_REASONS = frozenset({
@@ -284,6 +284,10 @@ class OALivePayloadInvalid(OALiveProviderError):
 
 class OALiveRequestError(OALiveProviderError):
     """The Live request failed outside a more specific safe classification."""
+
+
+class OALiveBusinessRejected(OALiveRequestError):
+    """OA answered with an explicit ``status=false`` + ``errorCode`` rejection envelope."""
 
 
 class ReplayOAReadProvider:
@@ -586,6 +590,7 @@ class LiveOAReadProvider:
                 split_payload,
                 _read_pending_workflow_sessionkey,
                 check_business_envelope=True,
+                step="split",
             )
             split_payload = None
             if payload_error_kind is not None:
@@ -607,6 +612,7 @@ class LiveOAReadProvider:
                 counts_payload,
                 _read_pending_workflow_count,
                 check_business_envelope=True,
+                step="counts",
             )
             counts_payload = None
             if payload_error_kind is not None:
@@ -634,6 +640,7 @@ class LiveOAReadProvider:
                     datas_payload,
                     _read_pending_workflow_page,
                     check_business_envelope=True,
+                    step="datas",
                 )
                 datas_payload = None
                 if payload_error_kind is not None:
@@ -1413,6 +1420,7 @@ def _consume_pending_workflow_value(
     reader: Callable[[Any], Any],
     *,
     check_business_envelope: bool,
+    step: str = "record",
 ) -> tuple[Any, str | None]:
     """Return a parsed value or a safe error kind without retaining traceback data."""
 
@@ -1421,6 +1429,7 @@ def _consume_pending_workflow_value(
     try:
         if check_business_envelope:
             _raise_for_business_error(value)
+            _raise_for_pending_rejection(value, step=step)
         parsed_value = reader(value)
     except OALiveIdentityExpired:
         error_kind = "identity_expired"
@@ -1430,6 +1439,8 @@ def _consume_pending_workflow_value(
         # Record the specific code before the message is folded into a generic kind.
         _record_pending_payload_failure("provider_transport", error)
         error_kind = "payload_invalid"
+    except OALiveBusinessRejected:
+        error_kind = "business_rejected"
     except OALiveProviderError:
         error_kind = "payload_invalid"
     except Exception:
@@ -1448,7 +1459,39 @@ def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
         raise OALivePermissionDenied("OA permission was denied")
     if error_kind == "payload_invalid":
         raise OALivePayloadInvalid("OA pending-workflow response payload is invalid")
+    if error_kind == "business_rejected":
+        raise OALiveBusinessRejected("OA rejected the pending-workflow request")
     raise OALiveRequestError("OA response processing failed")
+
+
+_BUSINESS_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
+
+
+def _raise_for_pending_rejection(value: Any, *, step: str) -> None:
+    """Classify OA's ``{status: false, errorCode, msg}`` envelope; ``msg`` is never read."""
+
+    if (
+        not isinstance(value, Mapping)
+        or value.get("status") is not False
+        or "errorCode" not in value
+    ):
+        return
+    error_code = value.get("errorCode")
+    text = (
+        str(error_code)
+        if isinstance(error_code, (str, int)) and not isinstance(error_code, bool)
+        else None
+    )
+    _record_oa_stage("provider_transport", "failed", reason="oa_business_rejected")
+    # Only a short code-shaped value is logged; anything else contributes its length.
+    _CHAT_STAGE_LOGGER.info(
+        "oa_business_rejected step=%s error_code=%s error_code_length=%s trace=%s",
+        step,
+        text if text is not None and _BUSINESS_ERROR_CODE.fullmatch(text) else "-",
+        len(text) if text is not None else type(error_code).__name__,
+        _structure_trace(),
+    )
+    raise OALiveBusinessRejected("OA rejected the pending-workflow request")
 
 
 def _is_valid_pending_workflow_sessionkey(sessionkey: object) -> TypeGuard[str]:
