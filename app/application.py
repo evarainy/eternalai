@@ -2,7 +2,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -69,6 +69,10 @@ from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 
+# Same shape as app.api.v1.agentscope_m0.M0TurnRunner; spelled out here so the
+# route module is imported only when the M0 counting switch is on.
+M0TurnRunner = Callable[..., Awaitable[dict[str, Any]]]
+
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
 
@@ -102,6 +106,7 @@ def create_app(
     browser_management: DFormManagementPort | None = None,
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
+    agentscope_m0_turn: M0TurnRunner | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -222,6 +227,19 @@ def create_app(
         ),
         prefix="/api/v1/runtime",
     )
+    if agentscope_m0_turn is not None:
+        # Internal M0 counting route; present only when explicitly enabled, and
+        # imported only then so the default import closure stays unchanged.
+        from app.api.v1.agentscope_m0 import make_router as make_agentscope_m0_router
+
+        application.include_router(
+            make_agentscope_m0_router(
+                agentscope_m0_turn,
+                csrf_protected_principal,
+                session_binder,
+            ),
+            prefix="/api/v1/runtime/agentscope-m0",
+        )
     application.include_router(
         make_browser_runs_router(
             browser_run_access if browser_run_access is not None else browser_chat,
@@ -426,6 +444,11 @@ def create_production_app(
     if (d_form_execution_without_sync
             and type(browser_supervisor) is not BrowserWorkerSupervisor):
         raise RuntimeError("browser_d_form_execution_without_sync_invalid")
+    agentscope_m0_turn: M0TurnRunner | None = None
+    if resolved_settings.agentscope_m0_turn_enabled:
+        agentscope_m0_turn = getattr(components, "agentscope_m0_turn", None)
+        if not callable(agentscope_m0_turn):
+            raise RuntimeError("agentscope_m0_turn_installation_invalid")
     application_factory = create_app if _application_factory is None else _application_factory
     return application_factory(
         runtime=components.runtime,
@@ -455,6 +478,7 @@ def create_production_app(
         diagnostic_checks=dict(components.diagnostic_checks),
         validate_workflows=components.validate_workflows,
         mcp_service=components.mcp_service,
+        agentscope_m0_turn=agentscope_m0_turn,
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
         browser_run_access=(browser_vertical.submission if browser_vertical is not None else None),
         browser_submission=(browser_vertical.submission if browser_vertical is not None else None),
