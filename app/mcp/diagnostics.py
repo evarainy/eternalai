@@ -30,6 +30,10 @@ GrantReason = Literal[
     "pending",
     "revoked",
     "unbound",
+    "session_missing",
+    "principal_mismatch",
+    "session_expired",
+    "resolve_failed",
 ]
 
 

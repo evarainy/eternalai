@@ -9,7 +9,7 @@ from app.mcp.models import McpFailure, ToolBinding, digest
 from app.ports.auth import authenticated_session
 from app.ports.human_gate import HumanGatePort
 from app.ports.mcp import McpAuthorizationContext
-from app.ports.mcp_store import McpStorePort
+from app.ports.mcp_store import Connection, McpStorePort
 from app.ports.workflow_store import GovernedWorkflowAuthorization, WorkflowStorePort
 
 
@@ -29,17 +29,7 @@ class McpExecutionContextFactory:
         mapping: ToolBinding,
         authorization: GovernedWorkflowAuthorization | None = None,
     ) -> McpAuthorizationContext:
-        session = authenticated_session.get()
-        if (
-            session is None
-            or session.principal.ai_user_id != user_id
-            or session.principal.org_ctx.tenant_id != tenant_id
-            or session.expires_at <= datetime.now(UTC)
-        ):
-            raise McpFailure("mcp_authorization_invalid")
-        connection = await self.store.connection(
-            tenant_id=tenant_id, user_id=user_id, service_config_id=mapping.service_config_id
-        )
+        connection: Connection | None = None
 
         def blocked(code: str, reason: GrantReason | None) -> McpFailure:
             record_mcp_event(
@@ -52,6 +42,20 @@ class McpExecutionContextFactory:
                 reason=reason,
             )
             return McpFailure(code)
+
+        session = authenticated_session.get()
+        if session is None:
+            raise blocked("mcp_authorization_invalid", "session_missing")
+        if (
+            session.principal.ai_user_id != user_id
+            or session.principal.org_ctx.tenant_id != tenant_id
+        ):
+            raise blocked("mcp_authorization_invalid", "principal_mismatch")
+        if session.expires_at <= datetime.now(UTC):
+            raise blocked("mcp_authorization_invalid", "session_expired")
+        connection = await self.store.connection(
+            tenant_id=tenant_id, user_id=user_id, service_config_id=mapping.service_config_id
+        )
 
         if connection is None:
             raise blocked("mcp_identity_unbound", "unbound")
@@ -90,7 +94,8 @@ class McpExecutionContextFactory:
         try:
             await self.store.resolve(context)
         except McpFailure as exc:
-            blocked(exc.code, None)
+            # resolve folds revocation, row mismatch and decrypt errors into one code.
+            blocked(exc.code, "resolve_failed")
             raise
         record_mcp_event(
             "identity_check",
