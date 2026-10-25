@@ -24,19 +24,20 @@ const eventLabels: Record<LifecycleOperation, string> = { assign: '分配承办�
   revise: '修改要求', withdraw: '撤回任务', extend: '延期', reassign: '改派' };
 type Action = { operation: LifecycleOperation; relationId?: string };
 
-export default function InternalWorkLifecyclePanel({ workObjectId, onAccessLost, onChanged }: {
-  workObjectId: string; onAccessLost?: () => void; onChanged?: () => void;
+export default function InternalWorkLifecyclePanel({ workObjectId, refreshSignal = 0, onAccessLost, onChanged }: {
+  workObjectId: string; refreshSignal?: number; onAccessLost?: () => void; onChanged?: () => void;
 }) {
   const token = useDraftSession();
   return token ? <LifecyclePanel key={`${token.generation}:${token.revision}:${workObjectId}`} id={workObjectId} token={token}
-    onAccessLost={onAccessLost} onChanged={onChanged} /> : null;
+    refreshSignal={refreshSignal} onAccessLost={onAccessLost} onChanged={onChanged} /> : null;
 }
 
-function LifecyclePanel({ id, token, onAccessLost, onChanged }: { id: string; token: DraftSessionToken; onAccessLost?: () => void; onChanged?: () => void }) {
+function LifecyclePanel({ id, token, refreshSignal, onAccessLost, onChanged }: { id: string; token: DraftSessionToken; refreshSignal: number; onAccessLost?: () => void; onChanged?: () => void }) {
   const client = useQueryClient();
   const alive = useRef(true);
   const epoch = useRef(0);
   const requestSequence = useRef(0);
+  const lastRefreshSignal = useRef(refreshSignal);
   const sending = useRef(false);
   const remarkSending = useRef(false);
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof readLifecycle>> | null>(null);
@@ -82,9 +83,13 @@ function LifecyclePanel({ id, token, onAccessLost, onChanged }: { id: string; to
   };
   const refreshBusiness = async () => {
     const requestEpoch = epoch.current; const sequence = ++requestSequence.current;
-    const [next, page, files] = await Promise.all([readLifecycle(id), readLifecycleEvents(id), readAttachments(id)]);
-    if (!current(requestEpoch) || sequence !== requestSequence.current) return;
-    setSnapshot(next); setEvents(page.items); setCursor(page.next_after_version); setAttachments(files);
+    try {
+      const [next, page, files] = await Promise.all([readLifecycle(id), readLifecycleEvents(id), readAttachments(id)]);
+      if (!current(requestEpoch) || sequence !== requestSequence.current) return;
+      setSnapshot(next); setEvents(page.items); setCursor(page.next_after_version); setAttachments(files);
+    } catch (error) {
+      if (current(requestEpoch) && sequence === requestSequence.current) throw error;
+    }
   };
   const refreshRemark = async () => {
     const requestEpoch = epoch.current;
@@ -107,6 +112,18 @@ function LifecyclePanel({ id, token, onAccessLost, onChanged }: { id: string; to
     // Authentication/task key gives this panel one private request lifecycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (lastRefreshSignal.current === refreshSignal) return;
+    lastRefreshSignal.current = refreshSignal;
+    const requestEpoch = epoch.current;
+    // Refresh protected business views in place; pending requests and all
+    // editing state (including the remark draft) keep their original identity.
+    void refreshBusiness().catch((error: unknown) => {
+      if (current(requestEpoch)) failed('lifecycle_read', error);
+    });
+    // Authentication/task changes already replace this keyed instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
   const afterBusiness = () => {
     void client.invalidateQueries({ queryKey: ['work-objects', token.generation] });
     onChanged?.();

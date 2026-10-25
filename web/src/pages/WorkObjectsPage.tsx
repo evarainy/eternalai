@@ -357,6 +357,7 @@ export default function WorkObjectsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedWorkObjectId, setSelectedWorkObjectId] = useState(() => searchParams.get('work_object_id') ?? '');
   const [privateCleared, setPrivateCleared] = useState(false);
+  const [lifecycleRefreshSignal, setLifecycleRefreshSignal] = useState(0);
   const [view, setView] = useState<WorkObjectView>('urgent');
   const autoSyncGeneration = useRef<number>();
   const queryClient = useQueryClient();
@@ -466,6 +467,24 @@ export default function WorkObjectsPage() {
     const denied = [listQuery.error, historyQuery.error, completedQuery.error, detailQuery.error].find(accessLost);
     if (denied) { logDispatchFailure('work_objects_read', denied); clearPrivate(); }
   }, [listQuery.error, historyQuery.error, completedQuery.error, detailQuery.error, clearPrivate]);
+
+  useEffect(() => {
+    if (!selectedWorkObjectId || privateCleared) return;
+    // Every actual list/queue fetch shares this path, including focus/reconnect
+    // and mutation invalidation. Detail reads never feed back into list reads.
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'fetch') return;
+      const [scope, generation, resource] = event.query.queryKey;
+      if (scope !== 'work-objects' || generation !== authGeneration ||
+        (resource !== 'list' && resource !== 'queue') ||
+        useAuthStore.getState().generation !== authGeneration) return;
+      setLifecycleRefreshSignal((signal) => signal + 1);
+      void queryClient.refetchQueries({
+        queryKey: workObjectDetailQueryKey(authGeneration, selectedWorkObjectId),
+        exact: true,
+      });
+    });
+  }, [authGeneration, privateCleared, queryClient, selectedWorkObjectId]);
 
   useEffect(() => {
     if (useAuthStore.getState().generation !== authGeneration) return;
@@ -932,7 +951,8 @@ export default function WorkObjectsPage() {
             title="详情读取失败"
             description={errorText(detailQuery.error)}
           />
-        ) : detailQuery.isLoading ? (
+        ) : null}
+        {detailQuery.error && (accessLost(detailQuery.error) || !detailQuery.data) ? null : detailQuery.isLoading ? (
           <Spin />
         ) : detailQuery.data?.state_authority === 'internal' ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
@@ -951,7 +971,7 @@ export default function WorkObjectsPage() {
               <Descriptions.Item label="创建时间">{detailQuery.data.created_at === null ? '未提供' : formatTimestamp(detailQuery.data.created_at)}</Descriptions.Item>
               <Descriptions.Item label="更新时间">{detailQuery.data.updated_at === null ? '未提供' : formatTimestamp(detailQuery.data.updated_at)}</Descriptions.Item>
             </Descriptions>
-            {detailQuery.data.source_kind === 'manual_dispatch' ? <InternalWorkLifecyclePanel workObjectId={detailQuery.data.work_object_id} onAccessLost={clearPrivate} /> : null}
+            {detailQuery.data.source_kind === 'manual_dispatch' ? <InternalWorkLifecyclePanel workObjectId={detailQuery.data.work_object_id} refreshSignal={lifecycleRefreshSignal} onAccessLost={clearPrivate} /> : null}
             {'series_id' in detailQuery.data && typeof detailQuery.data.series_id === 'string' ? <SeriesHistoryPanel seriesId={detailQuery.data.series_id} onOpenWorkObject={openTask} onAccessLost={clearPrivate} /> : null}
           </Space>
         ) : detailQuery.data ? (
