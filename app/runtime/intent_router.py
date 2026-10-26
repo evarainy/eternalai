@@ -226,6 +226,57 @@ def _record_chat_stage(
         return
 
 
+def _is_person_find(capability_id: str) -> bool:
+    # Business MCP IDs embed a configured service ID; only the code-owned
+    # tool suffix is compared and logged.
+    return capability_id.startswith("business.") and capability_id.endswith(".person_find")
+
+
+def _stage_capability(capability_id: object) -> str:
+    if type(capability_id) is not str:
+        return "none"
+    if capability_id in _CHAT_STAGE_CAPABILITIES:
+        return capability_id
+    return "person_find" if _is_person_find(capability_id) else "other"
+
+
+def record_candidate_coverage(
+    trace_id: object,
+    visible: tuple[CapabilitySpec, ...],
+    result: IntentParseResult,
+) -> None:
+    """Log one value-free candidate coverage line under the request trace."""
+    try:
+        if type(trace_id) is not str:
+            return
+        trace = UUID(trace_id)
+        if trace.version != 4 or str(trace) != trace_id:
+            return
+        selection = result.candidate_selection
+        _CHAT_STAGE_LOGGER.info(
+            "chat_stage node=candidate_coverage outcome=%s visible=%s selected=%s "
+            "omitted=%s coverage_complete=%s truncated_by=%s person_find_visible=%s "
+            "person_find_selected=%s match=%s capability=%s trace=%s",
+            selection.outcome if selection is not None else "none",
+            len(visible),
+            selection.selected_count if selection is not None else "null",
+            selection.omitted_count if selection is not None else "null",
+            selection.coverage_complete if selection is not None else "null",
+            ",".join(selection.truncated_by) if selection and selection.truncated_by else "none",
+            any(_is_person_find(item.capability_id) for item in visible),
+            selection is not None
+            and any(_is_person_find(item.capability_id) for item in selection.bindings),
+            result.match or "none",
+            _stage_capability(
+                result.capability_ref.capability_id if result.capability_ref else None
+            ),
+            trace.hex,
+        )
+    except Exception:
+        # Diagnostics must not replace the existing business result.
+        return
+
+
 class IntentRouter:
     """Turn normalized user text into a validated runtime-local intent result."""
 
@@ -563,4 +614,5 @@ __all__ = (
     "JSON_OBJECT_RESPONSE_FORMAT",
     "MAX_KNOWLEDGE_ITEMS",
     "MAX_KNOWLEDGE_ITEM_LENGTH",
+    "record_candidate_coverage",
 )

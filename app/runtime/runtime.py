@@ -118,7 +118,12 @@ from app.runtime.d_form_collection import (
     request_digest as d_form_request_digest,
 )
 from app.runtime.document_qa import DocumentQAResult, DocumentQAService, document_failure
-from app.runtime.intent_router import IntentFailureReason, IntentRouter, _record_chat_stage
+from app.runtime.intent_router import (
+    IntentFailureReason,
+    IntentRouter,
+    _record_chat_stage,
+    record_candidate_coverage,
+)
 from app.runtime.models import CapabilityRef
 from app.version_binding import (
     immutable_request_digest,
@@ -971,6 +976,7 @@ class RuntimeImpl:
                 intent_result.capability_ref.capability_id if intent_result.capability_ref else None
             ),
         )
+        record_candidate_coverage(trace_id, visible_capabilities, intent_result)
         if (
             collection is not None
             and not collection.record.consumed

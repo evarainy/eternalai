@@ -16,6 +16,7 @@ from app.config import ProductionSettings
 from app.event_loop import make_event_loop
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.business_mcp.catalog import catalog
+from app.infra.adapters.business_mcp.fixed_query_contracts import fixed_query_output_contracts
 from app.infra.adapters.business_mcp.fixed_read_profile import (
     RESOURCE,
     SERVICE_CONFIG_ID,
@@ -28,6 +29,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 )
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+from app.knowledge.capability_selection import select_capability_candidates
 from app.main import create_app
 from app.mcp.models import McpFailure, Ownership, ServiceConfig
 from app.ports.auth import (
@@ -548,3 +550,63 @@ def test_failed_rebind_voids_older_attempt_so_its_late_callback_cannot_open_read
         assert not readable(old)
 
     asyncio.run(run(), loop_factory=make_event_loop)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["查下业务系统里某某的信息", "业务系统里名字叫某某的人的信息"],
+)
+def test_name_lookup_wording_selects_person_find_among_published_reads(message: str) -> None:
+    service = ServiceConfig(
+        service_config_id=SERVICE_CONFIG_ID,
+        service_config_version=1,
+        deployment_id="synthetic",
+        tenant_id="default",
+        display_name="Synthetic",
+        endpoint=RESOURCE,
+        issuer="https://provider.invalid",
+        resource=RESOURCE,
+        registration_endpoint="https://provider.invalid/register",
+        authorization_endpoint="https://provider.invalid/authorize",
+        token_endpoint="https://provider.invalid/token",
+        callback_uri="https://client.invalid/callback",
+        callback_config_version=1,
+        enabled=True,
+    )
+    profile = build_fixed_read_profile(
+        service,
+        FixedReadApproval(
+            service_config_id=SERVICE_CONFIG_ID,
+            service_config_version=1,
+            tenant_id="default",
+            local_owner_source="authenticated_session",
+            version="synthetic-identity-v1",
+            approval_evidence="synthetic",
+            issuer_parameter_supported=True,
+            identity_binding_mode="oauth_owner",
+        ),
+        read_contracts={
+            tool: contract
+            for (service_id, tool), contract in fixed_query_output_contracts().items()
+            if service_id == SERVICE_CONFIG_ID
+        },
+    )
+    published = {
+        item.capability_id: item
+        for item in (
+            profile.capability,
+            *(read.capability for read in profile.approved_reads.values()),
+        )
+    }
+    writes, _ = catalog(service, {})
+    for item in writes:
+        if ".internal." not in item.capability_id:
+            published.setdefault(item.capability_id, item)
+    visible = [item.model_copy(update={"status": "active"}) for item in published.values()]
+    person_find = f"business.{SERVICE_CONFIG_ID}.person_find"
+
+    selection = select_capability_candidates(message, visible)
+
+    assert selection.visible_count > 8
+    assert selection.outcome == "ready"
+    assert selection.bindings[0].capability_id == person_find
