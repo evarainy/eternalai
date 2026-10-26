@@ -297,6 +297,8 @@ class ProductionSettings:
     llm_enable_thinking: bool
     health_timeout_seconds: float
     csrf_allowed_origins: frozenset[str] = field(default_factory=frozenset)
+    # M0 internal AgentScope turn route; registered only for the exact value "1".
+    agentscope_m0_turn_enabled: bool = False
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_contract_pack_dir: Path | None = None
@@ -493,6 +495,7 @@ class ProductionSettings:
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             csrf_allowed_origins=csrf_allowed_origins,
+            agentscope_m0_turn_enabled=source.get("AGENTSCOPE_M0_TURN_ENABLED") == "1",
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(

@@ -39,9 +39,7 @@ from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.ports.workflow_store import GovernedWorkflowAuthorization
 from app.version_binding import capability_version_bindings
 
-_CHAT_STAGE_LOGGER = logging.getLogger("eternalai.chat_stages")
-_CHAT_STAGE_LOGGER.addHandler(logging.NullHandler())
-_CHAT_STAGE_LOGGER.propagate = False
+_CHAT_STAGE_LOGGER = logging.getLogger("uvicorn.error.chat_stages")
 _CHAT_STAGE_NODES = frozenset({
     'candidate', 'catalog', 'credential_read', 'execution', 'fixed_reply', 'identity', 'intent',
     'model', 'normalization', 'oa_result', 'oa_route', 'provider_transport'
