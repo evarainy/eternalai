@@ -124,3 +124,14 @@ datas: list[object]
 - 采集件不再是该棒的前置——接口结构已固化于本 ADR。采集件本体永不进仓库
   （2026-08-20「HAR 清洗脚本进仓库，被清洗的 HAR 素材不进」）。
 - 本 ADR 记录的结构可供后续用途复用：登录身份展示、聊天收件人选择，以及任何**不涉及授权判定**的场景。
+
+## 请求参数取值（2026-10-26 补充）
+
+来源：经雨爷授权、Sol 安全评审后的脚本脱敏提取。本节只记参数名、控制取值与形态，不记录真实 ID、令牌或主机，不要求重读采集件。
+
+1. **① 部门树 GET**：`type=1`、`isVirtual=0`、`isLoadSubDepartment=1`、`keyword` 为空；`id` 为根节点 ID（两位数字）、`virtualCompanyid` 为一位数字，两者均属部署相关值，须配置而非写死；`__random__` 为防缓存随机值。采集中只出现 1 次树请求，是否一次返回整棵树未定。
+2. **② 人员搜索 POST form**：`tabkey=default_3`、`showAllLevel=1`、`virtualtype` 为空，`resourcename` / `manager` / `subcompany` / `department` / `telephone` / `mobile` / `mobilecall` / `jobtitle` 均为空；`departmentid` 在采集中为一个三位数字部门 ID，即采集时按某部门搜索，不是全单位。另有一个空值的额外表单字段，名称未提取。
+3. **③ 人员分页 POST form**：`dataKey`（②返回的 `sessionkey`）、`current`（页码）、`sortParams`（6 字符的非 JSON 值，疑为 URL 编码的空数组，未定）；另有一个空值额外字段。
+4. **④ 总数 POST form**：`dataKey`；另有一个空值额外字段。
+
+**实现前真实只读验证**：由 `P2-ORGDIR-OA-SOURCE-001` 首步在真实 OA 验证 `departmentid` 为空时是否返回全单位、部门树是否一次返回整棵树、`sortParams` 的实际取值。只输出计数，不输出人员行；雨爷确认普通账号可见全单位通讯录，不等于上述取数方式已实测。执行前须说明数据流向并取得确认，凭证及真实业务动作仍遵守专项授权。

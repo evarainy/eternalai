@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, NoReturn
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict
@@ -19,6 +19,15 @@ from app.admin.evidence import (
     AdminTaskEventListResponse,
     AdminTaskListResponse,
     AdminTraceListResponse,
+)
+from app.admin.leader_roster import (
+    AdminLeaderRosterError,
+    AdminLeaderRosterService,
+    LeaderRosterAddRequest,
+    LeaderRosterCandidatesResponse,
+    LeaderRosterEntryView,
+    LeaderRosterListResponse,
+    LeaderRosterRevokeResponse,
 )
 from app.admin.registry import (
     AdminBindingMutationResponse,
@@ -161,10 +170,52 @@ def _raise_http(error: RuntimeError) -> NoReturn:
     raise error
 
 
+_LEADER_ROSTER_HTTP = {
+    "directory_scope_denied": status.HTTP_403_FORBIDDEN,
+    "leader_roster_entry_not_found": status.HTTP_404_NOT_FOUND,
+    "leader_roster_entry_exists": status.HTTP_409_CONFLICT,
+    "leader_roster_person_ambiguous": status.HTTP_409_CONFLICT,
+    "leader_roster_person_not_found": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "organization_directory_missing": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "organization_directory_stale": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "organization_directory_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+    "leader_roster_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+}
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _configured_leader_roster(
+    service: AdminLeaderRosterService | None,
+) -> AdminLeaderRosterService:
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "leader_roster_unavailable",
+                "message": "Leader roster management is not configured.",
+            },
+            headers=_NO_STORE,
+        )
+    return service
+
+
+def _raise_leader_roster_http(error: RuntimeError) -> NoReturn:
+    if isinstance(error, AdminLeaderRosterError):
+        raise HTTPException(
+            status_code=_LEADER_ROSTER_HTTP.get(
+                error.code, status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail={"code": error.code, "message": "Leader roster request was refused."},
+            headers=_NO_STORE,
+        ) from None
+    _raise_http(error)
+
+
 def make_router(
     service: AdminRegistryService | None,
     require_principal: PrincipalDependency,
     *, d_form_management: AdminDFormManagementService | None = None,
+    leader_roster: AdminLeaderRosterService | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -240,6 +291,65 @@ def make_router(
             raise HTTPException(
                 409, {"code": error.code, "message": "D form action was refused."},
                                 headers={"Cache-Control": "no-store"}) from None
+
+    @router.get("/leader-roster", response_model=LeaderRosterListResponse)
+    async def list_leader_roster(
+        response: Response,
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> LeaderRosterListResponse:
+        response.headers.update(_NO_STORE)
+        try:
+            return await _configured_leader_roster(leader_roster).list_entries(context)
+        except RuntimeError as error:
+            _raise_leader_roster_http(error)
+
+    @router.get("/leader-roster/candidates", response_model=LeaderRosterCandidatesResponse)
+    async def list_leader_roster_candidates(
+        response: Response,
+        context: AdminRequestContext = Depends(authenticated_context),
+        query: Annotated[str, Query(max_length=64)] = "",
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> LeaderRosterCandidatesResponse:
+        response.headers.update(_NO_STORE)
+        try:
+            return await _configured_leader_roster(leader_roster).list_candidates(
+                context, query=query, limit=limit
+            )
+        except RuntimeError as error:
+            _raise_leader_roster_http(error)
+
+    @router.post(
+        "/leader-roster",
+        response_model=LeaderRosterEntryView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_leader_roster_entry(
+        body: LeaderRosterAddRequest,
+        response: Response,
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> LeaderRosterEntryView:
+        response.headers.update(_NO_STORE)
+        try:
+            return await _configured_leader_roster(leader_roster).add_entry(body, context)
+        except RuntimeError as error:
+            _raise_leader_roster_http(error)
+
+    @router.post(
+        "/leader-roster/{entry_id}/revoke",
+        response_model=LeaderRosterRevokeResponse,
+    )
+    async def revoke_leader_roster_entry(
+        entry_id: UUID,
+        response: Response,
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> LeaderRosterRevokeResponse:
+        response.headers.update(_NO_STORE)
+        try:
+            return await _configured_leader_roster(leader_roster).revoke_entry(
+                entry_id, context
+            )
+        except RuntimeError as error:
+            _raise_leader_roster_http(error)
 
     @router.get("/registry", response_model=AdminCapabilityListResponse)
     async def list_capabilities(

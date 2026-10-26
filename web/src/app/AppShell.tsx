@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import AntApp from 'antd/es/app';
 import Input from 'antd/es/input/Input';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { leaderRosterQueryKey, readLeaderRoster } from '../features/leader-roster/leaderRosterApi';
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
 import type { CredentialBindingView } from '../generated/credential-bindings/credential-bindings.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
@@ -68,6 +69,11 @@ const ADMIN_NAVIGATION: readonly PrimaryNavigationItem[] = [
   { icon: 'file', label: '任务证据', to: '/admin/tasks' },
   { icon: 'card', label: '账号绑定', to: BINDINGS_PATH },
 ];
+
+/** 领导名单只给本单位系统管理员：入口按后端对名单接口的实际判定显示，后端仍是最终判定。 */
+const LEADER_ROSTER_NAVIGATION: PrimaryNavigationItem = {
+  icon: 'users', label: '领导名单', to: '/admin/leader-roster',
+};
 
 type TopbarPanel = 'style' | 'system-status' | 'notifications' | 'user';
 
@@ -381,6 +387,17 @@ export function AppShell() {
     queryKey: ['credential-binding', authGeneration, 'oa'] as const,
     queryFn: () => getBinding('oa'),
   });
+  const onAdminPath = location.pathname.startsWith('/admin/');
+  const [adminGroupOpened, setAdminGroupOpened] = useState(false);
+  // 只在管理分组展开后才问后端；只有当前登录身份读成功过才显示入口。
+  const leaderRosterAccess = useQuery({
+    queryKey: leaderRosterQueryKey(authGeneration),
+    queryFn: readLeaderRoster,
+    enabled: onAdminPath || adminGroupOpened,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+  const showLeaderRoster = leaderRosterAccess.data !== undefined;
   const statusFetch: SystemStatusFetch = bindingQuery.isPending
     ? 'loading'
     : bindingQuery.isError
@@ -499,7 +516,10 @@ export function AppShell() {
           ))}
           <details
             className={styles.adminGroup}
-            open={location.pathname.startsWith('/admin/')}
+            onToggle={(event) => {
+              if (event.currentTarget.open) setAdminGroupOpened(true);
+            }}
+            open={onAdminPath}
           >
             <summary
               aria-label="管理页面"
@@ -521,6 +541,14 @@ export function AppShell() {
                   to={item.to}
                 />
               ))}
+              {showLeaderRoster ? (
+                <NavigationLink
+                  collapsed={collapsed}
+                  icon={LEADER_ROSTER_NAVIGATION.icon}
+                  label={LEADER_ROSTER_NAVIGATION.label}
+                  to={LEADER_ROSTER_NAVIGATION.to}
+                />
+              ) : null}
             </div>
           </details>
         </nav>

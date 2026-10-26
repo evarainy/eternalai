@@ -29,6 +29,7 @@ from app.db.config import normalize_database_url
 from app.event_loop import make_event_loop
 from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
+from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.main import create_app
 from app.ports import work_object_scope as policy
@@ -110,12 +111,14 @@ class DispatchHarness:
         self.factory = async_sessionmaker(self.engine, expire_on_commit=False)
         self.store = PostgreSQLWorkObjectStore(self.factory)
         self.directory = PostgreSQLOrganizationDirectory(self.factory)
+        self.leader_roster = PostgreSQLLeaderRoster(self.factory)
         self.trace = PostgreSQLTraceWriter(self.factory)
         self.service = api.WorkObjectService(
             store=self.store,
             gateway=RecordingGateway(),
             capability_registry=StaticCapabilityRegistry(),
             organization_directory=self.directory,
+            leader_roster=self.leader_roster,
             trace_port=self.trace,
             clock=lambda: NOW,
         )

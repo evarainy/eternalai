@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Literal, TypedDict
 
@@ -16,6 +18,23 @@ from app.mcp.models import ServiceConfig
 # application's logging configuration or depending on the root WARNING level.
 _LOGGER = logging.getLogger("uvicorn.error.mcp_stages")
 _TRACE_ID: ContextVar[str] = ContextVar("mcp_trace_id", default="")
+
+
+# Why a grant's lifetime ends or an identity check was blocked; closed set.
+GrantReason = Literal[
+    "token_ttl",
+    "session_cap",
+    "disconnected",
+    "grant_expired",
+    "session_mismatch",
+    "pending",
+    "revoked",
+    "unbound",
+    "session_missing",
+    "principal_mismatch",
+    "session_expired",
+    "resolve_failed",
+]
 
 
 class McpLogRefs(TypedDict, total=False):
@@ -45,12 +64,23 @@ def record_mcp_event(
     error_code: str = "",
     started_at: float | None = None,
     outbound_count: int = 0,
+    remaining_s: int | None = None,
+    reason: GrantReason | None = None,
 ) -> None:
     # Callers supply only code-owned labels and internal references. Never pass
     # payloads, URLs, login fingerprints, OAuth parameters or exception text.
+    # Grant fields are appended only when supplied, so other records keep their shape.
+    extra = ""
+    extra_args: list[object] = []
+    if remaining_s is not None:
+        extra += " remaining_s=%s"
+        extra_args.append(remaining_s)
+    if reason is not None:
+        extra += " reason=%s"
+        extra_args.append(reason)
     _LOGGER.info(
         "mcp stage=%s status=%s service=%s version=%s tool=%s task=%s trace=%s "
-        "connection=%s error=%s elapsed_ms=%s outbound_count=%s",
+        "connection=%s error=%s elapsed_ms=%s outbound_count=%s" + extra,
         stage,
         status,
         profile.service_config_id if profile else "",
@@ -62,7 +92,14 @@ def record_mcp_event(
         error_code,
         round((monotonic() - started_at) * 1000) if started_at is not None else 0,
         outbound_count,
+        *extra_args,
     )
+
+
+def remaining_seconds(expires_at: datetime | None) -> int | None:
+    if expires_at is None:
+        return None
+    return math.floor((expires_at - datetime.now(UTC)).total_seconds())
 
 
 CatalogDriftReason = Literal[

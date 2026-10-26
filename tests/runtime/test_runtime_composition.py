@@ -909,6 +909,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         validate_workflows=AsyncMock(),
         runtime=None,
         admin_registry_service=None,
+        leader_roster_admin_service=None,
         work_object_service=None,
         work_object_series_service=None,
         work_object_series_scheduler=None,

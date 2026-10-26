@@ -91,9 +91,7 @@ class IntentParseResult:
     provider_error_code: LLMProviderErrorCode | None = None
 
 
-_CHAT_STAGE_LOGGER = logging.getLogger("eternalai.chat_stages")
-_CHAT_STAGE_LOGGER.addHandler(logging.NullHandler())
-_CHAT_STAGE_LOGGER.propagate = False
+_CHAT_STAGE_LOGGER = logging.getLogger("uvicorn.error.chat_stages")
 _CHAT_STAGE_NODES = frozenset(
     {
         "candidate",

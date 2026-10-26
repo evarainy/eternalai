@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import anyio
 
-from app.mcp.diagnostics import mcp_trace_scope, record_mcp_event
+from app.mcp.diagnostics import mcp_trace_scope, record_mcp_event, remaining_seconds
 from app.mcp.models import McpFailure, ServiceConfig
 from app.ports.auth import AuthenticatedSessionContext, SessionRevocationStorePort
 from app.ports.mcp import McpOAuthHttpPort
@@ -381,14 +381,17 @@ class OAuthConnections:
             or result.get("scope", "mcp:business") != "mcp:business"
         ):
             raise McpFailure("mcp_token_invalid")
+        token_ttl_at = datetime.now(UTC) + timedelta(seconds=expires)
+        token_expires_at = min(session.expires_at, token_ttl_at)
         record_mcp_event(
             "token_exchange",
             "success",
             profile=profile,
             connection_id=transaction.owner.connection_id,
             outbound_count=1,
+            remaining_s=remaining_seconds(token_expires_at),
+            reason="session_cap" if session.expires_at < token_ttl_at else "token_ttl",
         )
-        token_expires_at = min(session.expires_at, datetime.now(UTC) + timedelta(seconds=expires))
         evidence = None
         if self.identity_policy.approved:
             metadata: dict[str, Any] = {

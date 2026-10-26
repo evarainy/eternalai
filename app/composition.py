@@ -17,6 +17,7 @@ from app.admin.actions import (
     ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
     ADMIN_LITE_POLICY_CAPABILITY_IDS,
 )
+from app.admin.leader_roster import AdminLeaderRosterService
 from app.admin.registry import (
     AdminBindingMutationService,
     AdminRegistryService,
@@ -117,6 +118,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLTaskStore,
 )
 from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
+from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSeriesStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
@@ -193,6 +195,7 @@ class ProductionComponents:
     work_object_service: WorkObjectService
     work_object_series_service: WorkObjectSeriesService
     work_object_series_scheduler: WorkObjectSeriesScheduler
+    leader_roster_admin_service: AdminLeaderRosterService
     credential_binding_service: CredentialBindingService
     credential_polling_job_queue: JobQueuePort
     credential_polling_scheduler: CredentialPollingScheduler
@@ -219,6 +222,9 @@ class ProductionComponents:
     browser_intent_model: str
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
+    # Internal M0 counting turn (agentscope_m0_turn.M0TurnRunner); built only
+    # when AGENTSCOPE_M0_TURN_ENABLED == "1", so AgentScope is otherwise never imported.
+    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
 
 
 def build_credential_store(
@@ -811,6 +817,43 @@ def build_production_components(
     overview_evaluator = OverviewPostconditionEvaluator()
     if not isinstance(overview_evaluator, OverviewPostconditionEvaluator):
         raise RuntimeError("overview_evaluator_configuration_invalid")
+    capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = (
+        {
+            fixed_read.capability.capability_id: fixed_read.format_result,
+            **{
+                read.capability.capability_id: partial(fixed_read.format_query_result, tool)
+                for tool, read in fixed_read.approved_reads.items()
+            },
+        }
+        if fixed_read is not None
+        else None
+    )
+    mcp_result_profiles = (
+        {
+            fixed_read.capability.capability_id: fixed_read.service,
+            **{
+                read.capability.capability_id: fixed_read.service
+                for read in fixed_read.approved_reads.values()
+            },
+        }
+        if fixed_read is not None
+        else None
+    )
+    # Process-local, code-owned rules for approved fixed reads only.
+    approved_projections = (
+        {
+            read.capability.capability_id: (
+                read.capability.version,
+                read.capability.policy_digest,
+                read.capability.output_schema_digest,
+                read.projection,
+            )
+            for read in fixed_read.approved_reads.values()
+            if read.projection is not None
+        }
+        if fixed_read is not None
+        else None
+    )
     runtime = build_runtime(
         task_store=task_store,
         d_form_collection_store=task_store,
@@ -837,46 +880,40 @@ def build_production_components(
         ),
         human_gate_port=human_gate_port,
         candidate_policy=policy_guard,
-        capability_formatters=(
-            {
-                fixed_read.capability.capability_id: fixed_read.format_result,
-                **{
-                    read.capability.capability_id: partial(
-                        fixed_read.format_query_result, tool
-                    )
-                    for tool, read in fixed_read.approved_reads.items()
-                },
-            }
-            if fixed_read is not None
-            else None
-        ),
-        mcp_result_profiles=(
-            {
-                fixed_read.capability.capability_id: fixed_read.service,
-                **{
-                    read.capability.capability_id: fixed_read.service
-                    for read in fixed_read.approved_reads.values()
-                },
-            }
-            if fixed_read is not None
-            else None
-        ),
-        # Process-local, code-owned rules for approved fixed reads only.
-        approved_projections=(
-            {
-                read.capability.capability_id: (
-                    read.capability.version,
-                    read.capability.policy_digest,
-                    read.capability.output_schema_digest,
-                    read.projection,
-                )
-                for read in fixed_read.approved_reads.values()
-                if read.projection is not None
-            }
-            if fixed_read is not None
-            else None
-        ),
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
     )
+    # The AgentScope read bridge reuses the same production instances and
+    # result mappings. It exists only for the M0 counting route; with the
+    # switch off neither AgentScope nor the bridge is imported.
+    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
+    if settings.agentscope_m0_turn_enabled:
+        from app.infra.orchestration.agentscope_m0_turn import build_m0_turn_runner
+        from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
+
+        agentscope_read_dependencies = AgentScopeReadDependencies(
+            capability_registry=capability_registry,
+            candidate_policy=policy_guard,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=capability_registry,
+                gateway=gateway,
+                workflow_engine=None,
+                response_builder=ResponseEnvelopeBuilder(),
+                validate_workflow=validate_workflow,
+                capability_formatters=capability_formatters,
+                mcp_result_profiles=mcp_result_profiles,
+                approved_projections=approved_projections,
+            ),
+            task_store=task_store,
+            trace_port=resolved_trace_port,
+            human_gate=human_gate_port,
+        )
+        agentscope_m0_turn = build_m0_turn_runner(
+            agentscope_read_dependencies,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
     resolved_authentication = (
         build_authentication_port(
             oa_base_url=settings.oa_base_url,
@@ -950,10 +987,22 @@ def build_production_components(
     )
     directory_scheduler = OrganizationDirectoryScheduler(directory_sync_service)
     work_object_store = PostgreSQLWorkObjectStore(session_factory)
+    leader_roster = PostgreSQLLeaderRoster(session_factory)
+    # The shared dispatch service also serves reassign and every recurrence path.
     work_dispatch_service = WorkDispatchService(
         store=work_object_store, organization_directory=organization_directory,
+        leader_roster=leader_roster,
         directory_max_age_s=settings.organization_directory_max_age_s,
         trace_port=resolved_trace_port,
+    )
+    leader_roster_admin_service = AdminLeaderRosterService(
+        roster=leader_roster,
+        organization_directory=organization_directory,
+        policy_guard=MinimalPolicyGuard(
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+        ),
+        directory_max_age_s=settings.organization_directory_max_age_s,
     )
     work_attachment_service = WorkObjectAttachmentService(
         PostgreSQLWorkObjectAttachmentStore(session_factory), work_dispatch_service,
@@ -1038,6 +1087,7 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
+        agentscope_m0_turn=agentscope_m0_turn,
         browser_gateway=gateway,
         browser_session_factory=session_factory,
         browser_capability_registry=capability_registry,
@@ -1113,6 +1163,7 @@ def build_production_components(
         work_object_service=work_object_service,
         work_object_series_service=work_series_service,
         work_object_series_scheduler=work_series_scheduler,
+        leader_roster_admin_service=leader_roster_admin_service,
         credential_binding_service=credential_binding_service,
         credential_polling_job_queue=credential_polling_job_queue,
         credential_polling_scheduler=credential_polling_scheduler,

@@ -120,6 +120,7 @@ explicitly names a future dedicated allowlist file.
 | python | sqlalchemy | >=2.0,<3.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (SQLAlchemy backend baseline) |
 | python | psycopg | >=3.1,<4.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-004A / P0-INFRA-004 database baseline runtime driver |
 | python | asyncpg | ==0.32.0 | backend-runtime | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 controller-relayed authorization for asyncpg + Proactor compatibility and exact dependency metadata scope |
+| python | agentscope | ==2.0.11.dev0 (source archive of commit 6c60853f4237dbc237803cdee2fb96a27a6a0611, sha256 af3fc9d4413acdbbd5744909702230e301461454c15c4b0844625718cf6130eb, pinned by uv.lock) | production | public_source_archive_development_only; no approved offline cache | P2-RUNTIME-AGENTSCOPE-M0-001; 雨爷 2026-10-21 approved Runtime replacement plan v1.3 M0 (in-process SDK, infra-only types); production-transitive inventory below |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
@@ -149,6 +150,80 @@ explicitly names a future dedicated allowlist file.
 
 Future frontend entries must use `ecosystem` value `npm` and must be added here
 before any frontend manifest or lockfile is changed.
+
+## AgentScope production-transitive inventory
+
+Informational inventory for P2-RUNTIME-AGENTSCOPE-M0-001; it is not parsed by
+`scripts/check_dependencies.py`, which checks direct manifest entries only. These
+packages are the production closure added by the `agentscope` row above and must
+ship with any offline package. Versions are the exact `uv.lock` pins; licenses come
+from the PyPI metadata of the pinned version. `agentscope` itself is Apache-2.0.
+Every row is `public_registry_development_only`: no enterprise mirror or approved
+offline cache exists yet, and local resolution is not target-environment evidence.
+Disabled integrations (OTLP export, socket.io, DashScope/Anthropic clients) are
+installed because the SDK requires them; installation does not enable them.
+
+| package | locked_version | license | lock_status |
+|---|---|---|---|
+| aiofiles | 25.1.0 | Apache-2.0 | new |
+| aiohappyeyeballs | 2.7.1 | PSF-2.0 | new |
+| aiohttp | 3.14.5 | Apache-2.0 AND MIT | new |
+| aioitertools | 0.13.0 | MIT | new |
+| aiosignal | 1.4.0 | Apache-2.0 | new |
+| anthropic | 1.17.0 | MIT | new |
+| bidict | 0.24.1 | MPL-2.0 | new |
+| cached-property | 2.0.1 | BSD | new |
+| certifi | 2026.4.22 | MPL-2.0 | already locked; now production |
+| charset-normalizer | 3.5.2 | MIT | new |
+| dashscope | 1.27.8 | Apache-2.0 | new |
+| docstring-parser | 0.18.0 | MIT | new |
+| filetype | 1.2.0 | MIT | new |
+| frozenlist | 1.8.0 | Apache-2.0 | new |
+| googleapis-common-protos | 1.75.5 | Apache-2.0 | new |
+| grpcio | 1.84.0 | Apache-2.0 | new |
+| httpcore | 1.0.9 | BSD-3-Clause | already locked; now production |
+| httpx | 0.28.1 | BSD-3-Clause | already locked; now production |
+| httpx-sse | 0.4.3 | MIT | new |
+| jinja2 | 3.1.6 | BSD | new |
+| jiter | 0.17.0 | MIT | new |
+| json-repair | 0.64.1 | MIT | new |
+| json5 | 0.17.3 | Apache-2.0 | new |
+| markdown-it-py | 4.2.0 | MIT | new |
+| mdurl | 0.1.2 | MIT | new |
+| multidict | 7.1.0 | Apache-2.0 | new |
+| numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | new |
+| openai | 3.35.1 | Apache-2.0 | new |
+| opentelemetry-exporter-http-transport | 0.66b0 | Apache-2.0 | new |
+| opentelemetry-exporter-otlp | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-exporter-otlp-common | 0.66b0 | Apache-2.0 | new |
+| opentelemetry-exporter-otlp-proto-common | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-exporter-otlp-proto-grpc | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-exporter-otlp-proto-http | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-proto | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-sdk | 1.45.0 | Apache-2.0 | new |
+| opentelemetry-semantic-conventions | 0.66b0 | Apache-2.0 | new |
+| propcache | 0.5.4 | Apache-2.0 | new |
+| protobuf | 7.36.2 | BSD-3-Clause | new |
+| pygments | 2.20.0 | BSD-2-Clause | already locked; now production |
+| pypdf | 6.21.1 | BSD-3-Clause | new |
+| python-datauri | 3.0.2 | Unlicense | new |
+| python-engineio | 4.14.0 | MIT | new |
+| python-frontmatter | 1.3.0 | MIT | new |
+| python-socketio | 5.17.0 | MIT | new |
+| pyyaml | 6.0.3 | MIT | new |
+| requests | 2.34.2 | Apache-2.0 | new |
+| rich | 15.0.0 | MIT | new |
+| shellingham | 1.5.4 | ISC | new |
+| shortuuid | 1.0.13 | BSD | new |
+| simple-websocket | 1.1.0 | MIT | new |
+| sniffio | 1.3.1 | Apache-2.0 OR MIT | new |
+| tree-sitter | 0.26.0 | MIT | new |
+| tree-sitter-bash | 0.25.1 | MIT | new |
+| typer | 0.27.3 | MIT | new |
+| urllib3 | 2.8.0 | MIT | new |
+| websocket-client | 1.9.2 | Apache-2.0 | new |
+| wsproto | 1.3.2 | MIT | new |
+| yarl | 1.25.1 | Apache-2.0 | new |
 
 ## Excluded frontend candidates
 
