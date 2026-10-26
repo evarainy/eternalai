@@ -11,6 +11,8 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlencode
 
+import anyio
+
 from app.mcp.diagnostics import mcp_trace_scope, record_mcp_event
 from app.mcp.models import McpFailure, ServiceConfig
 from app.ports.auth import AuthenticatedSessionContext, SessionRevocationStorePort
@@ -45,6 +47,11 @@ class OAuthConnections:
         issuer_parameter_supported: dict[str, bool] | None = None,
         authorization_allowed: Callable[[ServiceConfig, AuthenticatedSessionContext], bool]
         | None = None,
+        authorization_lock: anyio.Lock | None = None,
+        claim_authorization_attempt: Callable[[int, AuthorizationTransaction | None], None]
+        | None = None,
+        authorization_transaction_attempt: Callable[[AuthorizationTransaction], int | None]
+        | None = None,
     ) -> None:
         self.configs, self.store, self.http = configs, store, http
         self.revocations, self.identity_policy = revocations, identity_policy
@@ -54,6 +61,11 @@ class OAuthConnections:
         # service's confirmed authorization-server metadata.
         self._issuer_parameter_supported = dict(issuer_parameter_supported or {})
         self._authorization_allowed = authorization_allowed
+        # Local owner-rebind attempts; only the composition wires these, all
+        # from one fixed-read profile and its single lock.
+        self._authorization_lock = authorization_lock
+        self._claim_authorization_attempt = claim_authorization_attempt
+        self._authorization_transaction_attempt = authorization_transaction_attempt
 
     def service(self, service_id: str, session: AuthenticatedSessionContext) -> ServiceConfig:
         profile = self.configs.get(service_id)
@@ -69,12 +81,18 @@ class OAuthConnections:
             raise McpFailure("mcp_service_unavailable")
         return profile
 
-    async def authorize(self, service_id: str, session: AuthenticatedSessionContext) -> str:
+    async def authorize(
+        self,
+        service_id: str,
+        session: AuthenticatedSessionContext,
+        *,
+        attempt: int | None = None,
+    ) -> str:
         started = monotonic()
         profile = self.service(service_id, session)
         record_mcp_event("authorization", "started", profile=profile)
         try:
-            result = await self._authorize(service_id, session)
+            result = await self._authorize(service_id, session, attempt)
         except Exception as exc:
             record_mcp_event(
                 "authorization",
@@ -87,7 +105,9 @@ class OAuthConnections:
         record_mcp_event("authorization", "success", profile=profile, started_at=started)
         return result
 
-    async def _authorize(self, service_id: str, session: AuthenticatedSessionContext) -> str:
+    async def _authorize(
+        self, service_id: str, session: AuthenticatedSessionContext, attempt: int | None
+    ) -> str:
         profile = self.service(service_id, session)
         if session.expires_at <= datetime.now(UTC) or await self.revocations.is_revoked(
             session.fingerprint
@@ -139,16 +159,35 @@ class OAuthConnections:
         if client_id is None:
             raise McpFailure("mcp_registration_requires_reconciliation")
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
-        transaction = await self.store.begin_authorization(
-            profile,
-            user_id=session.principal.ai_user_id,
-            fingerprint=session.fingerprint.hex(),
-            registration_id=registration_id,
-            client_id=client_id,
-            state_digest=hashlib.sha256(state.encode()).hexdigest(),
-            verifier=verifier,
-            expires_at=min(session.expires_at, datetime.now(UTC) + timedelta(seconds=600)),
-        )
+
+        async def begin() -> AuthorizationTransaction:
+            return await self.store.begin_authorization(
+                profile,
+                user_id=session.principal.ai_user_id,
+                fingerprint=session.fingerprint.hex(),
+                registration_id=registration_id,
+                client_id=client_id,
+                state_digest=hashlib.sha256(state.encode()).hexdigest(),
+                verifier=verifier,
+                expires_at=min(session.expires_at, datetime.now(UTC) + timedelta(seconds=600)),
+            )
+
+        if attempt is None:
+            transaction = await begin()
+        else:
+            if self._authorization_lock is None or self._claim_authorization_attempt is None:
+                raise McpFailure("mcp_authorization_invalid")
+            # DCR stays outside the lock; the attempt bound before it must still
+            # be current when the transaction begins, and only it is recorded.
+            async with self._authorization_lock:
+                self._claim_authorization_attempt(attempt, None)
+                profile = self.service(service_id, session)
+                if session.expires_at <= datetime.now(UTC) or await self.revocations.is_revoked(
+                    session.fingerprint
+                ):
+                    raise McpFailure("mcp_authorization_invalid")
+                transaction = await begin()
+                self._claim_authorization_attempt(attempt, transaction)
         record_mcp_event(
             "authorization_transaction",
             "success",
@@ -186,12 +225,13 @@ class OAuthConnections:
         issuer: str | None = None,
         callback_uri: str,
         error: str | None = None,
-    ) -> None:
+    ) -> tuple[AuthorizationTransaction, int | None] | None:
+        """The stored transaction and its local attempt; None when cancelled."""
         with mcp_trace_scope(secrets.token_hex(16)):
             started = monotonic()
             record_mcp_event("oauth_callback", "started")
             try:
-                await self._callback(
+                completed = await self._callback(
                     session,
                     state=state,
                     code=code,
@@ -213,6 +253,7 @@ class OAuthConnections:
             record_mcp_event(
                 "oauth_callback", "cancelled" if error else "success", started_at=started
             )
+            return completed
 
     async def _callback(
         self,
@@ -223,7 +264,7 @@ class OAuthConnections:
         issuer: str | None,
         callback_uri: str,
         error: str | None,
-    ) -> None:
+    ) -> tuple[AuthorizationTransaction, int | None] | None:
         if (
             not state
             or len(state) > 512
@@ -274,7 +315,13 @@ class OAuthConnections:
                 profile=profile,
                 connection_id=transaction.owner.connection_id,
             )
-            return
+            return None
+        # Only the transaction recorded for the current local attempt may proceed.
+        attempt_of = self._authorization_transaction_attempt
+        attempt = attempt_of(transaction) if attempt_of is not None else None
+        lock = self._authorization_lock
+        if attempt is not None and lock is None:
+            raise McpFailure("mcp_authorization_invalid")
 
         token_expires_at: datetime | None = None
 
@@ -297,6 +344,7 @@ class OAuthConnections:
                 or current.service_config_version != transaction.service_config_version
                 or current.login_session_fingerprint != transaction.login_session_fingerprint
                 or current.state != "AUTHORIZING"
+                or (attempt_of is not None and attempt_of(transaction) != attempt)
             ):
                 raise McpFailure("mcp_authorization_stale")
 
@@ -359,17 +407,27 @@ class OAuthConnections:
                 service_config_id=transaction.owner.service_config_id,
                 token_metadata=metadata,
             )
-        await revalidate()
-        await self.store.store_grant(
-            transaction,
-            token=token,
-            expires_at=token_expires_at,
-            identity_policy_version=self.identity_policy.version if evidence else None,
-            identity_evidence=evidence,
-        )
+
+        async def commit() -> None:
+            await revalidate()
+            await self.store.store_grant(
+                transaction,
+                token=token,
+                expires_at=token_expires_at,
+                identity_policy_version=self.identity_policy.version if evidence else None,
+                identity_evidence=evidence,
+            )
+
+        if lock is None or attempt is None:
+            await commit()
+        else:
+            # Token POST and identity probe stay outside; no rebind interleaves here.
+            async with lock:
+                await commit()
         record_mcp_event(
             "identity_activation",
             "success" if evidence else "pending",
             profile=profile,
             connection_id=transaction.owner.connection_id,
         )
+        return transaction, attempt

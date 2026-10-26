@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
+
+import anyio
 
 from app.infra.adapters.business_mcp.fixed_query_contracts import (
     approved_fixed_query_projection,
@@ -32,6 +34,9 @@ from app.ports.mcp_store import McpStorePort
 from app.ports.response_projection_contract import ApprovedResponseProjectionError
 from app.ports.workflow_store import GovernedWorkflowAuthorization, WorkflowStorePort
 
+if TYPE_CHECKING:
+    from app.infra.adapters.business_mcp.fixed_read_profile import FixedReadProfile
+
 
 class BusinessMcpAdapter:
     def __init__(
@@ -45,6 +50,7 @@ class BusinessMcpAdapter:
         profiles: dict[str, ServiceConfig] | None = None,
         task_rules: McpTaskRulesPort | None = None,
         submit_preconditions: dict[tuple[str, str], McpSubmitPreconditionPort] | None = None,
+        fixed_read: FixedReadProfile | None = None,
     ) -> None:
         if not isolated_test_contracts:
             for contract in contracts.values():
@@ -53,6 +59,7 @@ class BusinessMcpAdapter:
         self.workflows, self.profiles = workflows, profiles or {}
         self.task_rules = task_rules
         self.submit_preconditions = dict(submit_preconditions or {})
+        self.fixed_read = fixed_read
         if (
             any(p.synthetic for p in self.submit_preconditions.values())
             and not isolated_test_contracts
@@ -99,6 +106,46 @@ class BusinessMcpAdapter:
         ):
             raise McpFailure("mcp_submit_precondition_denied")
 
+    def _read_commit_lock(
+        self, context: McpAuthorizationContext, write: bool
+    ) -> anyio.Lock | None:
+        fixed = self.fixed_read
+        if (
+            fixed is None
+            or write
+            or context.service_config_id != fixed.service.service_config_id
+            or fixed.approval.local_owner_source != "authenticated_session"
+        ):
+            return None
+        return fixed.authorization_lock
+
+    async def _read_still_authorized(
+        self, context: McpAuthorizationContext, tool: str, profile: ServiceConfig | None
+    ) -> None:
+        """A rebind after sending voids this read's result; the request itself stays sent."""
+        assert self.fixed_read is not None
+        try:
+            if not self.fixed_read.permits(
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                service_config_id=context.service_config_id,
+                tool=tool,
+                require_ready=True,
+            ):
+                raise McpFailure("mcp_authorization_invalid")
+            await self.store.resolve(context)
+        except McpFailure:
+            record_mcp_event(
+                "fixed_read_commit",
+                "failed",
+                profile=profile,
+                tool=tool,
+                task_id=context.task_id,
+                connection_id=context.connection_id,
+                error_code="fixed_read_authorization_changed",
+            )
+            raise
+
     async def execute(
         self,
         capability_id: str,
@@ -138,6 +185,7 @@ class BusinessMcpAdapter:
         except McpFailure:
             return AdapterResult(status="error", error_code="mcp_contract_unconfirmed")
         called = False
+        commit_lock: anyio.Lock | None = None
         started = monotonic()
         profile = self.profiles.get(context.service_config_id)
         refs: McpLogRefs = {"task_id": context.task_id, "connection_id": context.connection_id}
@@ -197,6 +245,13 @@ class BusinessMcpAdapter:
                     if remote_code == "PERMISSION_DENIED"
                     else "mcp_tool_rejected"
                 )
+            lock = self._read_commit_lock(context, write)
+            if lock is not None:
+                # Held through the synchronous projection and result below,
+                # so a rebind is ordered either wholly before or after it.
+                await lock.acquire()
+                commit_lock = lock
+                await self._read_still_authorized(context, tool, profile)
             validated = policy.validate(result)
             outcome = None
             if write:
@@ -324,3 +379,6 @@ class BusinessMcpAdapter:
                 if write and (called or exc.may_have_sent)
                 else "adapter_payload_invalid",
             )
+        finally:
+            if commit_lock is not None:
+                commit_lock.release()

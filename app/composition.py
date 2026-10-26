@@ -672,6 +672,7 @@ def build_production_components(
             isolated_test_contracts=mcp_isolated_test_contracts,
             task_rules=mcp_task_rules,
             submit_preconditions=dict(mcp_submit_preconditions or {}),
+            fixed_read=fixed_read,
         )
         if resolved_identity_mapping is None:
             raise RuntimeError("Production CapabilityGateway wiring is incomplete")
@@ -1076,6 +1077,14 @@ def build_production_components(
                         profile.service_config_id != FIXED_READ_SERVICE_CONFIG_ID
                     )
                 ),
+                # One lock and one attempt record, both owned by fixed_read.
+                authorization_lock=fixed_read.authorization_lock if fixed_read else None,
+                claim_authorization_attempt=(
+                    fixed_read.claim_authorization_attempt if fixed_read else None
+                ),
+                authorization_transaction_attempt=(
+                    fixed_read.authorization_transaction_attempt if fixed_read else None
+                ),
             ),
             governed_operations,
             WorkflowEngineAdapter(workflow_engine),
@@ -1083,12 +1092,17 @@ def build_production_components(
                 partial(
                     fixed_read.bind_authorization_owner,
                     revocations=session_revocations,
+                    store=mcp_store,
                 )
                 if fixed_read is not None
                 else None
             ),
             complete_authorization_owner=(
-                partial(fixed_read.complete_authorization_owner, store=mcp_store)
+                partial(
+                    fixed_read.complete_authorization_owner,
+                    store=mcp_store,
+                    revocations=session_revocations,
+                )
                 if fixed_read is not None
                 else None
             ),
