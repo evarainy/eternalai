@@ -169,6 +169,7 @@ class _Call:
     result: ToolResultBlock | None
     execution: ReadToolExecution | None
     matches: bool | None = None
+    query_ok: bool | None = None
 
 
 def build_m0_turn_runner(
@@ -365,6 +366,11 @@ def _match_expected(
         call.matches = False
         if call.normalized is None:
             continue
+        if call.block.name == _PERSON_FIND:
+            call.query_ok = any(
+                name == _PERSON_FIND and args.get("query") == call.normalized.get("query")
+                for name, args in expected
+            )
         key = (call.block.name, _omit_paging_defaults(call.block.name, call.normalized, kit))
         if key in unmatched:
             call.matches = True
@@ -491,9 +497,42 @@ def _identity_key_present(call: _Call) -> bool:
     )
 
 
+def _paging_diagnostics(call: _Call, kit: ReadToolkit) -> dict[str, Any]:
+    # Symbolic only: numeric paging values, their type names, booleans and a
+    # count; no query text, name or personId value.
+    arguments = call.normalized if isinstance(call.normalized, dict) else {}
+    schema = kit.exposed_schemas.get(call.block.name)
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    paging: dict[str, Any] = {}
+    for key in _PAGING_KEYS:
+        spec = properties.get(key) if isinstance(properties, dict) else None
+        has_default = isinstance(spec, dict) and "default" in spec
+        value = arguments.get(key)
+        paging[key] = {
+            "present": key in arguments,
+            "value": value if type(value) in (int, float) else None,
+            "type": type(value).__name__ if key in arguments else "absent",
+            "equals_default": (
+                key not in arguments
+                or (
+                    has_default
+                    and type(value) is type(spec["default"])
+                    and value == spec["default"]
+                )
+            ),
+        }
+    return {
+        "paging": paging,
+        "query_matches_expected": call.query_ok,
+        "distinct_person_ids": len(_person_ids(call)) if _completed(call) else 0,
+    }
+
+
 def _call_summary(call: _Call, kit: ReadToolkit) -> dict[str, Any]:
     result = call.result
+    extra = _paging_diagnostics(call, kit) if call.block.name == _PERSON_FIND else {}
     return {
+        **extra,
         "tool": _TOOL_NAMES.get(call.block.name, "unregistered"),
         "round": call.round,
         "parsed": call.normalized is not None,

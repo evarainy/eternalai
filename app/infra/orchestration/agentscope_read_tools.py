@@ -496,7 +496,7 @@ class _ReadExecutor:
             return execution, _SCOPE_TEXT, None
         return (
             execution,
-            _model_text(execution, envelope.fallback_text, envelope.data),
+            _model_text(execution, envelope.fallback_text, envelope.data, capability_id),
             envelope.data,
         )
 
@@ -567,12 +567,30 @@ def _failed(error_code: ErrorCode, trace_id: str) -> ExecutionResult:
     return ExecutionResult(status="failed", error_code=error_code, trace_id=trace_id)
 
 
-def _model_text(execution: ExecutionResult, message: str, data: dict[str, Any] | None) -> str:
+def _model_text(
+    execution: ExecutionResult,
+    message: str,
+    data: dict[str, Any] | None,
+    capability_id: str = "other",
+) -> str:
     # Only the approved projection reaches the model, never raw provider data.
     payload = {"status": execution.status, "message": message, "data": data}
     text = json.dumps(payload, ensure_ascii=False, default=str)
     raw = text.encode("utf-8")
-    if len(raw) <= MAX_TOOL_RESULT_BYTES:
+    truncated = len(raw) > MAX_TOOL_RESULT_BYTES
+    # Symbolic sizes only: no content reaches the log.
+    counts = [len(v) for v in data.values() if isinstance(v, list)] if data else []
+    _TOOL_LOGGER.info(
+        "agentscope_read_tool model_text capability=%s items=%s bytes_before=%s "
+        "bytes_after=%s truncated=%s turn=%s",
+        capability_id if capability_id in M0_READ_CAPABILITY_IDS else "other",
+        max(counts) if counts else "na",
+        len(raw),
+        min(len(raw), MAX_TOOL_RESULT_BYTES),
+        truncated,
+        current_turn_id(),
+    )
+    if not truncated:
         return text
     cut = raw[:MAX_TOOL_RESULT_BYTES].decode("utf-8", errors="ignore")
     return cut + "\n[结果已截断，未展示部分不得推断]"

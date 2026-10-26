@@ -45,7 +45,7 @@ AgentScopeErrorCode: TypeAlias = Literal[
 ]
 
 # Fixed M0 request contract (PLAN v1.3 section 4.1.1); not environment-tunable.
-MODEL_CALL_TIMEOUT_SECONDS = 30.0
+MODEL_CALL_TIMEOUT_SECONDS = 60.0
 TURN_TIMEOUT_SECONDS = 120.0
 MAX_MODEL_CALLS_PER_TURN = 4
 MAX_TOOL_CALLS_PER_RESPONSE = 2
