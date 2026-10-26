@@ -107,6 +107,7 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
     )
     values = {
         "runtime": None, "admin_registry_service": None, "work_object_service": None,
+        "leader_roster_admin_service": None,
         "work_object_series_service": None, "work_object_series_scheduler": None,
         "credential_binding_service": None, "user_profile": None, "authentication": None,
         "session_tokens": None, "session_revocations": None,
