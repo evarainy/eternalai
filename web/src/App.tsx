@@ -123,6 +123,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
     LazyBindingsPage,
     LazyChatPage,
     LazyHealthPage,
+    LazyLeaderRosterPage,
     LazyLoginPage,
     LazyMessagesPage,
     LazyRegistryPage,
@@ -239,6 +240,14 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
                   element={(
                     <RouteLoadBoundary label="正在打开页面">
                       <LazyBindingsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/admin/leader-roster"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyLeaderRosterPage />
                     </RouteLoadBoundary>
                   )}
                 />
