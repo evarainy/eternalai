@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import AntApp from 'antd/es/app';
 import Input from 'antd/es/input/Input';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ApiError } from '../api/mutator';
 import { leaderRosterQueryKey, readLeaderRoster } from '../features/leader-roster/leaderRosterApi';
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
 import type { CredentialBindingView } from '../generated/credential-bindings/credential-bindings.schemas';
@@ -390,7 +389,7 @@ export function AppShell() {
   });
   const onAdminPath = location.pathname.startsWith('/admin/');
   const [adminGroupOpened, setAdminGroupOpened] = useState(false);
-  // 只在管理分组展开后才问后端；普通用户收到 403 时不显示入口。
+  // 只在管理分组展开后才问后端；只有当前登录身份读成功过才显示入口。
   const leaderRosterAccess = useQuery({
     queryKey: leaderRosterQueryKey(authGeneration),
     queryFn: readLeaderRoster,
@@ -398,10 +397,7 @@ export function AppShell() {
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
-  const showLeaderRoster = leaderRosterAccess.isSuccess || (
-    leaderRosterAccess.isError
-    && !(leaderRosterAccess.error instanceof ApiError && leaderRosterAccess.error.status === 403)
-  );
+  const showLeaderRoster = leaderRosterAccess.data !== undefined;
   const statusFetch: SystemStatusFetch = bindingQuery.isPending
     ? 'loading'
     : bindingQuery.isError

@@ -117,7 +117,7 @@ export default function LeaderRosterPage() {
       render: (_, entry) => (entry.active ? (
         <Popconfirm
           title={`确认撤销该${LEADER_ROLE_LABELS[entry.role]}？`}
-          description="撤销后立即失去领导派发权限；已派发的任务不受影响。"
+          description="只撤销这一类领导身份；此人若还有其他生效的领导条目，仍保留领导派发权限。已派发的任务不受影响。"
           okText="撤销"
           cancelText="取消"
           onConfirm={() => revoke.mutate(entry.entry_id)}
