@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 PORT_PATH = Path(__file__).resolve().parents[2] / "app/ports/work_object_scope.py"
@@ -67,12 +68,18 @@ def test_scope_allowlists_are_exact_module_level_frozenset_literals() -> None:
     assert isinstance(expression, ast.Call)
     assert isinstance(expression.func, ast.Name) and expression.func.id == "frozenset"
     assert expression.args == [] and expression.keywords == []
-    for name in ("_UNIT_LEADER_JOBTITLE_IDS", "_SUPERVISING_LEADER_JOBTITLE_IDS"):
-        expression = assignments[name]
-        assert isinstance(expression, ast.Call)
-        assert isinstance(expression.func, ast.Name) and expression.func.id == "frozenset"
-        assert expression.args == [] and expression.keywords == []
+    # 2026-10-26: leaders are a per-tenant roster passed in by callers, never module constants.
+    assert not {"_UNIT_LEADER_JOBTITLE_IDS", "_SUPERVISING_LEADER_JOBTITLE_IDS"} & set(assignments)
+    assert not any("LEADER" in name for name in assignments)
     from app.ports import work_object_scope as policy
+
+    for function in (
+        policy.is_leader,
+        policy.may_dispatch_to,
+        policy.compute_dispatch_authorization,
+    ):
+        parameter = inspect.signature(function).parameters["leader_directory_user_ids"]
+        assert parameter.default is inspect.Parameter.empty
 
     assert policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS == frozenset()
     assert not (policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS & policy._PRISON_AREA_DEPARTMENT_IDS)

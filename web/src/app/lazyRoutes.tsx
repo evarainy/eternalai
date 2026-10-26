@@ -11,6 +11,7 @@ const LazyAuthenticatedAppShell = lazy(() =>
   })),
 );
 const LazyAppsPage = lazy(() => import('../features/apps/AppsPage'));
+const LazyLeaderRosterPage = lazy(() => import('../features/leader-roster/LeaderRosterPage'));
 const LazyMessagesPage = lazy(() => import('../features/messages/MessagesPage'));
 const LazyWorkDispatchPage = lazy(() =>
   import('../features/work-dispatch/WorkDispatchPage'),
@@ -33,6 +34,7 @@ export interface LazyRouteComponents {
   LazyBindingsPage: ComponentType;
   LazyChatPage: ComponentType;
   LazyHealthPage: ComponentType;
+  LazyLeaderRosterPage: ComponentType;
   LazyLoginPage: ComponentType;
   LazyMessagesPage: ComponentType;
   LazyRegistryPage: ComponentType;
@@ -50,6 +52,7 @@ export const lazyRouteComponents: LazyRouteComponents = {
   LazyBindingsPage,
   LazyChatPage,
   LazyHealthPage,
+  LazyLeaderRosterPage,
   LazyLoginPage,
   LazyMessagesPage,
   LazyRegistryPage,

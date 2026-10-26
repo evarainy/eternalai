@@ -35,6 +35,7 @@ def _decision(
             else None
         ),
         target_department_id=target,
+        leader_directory_user_ids=frozenset(),
     )
 
 
@@ -52,12 +53,14 @@ def test_non_head_jobtitle_denied(monkeypatch, job_title: str | None, department
     )
     assert may_dispatch_to(
         member,
+        leader_directory_user_ids=frozenset(),
         target_kind="user",
         target_department_id=department_id,
         target_directory_user_id="self",
     )
     assert not may_dispatch_to(
         member,
+        leader_directory_user_ids=frozenset(),
         target_kind="user",
         target_department_id=department_id,
         target_directory_user_id="other",
@@ -166,6 +169,7 @@ def test_mismatched_department_lookup_does_not_grant_office_authority() -> None:
             display_name="Synthetic office",
         ),
         target_department_id="575",
+        leader_directory_user_ids=frozenset(),
     )
     assert decision.decision == "deny"
     assert decision.matched_rule == "department_unresolved"
@@ -189,6 +193,7 @@ def test_unknown_join_key_denies_dispatch_and_alerts() -> None:
         dispatcher_membership=None,
         dispatcher_department=None,
         target_department_id="572",
+        leader_directory_user_ids=frozenset(),
     )
     assert decision.decision == "deny"
     assert decision.reason_code == "directory_membership_missing"

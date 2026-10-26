@@ -17,6 +17,7 @@ from app.organization_directory_access import (
     read_fresh_directory_view,
 )
 from app.ports.auth import Principal
+from app.ports.dispatch_leader_roster import LeaderRosterError, LeaderRosterReadPort
 from app.ports.organization_directory import OrganizationDirectoryPort, OrganizationUserMembership
 from app.ports.trace import TraceEvent, TracePort
 from app.ports.work_object import (
@@ -65,6 +66,7 @@ class WorkDispatchService:
         *,
         store: WorkObjectStorePort,
         organization_directory: OrganizationDirectoryPort | None = None,
+        leader_roster: LeaderRosterReadPort | None = None,
         trace_port: TracePort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
@@ -73,6 +75,7 @@ class WorkDispatchService:
     ) -> None:
         self._store = store
         self._organization_directory = organization_directory
+        self._leader_roster = leader_roster
         self._trace_port = trace_port
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
@@ -96,6 +99,16 @@ class WorkDispatchService:
             )
         except DirectoryAccessError as exc:
             raise WorkDispatchError(exc.code) from None
+
+    async def _leaders(self, subject: DispatchSubject) -> frozenset[str]:
+        # Only leader-dependent paths read the roster; its failure never means "no leaders".
+        if self._leader_roster is None:
+            raise WorkDispatchError("leader_roster_unavailable")
+        try:
+            return await self._leader_roster.active_leader_directory_user_ids(subject.tenant_id)
+        except LeaderRosterError as exc:
+            _LOGGER.warning("work_dispatch stage=leader_roster code=%s", exc.code)
+            raise WorkDispatchError("leader_roster_unavailable") from None
 
     @staticmethod
     def _recheck(fresh: FreshDirectoryView) -> None:
@@ -193,13 +206,17 @@ class WorkDispatchService:
 
     @staticmethod
     def _validate_targets(
-        subject: DispatchSubject, request: DispatchRequest, fresh: FreshDirectoryView
+        subject: DispatchSubject,
+        request: DispatchRequest,
+        fresh: FreshDirectoryView,
+        leaders: frozenset[str],
     ) -> None:
         actor = WorkDispatchService._member(subject, fresh)
         # Check the whole batch's authority before resolving any target's existence.
         for target in request.targets:
             if not may_dispatch_to(
                 actor,
+                leader_directory_user_ids=leaders,
                 target_kind=target.kind,
                 target_department_id=target.department_id,
                 target_directory_user_id=target.directory_user_id
@@ -208,7 +225,7 @@ class WorkDispatchService:
             ):
                 raise WorkDispatchError(
                     "cross_department_dispatch_denied"
-                    if is_department_head(actor) or is_leader(actor)
+                    if is_department_head(actor) or is_leader(actor, leaders)
                     else "not_department_head"
                 )
         for target in request.targets:
@@ -240,7 +257,7 @@ class WorkDispatchService:
         scheduled_at: datetime | None = None,
     ) -> PreparedDispatch:
         fresh = await self._fresh(subject)
-        self._validate_targets(subject, request, fresh)
+        self._validate_targets(subject, request, fresh, await self._leaders(subject))
         scope = self._scope(subject, fresh)
         now = self._clock()
         groups = (
@@ -460,10 +477,12 @@ class WorkDispatchService:
         actor = self._member(subject, fresh)
         if kind not in {"user", "department"} or not 1 <= limit <= 100:
             raise WorkDispatchError("dispatch_options_request_invalid")
-        if kind == "department" and not (is_department_head(actor) or is_leader(actor)):
+        leaders = await self._leaders(subject)
+        leader = is_leader(actor, leaders)
+        if kind == "department" and not (is_department_head(actor) or leader):
             raise WorkDispatchError("not_department_head")
         if kind == "user" and department_id is not None:
-            if department_id != actor.department_id and not is_leader(actor):
+            if department_id != actor.department_id and not leader:
                 raise WorkDispatchError(
                     "cross_department_dispatch_denied"
                     if is_department_head(actor)
@@ -479,6 +498,7 @@ class WorkDispatchService:
                     continue
                 if not may_dispatch_to(
                     actor,
+                    leader_directory_user_ids=leaders,
                     target_kind="user",
                     target_department_id=member.department_id,
                     target_directory_user_id=member.user_id,
@@ -509,7 +529,10 @@ class WorkDispatchService:
         else:
             for department in fresh.view.departments:
                 if not may_dispatch_to(
-                    actor, target_kind="department", target_department_id=department.department_id
+                    actor,
+                    leader_directory_user_ids=leaders,
+                    target_kind="department",
+                    target_department_id=department.department_id,
                 ):
                     continue
                 if query and query.casefold() not in department.display_name.casefold():
@@ -564,8 +587,8 @@ class WorkDispatchService:
             has_more=next_cursor is not None,
             unselectable_count=len(unselectable),
             snapshot_version=fresh.view.snapshot_version,
-            can_dispatch_departments=is_department_head(actor) or is_leader(actor),
-            can_dispatch_others=is_department_head(actor) or is_leader(actor),
+            can_dispatch_departments=is_department_head(actor) or leader,
+            can_dispatch_others=is_department_head(actor) or leader,
         )
 
     async def get_lifecycle_for_principal(

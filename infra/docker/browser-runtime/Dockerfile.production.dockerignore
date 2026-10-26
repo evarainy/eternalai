@@ -115,6 +115,7 @@ services/decision/*
 !app/admin/actions.py
 !app/admin/d_form.py
 !app/admin/evidence.py
+!app/admin/leader_roster.py
 !app/admin/registry.py
 !app/application.py
 !app/api/__init__.py
@@ -283,6 +284,7 @@ services/decision/*
 !app/infra/persistence/work_object/attachments.py
 !app/infra/persistence/work_object/authorization.py
 !app/infra/persistence/work_object/dispatch_insert.py
+!app/infra/persistence/work_object/leader_roster.py
 !app/infra/persistence/work_object/postgresql.py
 !app/infra/persistence/work_object/recurrence.py
 !app/infra/policy/minimal_policy_guard.py
@@ -326,6 +328,7 @@ services/decision/*
 !app/ports/capability_registry.py
 !app/ports/credential_binding.py
 !app/ports/credential_vault.py
+!app/ports/dispatch_leader_roster.py
 !app/ports/error_codes.py
 !app/ports/evaluation.py
 !app/ports/fixed_document.py
