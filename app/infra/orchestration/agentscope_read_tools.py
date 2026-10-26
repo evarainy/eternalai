@@ -578,6 +578,10 @@ def _model_text(
     text = json.dumps(payload, ensure_ascii=False, default=str)
     raw = text.encode("utf-8")
     truncated = len(raw) > MAX_TOOL_RESULT_BYTES
+    final_text = text
+    if truncated:
+        cut = raw[:MAX_TOOL_RESULT_BYTES].decode("utf-8", errors="ignore")
+        final_text = cut + "\n[结果已截断，未展示部分不得推断]"
     # Symbolic sizes only: no content reaches the log.
     counts = [len(v) for v in data.values() if isinstance(v, list)] if data else []
     _TOOL_LOGGER.info(
@@ -586,14 +590,11 @@ def _model_text(
         capability_id if capability_id in M0_READ_CAPABILITY_IDS else "other",
         max(counts) if counts else "na",
         len(raw),
-        min(len(raw), MAX_TOOL_RESULT_BYTES),
+        len(final_text.encode("utf-8")),
         truncated,
         current_turn_id(),
     )
-    if not truncated:
-        return text
-    cut = raw[:MAX_TOOL_RESULT_BYTES].decode("utf-8", errors="ignore")
-    return cut + "\n[结果已截断，未展示部分不得推断]"
+    return final_text
 
 
 def _chunk(text: str, *, error_code: str | None, task_id: str | None = None) -> ToolChunk:
