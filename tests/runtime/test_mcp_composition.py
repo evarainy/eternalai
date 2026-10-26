@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from uuid import uuid4
 
 import httpx
@@ -15,6 +16,12 @@ from app.config import ProductionSettings
 from app.event_loop import make_event_loop
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.business_mcp.catalog import catalog
+from app.infra.adapters.business_mcp.fixed_read_profile import (
+    RESOURCE,
+    SERVICE_CONFIG_ID,
+    FixedReadApproval,
+    build_fixed_read_profile,
+)
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -22,7 +29,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
 from app.main import create_app
-from app.mcp.models import McpFailure
+from app.mcp.models import McpFailure, Ownership, ServiceConfig
 from app.ports.auth import (
     AuthenticatedSessionContext,
     Principal,
@@ -32,6 +39,7 @@ from app.ports.auth import (
 )
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.human_gate import build_task_version_binding_manifest
+from app.ports.mcp_store import AuthorizationTransaction, Connection
 from app.ports.task_store import TaskRecord
 from app.runtime.models import IntentOutput, MatchedIntent
 from app.version_binding import capability_version_bindings
@@ -371,3 +379,172 @@ def test_two_services_same_user_same_tool_are_isolated_after_composition_restart
                     authenticated_session.reset(token)
 
         asyncio.run(run(), loop_factory=make_event_loop)
+
+
+def test_failed_rebind_voids_older_attempt_so_its_late_callback_cannot_open_reads():
+    service = ServiceConfig(
+        service_config_id=SERVICE_CONFIG_ID,
+        service_config_version=1,
+        deployment_id="synthetic",
+        tenant_id="default",
+        display_name="Synthetic",
+        endpoint=RESOURCE,
+        issuer="https://provider.invalid",
+        resource=RESOURCE,
+        registration_endpoint="https://provider.invalid/register",
+        authorization_endpoint="https://provider.invalid/authorize",
+        token_endpoint="https://provider.invalid/token",
+        callback_uri="https://client.invalid/callback",
+        callback_config_version=1,
+        enabled=True,
+    )
+    profile = build_fixed_read_profile(
+        service,
+        FixedReadApproval(
+            service_config_id=SERVICE_CONFIG_ID,
+            service_config_version=1,
+            tenant_id="default",
+            local_owner_source="authenticated_session",
+            version="synthetic-identity-v1",
+            approval_evidence="synthetic",
+            issuer_parameter_supported=True,
+            identity_binding_mode="oauth_owner",
+        ),
+    )
+    principal = Principal(
+        ai_user_id="synthetic-user",
+        display_name="Synthetic",
+        roles=(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
+    )
+    old = AuthenticatedSessionContext(
+        principal=principal,
+        fingerprint=b"o" * 32,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    new = replace(old, fingerprint=b"n" * 32)
+    other = replace(old, principal=principal.model_copy(update={"ai_user_id": "other-user"}))
+
+    class Revocations:
+        async def is_revoked(self, fingerprint: bytes) -> bool:
+            return False
+
+    class Store:
+        connected: Connection | None = None
+        disconnect_fails = False
+        disconnects = 0
+
+        async def connection(self, **_):
+            return self.connected
+
+        async def disconnect(self, **_):
+            if self.disconnect_fails:
+                raise McpFailure("synthetic_disconnect_failed")
+            self.disconnects += 1
+            return True
+
+    owner = Ownership(
+        tenant_id="default",
+        user_id="synthetic-user",
+        service_config_id=SERVICE_CONFIG_ID,
+        connection_id="synthetic-connection",
+    )
+
+    def transaction(session, epoch):
+        return AuthorizationTransaction(
+            state_digest=f"synthetic-state-{epoch}",
+            owner=owner,
+            registration_id="synthetic-registration",
+            client_id="synthetic-client",
+            binding_epoch=epoch,
+            service_config_version=1,
+            login_session_fingerprint=session.fingerprint.hex(),
+            issuer=service.issuer,
+            resource=service.resource,
+            callback_uri=service.callback_uri,
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            verifier="synthetic-verifier",
+        )
+
+    def active(txn):
+        return Connection(
+            **owner.model_dump(),
+            registration_id=txn.registration_id,
+            service_config_version=1,
+            binding_epoch=txn.binding_epoch,
+            grant_epoch=1,
+            login_session_fingerprint=txn.login_session_fingerprint,
+            state="ACTIVE",
+            identity_policy_version="synthetic-identity-v1",
+            identity_evidence="synthetic-evidence",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+    def readable(session):
+        token = authenticated_session.set(session)
+        try:
+            return profile.permits(
+                tenant_id="default", user_id="synthetic-user", service_config_id=SERVICE_CONFIG_ID
+            )
+        finally:
+            authenticated_session.reset(token)
+
+    async def begin(attempt, txn):
+        async with profile.authorization_lock:
+            profile.claim_authorization_attempt(attempt, None)
+            profile.claim_authorization_attempt(attempt, txn)
+
+    async def run():
+        store, revocations = Store(), Revocations()
+        bind = partial(profile.bind_authorization_owner, revocations=revocations, store=store)
+        complete = partial(
+            profile.complete_authorization_owner, store=store, revocations=revocations
+        )
+
+        stale = await bind(SERVICE_CONFIG_ID, old)
+        stale_txn = transaction(old, 1)
+        await begin(stale, stale_txn)
+        assert profile.authorization_transaction_attempt(stale_txn) == stale
+        # The old callback already stored ACTIVE, but has not completed yet.
+        store.connected = active(stale_txn)
+
+        # Re-authorizing from the same session fails in disconnect, so the
+        # stored ACTIVE grant and its epoch still match the old transaction.
+        store.disconnect_fails = True
+        with pytest.raises(McpFailure) as failed:
+            await bind(SERVICE_CONFIG_ID, old)
+        assert failed.value.code == "synthetic_disconnect_failed"
+        assert store.disconnects == 0
+
+        # The late old callback, a stale DCR and old reads are all refused.
+        with pytest.raises(McpFailure) as late:
+            await complete(old, stale_txn, stale)
+        assert late.value.code == "mcp_authorization_invalid"
+        with pytest.raises(McpFailure) as callback:
+            profile.authorization_transaction_attempt(stale_txn)
+        assert callback.value.code == "mcp_authorization_stale"
+        with pytest.raises(McpFailure) as dcr:
+            await begin(stale, transaction(old, 2))
+        assert dcr.value.code == "mcp_authorization_stale"
+        assert not readable(old)
+        assert not readable(new)
+
+        # Another user is refused without voiding anything.
+        store.disconnect_fails = False
+        with pytest.raises(McpFailure) as refused:
+            await bind(SERVICE_CONFIG_ID, other)
+        assert refused.value.code == "mcp_service_unavailable"
+        assert store.disconnects == 0
+
+        # A fresh explicit authorization by the same user completes normally.
+        fresh = await bind(SERVICE_CONFIG_ID, new)
+        assert store.disconnects == 1
+        fresh_txn = transaction(new, 2)
+        await begin(fresh, fresh_txn)
+        assert not readable(new)
+        store.connected = active(fresh_txn)
+        await complete(new, fresh_txn, fresh)
+        assert readable(new)
+        assert not readable(old)
+
+    asyncio.run(run(), loop_factory=make_event_loop)

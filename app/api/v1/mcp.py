@@ -19,6 +19,7 @@ from app.mcp.oauth import OAuthConnections
 from app.mcp.operations import GovernedOperations
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.human_gate import HumanGateConflictError, HumanGateDecisionRecord
+from app.ports.mcp_store import AuthorizationTransaction
 from app.ports.workflow_engine import WorkflowEnginePort
 from app.ports.workflow_store import WorkflowOperation
 
@@ -72,10 +73,11 @@ class McpApiService:
         workflows: WorkflowEnginePort,
         *,
         bind_authorization_owner: Callable[
-            [str, AuthenticatedSessionContext], Awaitable[None]
+            [str, AuthenticatedSessionContext], Awaitable[int | None]
         ] | None = None,
         complete_authorization_owner: Callable[
-            [AuthenticatedSessionContext], Awaitable[None]
+            [AuthenticatedSessionContext, AuthorizationTransaction | None, int | None],
+            Awaitable[None],
         ] | None = None,
     ) -> None:
         self.oauth, self.operations, self.workflows = oauth, operations, workflows
@@ -333,11 +335,14 @@ def make_router(
         service_config_id: str, context: AuthenticatedSessionContext = Depends(session)
     ) -> AuthorizationView:
         current = available()
+        attempt = None
         if current.bind_authorization_owner is not None:
-            await current.bind_authorization_owner(service_config_id, context)
+            attempt = await current.bind_authorization_owner(service_config_id, context)
         await current.oauth.store.configure(current.oauth.service(service_config_id, context))
         return AuthorizationView(
-            authorization_url=await current.oauth.authorize(service_config_id, context)
+            authorization_url=await current.oauth.authorize(
+                service_config_id, context, attempt=attempt
+            )
         )
 
     @router.get("/oauth/callback", response_model=Literal["authorization_received"])
@@ -353,7 +358,7 @@ def make_router(
         ):
             raise McpFailure("mcp_authorization_invalid")
         current = available()
-        await current.oauth.callback(
+        completed = await current.oauth.callback(
             context,
             state=query["state"],
             code=query.get("code"),
@@ -363,7 +368,8 @@ def make_router(
         )
         complete_authorization_owner = current.complete_authorization_owner
         if "error" not in query and complete_authorization_owner is not None:
-            await complete_authorization_owner(context)
+            transaction, attempt = completed if completed is not None else (None, None)
+            await complete_authorization_owner(context, transaction, attempt)
         if "error" in query:
             return RedirectResponse(
                 "/apps", status_code=303,

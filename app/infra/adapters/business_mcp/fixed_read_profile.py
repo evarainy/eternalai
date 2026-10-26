@@ -19,6 +19,7 @@ from hashlib import sha256
 from threading import Lock
 from typing import Any, Literal
 
+import anyio
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -740,6 +741,15 @@ class FixedReadLocalOwner:
         )
 
 
+def _transaction_key(transaction: AuthorizationTransaction) -> tuple[str, str, int, str]:
+    return (
+        transaction.state_digest,
+        transaction.owner.connection_id,
+        transaction.binding_epoch,
+        transaction.registration_id,
+    )
+
+
 def prepare_fixed_read_definition(service: ServiceConfig) -> PreparedFixedReadDefinition:
     if (
         service.protocol_version != "2025-11-25"
@@ -794,6 +804,20 @@ class FixedReadProfile(IdentityAssertionPort):
     )
     _owner_ready: bool = dataclass_field(init=False, default=False, repr=False, compare=False)
     _owner_lock: Lock = dataclass_field(init=False, default_factory=Lock, repr=False, compare=False)
+    # One current explicit authorization attempt. A new bind advances it before
+    # any await, so a failed or cancelled rebind still invalidates older attempts.
+    _attempt: int = dataclass_field(init=False, default=0, repr=False, compare=False)
+    _attempt_prepared: bool = dataclass_field(init=False, default=False, repr=False, compare=False)
+    _attempt_transaction: tuple[str, str, int, str] | None = dataclass_field(
+        init=False, default=None, repr=False, compare=False
+    )
+    # Shared with OAuth and the adapter: serializes owner changes, transaction
+    # begin, grant commit and fixed-read result commit. Never held across the
+    # OAuth page, DCR, token POST, identity probe or a read's network call.
+    # Order: authorization_lock, then _owner_lock; _owner_lock never spans await.
+    authorization_lock: anyio.Lock = dataclass_field(
+        init=False, default_factory=anyio.Lock, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         self.version = self.approval.version
@@ -801,7 +825,7 @@ class FixedReadProfile(IdentityAssertionPort):
     def permits_authorization(
         self, service: ServiceConfig, session: AuthenticatedSessionContext
     ) -> bool:
-        """Check the approved or once-bound owner before OAuth config or network work."""
+        """Check the approved or currently bound owner before OAuth config or network work."""
         try:
             owner = FixedReadLocalOwner.from_session(session)
         except McpFailure:
@@ -818,56 +842,194 @@ class FixedReadProfile(IdentityAssertionPort):
         service_config_id: str,
         session: AuthenticatedSessionContext,
         revocations: SessionRevocationStorePort,
-    ) -> None:
-        """A single explicit Apps authorization may select the local owner once."""
+        store: McpStorePort,
+    ) -> int | None:
+        """An explicit Apps authorization selects the owner's current login session.
+
+        The first bind fixes tenant/user. A later explicit authorization by the
+        same tenant/user replaces the session and voids every earlier attempt
+        and grant; any other tenant/user is rejected before any change.
+        """
         if self.approval.local_owner_source != "authenticated_session":
-            return
+            return None
         if not self.service.enabled or service_config_id != self.service.service_config_id:
             raise McpFailure("mcp_service_unavailable")
-        owner = FixedReadLocalOwner.from_session(session)
-        if (
-            owner.tenant_id != self.approval.tenant_id
-            or not owner.user_id
-            or await revocations.is_revoked(owner.fingerprint)
-        ):
-            raise McpFailure("mcp_service_unavailable")
-        with self._owner_lock:
-            if self._bound_owner is None:
-                self._bound_owner = owner
-                record_mcp_event("fixed_owner_bound", "success", profile=self.service, tool=TOOL)
-            elif self._bound_owner != owner:
+        async with self.authorization_lock:
+            owner = FixedReadLocalOwner.from_session(session)
+            if (
+                owner.tenant_id != self.approval.tenant_id
+                or not owner.user_id
+                or await revocations.is_revoked(owner.fingerprint)
+            ):
                 raise McpFailure("mcp_service_unavailable")
-            self._owner_ready = False
+            with self._owner_lock:
+                previous = self._bound_owner
+                other_user = previous is not None and (
+                    previous.tenant_id != owner.tenant_id or previous.user_id != owner.user_id
+                )
+                if not other_user:
+                    # Void older attempts before any await; never rolled back.
+                    self._owner_ready = False
+                    self._attempt += 1
+                    self._attempt_prepared = False
+                    self._attempt_transaction = None
+                    self._bound_owner = owner
+                    attempt = self._attempt
+            if other_user:
+                record_mcp_event(
+                    "fixed_owner_bound",
+                    "failed",
+                    profile=self.service,
+                    tool=TOOL,
+                    error_code="fixed_owner_other_user",
+                )
+                raise McpFailure("mcp_service_unavailable")
+            try:
+                connection = await store.connection(
+                    tenant_id=owner.tenant_id,
+                    user_id=owner.user_id,
+                    service_config_id=self.service.service_config_id,
+                )
+                if connection is not None:
+                    # Advances binding_epoch: old states, grants and contexts fail closed.
+                    await store.disconnect(
+                        tenant_id=owner.tenant_id,
+                        user_id=owner.user_id,
+                        connection_id=connection.connection_id,
+                    )
+            except BaseException:
+                record_mcp_event(
+                    "fixed_owner_bound",
+                    "failed",
+                    profile=self.service,
+                    tool=TOOL,
+                    error_code="fixed_owner_disconnect_failed",
+                )
+                raise
+            with self._owner_lock:
+                self._attempt_prepared = True
+        record_mcp_event(
+            "fixed_owner_rebound" if previous is not None else "fixed_owner_bound",
+            "success",
+            profile=self.service,
+            tool=TOOL,
+        )
+        return attempt
+
+    def claim_authorization_attempt(
+        self, attempt: int, transaction: AuthorizationTransaction | None = None
+    ) -> None:
+        """Before begin, require the current prepared attempt; after, record its transaction.
+
+        Callers hold authorization_lock across both calls and begin_authorization.
+        """
+        with self._owner_lock:
+            current = (
+                attempt == self._attempt
+                and self._attempt_prepared
+                and self._attempt_transaction is None
+            )
+            if current and transaction is not None:
+                self._attempt_transaction = _transaction_key(transaction)
+        if not current:
+            record_mcp_event(
+                "fixed_owner_attempt",
+                "failed",
+                profile=self.service,
+                tool=TOOL,
+                error_code="fixed_owner_attempt_stale",
+            )
+            raise McpFailure("mcp_authorization_stale")
+
+    def authorization_transaction_attempt(
+        self, transaction: AuthorizationTransaction
+    ) -> int | None:
+        """The current attempt that began this transaction; None where no rebind applies."""
+        if (
+            self.approval.local_owner_source != "authenticated_session"
+            or transaction.owner.service_config_id != self.service.service_config_id
+        ):
+            return None
+        with self._owner_lock:
+            current = self._attempt_prepared and self._attempt_transaction == _transaction_key(
+                transaction
+            )
+            attempt = self._attempt
+        if not current:
+            record_mcp_event(
+                "fixed_owner_attempt",
+                "failed",
+                profile=self.service,
+                tool=TOOL,
+                error_code="fixed_owner_attempt_stale",
+            )
+            raise McpFailure("mcp_authorization_stale")
+        return attempt
 
     async def complete_authorization_owner(
-        self, session: AuthenticatedSessionContext, store: McpStorePort
+        self,
+        session: AuthenticatedSessionContext,
+        transaction: AuthorizationTransaction | None,
+        attempt: int | None,
+        *,
+        store: McpStorePort,
+        revocations: SessionRevocationStorePort,
     ) -> None:
-        """Release the local read only after the matching grant is ACTIVE."""
+        """Release the local read only for the current attempt's own ACTIVE grant."""
         if self.approval.local_owner_source != "authenticated_session":
             return
         owner = FixedReadLocalOwner.from_session(session)
-        if self._bound_owner != owner:
+        if transaction is None or attempt is None:
             raise McpFailure("mcp_authorization_invalid")
-        connection = await store.connection(
-            tenant_id=owner.tenant_id,
-            user_id=owner.user_id,
-            service_config_id=self.service.service_config_id,
-        )
-        if (
-            connection is None
-            or connection.state != "ACTIVE"
-            or connection.service_config_version != self.service.service_config_version
-            or connection.login_session_fingerprint != owner.fingerprint.hex()
-            or connection.identity_policy_version != self.version
-            or not connection.identity_evidence
-            or connection.expires_at is None
-            or connection.expires_at <= datetime.now(UTC)
-        ):
-            raise McpFailure("mcp_authorization_invalid")
-        with self._owner_lock:
-            if self._bound_owner != owner:
+        key = _transaction_key(transaction)
+        async with self.authorization_lock:
+            connection = await store.connection(
+                tenant_id=owner.tenant_id,
+                user_id=owner.user_id,
+                service_config_id=self.service.service_config_id,
+            )
+            if (
+                connection is None
+                or connection.state != "ACTIVE"
+                or connection.service_config_version != self.service.service_config_version
+                or connection.login_session_fingerprint != owner.fingerprint.hex()
+                or connection.identity_policy_version != self.version
+                or not connection.identity_evidence
+                or connection.expires_at is None
+                or connection.expires_at <= datetime.now(UTC)
+                or connection.connection_id != transaction.owner.connection_id
+                or connection.binding_epoch != transaction.binding_epoch
+                or connection.registration_id != transaction.registration_id
+                or transaction.expires_at <= datetime.now(UTC)
+                or await revocations.is_revoked(owner.fingerprint)
+            ):
+                record_mcp_event(
+                    "fixed_owner_ready",
+                    "failed",
+                    profile=self.service,
+                    tool=TOOL,
+                    error_code="fixed_owner_connection_mismatch",
+                )
                 raise McpFailure("mcp_authorization_invalid")
-            self._owner_ready = True
+            with self._owner_lock:
+                current = (
+                    self._bound_owner == owner
+                    and attempt == self._attempt
+                    and self._attempt_prepared
+                    and self._attempt_transaction == key
+                )
+                if current:
+                    self._owner_ready = True
+            if not current:
+                record_mcp_event(
+                    "fixed_owner_ready",
+                    "failed",
+                    profile=self.service,
+                    tool=TOOL,
+                    error_code="fixed_owner_attempt_stale",
+                )
+                raise McpFailure("mcp_authorization_invalid")
+        record_mcp_event("fixed_owner_ready", "success", profile=self.service, tool=TOOL)
 
     def permits(
         self,
@@ -887,13 +1049,14 @@ class FixedReadProfile(IdentityAssertionPort):
             return False
         if self.approval.local_owner_source == "fixed":
             return user_id == self.approval.user_id
-        owner = self._bound_owner
+        with self._owner_lock:
+            owner, ready = self._bound_owner, self._owner_ready
         session = authenticated_session.get()
         now = datetime.now(UTC)
         return (
             owner is not None
             and session is not None
-            and (not require_ready or self._owner_ready)
+            and (not require_ready or ready)
             and owner.tenant_id == tenant_id
             and owner.user_id == user_id == session.principal.ai_user_id
             and session.principal.org_ctx.tenant_id == tenant_id
