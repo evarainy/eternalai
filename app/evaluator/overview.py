@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from app.ports.capability_gateway import ExecutionResult
 from app.ports.evaluation import (
     BusinessVerification,
     CheckResult,
@@ -132,3 +133,69 @@ class OverviewPostconditionEvaluator:
             pending="passed",
             messages="passed",
         )
+
+
+def evaluate_required_postconditions(
+    execution: ExecutionResult,
+    *,
+    scope: EvaluationScope,
+    capability_id: str,
+    version: str,
+    evaluator: OverviewPostconditionEvaluator,
+) -> tuple[ExecutionResult, BusinessVerification]:
+    """Apply the required postcondition rule to one completed execution.
+
+    A passed check returns the execution with the evidence snapshot as data;
+    any other configured outcome turns the execution into ``internal_error``.
+    """
+
+    if required_postcondition_rule(capability_id) is None or execution.status != "completed":
+        return execution, unevaluated(capability_id)
+    evidence = execution.postcondition_input
+    if version != OVERVIEW_VERSION:
+        conclusion = verification("error", "unsupported_version", source="failed")
+    elif execution.error_code is not None:
+        conclusion = verification("error", "evaluator_error")
+    elif evidence is None:
+        conclusion = verification("error", "evidence_missing", source="failed")
+    else:
+        try:
+            output_json = canonical_object(execution.data)
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            conclusion = verification("failed", "structure_invalid", structure="failed")
+        else:
+            if output_json != evidence.output_json:
+                conclusion = verification("failed", "output_snapshot_mismatch")
+            else:
+                try:
+                    conclusion = evaluator.evaluate(
+                        scope,
+                        capability_id,
+                        version,
+                        evidence,
+                    )
+                    if type(conclusion) is not BusinessVerification or (
+                        conclusion.rule_id != required_postcondition_rule(capability_id)
+                        or conclusion.result not in {"passed", "failed", "error"}
+                    ):
+                        raise ValueError("Invalid required verification conclusion")
+                    if conclusion.result == "passed":
+                        if conclusion != verification(
+                            "passed",
+                            "postconditions_satisfied",
+                            structure="passed",
+                            source="passed",
+                            pending="passed",
+                            messages="passed",
+                        ):
+                            raise ValueError("Incomplete required verification")
+                        return execution.model_copy(
+                            update={"data": load_object(evidence.output_json)},
+                        ), conclusion
+                except Exception:
+                    conclusion = verification("error", "evaluator_error")
+    return ExecutionResult(
+        status="failed",
+        error_code="internal_error",
+        trace_id=execution.trace_id,
+    ), conclusion

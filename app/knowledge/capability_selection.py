@@ -528,18 +528,163 @@ def _is_ascii_alnum(character: str) -> bool:
     return character.isascii() and character.isalnum()
 
 
+# Native tool definitions (M1 path). The legacy candidate projection above is
+# unchanged; these rules only shape what a model-facing tool schema may carry.
+MAX_TOOL_SCHEMA_BYTES = 2048
+MAX_TOOL_PROPERTY_DESCRIPTION_CHARS = 120
+_TOOL_SCHEMA_KEYS = frozenset(
+    {
+        "type",
+        "properties",
+        "items",
+        "enum",
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "format",
+    }
+)
+_TOOL_SCHEMA_NUMBER_KEYS = frozenset({"minimum", "maximum"})
+_TOOL_SCHEMA_COUNT_KEYS = frozenset({"minLength", "maxLength", "minItems", "maxItems"})
+_SAFE_SCHEMA_FORMAT = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
+class ToolDefinitionRejected(ValueError):
+    """A capability cannot be exposed as a native tool; ``reason`` is symbolic."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def validate_tool_text(text: str, *, max_chars: int) -> None:
+    """Reject model-facing tool text that is empty, unsafe or too long."""
+
+    try:
+        _require_safe_text(text)
+    except _InvalidCatalogError as exc:
+        raise ToolDefinitionRejected("unsafe_text") from exc
+    if len(text) > max_chars:
+        raise ToolDefinitionRejected("text_too_long")
+
+
+def project_tool_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Project a registered input schema onto the native tool allowlist.
+
+    Only structural keywords and safe property descriptions are kept;
+    ``required`` and every other keyword are dropped (Gateway checks required
+    arguments after identity). The canonical form must fit the byte budget.
+    """
+
+    if (
+        not isinstance(schema, dict)
+        or schema.get("type") != "object"
+        or not isinstance(schema.get("properties"), dict)
+    ):
+        raise ToolDefinitionRejected("schema_invalid")
+    projected = _project_tool_node(schema)
+    if len(canonical_json(projected).encode("utf-8")) > MAX_TOOL_SCHEMA_BYTES:
+        raise ToolDefinitionRejected("schema_too_large")
+    return projected
+
+
+def _project_tool_node(node: object) -> dict[str, Any]:
+    if not isinstance(node, dict):
+        raise ToolDefinitionRejected("schema_invalid")
+    projected: dict[str, Any] = {}
+    for key in sorted(node):
+        if key not in _TOOL_SCHEMA_KEYS:
+            continue
+        value = node[key]
+        if key == "type":
+            projected[key] = _tool_schema_type(value)
+        elif key == "properties":
+            if not isinstance(value, dict):
+                raise ToolDefinitionRejected("schema_invalid")
+            properties: dict[str, Any] = {}
+            for name in sorted(value):
+                try:
+                    _require_safe_property_key(name)
+                except _InvalidCatalogError as exc:
+                    raise ToolDefinitionRejected("unsafe_property_key") from exc
+                properties[name] = _project_tool_property(value[name])
+            projected[key] = properties
+        elif key == "items":
+            projected[key] = _project_tool_node(value)
+        elif key == "enum":
+            projected[key] = _tool_schema_enum(value)
+        elif key in _TOOL_SCHEMA_NUMBER_KEYS:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise ToolDefinitionRejected("schema_invalid")
+            projected[key] = value
+        elif key in _TOOL_SCHEMA_COUNT_KEYS:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ToolDefinitionRejected("schema_invalid")
+            projected[key] = value
+        else:  # format
+            if not isinstance(value, str) or _SAFE_SCHEMA_FORMAT.fullmatch(value) is None:
+                raise ToolDefinitionRejected("schema_invalid")
+            projected[key] = value
+    return projected
+
+
+def _project_tool_property(node: object) -> dict[str, Any]:
+    if not isinstance(node, dict):
+        raise ToolDefinitionRejected("schema_invalid")
+    projected = _project_tool_node(node)
+    if "description" in node:
+        description = node["description"]
+        if not isinstance(description, str):
+            raise ToolDefinitionRejected("schema_invalid")
+        validate_tool_text(description, max_chars=MAX_TOOL_PROPERTY_DESCRIPTION_CHARS)
+        projected["description"] = description
+    return projected
+
+
+def _tool_schema_type(value: object) -> str | list[str]:
+    if isinstance(value, str) and value in _SCHEMA_TYPES:
+        return value
+    if (
+        isinstance(value, list)
+        and value
+        and all(isinstance(item, str) and item in _SCHEMA_TYPES for item in value)
+        and len(set(value)) == len(value)
+    ):
+        return list(value)
+    raise ToolDefinitionRejected("schema_invalid")
+
+
+def _tool_schema_enum(value: object) -> list[object]:
+    if not isinstance(value, list) or not value:
+        raise ToolDefinitionRejected("schema_invalid")
+    for item in value:
+        if isinstance(item, str):
+            validate_tool_text(item, max_chars=MAX_TOOL_PROPERTY_DESCRIPTION_CHARS)
+        elif item is not None and not isinstance(item, bool | int | float):
+            raise ToolDefinitionRejected("schema_invalid")
+    return list(value)
+
+
 __all__ = (
     "CAPABILITY_CANDIDATE_PROTOCOL_VERSION",
     "CAPABILITY_SELECTION_RULES",
     "MAX_CAPABILITY_CANDIDATES",
     "MAX_CAPABILITY_CANDIDATE_SEGMENT_BYTES",
     "MAX_CAPABILITY_CONTRACT_BYTES",
+    "MAX_TOOL_PROPERTY_DESCRIPTION_CHARS",
+    "MAX_TOOL_SCHEMA_BYTES",
     "CandidateBinding",
     "CapabilityCandidateSet",
     "SelectionOutcome",
+    "ToolDefinitionRejected",
     "TruncationReason",
     "canonical_json",
     "capability_fingerprint",
     "is_safe_capability_id",
+    "project_tool_input_schema",
     "select_capability_candidates",
+    "validate_tool_text",
 )

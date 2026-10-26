@@ -172,6 +172,7 @@ from app.ports.organization_directory import (
 from app.ports.organization_directory_sync import DirectorySourceError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
 from app.ports.response_projection_contract import ApprovedResponseProjection
+from app.ports.runtime import RuntimePort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import DFormCollectionStorePort, SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
@@ -222,9 +223,9 @@ class ProductionComponents:
     browser_intent_model: str
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
-    # Internal M0 counting turn (agentscope_m0_turn.M0TurnRunner); built only
-    # when AGENTSCOPE_M0_TURN_ENABLED == "1", so AgentScope is otherwise never imported.
-    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
+    # M1 AgentScope runtime; built only when RUNTIME_ENGINE == "agentscope",
+    # so AgentScope is otherwise never imported.
+    agentscope_runtime: RuntimePort | None = None
 
 
 def build_credential_store(
@@ -854,6 +855,15 @@ def build_production_components(
         if fixed_read is not None
         else None
     )
+    knowledge_items = (
+        ENTERPRISE_TERM_ITEMS
+        + {
+            "mock": MOCK_SYSTEM_ITEMS,
+            "live": LIVE_SYSTEM_ITEMS,
+            "replay": REPLAY_SYSTEM_ITEMS,
+        }[settings.oa_read_adapter_mode]
+        + POLICY_TEMPLATE_ITEMS
+    )
     runtime = build_runtime(
         task_store=task_store,
         d_form_collection_store=task_store,
@@ -869,50 +879,49 @@ def build_production_components(
         validate_workflow=validate_workflow,
         overview_evaluator=overview_evaluator,
         evaluator=terminal_evaluator,
-        semantic_knowledge=BasicKnowledge(
-            static_items=ENTERPRISE_TERM_ITEMS
-            + {
-                "mock": MOCK_SYSTEM_ITEMS,
-                "live": LIVE_SYSTEM_ITEMS,
-                "replay": REPLAY_SYSTEM_ITEMS,
-            }[settings.oa_read_adapter_mode]
-            + POLICY_TEMPLATE_ITEMS,
-        ),
+        semantic_knowledge=BasicKnowledge(static_items=knowledge_items),
         human_gate_port=human_gate_port,
         candidate_policy=policy_guard,
         capability_formatters=capability_formatters,
         mcp_result_profiles=mcp_result_profiles,
         approved_projections=approved_projections,
     )
-    # The AgentScope read bridge reuses the same production instances and
-    # result mappings. It exists only for the M0 counting route; with the
-    # switch off neither AgentScope nor the bridge is imported.
-    agentscope_m0_turn: Callable[..., Awaitable[dict[str, Any]]] | None = None
-    if settings.agentscope_m0_turn_enabled:
-        from app.infra.orchestration.agentscope_m0_turn import build_m0_turn_runner
-        from app.infra.orchestration.agentscope_read_tools import AgentScopeReadDependencies
+    # The M1 AgentScope runtime reuses the same production instances and
+    # result mappings; with the legacy engine AgentScope is never imported.
+    agentscope_runtime: RuntimePort | None = None
+    if settings.runtime_engine == "agentscope":
+        from app.infra.llm.agentscope_chat import build_chat_model
+        from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
+        from app.infra.orchestration.agentscope_runtime import build_agentscope_runtime
 
-        agentscope_read_dependencies = AgentScopeReadDependencies(
-            capability_registry=capability_registry,
-            candidate_policy=policy_guard,
-            orchestration=AgentOrchestrationAdapter(
+        agentscope_runtime = build_agentscope_runtime(
+            AgentScopeRuntimeDependencies(
                 capability_registry=capability_registry,
-                gateway=gateway,
-                workflow_engine=None,
+                candidate_policy=policy_guard,
+                orchestration=AgentOrchestrationAdapter(
+                    capability_registry=capability_registry,
+                    gateway=gateway,
+                    workflow_engine=None,
+                    response_builder=ResponseEnvelopeBuilder(),
+                    validate_workflow=validate_workflow,
+                    capability_formatters=capability_formatters,
+                    mcp_result_profiles=mcp_result_profiles,
+                    approved_projections=approved_projections,
+                ),
+                task_store=task_store,
+                session_store=session_store,
+                trace_port=resolved_trace_port,
+                human_gate=human_gate_port,
                 response_builder=ResponseEnvelopeBuilder(),
-                validate_workflow=validate_workflow,
-                capability_formatters=capability_formatters,
-                mcp_result_profiles=mcp_result_profiles,
-                approved_projections=approved_projections,
-            ),
-            task_store=task_store,
-            trace_port=resolved_trace_port,
-            human_gate=human_gate_port,
-        )
-        agentscope_m0_turn = build_m0_turn_runner(
-            agentscope_read_dependencies,
-            base_url=settings.llm_base_url,
-            model=settings.llm_model,
+                knowledge=BasicKnowledge(static_items=knowledge_items),
+                terminal_evaluator=terminal_evaluator,
+                overview_evaluator=overview_evaluator,
+                model_factory=partial(
+                    build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
+                ),
+                model_name=settings.llm_model,
+                session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
+            )
         )
     resolved_authentication = (
         build_authentication_port(
@@ -1087,7 +1096,7 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
-        agentscope_m0_turn=agentscope_m0_turn,
+        agentscope_runtime=agentscope_runtime,
         browser_gateway=gateway,
         browser_session_factory=session_factory,
         browser_capability_registry=capability_registry,

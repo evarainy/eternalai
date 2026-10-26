@@ -44,6 +44,7 @@ _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY = 4
 _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS = 60
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
+RuntimeEngine: TypeAlias = Literal["legacy", "agentscope"]
 MCP_TLS_CA_ENDPOINT = "https://34.64.8.101/mcp"
 MCP_TLS_CA_OAUTH_ENDPOINTS = frozenset({
     "https://34.64.8.101/oauth/register",
@@ -297,8 +298,8 @@ class ProductionSettings:
     llm_enable_thinking: bool
     health_timeout_seconds: float
     csrf_allowed_origins: frozenset[str] = field(default_factory=frozenset)
-    # M0 internal AgentScope turn route; registered only for the exact value "1".
-    agentscope_m0_turn_enabled: bool = False
+    # Runtime behind /api/v1/runtime; AgentScope is imported only for "agentscope".
+    runtime_engine: RuntimeEngine = "legacy"
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_contract_pack_dir: Path | None = None
@@ -495,7 +496,7 @@ class ProductionSettings:
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             csrf_allowed_origins=csrf_allowed_origins,
-            agentscope_m0_turn_enabled=source.get("AGENTSCOPE_M0_TURN_ENABLED") == "1",
+            runtime_engine=_runtime_engine(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
@@ -796,6 +797,13 @@ def _canonical_origin_host(hostname: str, name: str) -> str:
     return hostname
 
 
+def _runtime_engine(source: Mapping[str, str]) -> RuntimeEngine:
+    value = source.get("RUNTIME_ENGINE", "legacy")
+    if value not in {"legacy", "agentscope"}:
+        raise RuntimeError("RUNTIME_ENGINE must be legacy or agentscope")
+    return cast(RuntimeEngine, value)
+
+
 def _oa_read_adapter_mode(source: Mapping[str, str]) -> OAReadAdapterMode:
     value = source.get("OA_READ_ADAPTER_MODE", "mock").strip().casefold()
     if value not in {"mock", "replay", "live"}:
@@ -1029,7 +1037,7 @@ def _base64_key(
     return decoded
 
 
-__all__ = ("OAReadAdapterMode", "ProductionSettings", "RedisConnectionURL")
+__all__ = ("OAReadAdapterMode", "ProductionSettings", "RedisConnectionURL", "RuntimeEngine")
 
 
 def _directory_max_age(source: Mapping[str, str]) -> int:

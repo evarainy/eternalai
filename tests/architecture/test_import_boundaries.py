@@ -45,6 +45,24 @@ class BoundaryRule:
             object.__setattr__(self, "source_path", REPO_ROOT / self.source.replace(".", "/"))
 
 
+_AGENTSCOPE_FREE_PACKAGES = (
+    "api",
+    "runtime",
+    "ports",
+    "knowledge",
+    "memory",
+    "contracts",
+    "evaluator",
+    "admin",
+    "mcp",
+    "workflow",
+    "work_dispatch",
+    "browser_skill",
+    "execution_fabric",
+    "db",
+)
+
+
 def _boundary_rules() -> list[BoundaryRule]:
     return [
         BoundaryRule(
@@ -193,6 +211,16 @@ def _boundary_rules() -> list[BoundaryRule]:
             name="real_adapters_no_runtime",
             source="app.infra.adapters",
             forbidden_imports=("app.runtime",),
+        ),
+        # P2-RUNTIME-AGENTSCOPE-M1A-001 (M1 D3): the AgentScope SDK stays in
+        # app/infra; composition reaches it only through lazy infra imports.
+        *(
+            BoundaryRule(
+                name=f"{package}_no_agentscope",
+                source=f"app.{package}",
+                forbidden_imports=("agentscope",),
+            )
+            for package in _AGENTSCOPE_FREE_PACKAGES
         ),
     ]
 
