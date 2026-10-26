@@ -275,7 +275,13 @@ class ApprovedQueryRead:
 
 
 _QUERY_PRESENTATION = {
-    "person_find": ("查找人员", "按用户提供的条件查询已授权人员", "person_lookup"),
+    # The intent model only sees short_description; candidate ranking scores
+    # name and description bigrams, so both carry the "by name" wording.
+    "person_find": (
+        "查询业务系统人员信息",
+        "按姓名或姓名片段查询业务系统中已授权人员的信息；query 填写姓名或姓名片段",
+        "person_lookup",
+    ),
     "talk_context_get": ("查询谈话上下文", "查询已授权人员的谈话上下文", "talk_context"),
     "talk_record_get": ("查询谈话记录", "查询已授权谈话记录", "talk_record"),
     "talk_tasks_list": ("查询谈话任务", "查询已授权谈话任务列表", "talk_tasks"),
