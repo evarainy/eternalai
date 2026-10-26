@@ -586,25 +586,36 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| M0 正式工具调用计数（已关闭）及覆盖缺口 | PR #224 已合并；2026-10-26 rev4 冻结后 run6 按 12 条各 1 次、12/12 通过，真实授权与冻结不再是阻塞；「先读标识再查详情」与日期条件仍以两次独立人员查询和标点条件替代，chat template 与工具解析器名称仍未取得 | 无（计数已完成；覆盖与元数据仍待补） | 待裁决（M1 task_id 留空） | 计数义务已满足；剩余覆盖缺口经后续真实接通补验或明确裁决，服务端元数据由管理员提供或裁决不需 | PR #224；仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json` |
+| M0 正式工具调用计数（已关闭）及覆盖缺口 | PR #224 已合并；2026-10-26 rev4 冻结后 run6 按 12 条各 1 次、12/12 通过，真实授权与冻结不再是阻塞；「先读标识再查详情」与日期条件仍以两次独立人员查询和标点条件替代，chat template 与工具解析器名称仍未取得 | 无（计数已完成；覆盖与元数据仍待补） | 待分配（剩余覆盖与元数据补验；M1 不承担，验收记录继续注明缺失） | 计数义务已满足；剩余覆盖缺口经后续真实接通补验或明确裁决，服务端元数据由管理员提供或裁决不需 | PR #224；仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json` |
 | 目标环境离线安装与同路径运行 | 雨爷 2026-10-22 决定：短期内本机即开发、测试与服务器环境，目标环境离线安装验收推迟到全部开发完成后打 Docker 镜像推服务器阶段；本机 Windows（Python 3.12.14）离线包安装与同路径运行已验证，不阻塞 M0 | 全部开发完成（Docker 镜像与服务器阶段） | 待 GOV-SYNC 分配（Docker 镜像与服务器部署阶段） | 以 `uv.lock` 构建的镜像在目标服务器由批准来源离线安装后，同一模型接缝在实际 vLLM 上可运行 | `docs/dev/dependency_policy.md` AgentScope 生产传递依赖清单 |
 | 浏览器运行镜像随之安装 AgentScope 闭包 | `infra/docker/browser-runtime` 两个 Dockerfile 以 `uv sync --frozen --no-dev` 安装全部生产依赖，现包含 AgentScope 及其传递依赖；构建需可访问固定提交归档，未构建验证镜像 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（随整体切换或镜像范围裁决） | 镜像构建实测通过，或裁定浏览器镜像排除该包并同步其构建入口 | `infra/docker/browser-runtime/Dockerfile.production` |
-| M0 计数用内部认证路由的去留 | `POST /api/v1/runtime/agentscope-m0/turn` 仅在 `AGENTSCOPE_M0_TURN_ENABLED` 严格为 "1" 时注册，供 M0 正式计数；计数完成后是否删除或改造为正式入口未定，删除需专项授权 | 无（PR #224 正式计数已完成） | 待裁决（M1 task_id 留空） | M1 定稿入口后删除该路由（经授权）或并入正式入口，并确认生产配置未开启 | `app/api/v1/agentscope_m0.py`；`app/application.py::create_app` |
-| AgentScope 类型限于 infra 的架构守卫 | 现有 import 边界规则未声明 `agentscope` 只能出现在 `app/infra`；新增守卫属新增测试，本棒未获授权 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（M1 或明确授权的守卫补充） | `tests/architecture/` 增加对应边界规则并在 required CI 通过，或另经裁决不设 | `tests/architecture/test_import_boundaries.py::_boundary_rules` |
+| M0 计数用内部认证路由的去留 | `POST /api/v1/runtime/agentscope-m0/turn` 仅在 `AGENTSCOPE_M0_TURN_ENABLED` 严格为 "1" 时注册，供 M0 正式计数；2026-10-27 已获专项删除授权，并入 M1A 执行，仓库外计数证据保留 | 无（PR #224 正式计数已完成） | `P2-RUNTIME-AGENTSCOPE-M1A-001` | M1A 按 DECISIONS 授权清单删除路由、runner、开关及对应接线/参数，并确认生产配置未开启 | `app/api/v1/agentscope_m0.py`；`app/application.py::create_app` |
+| AgentScope 类型限于 infra 的架构守卫 | 现有 import 边界规则未声明 `agentscope` 只能出现在 `app/infra`；2026-10-27 已批准由 M1A 承接该边界规则 | 无（不阻塞 M0） | `P2-RUNTIME-AGENTSCOPE-M1A-001` | `tests/architecture/` 增加对应边界规则并在 required CI 通过，或另经裁决不设 | `tests/architecture/test_import_boundaries.py::_boundary_rules` |
 
 
-M0 已由 PR #224 合并，后继 M1 由用户在新窗口开展；task_id 留空，待裁决。本节不分配新任务、不解除既有部署与授权边界。以下欠债已与 PR #224/#229/#232 正文核对；外部证据均在仓库外 `runtime-agentscope-20261021/` 下，既有义务沿原行更新。
+M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，当前串行后继为 `P2-RUNTIME-AGENTSCOPE-M1A-001`，随后为 `P2-RUNTIME-AGENTSCOPE-M1B-001`。本节仅按已批范围分配承接，不解除既有部署与授权边界。以下欠债已与 PR #224/#229/#232 正文核对；外部证据均在仓库外 `runtime-agentscope-20261021/` 下，既有义务沿原行更新。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 业务 MCP 授权就绪状态只在进程内 | 后端重启后须重新授权，页面可能仍显示已连接；计数脚本的未授权前置检查只作缓解。PR #229 解决同一用户重新登录后的重新授权，不解决重启后的状态持久化 | 无（不阻塞 M0） | 待裁决（M1 task_id 留空） | 授权状态持久化或页面如实反映就绪状态，并完成实际流程核对 | PR #224、PR #229；`m0-runs/M0_SAMPLES_FROZEN.md` run5 记录、`m0-runs/M0_count_console.js` |
+| 业务 MCP 授权就绪状态只在进程内 | 后端重启后须重新授权，页面可能仍显示已连接；计数脚本的未授权前置检查只作缓解。PR #229 解决同一用户重新登录后的重新授权，不解决重启后的状态持久化 | 无（不阻塞 M0） | 待分配（M1 不承担） | 授权状态持久化或页面如实反映就绪状态，并完成实际流程核对 | PR #224、PR #229；`m0-runs/M0_SAMPLES_FROZEN.md` run5 记录、`m0-runs/M0_count_console.js` |
 | 外部授权服务不支持 refresh_token | 外部服务不下发 refresh_token，授权最长 1 小时，到期须人工重新授权，常驻使用受限 | 外部授权服务能力（无仓库 task_id） | 待分配（M1 之后的业务 MCP 接入） | 外部服务支持 refresh_token，或产品裁定可接受的重新授权流程 | PR #224；`m0-runs/M0_A0_PROBE2.md` |
 | M0 门槛由 36 次降为 12 次的统计限制 | 2026-10-26 决定采用 12 条各 1 次、门槛 12/12，并只重测未通过样本；提示词变更后 rev4 全部重跑。统计强度降低，不能据此估计逐样本稳定性 | 无 | 待分配（M1 前或首次生产灰度前复核） | 以更大样本复测，或明确接受 12 次口径作为最终 M0 验收 | PR #224；`m0-runs/M0_SAMPLES_FROZEN.md` rev4、`m0-runs/M0_COUNT_RESULTS.run6.json` |
 | 他人账号被拒时前端只显示通用 409 文案 | 后端仍按合同拒绝其他用户（fixed_owner_other_user），前端通用提示未说明服务已由其他用户授权 | 无 | 待分配（MCP 授权前端文案棒） | 显示明确的其他用户已授权提示，或裁决维持通用文案 | PR #229「验证结果」真实操作验收第 3 项 |
 | OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒） | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
 | MCP 换绑验收用开发库副本保留 | 真实验收的本机开发库副本仍保留，删除须专项授权；真实验收待外部服务恢复的旧阻塞已于 2026-10-26 关闭 | 无 | 待用户授权处置 | 获准删除副本库，或确认长期保留 | PR #229「本棒新增欠债」第 1、4 项及真实验收环境说明 |
-| 极简查人问法仍可能 low_confidence | 不含「业务系统 / 人员 / 姓名 / 信息 / 查询」等词的问法可能与能力零词面重合；超过 8 个可见能力时仍可能未入选，PR #232 未扩 K 或改 selector | 无 | 待分配（如需覆盖，另开候选召回/语义检索棒） | 候选召回不再只依赖词面重合，或确认这类问法无需支持 | PR #232「本棒新增欠债」第 2 项 |
+| 极简查人问法仍可能 low_confidence | 不含「业务系统 / 人员 / 姓名 / 信息 / 查询」等词的问法可能与能力零词面重合；超过 8 个可见能力时仍可能未入选，PR #232 未扩 K 或改 selector；新路径由 M1A 去掉词面预筛承接，旧路径不修 | 无 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（新路径） | 新路径成为默认入口或旧路径退役 | PR #232「本棒新增欠债」第 2 项 |
 | D 表单浏览器纵切在本机关闭 | 主线本机启动缺 d_form 授权配置（d_form_authorization_missing），仓库外启动器暂设 BROWSER_ENABLED=0；开发库已升级不代表浏览器纵切已接通 | 无对应 task_id（待提供本机授权配置） | 待定（下一根 D 表单真实浏览器验收棒） | 配置具备后以 BROWSER_ENABLED=1 完成一次真实纵切验收，具体填写、保存、提交仍分别取得授权 | PR #232；`controller-dispatch/sonnet_devmain_switch.out.md`、`m0-runs/DEV_start_backend.py` |
+
+### Runtime 替换 M1 已批分棒与新增欠债（2026-10-27）
+
+`P2-GOV-SYNC-M1-OPEN` → `P2-RUNTIME-AGENTSCOPE-M1A-001`（A 档、高风险：读路径、工具组、会话、infra 守卫及已获授权的 M0 计数路由删除）→ `P2-RUNTIME-AGENTSCOPE-M1B-001`（A 档、高风险：确认/写入、C1–C6、Golden 注入接缝），串行。治理裁决须先于 M1 代码合并进入主线；M2/M6 分工不变，`RUNTIME_ENGINE` 默认 `legacy`，M1 不切默认入口。依据见 [DECISIONS 2026-10-27 裁决](DECISIONS.md#2026-10-27--裁决agentscope-runtime-选型m1-工具组替代-top-k-与运行时工具协议)。以下为已批准方案的未实现义务，不表示新路径已交付。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 新路径多结果卡片未做 | ResponseEnvelope 仍只有一个 ui；同轮多个业务工具结果暂用文本，不新增多结果公共合同 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（新路径基础） | 待分配（M2/M4 响应组件范围确认后） | 多结果展示合同获批并在新路径完成真实验收 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §3.7、§6 |
+| 新路径聊天状态只在进程内、重启丢失 | M1 仅实现进程内 AgentState 与裁剪，不做持久化聊天历史；重启后为新会话 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（进程内会话） | 待分配（聊天历史持久化另行批准后） | 持久化方案获批并验证重启恢复，或明确接受重启丢失 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §3.3、§6 |
+| 旧路径八项限制保留至旧路径退役 | D1 仅替代 AgentScope 路径；旧 IntentRouter 继续 capability-topk-v1、最多八项与词面预筛 | 旧路径退役范围尚未安排 | 待分配（旧路径退役） | 旧路径退役 | DECISIONS 2026-10-27 D1；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§6 |
+| M1 评测脚本在仓库外 | 题集、判分器与脚本按已批方案留在仓库外，仓库内没有该评测回归入口 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（最终配置评测与冻结证据） | 待分配（需要后续回归时决定是否入库） | 后续回归时明确脚本入库或仓库外版本管理、执行与留证方式 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §4.2、§4.4–§4.6、§6 |
 
 ## 6. P2 不做什么
 

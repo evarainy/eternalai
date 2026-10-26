@@ -1,4 +1,4 @@
-# AGENTS.md — Phase 2 项目规则 v3.1.1
+# AGENTS.md — Phase 2 项目规则 v3.1.2
 
 本文件是项目级规则与约束的唯一权威；Skills、模板和历史记录不得另设权限或门禁。
 
@@ -35,7 +35,7 @@
 ## 项目不变量与红线
 
 1. 六边形依赖：`app/ports/` 是 Protocol 接口，`app/infra/` 是实现；ports 不得依赖 infra。`app/ports/` 契约仅在设计需要时最小变更，记录理由并同步所有实现与既有测试消费接口，不以 workaround 绕开。
-2. Runtime LLM 使用 vLLM raw JSON mode；默认 `http://34.74.11.38:8011/v1` + `glm-4.7`，URL、model 与采样参数可由 env 覆盖；禁止 instructor / PydanticAI。开发助手的模型选择不改变此运行时合同（见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1）。
+2. Runtime LLM 走 OpenAI 兼容的 vLLM；默认 `http://34.74.11.38:8011/v1` + `glm-4.7`，URL、model 与采样参数可由 env 覆盖。让模型选择和调用工具时使用原生 tools/tool_calls（`tool_choice=auto`，请求级关闭思考）；只需模型按固定格式输出数据时使用 JSON 输出，可用时优先 JSON Schema 约束，其次 raw JSON mode。不使用框架的结构化输出与上下文压缩；禁止 instructor / PydanticAI。模型、chat template、工具解析器、思考模式或 vLLM 版本变化后，须重新验证工具调用。开发助手的模型选择不改变此运行时合同（见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1）。
 3. `tests/` 镜像 `app/`；架构守卫在 `tests/architecture/`；`experiments/` 只放 Spike，不进入生产。禁止修改 `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`。
 4. 不得弱化测试换绿（空断言、宽泛 skip、删除断言等）；失败路径保留 error code，不报成功；不得回归 session/tenant/user 隔离。Golden negative/boundary 必须 100% 通过，包括 GT-012 多绑定 scope clarification；下游 descriptor 存在不释放依赖门。
 5. 安全分流只依赖可真实校验的协议事实或配置值，不以 `ENV` 等自由文本标签承担安全开关。
