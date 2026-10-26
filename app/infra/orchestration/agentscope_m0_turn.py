@@ -509,6 +509,7 @@ def _paging_diagnostics(call: _Call, kit: ReadToolkit) -> dict[str, Any]:
     for key in _PAGING_KEYS:
         spec = properties.get(key) if isinstance(properties, dict) else None
         has_default = isinstance(spec, dict) and "default" in spec
+        default_value = spec.get("default") if isinstance(spec, dict) else None
         value = arguments.get(key)
         paging[key] = {
             "present": key in arguments,
@@ -518,8 +519,8 @@ def _paging_diagnostics(call: _Call, kit: ReadToolkit) -> dict[str, Any]:
                 key not in arguments
                 or (
                     has_default
-                    and type(value) is type(spec["default"])
-                    and value == spec["default"]
+                    and type(value) is type(default_value)
+                    and value == default_value
                 )
             ),
         }
