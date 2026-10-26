@@ -71,7 +71,7 @@ M0_READ_CAPABILITY_IDS = frozenset(
     }
 )
 AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
-AGENT_PROMPT_VERSION = "m0-2"
+AGENT_PROMPT_VERSION = "m0-3"
 MAX_TOOL_RESULT_BYTES = 8192
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _READ_FAILED_TEXT = "读取失败。"
