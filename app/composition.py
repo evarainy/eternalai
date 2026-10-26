@@ -17,6 +17,7 @@ from app.admin.actions import (
     ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
     ADMIN_LITE_POLICY_CAPABILITY_IDS,
 )
+from app.admin.leader_roster import AdminLeaderRosterService
 from app.admin.registry import (
     AdminBindingMutationService,
     AdminRegistryService,
@@ -117,6 +118,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLTaskStore,
 )
 from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
+from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSeriesStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
@@ -193,6 +195,7 @@ class ProductionComponents:
     work_object_service: WorkObjectService
     work_object_series_service: WorkObjectSeriesService
     work_object_series_scheduler: WorkObjectSeriesScheduler
+    leader_roster_admin_service: AdminLeaderRosterService
     credential_binding_service: CredentialBindingService
     credential_polling_job_queue: JobQueuePort
     credential_polling_scheduler: CredentialPollingScheduler
@@ -949,10 +952,22 @@ def build_production_components(
     )
     directory_scheduler = OrganizationDirectoryScheduler(directory_sync_service)
     work_object_store = PostgreSQLWorkObjectStore(session_factory)
+    leader_roster = PostgreSQLLeaderRoster(session_factory)
+    # The shared dispatch service also serves reassign and every recurrence path.
     work_dispatch_service = WorkDispatchService(
         store=work_object_store, organization_directory=organization_directory,
+        leader_roster=leader_roster,
         directory_max_age_s=settings.organization_directory_max_age_s,
         trace_port=resolved_trace_port,
+    )
+    leader_roster_admin_service = AdminLeaderRosterService(
+        roster=leader_roster,
+        organization_directory=organization_directory,
+        policy_guard=MinimalPolicyGuard(
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+        ),
+        directory_max_age_s=settings.organization_directory_max_age_s,
     )
     work_attachment_service = WorkObjectAttachmentService(
         PostgreSQLWorkObjectAttachmentStore(session_factory), work_dispatch_service,
@@ -1099,6 +1114,7 @@ def build_production_components(
         work_object_service=work_object_service,
         work_object_series_service=work_series_service,
         work_object_series_scheduler=work_series_scheduler,
+        leader_roster_admin_service=leader_roster_admin_service,
         credential_binding_service=credential_binding_service,
         credential_polling_job_queue=credential_polling_job_queue,
         credential_polling_scheduler=credential_polling_scheduler,

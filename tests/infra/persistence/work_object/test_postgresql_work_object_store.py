@@ -940,6 +940,7 @@ def test_dispatch_trace_failure_recovers_concurrent_receipt(
         gateway=db.service._gateway,
         capability_registry=StaticCapabilityRegistry(),
         organization_directory=db.directory,
+        leader_roster=db.leader_roster,
         trace_port=db.trace,
     )
 

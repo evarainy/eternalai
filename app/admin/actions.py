@@ -16,6 +16,10 @@ AdminAction: TypeAlias = Literal[
     "bindings_revoke",
     "bindings_reset",
     "traces_list",
+    "leader_roster_list",
+    "leader_roster_candidates",
+    "leader_roster_add",
+    "leader_roster_revoke",
 ]
 
 AUDIT_READER_ROLE = "audit_reader"
@@ -32,6 +36,11 @@ ADMIN_POLICY_CAPABILITY_BY_ACTION: dict[AdminAction, str] = {
     "bindings_revoke": "admin_bindings_revoke",
     "bindings_reset": "admin_bindings_reset",
     "traces_list": "admin_traces_list",
+    # Leader roster actions are admin-only; audit_reader does not unlock them.
+    "leader_roster_list": "admin_leader_roster_list",
+    "leader_roster_candidates": "admin_leader_roster_candidates",
+    "leader_roster_add": "admin_leader_roster_add",
+    "leader_roster_revoke": "admin_leader_roster_revoke",
 }
 
 ADMIN_LITE_POLICY_CAPABILITY_IDS = frozenset(ADMIN_POLICY_CAPABILITY_BY_ACTION.values())

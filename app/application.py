@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.admin.d_form import AdminDFormManagementService
+from app.admin.leader_roster import AdminLeaderRosterService
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
 from app.api.v1.auth import (
@@ -92,6 +93,7 @@ def create_app(
     organization_directory_scheduler: OrganizationDirectoryScheduler | None = None,
     work_object_series_service: WorkObjectSeriesService | None = None,
     work_object_series_scheduler: WorkObjectSeriesScheduler | None = None,
+    leader_roster_admin: AdminLeaderRosterService | None = None,
     diagnostic_checks: dict[str, HealthCheck] | None = None,
     validate_workflows: Callable[[], Awaitable[None]] | None = None,
     mcp_service: McpApiService | None = None,
@@ -239,6 +241,7 @@ def create_app(
         make_admin_router(
             admin_registry_service, csrf_protected_principal,
             d_form_management=admin_d_form_management,
+            leader_roster=leader_roster_admin,
         ),
         prefix="/api/v1/admin",
     )
@@ -432,6 +435,7 @@ def create_production_app(
         admin_registry_service=components.admin_registry_service,
         work_object_service=components.work_object_service,
         work_object_series_service=components.work_object_series_service,
+        leader_roster_admin=components.leader_roster_admin_service,
         work_object_series_scheduler=(
             components.work_object_series_scheduler if background_sync_enabled else None
         ),

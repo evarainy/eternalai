@@ -3,6 +3,7 @@
 Callers must resolve the current principal's stable join key on every decision.
 Dispatch endpoints and Trace emission are owned by DISPATCH-001. No directory I/O
 or credentials belong here; a missing membership produces an explicit alert signal.
+Unit and supervising leaders come from the caller-supplied per-tenant roster.
 """
 
 from __future__ import annotations
@@ -14,8 +15,6 @@ from pydantic import BaseModel, ConfigDict
 from app.ports.organization_directory import OrganizationDepartment, OrganizationUserMembership
 
 _DEPARTMENT_HEAD_JOBTITLE_IDS: frozenset[str] = frozenset({"75", "380", "1405", "1701", "1999"})
-_UNIT_LEADER_JOBTITLE_IDS: frozenset[str] = frozenset()
-_SUPERVISING_LEADER_JOBTITLE_IDS: frozenset[str] = frozenset()
 _CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS: frozenset[str] = frozenset()
 _PRISON_AREA_DEPARTMENT_IDS: frozenset[str] = frozenset(
     {
@@ -89,6 +88,7 @@ def compute_dispatch_authorization(
     dispatcher_membership: OrganizationUserMembership | None,
     dispatcher_department: OrganizationDepartment | None,
     target_department_id: str,
+    leader_directory_user_ids: frozenset[str],
 ) -> DispatchAuthorizationDecision:
     """Use lookup results, never token-baked department/job title or caller labels.
 
@@ -111,7 +111,9 @@ def compute_dispatch_authorization(
     ) = None
     if dispatcher_membership is None or not resolved:
         reason = "directory_membership_missing"
-    elif not is_department_head(dispatcher_membership) and not is_leader(dispatcher_membership):
+    elif not is_department_head(dispatcher_membership) and not is_leader(
+        dispatcher_membership, leader_directory_user_ids
+    ):
         reason = "not_department_head"
     return DispatchAuthorizationDecision(
         decision="allow" if reason is None else "deny",
@@ -129,18 +131,21 @@ def is_department_head(membership: OrganizationUserMembership) -> bool:
     return membership.job_title in _DEPARTMENT_HEAD_JOBTITLE_IDS
 
 
-def is_leader(membership: OrganizationUserMembership) -> bool:
-    return membership.job_title in (_UNIT_LEADER_JOBTITLE_IDS | _SUPERVISING_LEADER_JOBTITLE_IDS)
+def is_leader(
+    membership: OrganizationUserMembership, leader_directory_user_ids: frozenset[str]
+) -> bool:
+    return membership.user_id in leader_directory_user_ids
 
 
 def may_dispatch_to(
     membership: OrganizationUserMembership,
     *,
+    leader_directory_user_ids: frozenset[str],
     target_kind: str,
     target_department_id: str,
     target_directory_user_id: str | None = None,
 ) -> bool:
-    if is_leader(membership):
+    if is_leader(membership, leader_directory_user_ids):
         return True
     if target_kind == "user" and target_directory_user_id == membership.user_id:
         return True

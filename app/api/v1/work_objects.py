@@ -37,6 +37,7 @@ from app.ports.credential_binding import (
     BackgroundWorkObjectSyncError,
     CredentialCountedFailureCode,
 )
+from app.ports.dispatch_leader_roster import LeaderRosterReadPort
 from app.ports.organization_directory import (
     OrganizationDirectoryPort,
 )
@@ -317,6 +318,7 @@ class WorkObjectService:
         gateway: CapabilityGatewayPort,
         capability_registry: CapabilityRegistryPort,
         organization_directory: OrganizationDirectoryPort | None = None,
+        leader_roster: LeaderRosterReadPort | None = None,
         trace_port: TracePort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
@@ -329,6 +331,7 @@ class WorkObjectService:
         self.dispatch = dispatch_service or WorkDispatchService(
             store=store,
             organization_directory=organization_directory,
+            leader_roster=leader_roster,
             trace_port=trace_port,
             clock=clock,
             id_factory=id_factory,
@@ -1482,6 +1485,7 @@ _DISPATCH_HTTP = {
     "organization_directory_missing": 503,
     "organization_directory_stale": 503,
     "organization_directory_unavailable": 503,
+    "leader_roster_unavailable": 503,
     "work_object_unavailable": 503,
     "work_object_store_unavailable": 503,
     "work_object_audit_unavailable": 503,
@@ -1512,6 +1516,7 @@ _LIFECYCLE_MESSAGES = {
     "organization_directory_missing": "Organization directory has no trusted snapshot.",
     "organization_directory_stale": "Organization directory snapshot is stale.",
     "organization_directory_unavailable": "Organization directory is unavailable.",
+    "leader_roster_unavailable": "Leader roster is unavailable.",
     "work_object_unavailable": "Work Object provider is not configured.",
     "work_object_audit_unavailable": "Work object audit is unavailable.",
     "work_object_lifecycle_failed": "Work object lifecycle operation failed.",
@@ -1553,6 +1558,7 @@ def _raise_dispatch_error(http_status: int, code: str) -> NoReturn:
             "Organization directory is stale; directory-dependent authorization is unavailable."
         ),
         "organization_directory_unavailable": "Organization directory is unavailable.",
+        "leader_roster_unavailable": "Leader roster is unavailable.",
         "directory_scope_denied": "Directory access is not permitted for this identity.",
         "work_object_unavailable": "Work Object provider is not configured.",
         "work_object_dispatch_failed": "Dispatch could not be completed; retry with the same key.",
