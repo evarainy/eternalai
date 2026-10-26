@@ -582,15 +582,29 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 六查询完整真实覆盖 | 已有人员查询成功，不能据此证明全部六工具、分页与受限/空态均已实测 | `P2-CHAT-BROWSER-READ-001`（正式服务、用户授权与适用业务对象） | `P2-CHAT-BROWSER-READ-001` | 在获准查询范围逐项完成真实验收；写工具继续关闭 | `app/infra/adapters/business_mcp/fixed_query_contracts.py`；候选 PR |
 | 跨机组合装配 | 当前演示组合启动器、任务 JSON、CA/服务配置、日志处理器及 pins 在仓库外；源码原始字节摘要也受换行影响 | `P2-CHAT-BROWSER-READ-001`（目标环境配置与对应装载授权） | 待用户确定后续范围 | 目标机器按其实际源码/路径/配置完成装配和授权，真实只读及 D 填写后停止验收；不复制凭证或原机进程状态 | `docs/dev/chat_browser_mcp_handoff.md` 新电脑接续 |
 
-### Runtime 替换 M0 剩余义务（2026-10-21）
+### Runtime 替换 M0 剩余义务（2026-10-26同步）
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| M0 正式 36 次工具调用样本 | 内网 Qwen 端点协议试探与只读桥已完成（合成取证）；计数读取范围按雨爷 2026-10-22 确认收窄为 OA 本人待办与业务 MCP 人员查询 2 项，样本人名由雨爷运行时在浏览器填写；方案 4.1.1「先读标识再查详情」与日期条件无已接通工具可覆盖，以两次独立人员查询和标点条件替代，记为覆盖缺口；仍缺：真实读取授权、样本冻结（复用 `app/mcp/contracts.py::INPUT_SCHEMAS`，获准 tools/list 只做核对；逐题判卷规则 `agentscope_m0_turn.py::M0_SAMPLE_RULES` 随样本一并冻结，12 题的最终结果均由雨爷本地目视判定）；计数用默认关闭内部认证路由已获准并实现，待真实环境开启；chat template 与工具解析器名称未取得 | `P2-RUNTIME-AGENTSCOPE-M0-001`（真实读取授权与样本输入） | `P2-RUNTIME-AGENTSCOPE-M0-001` | 12 条样本连同完整提示、真实 schema 摘要、预期行为与判卷规则先冻结，再以本棒模型接缝、实际内网 vLLM 及获准读取路径完成 36 次并达到计划阈值；不以 Mock、合成工具结果或协议探测代替 | `app/infra/llm/agentscope_chat.py`；`app/infra/orchestration/agentscope_read_tools.py`；本棒 PR 验证段 |
+| M0 正式工具调用计数（已关闭）及覆盖缺口 | PR #224 已合并；2026-10-26 rev4 冻结后 run6 按 12 条各 1 次、12/12 通过，真实授权与冻结不再是阻塞；「先读标识再查详情」与日期条件仍以两次独立人员查询和标点条件替代，chat template 与工具解析器名称仍未取得 | 无（计数已完成；覆盖与元数据仍待补） | 待裁决（M1 task_id 留空） | 计数义务已满足；剩余覆盖缺口经后续真实接通补验或明确裁决，服务端元数据由管理员提供或裁决不需 | PR #224；仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json` |
 | 目标环境离线安装与同路径运行 | 雨爷 2026-10-22 决定：短期内本机即开发、测试与服务器环境，目标环境离线安装验收推迟到全部开发完成后打 Docker 镜像推服务器阶段；本机 Windows（Python 3.12.14）离线包安装与同路径运行已验证，不阻塞 M0 | 全部开发完成（Docker 镜像与服务器阶段） | 待 GOV-SYNC 分配（Docker 镜像与服务器部署阶段） | 以 `uv.lock` 构建的镜像在目标服务器由批准来源离线安装后，同一模型接缝在实际 vLLM 上可运行 | `docs/dev/dependency_policy.md` AgentScope 生产传递依赖清单 |
 | 浏览器运行镜像随之安装 AgentScope 闭包 | `infra/docker/browser-runtime` 两个 Dockerfile 以 `uv sync --frozen --no-dev` 安装全部生产依赖，现包含 AgentScope 及其传递依赖；构建需可访问固定提交归档，未构建验证镜像 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（随整体切换或镜像范围裁决） | 镜像构建实测通过，或裁定浏览器镜像排除该包并同步其构建入口 | `infra/docker/browser-runtime/Dockerfile.production` |
-| M0 计数用内部认证路由的去留 | `POST /api/v1/runtime/agentscope-m0/turn` 仅在 `AGENTSCOPE_M0_TURN_ENABLED` 严格为 "1" 时注册，供 M0 正式计数；计数完成后是否删除或改造为正式入口未定，删除需专项授权 | `P2-RUNTIME-AGENTSCOPE-M0-001`（正式计数完成） | 待 GOV-SYNC 分配（M1） | M1 定稿入口后删除该路由（经授权）或并入正式入口，并确认生产配置未开启 | `app/api/v1/agentscope_m0.py`；`app/application.py::create_app` |
+| M0 计数用内部认证路由的去留 | `POST /api/v1/runtime/agentscope-m0/turn` 仅在 `AGENTSCOPE_M0_TURN_ENABLED` 严格为 "1" 时注册，供 M0 正式计数；计数完成后是否删除或改造为正式入口未定，删除需专项授权 | 无（PR #224 正式计数已完成） | 待裁决（M1 task_id 留空） | M1 定稿入口后删除该路由（经授权）或并入正式入口，并确认生产配置未开启 | `app/api/v1/agentscope_m0.py`；`app/application.py::create_app` |
 | AgentScope 类型限于 infra 的架构守卫 | 现有 import 边界规则未声明 `agentscope` 只能出现在 `app/infra`；新增守卫属新增测试，本棒未获授权 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（M1 或明确授权的守卫补充） | `tests/architecture/` 增加对应边界规则并在 required CI 通过，或另经裁决不设 | `tests/architecture/test_import_boundaries.py::_boundary_rules` |
+
+
+M0 已由 PR #224 合并，后继 M1 由用户在新窗口开展；task_id 留空，待裁决。本节不分配新任务、不解除既有部署与授权边界。以下欠债已与 PR #224/#229/#232 正文核对；外部证据均在仓库外 `runtime-agentscope-20261021/` 下，既有义务沿原行更新。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 业务 MCP 授权就绪状态只在进程内 | 后端重启后须重新授权，页面可能仍显示已连接；计数脚本的未授权前置检查只作缓解。PR #229 解决同一用户重新登录后的重新授权，不解决重启后的状态持久化 | 无（不阻塞 M0） | 待裁决（M1 task_id 留空） | 授权状态持久化或页面如实反映就绪状态，并完成实际流程核对 | PR #224、PR #229；`m0-runs/M0_SAMPLES_FROZEN.md` run5 记录、`m0-runs/M0_count_console.js` |
+| 外部授权服务不支持 refresh_token | 外部服务不下发 refresh_token，授权最长 1 小时，到期须人工重新授权，常驻使用受限 | 外部授权服务能力（无仓库 task_id） | 待分配（M1 之后的业务 MCP 接入） | 外部服务支持 refresh_token，或产品裁定可接受的重新授权流程 | PR #224；`m0-runs/M0_A0_PROBE2.md` |
+| M0 门槛由 36 次降为 12 次的统计限制 | 2026-10-26 决定采用 12 条各 1 次、门槛 12/12，并只重测未通过样本；提示词变更后 rev4 全部重跑。统计强度降低，不能据此估计逐样本稳定性 | 无 | 待分配（M1 前或首次生产灰度前复核） | 以更大样本复测，或明确接受 12 次口径作为最终 M0 验收 | PR #224；`m0-runs/M0_SAMPLES_FROZEN.md` rev4、`m0-runs/M0_COUNT_RESULTS.run6.json` |
+| 他人账号被拒时前端只显示通用 409 文案 | 后端仍按合同拒绝其他用户（fixed_owner_other_user），前端通用提示未说明服务已由其他用户授权 | 无 | 待分配（MCP 授权前端文案棒） | 显示明确的其他用户已授权提示，或裁决维持通用文案 | PR #229「验证结果」真实操作验收第 3 项 |
+| OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒） | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
+| MCP 换绑验收用开发库副本保留 | 真实验收的本机开发库副本仍保留，删除须专项授权；真实验收待外部服务恢复的旧阻塞已于 2026-10-26 关闭 | 无 | 待用户授权处置 | 获准删除副本库，或确认长期保留 | PR #229「本棒新增欠债」第 1、4 项及真实验收环境说明 |
+| 极简查人问法仍可能 low_confidence | 不含「业务系统 / 人员 / 姓名 / 信息 / 查询」等词的问法可能与能力零词面重合；超过 8 个可见能力时仍可能未入选，PR #232 未扩 K 或改 selector | 无 | 待分配（如需覆盖，另开候选召回/语义检索棒） | 候选召回不再只依赖词面重合，或确认这类问法无需支持 | PR #232「本棒新增欠债」第 2 项 |
+| D 表单浏览器纵切在本机关闭 | 主线本机启动缺 d_form 授权配置（d_form_authorization_missing），仓库外启动器暂设 BROWSER_ENABLED=0；开发库已升级不代表浏览器纵切已接通 | 无对应 task_id（待提供本机授权配置） | 待定（下一根 D 表单真实浏览器验收棒） | 配置具备后以 BROWSER_ENABLED=1 完成一次真实纵切验收，具体填写、保存、提交仍分别取得授权 | PR #232；`controller-dispatch/sonnet_devmain_switch.out.md`、`m0-runs/DEV_start_backend.py` |
 
 ## 6. P2 不做什么
 
