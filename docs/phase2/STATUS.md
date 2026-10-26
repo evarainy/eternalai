@@ -1,6 +1,8 @@
 # Phase 2 当前状态
 
-- Runtime 替换 M0 已收口：`P2-RUNTIME-AGENTSCOPE-M0-001` 已由 PR #224 合并。2026-10-26 正式计数 run6 按 rev4 冻结样本完成 12 条各 1 次、12/12 通过；当日决定将原 36 次门槛改为 12/12，并采用只重测未通过样本的规则（提示词变更后按 rev4 全部重跑）。关键修复为单次模型调用时限 30→60 秒及 person_find 分页提示规则；整轮 120 秒、最多 4 次模型调用、零重试不变。计数覆盖获准的 OA 本人待办与业务 MCP 人员查询，未激活新 Runtime、未切换生产入口。后继 M1 由用户在新窗口开展，task_id 留空、待裁决；目标环境离线验收仍推迟到 Docker 镜像与服务器阶段。剩余义务及统计强度限制见 [PLAN](PHASE2_PLAN.md#runtime-替换-m0-剩余义务2026-10-26同步)，证据见 PR #224 与仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json`。
+- Runtime 替换 M1 方案于 2026-10-27 获批：采用可替换的 AgentScope SDK 编排，新路径以工具组替代 Top-K、按用途区分运行时工具协议，M1A 承接读路径/会话与已获授权的 M0 计数路由删除，M1B 承接确认/写入；默认入口仍为 legacy。当前治理批 `P2-GOV-SYNC-M1-OPEN`，当前串行后继 `P2-RUNTIME-AGENTSCOPE-M1A-001`；方案批准不表示代码、评测或真实验收完成。见 [DECISIONS 新裁决](DECISIONS.md#2026-10-27--裁决agentscope-runtime-选型m1-工具组替代-top-k-与运行时工具协议) 与 [PLAN 分棒及欠债](PHASE2_PLAN.md#runtime-替换-m1-已批分棒与新增欠债2026-10-27)。
+
+- Runtime 替换 M0 已收口：`P2-RUNTIME-AGENTSCOPE-M0-001` 已由 PR #224 合并。2026-10-26 正式计数 run6 按 rev4 冻结样本完成 12 条各 1 次、12/12 通过；当日决定将原 36 次门槛改为 12/12，并采用只重测未通过样本的规则（提示词变更后按 rev4 全部重跑）。关键修复为单次模型调用时限 30→60 秒及 person_find 分页提示规则；整轮 120 秒、最多 4 次模型调用、零重试不变。计数覆盖获准的 OA 本人待办与业务 MCP 人员查询，未激活新 Runtime、未切换生产入口。后继 M1 已于 2026-10-27 批准分棒，当前串行后继 `P2-RUNTIME-AGENTSCOPE-M1A-001`；目标环境离线验收仍推迟到 Docker 镜像与服务器阶段。剩余义务及统计强度限制见 [PLAN](PHASE2_PLAN.md#runtime-替换-m0-剩余义务2026-10-26同步)，证据见 PR #224 与仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json`。
 
 - MCP 换绑修复：`P2-MCP-OWNER-REBIND-001` 已由 PR #229 合并并完成真实验收；同一用户重新登录后可显式重新授权 MCP，无需重启后端，其他用户仍被拒。进程重启后的授权就绪状态、拒绝提示及其他保留欠债见 PLAN。
 - 普通聊天查人修复：`P2-CHAT-PERSON-FIND-INTENT-001` 已由 PR #232 合并；person_find 展示名/描述明确按姓名查询，修复候选截断导致选不中。本机开发库该能力定义已同步；真实前端对话与新增诊断日志输出尚未实测，极简问法限制见 PLAN。
