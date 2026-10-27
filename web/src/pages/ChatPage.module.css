@@ -397,7 +397,12 @@
  * 边界。聚焦态那条是两个类，本来就压得过，所以之前只有聚焦时看得见框。
  */
 .sender:global(.ant-sender) {
-  padding: 20px;
+  /*
+   * P2-WEB-CHAT-INPUT-SIZE-001：输入区缩小约 40%。卡高 = 上下内边距 + 文本区 + 底栏(12 + 40)：
+   * 改前 20*2 + 3 行*25.5(17px*1.5) + 52 ≈ 169px；改后 12*2 + 1 行*25.5 + 52 ≈ 102px（约 60%）。
+   * 文本区最多 4 行（原 6 行），超出后在框内滚动。
+   */
+  padding: 12px 20px;
   background: #fff;
   border: 0;
   border-radius: 22px;
