@@ -67,6 +67,10 @@ GROUP_INSTRUCTIONS: dict[str, str] = {
         "用户指定了就按原值填写；不要为了只取一个结果缩小每页条数。"
         "查到多个匹配的人时，列出来请用户指定是哪一位，不要替用户选择。"
     ),
+    "clothing_options_get": (
+        "查询被服选项只需要 jyId；jqId 是可选的监区 ID，"
+        "用户没有给出时不要填写，也不要向用户索要。"
+    ),
 }
 if sum(len(text) for text in GROUP_INSTRUCTIONS.values()) > MAX_GROUP_INSTRUCTIONS_CHARS:
     raise RuntimeError("group_instructions_over_budget")
