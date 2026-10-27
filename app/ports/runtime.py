@@ -39,6 +39,10 @@ type UserActionOutcome = Literal[
 ]
 
 
+class RuntimeSessionBusyError(RuntimeError):
+    """The conversation session already has a turn in progress (HTTP 409)."""
+
+
 class RuntimePort(Protocol):
     async def handle_user_message(
         self,
@@ -59,5 +63,9 @@ class RuntimePort(Protocol):
 
 
 __all__ = (
-    "DFormCollectionReference", "RuntimePort", "UserActionOutcome", "d_form_collection_reference",
+    "DFormCollectionReference",
+    "RuntimePort",
+    "RuntimeSessionBusyError",
+    "UserActionOutcome",
+    "d_form_collection_reference",
 )

@@ -103,7 +103,7 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
 
     settings = SimpleNamespace(
         browser=SimpleNamespace(enabled=True), session_cookie_secure=True,
-        csrf_allowed_origins=frozenset(), agentscope_m0_turn_enabled=False,
+        csrf_allowed_origins=frozenset(), runtime_engine="legacy",
     )
     values = {
         "runtime": None, "admin_registry_service": None, "work_object_service": None,

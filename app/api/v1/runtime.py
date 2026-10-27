@@ -19,6 +19,7 @@ from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import (
     DFormCollectionReference,
     RuntimePort,
+    RuntimeSessionBusyError,
     UserActionOutcome,
     d_form_collection_reference,
 )
@@ -175,6 +176,10 @@ def _bind_runtime_request(
     return runtime, session_id
 
 
+def _session_busy() -> HTTPException:
+    return HTTPException(409, {"code": "runtime_session_busy"}, headers=_PRIVATE_HEADERS)
+
+
 def make_router(
     runtime: RuntimePort | None,
     require_principal: PrincipalDependency,
@@ -267,6 +272,8 @@ def make_router(
                 {"code": error.code},
                 headers=_PRIVATE_HEADERS,
             ) from None
+        except RuntimeSessionBusyError:
+            raise _session_busy() from None
         finally:
             d_form_collection_reference.reset(collection_token)
             browser_request_scope.reset(token)
@@ -282,12 +289,15 @@ def make_router(
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
-        envelope = await bound_runtime.handle_user_action(
-            channel=body.channel,
-            principal=principal,
-            session_id=session_id,
-            action=body.action,
-        )
+        try:
+            envelope = await bound_runtime.handle_user_action(
+                channel=body.channel,
+                principal=principal,
+                session_id=session_id,
+                action=body.action,
+            )
+        except RuntimeSessionBusyError:
+            raise _session_busy() from None
         try:
             return ActionResponseEnvelope.model_validate(envelope.model_dump())
         except ValidationError:

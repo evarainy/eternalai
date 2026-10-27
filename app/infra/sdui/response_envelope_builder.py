@@ -246,6 +246,35 @@ class ResponseEnvelopeBuilder:
             trace_summary,
         )
 
+    def rebind(
+        self,
+        envelope: ResponseEnvelope,
+        *,
+        response_id: str,
+        task_id: str,
+        trace_id: str,
+        message: str | None = None,
+    ) -> ResponseEnvelope:
+        """Rebuild an envelope under new ids, optionally with a new message.
+
+        Status, UI, data and fallback text are kept and every field goes
+        through the same sanitization as a freshly built envelope.
+        """
+
+        return self._build_envelope(
+            response_id,
+            task_id,
+            envelope.session_id,
+            envelope.message if message is None else message,
+            envelope.fallback_text,
+            trace_id,
+            envelope.status,
+            type(envelope.ui),
+            envelope.ui.model_dump(),
+            envelope.data,
+            envelope.trace_summary,
+        )
+
     def serialize(self, envelope: ResponseEnvelope) -> str:
         return envelope.model_dump_json()
 

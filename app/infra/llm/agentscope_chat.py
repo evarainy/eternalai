@@ -13,14 +13,15 @@ import asyncio
 import logging
 import re
 import secrets
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
 from agentscope.agent import Agent, ContextConfig, InjectionConfig, ModelConfig, ReActConfig
 from agentscope.credential import OpenAICredential
-from agentscope.event import ToolResultEndEvent
+from agentscope.event import ToolResultEndEvent, ToolResultStartEvent
 from agentscope.message import Msg, ToolCallBlock, ToolResultState
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatResponse, FinishedReason, OpenAIChatModel
@@ -42,17 +43,51 @@ AgentScopeErrorCode: TypeAlias = Literal[
     "model_call_budget_exceeded",
     "forbidden_request_shape",
     "tool_call_budget_exceeded",
+    # Final model text carried a standalone tool-call block instead of a call.
+    "tool_protocol_text",
 ]
 
-# Fixed M0 request contract (PLAN v1.3 section 4.1.1); not environment-tunable.
-MODEL_CALL_TIMEOUT_SECONDS = 60.0
-TURN_TIMEOUT_SECONDS = 120.0
-MAX_MODEL_CALLS_PER_TURN = 4
-MAX_TOOL_CALLS_PER_RESPONSE = 2
-MAX_TOOL_EXECUTIONS_PER_TURN = 4
+# Fixed request contract (PLAN v1.3 section 4.1.1); not environment-tunable.
 MAX_OUTPUT_TOKENS = 2048
 TEMPERATURE = 0.0
 TOP_P = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class TurnLimits:
+    """Per-turn bounds of one AgentScope reply; code-owned, not env-tunable."""
+
+    model_call_timeout_seconds: float
+    turn_timeout_seconds: float
+    max_model_calls: int
+    max_tool_calls_per_response: int
+    max_tool_executions: int
+    max_resets: int
+    max_groups_per_reset: int
+    max_tool_tokens: int
+
+
+# M1 tool-group turn. The SDK adds one forced summary call at max_iters; the
+# guard rejects it as over budget, so a turn makes at most five real calls.
+M1_TURN_LIMITS = TurnLimits(
+    model_call_timeout_seconds=60.0,
+    turn_timeout_seconds=120.0,
+    max_model_calls=5,
+    max_tool_calls_per_response=2,
+    max_tool_executions=4,
+    max_resets=2,
+    max_groups_per_reset=3,
+    max_tool_tokens=12000,
+)
+
+# Decides whether an ERROR tool result is a discovery error (the model may go
+# on) or a business error (tool use stops for the reply). Arguments: tool call
+# id, tool name, result metadata and the agent state.
+ToolErrorKind: TypeAlias = Literal["discovery", "business"]
+ToolErrorClassifier: TypeAlias = Callable[
+    [str, str, Mapping[str, Any], AgentState], ToolErrorKind
+]
+
 # Empirical bound on the SDK's bytes/4 input estimate (template overhead not
 # counted), well below the measured 200000-token vLLM window minus 2048 output.
 DEFAULT_CONTEXT_TOKEN_BUDGET = 65536
@@ -64,7 +99,7 @@ INTERRUPTION_MESSAGE = "本轮对话已中断，请以业务记录的实际状�
 # placeholder, not a credential.
 _NO_AUTH_PLACEHOLDER = "EMPTY"
 # The guard's wall-clock timeout fires first; the client timeout is a backstop.
-_CLIENT_TIMEOUT_SECONDS = MODEL_CALL_TIMEOUT_SECONDS + 5.0
+_CLIENT_TIMEOUT_SECONDS = M1_TURN_LIMITS.model_call_timeout_seconds + 5.0
 _DISABLE_THINKING_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 _FORBIDDEN_TOOL_NAMES = frozenset({"generate_structured_output", "CompressContext"})
 _STATE_KEY = "eternalai_model_guard"
@@ -136,20 +171,29 @@ def create_bounded_agent(
     model: ChatModelBase,
     toolkit: Toolkit | None = None,
     state: AgentState | None = None,
+    limits: TurnLimits,
+    extra_middlewares: Sequence[MiddlewareBase] = (),
+    classify_tool_error: ToolErrorClassifier | None = None,
 ) -> Agent:
-    """Create an agent with the fixed retry, compression and iteration bounds."""
+    """Create an agent with the fixed retry, compression and iteration bounds.
+
+    ``extra_middlewares`` wrap the guard; index 0 is the outermost layer.
+    """
 
     return Agent(
         name=name,
         system_prompt=system_prompt,
         model=model,
         toolkit=toolkit,
-        middlewares=[BoundedModelGuard()],
+        middlewares=[
+            *extra_middlewares,
+            BoundedModelGuard(limits, classify_tool_error=classify_tool_error),
+        ],
         state=state,
         model_config=ModelConfig(max_retries=0, fallback_model=None),
         context_config=ContextConfig(compression_tool_enabled=False),
         react_config=ReActConfig(
-            max_iters=MAX_MODEL_CALLS_PER_TURN,
+            max_iters=limits.max_model_calls,
             interruption_message=INTERRUPTION_MESSAGE,
             interruption_raise_cancelled_error=True,
         ),
@@ -157,14 +201,14 @@ def create_bounded_agent(
     )
 
 
-def new_turn_deadline() -> float:
+def new_turn_deadline(limits: TurnLimits) -> float:
     """Absolute end (event-loop clock) of a turn that starts now."""
 
-    return asyncio.get_running_loop().time() + TURN_TIMEOUT_SECONDS
+    return asyncio.get_running_loop().time() + limits.turn_timeout_seconds
 
 
 async def run_bounded_turn(
-    agent: Agent, inputs: Msg | list[Msg], *, deadline: float | None = None
+    agent: Agent, inputs: Msg | list[Msg], *, deadline: float
 ) -> Msg:
     """Run one user turn within the fixed wall-clock budget.
 
@@ -175,11 +219,10 @@ async def run_bounded_turn(
     """
 
     started = monotonic()
-    end = new_turn_deadline() if deadline is None else deadline
-    token = _TURN_DEADLINE.set(end)
+    token = _TURN_DEADLINE.set(deadline)
     turn_token = _TURN_ID.set(secrets.token_hex(8)) if _TURN_ID.get() is None else None
     try:
-        async with asyncio.timeout_at(end):
+        async with asyncio.timeout_at(deadline):
             return await agent.reply(inputs)
     except TimeoutError:
         _log_turn_failure("turn_timeout", started)
@@ -227,6 +270,22 @@ def model_call_count(state: AgentState) -> int:
     return int(count)
 
 
+def tool_execution_count(state: AgentState) -> int:
+    """Tool executions claimed in the current reply."""
+
+    record = state.middle_context.get(_EXECUTION_KEY)
+    count = record.get(state.reply_id, 0) if isinstance(record, dict) else 0
+    return int(count)
+
+
+def halt_tool_use(state: AgentState, reason: str) -> None:
+    """Stop further business tool execution for the rest of this reply."""
+
+    if tool_halt_reason(state) is None:
+        state.middle_context[_HALT_KEY] = {state.reply_id: reason}
+        _MODEL_LOGGER.info("agentscope_tool_halt reason=%s turn=%s", reason, current_turn_id())
+
+
 def tool_halt_reason(state: AgentState) -> str | None:
     """Return the first tool error code that stopped tool use in this reply."""
 
@@ -235,13 +294,13 @@ def tool_halt_reason(state: AgentState) -> str | None:
     return reason if isinstance(reason, str) else None
 
 
-def reserve_tool_execution(state: AgentState) -> bool:
-    """Claim one real tool execution for this reply, at most four per turn."""
+def reserve_tool_execution(state: AgentState, limits: TurnLimits) -> bool:
+    """Claim one real tool execution for this reply within the turn limit."""
 
     reply_id = state.reply_id
     record = state.middle_context.get(_EXECUTION_KEY)
     count = record.get(reply_id, 0) if isinstance(record, dict) else 0
-    if count >= MAX_TOOL_EXECUTIONS_PER_TURN:
+    if count >= limits.max_tool_executions:
         return False
     state.middle_context[_EXECUTION_KEY] = {reply_id: count + 1}
     return True
@@ -250,10 +309,21 @@ def reserve_tool_execution(state: AgentState) -> bool:
 class BoundedModelGuard(MiddlewareBase):
     """Enforce per-turn call budget, request shape and per-call timeout.
 
-    Any tool result in ERROR state also stops further tool execution for the
+    A tool result in ERROR state also stops further tool execution for the
     rest of the reply, so rejected parameters are clarified with the user
-    instead of being repaired and retried by the model.
+    instead of being repaired and retried by the model. With a classifier,
+    only results it classifies as business errors stop tool use; discovery
+    errors (inactive or unexposed tools, rejected group resets) do not.
     """
+
+    def __init__(
+        self,
+        limits: TurnLimits,
+        *,
+        classify_tool_error: ToolErrorClassifier | None = None,
+    ) -> None:
+        self._limits = limits
+        self._classify = classify_tool_error
 
     async def on_reply(
         self,
@@ -263,22 +333,26 @@ class BoundedModelGuard(MiddlewareBase):
     ) -> AsyncGenerator[Any, None]:
         # Events arrive one at a time; a sequential batch does not start the
         # next tool call until this generator pulls again.
+        names: dict[str, str] = {}
         async for event in next_handler(**input_kwargs):
-            if (
-                isinstance(event, ToolResultEndEvent)
-                and event.state == ToolResultState.ERROR
-                and tool_halt_reason(agent.state) is None
-            ):
-                code = event.metadata.get("error_code")
-                reason = (
-                    code if isinstance(code, str) and _SAFE_CODE.fullmatch(code)
-                    else "tool_input_rejected"
-                )
-                agent.state.middle_context[_HALT_KEY] = {event.reply_id: reason}
-                _MODEL_LOGGER.info(
-                    "agentscope_tool_halt reason=%s turn=%s", reason, current_turn_id()
-                )
+            if isinstance(event, ToolResultStartEvent):
+                names[event.tool_call_id] = event.tool_call_name
+            elif isinstance(event, ToolResultEndEvent) and event.state == ToolResultState.ERROR:
+                self._on_tool_error(agent, event, names.get(event.tool_call_id, ""))
             yield event
+
+    def _on_tool_error(self, agent: Agent, event: ToolResultEndEvent, name: str) -> None:
+        code = event.metadata.get("error_code")
+        safe_code = code if isinstance(code, str) and _SAFE_CODE.fullmatch(code) else None
+        if self._classify is not None:
+            kind = self._classify(event.tool_call_id, name, event.metadata, agent.state)
+            if kind == "discovery":
+                _MODEL_LOGGER.info(
+                    "agentscope_tool_discovery_error code=%s turn=%s",
+                    safe_code or "framework", current_turn_id(),
+                )
+                return
+        halt_tool_use(agent.state, safe_code or "tool_input_rejected")
 
     async def on_compress_context(
         self,
@@ -300,7 +374,8 @@ class BoundedModelGuard(MiddlewareBase):
         tools: list[dict[str, Any]] = input_kwargs.get("tools") or []
         tool_choice: ToolChoice | None = input_kwargs.get("tool_choice")
         started = monotonic()
-        if call_index > MAX_MODEL_CALLS_PER_TURN:
+        limits = self._limits
+        if call_index > limits.max_model_calls:
             _reject("model_call_budget_exceeded", call_index, started)
         if any(_tool_name(tool) in _FORBIDDEN_TOOL_NAMES for tool in tools):
             _reject("forbidden_request_shape", call_index, started)
@@ -313,7 +388,7 @@ class BoundedModelGuard(MiddlewareBase):
         if estimated > model.context_size:
             _reject("context_length_exceeded", call_index, started)
         try:
-            async with asyncio.timeout(MODEL_CALL_TIMEOUT_SECONDS):
+            async with asyncio.timeout(limits.model_call_timeout_seconds):
                 response = await next_handler(**input_kwargs)
         except TimeoutError:
             _reject("timeout", call_index, started)
@@ -325,10 +400,10 @@ class BoundedModelGuard(MiddlewareBase):
         if response.finished_reason == FinishedReason.INTERRUPTED:
             # The SDK turns cancellation into an INTERRUPTED response; when the
             # wall clock is spent, that is this guard's timeout.
-            if monotonic() - started >= MODEL_CALL_TIMEOUT_SECONDS:
+            if monotonic() - started >= limits.model_call_timeout_seconds:
                 _reject("timeout", call_index, started)
         tool_calls = sum(1 for block in response.content if isinstance(block, ToolCallBlock))
-        if tool_calls > MAX_TOOL_CALLS_PER_RESPONSE:
+        if tool_calls > limits.max_tool_calls_per_response:
             _reject("tool_call_budget_exceeded", call_index, started)
         _log_model_call(call_index, started, response)
         return response
@@ -422,12 +497,17 @@ def _log_turn_failure(code: AgentScopeErrorCode, started: float) -> None:
 
 
 __all__ = (
+    "M1_TURN_LIMITS",
     "AgentScopeErrorCode",
     "AgentScopeModelError",
     "BoundedModelGuard",
+    "ToolErrorClassifier",
+    "ToolErrorKind",
+    "TurnLimits",
     "bind_turn_id",
     "build_chat_model",
     "current_turn_id",
+    "halt_tool_use",
     "log_turn_end",
     "create_bounded_agent",
     "model_call_count",
@@ -435,6 +515,7 @@ __all__ = (
     "reserve_tool_execution",
     "reset_turn_id",
     "run_bounded_turn",
+    "tool_execution_count",
     "tool_halt_reason",
     "turn_seconds_remaining",
 )
