@@ -18,6 +18,8 @@ from app.credential_polling import (
     CredentialPollingPolicy,
     CredentialPollingScheduler,
     CredentialPollingService,
+    CredentialRecoveryPolicy,
+    CredentialSessionRecovery,
 )
 from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
@@ -38,6 +40,7 @@ from app.ports.credential_binding import (
     CredentialAcquisitionFailureCode,
     CredentialBindingView,
     CredentialPollCandidate,
+    CredentialRecoveryState,
     CredentialTargetSystem,
     CredentialTerminalFailure,
     PasswordBindingCredential,
@@ -1075,3 +1078,111 @@ def test_sync_failure_uses_cookie_write_receipt_instead_of_reloading_latest_stam
         assert store.counted_failures == 1
 
     asyncio.run(exercise())
+
+
+def _recovery_state(**changes: Any) -> CredentialRecoveryState:
+    values: dict[str, Any] = {
+        "snapshot": CANDIDATE.snapshot, "binding_state": "unverified", "poll_status": "active",
+        "poll_failure_count": 0, "updated_at": CANDIDATE.updated_at, "revoked": False,
+        "has_password": True, "session_expires_at": NOW + timedelta(hours=1),
+        "session_write_marker": b"marker-before",
+    }
+    values.update(changes)
+    return CredentialRecoveryState(**values)
+
+
+class FakeRecoveryStore(FakeBindingStore):
+    def __init__(self, state: CredentialRecoveryState) -> None:
+        super().__init__()
+        self.state = state
+        self.claims = 0
+
+    async def claim_write(self, snapshot):
+        self.claims += 1
+        return await super().claim_write(snapshot)
+
+    async def recovery_state(self, ai_user_id: str, *, tenant_id: str):
+        return self.state
+
+    async def mark_poll_succeeded(self, ai_user_id, target_system, *, tenant_id, expected_write):
+        await super().mark_poll_succeeded(
+            ai_user_id, target_system, tenant_id=tenant_id, expected_write=expected_write
+        )
+        self.state = _recovery_state(
+            session_write_marker=f"marker-{self.successes}".encode()
+        )
+
+
+def _recovery(store: FakeRecoveryStore, acquirer: FakeAcquirer, clock: list[float]):
+    return CredentialSessionRecovery(
+        binding_store=store, tenant_id="default", acquirer=acquirer,
+        policy=CredentialPollingPolicy(600, 3600, 0, 24, "UTC", 4, 60),
+        recovery_policy=CredentialRecoveryPolicy(
+            cooldown_seconds=60, wait_seconds=1, kick_window_seconds=300
+        ),
+        clock=lambda: NOW, monotonic_clock=lambda: clock[0],
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (_recovery_state(binding_state="active"), "browser_bound"),
+        (_recovery_state(revoked=True), "rejected"),
+        (_recovery_state(poll_status="invalid"), "rejected"),
+        (_recovery_state(poll_status="captcha_required"), "captcha_required"),
+        (_recovery_state(has_password=False), "binding_unavailable"),
+    ],
+)
+def test_on_demand_recovery_never_logs_in_outside_the_supported_binding(
+    state: CredentialRecoveryState, expected: str
+) -> None:
+    store = FakeRecoveryStore(state)
+    acquirer = FakeAcquirer()
+
+    outcome = asyncio.run(_recovery(store, acquirer, [0.0]).recover_session(
+        tenant_id="default", ai_user_id=CANDIDATE.ai_user_id, observed=_recovery_state(),
+    ))
+
+    assert outcome == expected
+    assert (store.claims, acquirer.calls) == (0, 0)
+
+
+def test_on_demand_recovery_never_bypasses_failure_backoff() -> None:
+    store = FakeRecoveryStore(_recovery_state(poll_status="retrying", poll_failure_count=1))
+    store.candidate = CANDIDATE.model_copy(
+        update={"poll_failure_count": 1, "updated_at": NOW - timedelta(minutes=5)}
+    )
+    acquirer = FakeAcquirer()
+
+    outcome = asyncio.run(_recovery(store, acquirer, [0.0]).recover_session(
+        tenant_id="default", ai_user_id=CANDIDATE.ai_user_id,
+        observed=_recovery_state(poll_status="retrying", poll_failure_count=1),
+    ))
+
+    assert outcome == "backoff"
+    assert (store.claims, acquirer.calls) == (0, 0)
+
+
+def test_on_demand_recovery_confirms_new_session_then_suspends_on_repeated_kick() -> None:
+    store = FakeRecoveryStore(_recovery_state())
+    acquirer = FakeAcquirer()
+    clock = [0.0]
+    recovery = _recovery(store, acquirer, clock)
+
+    first = asyncio.run(recovery.recover_session(
+        tenant_id="default", ai_user_id=CANDIDATE.ai_user_id, observed=_recovery_state(),
+    ))
+    recovered = store.state
+    clock[0] = 90.0
+    store.candidate = CANDIDATE
+    second = asyncio.run(recovery.recover_session(
+        tenant_id="default", ai_user_id=CANDIDATE.ai_user_id, observed=recovered,
+    ))
+    clock[0] = 200.0
+    third = asyncio.run(recovery.recover_session(
+        tenant_id="default", ai_user_id=CANDIDATE.ai_user_id, observed=store.state,
+    ))
+
+    assert (first, second, third) == ("recovered", "recovered", "suspended")
+    assert (acquirer.calls, store.successes) == (2, 2)

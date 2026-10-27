@@ -44,6 +44,35 @@ CredentialCountedFailureCode: TypeAlias = Literal[
     "upstream_5xx",
     "invalid_response",
 ]
+OASessionHeartbeatResult: TypeAlias = Literal["alive", "dead"]
+OASessionProbeResult: TypeAlias = Literal["alive", "dead", "unavailable"]
+CredentialRecoveryTrigger: TypeAlias = Literal[
+    "keepalive", "read_identity_expired", "oa_002", "local_expiry"
+]
+RecoveryOutcome: TypeAlias = Literal[
+    "recovered",
+    "refreshed_by_other",
+    "backoff",
+    "unavailable",
+    "binding_unavailable",
+    "rejected",
+    "captcha_required",
+    "browser_bound",
+    "suspended",
+]
+OAKeepaliveStatus: TypeAlias = Literal[
+    "alive",
+    "recovered",
+    "refreshed_by_other",
+    "backoff",
+    "unavailable",
+    "binding_unavailable",
+    "rejected",
+    "captcha_required",
+    "browser_bound",
+    "suspended",
+    "disabled",
+]
 
 
 class PasswordBindingCredential(BaseModel):
@@ -120,6 +149,33 @@ class CredentialPollCandidate(BaseModel):
     updated_at: datetime
     snapshot: CredentialSnapshot
     write_stamp: CredentialWriteStamp | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialRecoveryState:
+    """Value-free row state compared before and after an OA Session recovery.
+
+    ``session_write_marker`` changes only when the encrypted Session is rewritten;
+    it is compared in-process and never logged.
+    """
+
+    snapshot: CredentialSnapshot
+    binding_state: str
+    poll_status: str
+    poll_failure_count: int
+    updated_at: datetime
+    revoked: bool
+    has_password: bool
+    session_expires_at: datetime | None
+    session_write_marker: bytes | None = field(repr=False)
+
+
+class OAKeepaliveView(BaseModel):
+    """Keepalive outcome for the signed-in user's own OA Session; no credential data."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    oa: OAKeepaliveStatus
 
 
 class CredentialAcquisitionError(RuntimeError):
@@ -234,6 +290,44 @@ class CredentialPollingStorePort(Protocol):
         expected_write: CredentialWriteStamp,
     ) -> None: ...
 
+    async def recovery_state(
+        self, ai_user_id: str, *, tenant_id: str
+    ) -> CredentialRecoveryState | None: ...
+
+    async def extend_session_expiry(
+        self, snapshot: CredentialSnapshot, expires_at: datetime
+    ) -> bool:
+        """Push only the local Session deadline; never touches poll timing or revisions."""
+        ...
+
+
+class OASessionRenewalPort(Protocol):
+    """Heartbeat and one-shot recovery for a user's own OA Session."""
+
+    async def observe(
+        self, *, tenant_id: str, ai_user_id: str
+    ) -> CredentialRecoveryState | None: ...
+
+    async def probe(
+        self,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
+        observed: CredentialRecoveryState,
+        credential: OASessionCredential | None,
+    ) -> OASessionProbeResult: ...
+
+    async def recover(
+        self,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
+        observed: CredentialRecoveryState,
+        trigger: CredentialRecoveryTrigger,
+    ) -> RecoveryOutcome: ...
+
+    async def keepalive(self, principal: Principal) -> OAKeepaliveView: ...
+
 
 class PasswordBindingReaderPort(Protocol):
     async def load_password_for_poll(
@@ -287,8 +381,16 @@ __all__ = (
     "CredentialPollingStorePort",
     "CredentialPollCandidate",
     "CredentialPollStatus",
+    "CredentialRecoveryState",
+    "CredentialRecoveryTrigger",
     "CredentialTargetSystem",
     "CredentialTerminalFailure",
+    "OAKeepaliveStatus",
+    "OAKeepaliveView",
+    "OASessionHeartbeatResult",
+    "OASessionProbeResult",
+    "OASessionRenewalPort",
     "PasswordBindingCredential",
     "PasswordBindingReaderPort",
+    "RecoveryOutcome",
 )

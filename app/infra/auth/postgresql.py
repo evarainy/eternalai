@@ -37,6 +37,7 @@ from app.ports.credential_binding import (
     CredentialBindingView,
     CredentialPollCandidate,
     CredentialPollingStorePort,
+    CredentialRecoveryState,
     CredentialTargetSystem,
     CredentialTerminalFailure,
     PasswordBindingCredential,
@@ -745,6 +746,65 @@ class PostgreSQLCredentialStore:
         if row is None:
             return None
         return _candidate(row)
+
+    async def recovery_state(
+        self, ai_user_id: str, *, tenant_id: str
+    ) -> CredentialRecoveryState | None:
+        _validate_binding_key(ai_user_id, "oa")
+        async with self._session_factory() as session:
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            f"SELECT {_STAMP_COLUMNS}, binding_state, poll_status,"
+                            " poll_failure_count, updated_at, revoked_at, expires_at, nonce,"
+                            " encrypted_password_payload IS NOT NULL AS has_password"
+                            f" FROM oa_session_credentials WHERE {_KEY_WHERE}"
+                        ),
+                        _key(tenant_id, ai_user_id, "oa"),
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        nonce = row["nonce"]
+        return CredentialRecoveryState(
+            snapshot=_snapshot(row),
+            binding_state=row["binding_state"],
+            poll_status=row["poll_status"],
+            poll_failure_count=row["poll_failure_count"],
+            updated_at=row["updated_at"],
+            revoked=row["revoked_at"] is not None,
+            has_password=bool(row["has_password"]),
+            session_expires_at=row["expires_at"],
+            session_write_marker=(
+                sha256(bytes(nonce)).digest()[:16] if nonce is not None else None
+            ),
+        )
+
+    async def extend_session_expiry(
+        self, snapshot: CredentialSnapshot, expires_at: datetime
+    ) -> bool:
+        # Heartbeat-confirmed liveness only moves the local deadline: no poll lock,
+        # and updated_at / revisions / epoch / nonce / poll state stay untouched.
+        _validate_binding_key(snapshot.ai_user_id, snapshot.target_system)
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "UPDATE oa_session_credentials SET"
+                        " expires_at = GREATEST(expires_at, :expires_at)"
+                        f" WHERE {_SNAPSHOT_WHERE} AND revoked_at IS NULL"
+                        " AND encrypted_payload IS NOT NULL AND expires_at IS NOT NULL"
+                        " RETURNING binding_id"
+                    ),
+                    {**_snapshot_params(snapshot), "expires_at": expires_at},
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+        return row is not None
 
     @asynccontextmanager
     async def _write_session(

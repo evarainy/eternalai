@@ -42,6 +42,11 @@ _DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR = 18
 _DEFAULT_CREDENTIAL_POLL_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY = 4
 _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS = 60
+_DEFAULT_OA_HEARTBEAT_PATH = "/api/hrm/common/heartbeat"
+_DEFAULT_OA_HEARTBEAT_INTERVAL_SECONDS = 60
+_DEFAULT_OA_RECOVERY_COOLDOWN_SECONDS = 60
+_DEFAULT_OA_RECOVERY_WAIT_SECONDS = 15
+_DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS = 300
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
 RuntimeEngine: TypeAlias = Literal["legacy", "agentscope"]
@@ -336,6 +341,11 @@ class ProductionSettings:
     credential_poll_scheduler_tick_seconds: int = (
         _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS
     )
+    oa_heartbeat_path: str = _DEFAULT_OA_HEARTBEAT_PATH
+    oa_heartbeat_interval_seconds: int = _DEFAULT_OA_HEARTBEAT_INTERVAL_SECONDS
+    oa_recovery_cooldown_seconds: int = _DEFAULT_OA_RECOVERY_COOLDOWN_SECONDS
+    oa_recovery_wait_seconds: int = _DEFAULT_OA_RECOVERY_WAIT_SECONDS
+    oa_recovery_kick_window_seconds: int = _DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS
     organization_directory_max_age_s: int = 172800
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
@@ -650,6 +660,38 @@ class ProductionSettings:
                 "CREDENTIAL_POLL_SCHEDULER_TICK_S",
                 _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS,
                 maximum=600,
+            ),
+            oa_heartbeat_path=_oa_path_with_default(
+                source,
+                "OA_HEARTBEAT_PATH",
+                _DEFAULT_OA_HEARTBEAT_PATH,
+            ),
+            oa_heartbeat_interval_seconds=_bounded_positive_int(
+                source,
+                "OA_HEARTBEAT_INTERVAL_S",
+                _DEFAULT_OA_HEARTBEAT_INTERVAL_SECONDS,
+                minimum=30,
+                maximum=600,
+            ),
+            oa_recovery_cooldown_seconds=_bounded_positive_int(
+                source,
+                "OA_RECOVERY_COOLDOWN_S",
+                _DEFAULT_OA_RECOVERY_COOLDOWN_SECONDS,
+                minimum=30,
+                maximum=3_600,
+            ),
+            oa_recovery_wait_seconds=_bounded_positive_int(
+                source,
+                "OA_RECOVERY_WAIT_S",
+                _DEFAULT_OA_RECOVERY_WAIT_SECONDS,
+                maximum=60,
+            ),
+            oa_recovery_kick_window_seconds=_bounded_positive_int(
+                source,
+                "OA_RECOVERY_KICK_WINDOW_S",
+                _DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS,
+                minimum=60,
+                maximum=3_600,
             ),
             phase0_mock_mode=phase0_mock_mode,
             mcp_services=_mcp_services(source),

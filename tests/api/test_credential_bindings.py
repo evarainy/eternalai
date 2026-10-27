@@ -34,6 +34,7 @@ from app.ports.credential_binding import (
     CredentialBindingVerification,
     CredentialBindingView,
     CredentialTargetSystem,
+    OAKeepaliveView,
     PasswordBindingCredential,
 )
 
@@ -421,3 +422,29 @@ def test_browser_activation_route_keeps_csrf_and_value_free_errors() -> None:
         assert "ACTIVATION-PASSWORD-CANARY" not in value
         assert "ACTIVATION-LOGIN-CANARY" not in value
     assert store.activate_browser_binding.await_count == 1
+
+
+def test_oa_keepalive_requires_csrf_and_only_touches_the_callers_session() -> None:
+    keeper = AsyncMock()
+    keeper.keepalive.return_value = OAKeepaliveView(oa="alive")
+    service = CredentialBindingService(
+        store=AsyncMock(), verifier=AsyncMock(), oa_session_keeper=keeper,
+    )
+
+    async def require_principal(_request: Request) -> Principal:
+        return PRINCIPAL
+
+    app = FastAPI()
+    app.include_router(make_router(service, make_csrf_protected_principal(
+        require_principal, make_require_csrf({"http://testserver"}),
+    )), prefix="/api/v1/credential-bindings")
+    client = TestClient(app)
+    path = "/api/v1/credential-bindings/oa/keepalive"
+
+    denied = client.post(path)
+    assert denied.status_code == 403
+    keeper.keepalive.assert_not_awaited()
+    allowed = client.post(path, headers={"Origin": "http://testserver", "X-EternalAI-CSRF": "1"})
+    assert allowed.status_code == 200
+    assert allowed.json() == {"oa": "alive"}
+    keeper.keepalive.assert_awaited_once_with(PRINCIPAL)
