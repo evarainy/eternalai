@@ -615,7 +615,12 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，当前串行后继�
 | 新路径多结果卡片未做 | ResponseEnvelope 仍只有一个 ui；同轮多个业务工具结果暂用文本，不新增多结果公共合同 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（新路径基础） | 待分配（M2/M4 响应组件范围确认后） | 多结果展示合同获批并在新路径完成真实验收 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §3.7、§6 |
 | 新路径聊天状态只在进程内、重启丢失 | M1 仅实现进程内 AgentState 与裁剪，不做持久化聊天历史；重启后为新会话 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（进程内会话） | 待分配（聊天历史持久化另行批准后） | 持久化方案获批并验证重启恢复，或明确接受重启丢失 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §3.3、§6 |
 | 旧路径八项限制保留至旧路径退役 | D1 仅替代 AgentScope 路径；旧 IntentRouter 继续 capability-topk-v1、最多八项与词面预筛 | 旧路径退役范围尚未安排 | 待分配（旧路径退役） | 旧路径退役 | DECISIONS 2026-10-27 D1；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§6 |
-| M1 评测脚本在仓库外 | 题集、判分器与脚本按已批方案留在仓库外，仓库内没有该评测回归入口 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（最终配置评测与冻结证据） | 待分配（需要后续回归时决定是否入库） | 后续回归时明确脚本入库或仓库外版本管理、执行与留证方式 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §4.2、§4.4–§4.6、§6 |
+| M1 评测脚本在仓库外 | 题集、判分器与脚本按已批方案留在仓库外 `m1-eval/`，未纳入仓库，仓库内没有该评测回归入口 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（最终配置评测与冻结证据） | 待分配（需要后续回归时决定是否入库） | 后续回归时明确脚本入库或仓库外版本管理、执行与留证方式 | 仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §4.2、§4.4–§4.6、§6；同目录下 `m1-eval/` |
+| M1A 离线评测门槛未达 | 冻结 judge v3.1、配置 A（非流式/不思考/T=0/Qwen3.6-27B/vLLM 0.23.0）完整开发集 265/276；zero_lexical_c50 13/15（≥14）、zero_lexical_c100 12/15（≥14）、classification 26/30（≥29）未过门槛；第二次修订退步至 260/276，已回退；雨爷裁决记欠账继续推进 | vLLM 升级（外部，管理员；非仓库 task_id） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选在原冻结开发集与独立留出验收达到全部门槛 | 仓库外 `m1-eval/` 评测报告 `TEST1_RESULT.md`、`TEST2_RESULT.md` |
+| M1A 留出集验收未运行 | 开发集门槛未达，尚未运行独立留出集验收，不能宣称评测验收完成 | 本表「M1A 离线评测门槛未达」（外部 vLLM 升级） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选先在原冻结开发集达到全部门槛，再完成独立留出验收并达到全部门槛 | 仓库外 `m1-eval/` 的 `TEST1_RESULT.md`、`TEST2_RESULT.md`；`runtime-agentscope-20261021/M1_PLAN.md` §4.5 |
+| 新运行时关闭失败可能残留 running 任务 | 关闭失败时底层任务可能仍为 running，终态收尾尚未完全闭合 | 无（独立生命周期收尾缺口） | 待 GOV-SYNC 分配 | 关闭失败路径完成确定终态收尾，并在获授权环境验证无 running 残留 | 仓库外 `runtime-agentscope-20261021/M1A_DESIGN.md` 的控制终态合同；本棒收口欠债 |
+| required Golden 不覆盖新运行时 | required Golden 仍走旧 RuntimeImpl，34/34 只证明旧路径未回归，不覆盖 AgentScope 新路径 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（Golden 注入接缝） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | 在新构建路径正式回放 Golden 34 题并达到全部门槛 | `scripts/golden_task_evaluator.py`；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§5 |
+| 新路径身份替换请求的回复措辞 | 真实验收第 14 题：以他人身份查询时未执行任何查询，但回复“暂未接入该能力”，未明确说明不能代他人查询；离线 identity_injection 6/6 未暴露此差异 | 无 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（提示词随写路径一并修订） | 新路径真实验收中身份替换请求得到明确拒绝且不执行任何查询 | 仓库外 `runtime-agentscope-20261021/M1A_REAL_ACCEPTANCE.md` |
 
 ## 6. P2 不做什么
 
