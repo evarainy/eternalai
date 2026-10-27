@@ -49,9 +49,14 @@ GROUP_BY_TARGET: dict[str | None, str] = {
     "hikvision_ivms": "ivms_query",
     None: "general_query",
 }
-# Second-level split inside one primary group, registered once the real
-# catalog is exported: {group: ((subgroup, (capability suffix, ...)), ...)}.
+# Second-level split inside one primary group, applied only when the primary
+# group does not fit in one chunk: {group: ((subgroup, (capability suffix,
+# ...)), ...)}. Subgroup names must not contain "_other_".
 SUBGROUPS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {}
+# Family key: the capability id without its last dot segment, plus the part of
+# that segment before its first underscore ("oa.seal_cur_list" -> "oa.seal").
+# Chunking keeps a family together unless the family alone breaks a limit.
+FAMILY_KEY_RULE = "namespace+stem"
 _GROUP_PURPOSES: dict[str, str] = {
     "oa_query": "查询 OA 办公系统中当前用户本人的数据。",
     "business_query": "查询业务平台中的业务数据（如人员信息）。",
@@ -87,7 +92,8 @@ def _rules_digest() -> str:
 
 
 GROUP_RULES = (
-    f"groups-v1;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};map={_rules_digest()}"
+    f"groups-v2;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};"
+    f"family={FAMILY_KEY_RULE};map={_rules_digest()}"
 )
 
 
@@ -275,18 +281,75 @@ def _split(
             fitting.append(tool)
     if not fitting:
         return []
-    size = min(G_MAX, len(fitting))
-    while True:
-        chunks = [fitting[index : index + size] for index in range(0, len(fitting), size)]
-        if all(
-            len(_group_description(primary, chunk, spec_names)) <= MAX_GROUP_DESCRIPTION_CHARS
-            for chunk in chunks
-        ):
-            break
-        size -= 1
-    if len(chunks) == 1:
-        return [(primary, chunks[0])]
-    return [(f"{primary}_other_{index}", chunk) for index, chunk in enumerate(chunks, start=1)]
+    if _fits(primary, fitting, spec_names):
+        return [(primary, fitting)]
+    # Registered subgroups first, in table order; the rest become other chunks.
+    named: list[tuple[str, list[CatalogTool]]] = []
+    rest = fitting
+    for subgroup, suffixes in SUBGROUPS.get(primary, ()):
+        chosen = [tool for tool in rest if _suffix(tool) in suffixes]
+        rest = [tool for tool in rest if _suffix(tool) not in suffixes]
+        chunks = _pack(primary, chosen, spec_names)
+        if len(chunks) == 1:
+            named.append((subgroup, chunks[0]))
+        else:
+            named.extend(
+                (f"{subgroup}_{index}", chunk) for index, chunk in enumerate(chunks, start=1)
+            )
+    named.extend(
+        (f"{primary}_other_{index}", chunk)
+        for index, chunk in enumerate(_pack(primary, rest, spec_names), start=1)
+    )
+    return named
+
+
+def _pack(
+    primary: str, members: list[CatalogTool], spec_names: dict[str, str]
+) -> list[list[CatalogTool]]:
+    # Whole families are packed in family-key order into the current chunk
+    # while it stays within both limits. A family that breaks a limit on its
+    # own is cut into chunks of its own; every member fits alone already.
+    families: dict[str, list[CatalogTool]] = {}
+    for tool in sorted(members, key=lambda item: (_family_key(item), item.capability_id)):
+        families.setdefault(_family_key(tool), []).append(tool)
+    chunks: list[list[CatalogTool]] = []
+    current: list[CatalogTool] = []
+    for family in families.values():
+        if _fits(primary, current + family, spec_names):
+            current = current + family
+            continue
+        if current:
+            chunks.append(current)
+            current = []
+        if _fits(primary, family, spec_names):
+            current = family
+            continue
+        piece: list[CatalogTool] = []
+        for tool in family:
+            if piece and not _fits(primary, piece + [tool], spec_names):
+                chunks.append(piece)
+                piece = []
+            piece.append(tool)
+        chunks.append(piece)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _fits(primary: str, members: Sequence[CatalogTool], spec_names: dict[str, str]) -> bool:
+    return (
+        len(members) <= G_MAX
+        and len(_group_description(primary, members, spec_names)) <= MAX_GROUP_DESCRIPTION_CHARS
+    )
+
+
+def _suffix(tool: CatalogTool) -> str:
+    return tool.capability_id.rsplit(".", 1)[-1]
+
+
+def _family_key(tool: CatalogTool) -> str:
+    namespace, _, last = tool.capability_id.rpartition(".")
+    return f"{namespace}.{last.split('_', 1)[0]}"
 
 
 def _with_group(tool: CatalogTool, group: str) -> CatalogTool:
@@ -315,7 +378,7 @@ def _group_instructions(members: Sequence[CatalogTool]) -> str | None:
     texts = [
         text
         for suffix, text in GROUP_INSTRUCTIONS.items()
-        if any(tool.capability_id.rsplit(".", 1)[-1] == suffix for tool in members)
+        if any(_suffix(tool) == suffix for tool in members)
     ]
     return "\n".join(texts) if texts else None
 
@@ -342,6 +405,7 @@ def _count(excluded: dict[str, int], reason: str) -> None:
 
 
 __all__ = (
+    "FAMILY_KEY_RULE",
     "G_MAX",
     "GROUP_BY_TARGET",
     "GROUP_INSTRUCTIONS",
