@@ -274,20 +274,84 @@ class ApprovedQueryRead:
     projection: ApprovedResponseProjection | None = None
 
 
+# Capability cards: "<goal>. <details/arguments>. 常见说法: ... 不用于: ...". The
+# first sentence (<= 50 chars) is the discovery summary shown in tool-group
+# descriptions; the development Registry stores the same text (NFKC).
+_BUSINESS_CONTEXT_PRESENTATION = (
+    "查询业务平台时区与可用功能",
+    "查看业务平台使用的时区和平台列出的可用功能清单。"
+    "仅供查看，不代表本账号已获得其中每项功能的授权。"
+    "常见说法：平台开通了哪些功能、业务系统按哪个时区算时间、平台上有哪些功能可用。"
+    "不用于：查待办或正在办理的事项（OA 待办用 OA 待办事宜查询），"
+    "也不返回人员、谈话或被服数据。",
+)
 _QUERY_PRESENTATION = {
-    # The intent model only sees short_description; candidate ranking scores
-    # name and description bigrams, so both carry the "by name" wording.
     "person_find": (
         "查询业务系统人员信息",
-        "按姓名或姓名片段查询业务系统中已授权人员的信息；query 填写姓名或姓名片段",
+        "按姓名找业务系统里的人员。"
+        "返回匹配人员的人员ID、人员编号、姓名等；用户给出姓名或姓名中的几个字就直接查，"
+        "不必先问用途，同名或相近的多个人时再请用户指定。query 填写姓名或姓名片段。"
+        "常见说法：帮我找一下这个人、看看系统里有没有这个人、这人的编号是多少。"
+        "不用于：了解某人的谈话情况（用查询谈话上下文）。",
         "person_lookup",
     ),
-    "talk_context_get": ("查询谈话上下文", "查询已授权人员的谈话上下文", "talk_context"),
-    "talk_record_get": ("查询谈话记录", "查询已授权谈话记录", "talk_record"),
-    "talk_tasks_list": ("查询谈话任务", "查询已授权谈话任务列表", "talk_tasks"),
-    "clothing_options_get": ("查询被服选项", "查询已授权被服选项", "clothing_options"),
-    "clothing_result_get": ("查询被服结果", "查询已授权被服结果", "clothing_result"),
+    "talk_context_get": (
+        "查询谈话上下文",
+        "谈话前了解某名人员的情况和以往谈话。"
+        "返回该人员基本情况、在押状态、近期谈话记录、相关谈话任务和可选的谈话事项、民警选项；"
+        "需要人员ID、谈话目的和谈话场景，只有姓名时先用查询业务系统人员信息取得人员ID。"
+        "常见说法：准备找某人谈话、谈话前先摸一下他的情况。"
+        "不用于：按记录ID看单条记录（用查询谈话记录）、列任务清单（用查询谈话任务）。",
+        "talk_context",
+    ),
+    "talk_record_get": (
+        "查询谈话记录",
+        "按记录ID查看一条谈话记录的完整内容。"
+        "包括谈话日期、地点、谈话民警ID、谈话事项、效果、内容和计次情况，需要记录ID。"
+        "常见说法：打开那条谈话记录、那次谈话具体谈了什么。"
+        "不用于：了解某人近期多次谈话或准备新谈话（用查询谈话上下文）。",
+        "talk_record",
+    ),
+    "talk_tasks_list": (
+        "查询谈话任务",
+        "查看谈话任务的完成进度和待领取情况。"
+        "每项有本周开始日期、截止时间、要求次数、已计次数、剩余次数和状态，可按人员ID筛选；"
+        "view 取 pool 为待领取、mine 为本人已领取、all 为全部。"
+        "常见说法：这周的谈话指标完成得怎样、还有哪些谈话任务没人领。"
+        "不用于：查看某次谈话的具体内容（用查询谈话记录）。",
+        "talk_tasks",
+    ),
+    "clothing_options_get": (
+        "查询被服选项",
+        "查看被服发放的可选配置和库存。"
+        "按监狱（可细到监区）返回发放模板、仓库、发放标准、库存可用数量和历史发放情况；"
+        "需要监狱ID，监区ID可不填。"
+        "常见说法：衣被库存还够不够、按什么标准发放衣被。"
+        "不用于：查某次已提交发放单的回执（用查询被服结果）。",
+        "clothing_options",
+    ),
+    "clothing_result_get": (
+        "查询被服结果",
+        "查看一次被服发放提交后的回执和出库状态。"
+        "按32位单据ID返回发放批次号、发放名册ID、出库单ID、发放总件数、提交人ID、"
+        "实物交接确认状态和各出库单当前状态；不含名册明细和人员详情，也不表示实物已经交接。"
+        "常见说法：那批衣被的出库单现在什么状态、把发放回执调出来看看。"
+        "不用于：查库存或发放标准（用查询被服选项）。",
+        "clothing_result",
+    ),
 }
+
+
+def approved_read_presentations() -> dict[str, tuple[str, str]]:
+    """Code-owned (name, short_description) of every approved business read, by id.
+
+    Values are as written here (before the Registry's NFKC normalization).
+    """
+
+    presentations = {f"business.{SERVICE_CONFIG_ID}.{TOOL}": _BUSINESS_CONTEXT_PRESENTATION}
+    for tool, (name, description, _) in _QUERY_PRESENTATION.items():
+        presentations[f"business.{SERVICE_CONFIG_ID}.{tool}"] = (name, description)
+    return presentations
 
 # Display labels only translate names: every approved field is shown, unknown
 # keys keep their original name. Paths use "." for objects and "[]" for items;
@@ -781,8 +845,8 @@ def prepare_fixed_read_definition(service: ServiceConfig) -> PreparedFixedReadDe
     capability = CapabilitySpec.model_validate(
         {
             **capability.model_dump(),
-            "name": "查询当前业务信息",
-            "short_description": "读取本人已授权业务平台的当前业务信息",
+            "name": _BUSINESS_CONTEXT_PRESENTATION[0],
+            "short_description": _BUSINESS_CONTEXT_PRESENTATION[1],
             "intent_tags": ["business_context", "current_business", "business_context_get"],
             "output_schema": public_schema,
             "output_schema_digest": digest(public_schema),

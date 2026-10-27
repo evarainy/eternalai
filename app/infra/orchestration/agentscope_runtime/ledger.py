@@ -43,6 +43,10 @@ class LedgerExecution:
     raw_execution: ExecutionResult = field(repr=False, compare=False)
     verification: BusinessVerification | None = field(default=None, repr=False, compare=False)
     projected: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    # sha256 of the canonical SDK-parsed arguments; argument values are not kept.
+    args_digest: str = ""
+    # Capability fingerprint in the exposure snapshot of the issuing call.
+    exposed_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +70,13 @@ class BindingCard:
 @dataclass(frozen=True, slots=True)
 class Unsupported:
     """The model reported that no visible group can handle the request."""
+
+
+@dataclass(frozen=True, slots=True)
+class Clarify:
+    """The model asked the user for missing information with ask_user."""
+
+    question: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +109,7 @@ class TurnLedger:
     catalog_attributes: Mapping[str, Any]
     executions: list[LedgerExecution] = field(default_factory=list)
     failures: list[LedgerFailure] = field(default_factory=list)
-    terminal: BindingCard | Unsupported | None = None
+    terminal: BindingCard | Unsupported | Clarify | None = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
     call_of: dict[str, int] = field(default_factory=dict)
@@ -128,6 +139,7 @@ class TurnLedger:
 __all__ = (
     "BindingCard",
     "CallSnapshot",
+    "Clarify",
     "ClosingTask",
     "ExecutionMode",
     "LedgerExecution",

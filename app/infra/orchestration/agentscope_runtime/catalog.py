@@ -37,9 +37,12 @@ from app.ports.request_context import RequestChannel, RequestOrgContext
 
 TOOL_GROUP_PROTOCOL_VERSION = "agentscope-tool-groups-v1"
 G_MAX = 10
-MAX_GROUP_DESCRIPTION_CHARS = 300
+MAX_GROUP_DESCRIPTION_CHARS = 800
 MAX_GROUP_INSTRUCTIONS_CHARS = 1200
-RESERVED_TOOL_NAMES = frozenset({"reset_tools", "report_unsupported"})
+# A member appears in its group description as "name: summary", the summary
+# being the first sentence of its short description when it is this short.
+DISCOVERY_SUMMARY_MAX_CHARS = 50
+RESERVED_TOOL_NAMES = frozenset({"reset_tools", "report_unsupported", "ask_user"})
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 GROUP_BY_TARGET: dict[str | None, str] = {
@@ -59,7 +62,7 @@ SUBGROUPS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {}
 FAMILY_KEY_RULE = "namespace+stem"
 _GROUP_PURPOSES: dict[str, str] = {
     "oa_query": "查询 OA 办公系统中当前用户本人的数据。",
-    "business_query": "查询业务平台中的业务数据（如人员信息）。",
+    "business_query": "查询业务平台中的业务数据和平台信息。",
     "u8_query": "查询 U8 系统中的业务数据。",
     "ivms_query": "查询海康 iVMS 平台中的数据。",
     "general_query": "查询其他系统中的数据。",
@@ -92,7 +95,8 @@ def _rules_digest() -> str:
 
 
 GROUP_RULES = (
-    f"groups-v2;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};"
+    f"groups-v3;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};"
+    f"summary=first-sentence<={DISCOVERY_SUMMARY_MAX_CHARS};"
     f"family={FAMILY_KEY_RULE};map={_rules_digest()}"
 )
 
@@ -123,6 +127,9 @@ class ToolCatalog:
     visible_count: int
     # (reason_code, count), sorted by reason; never capability ids.
     excluded: tuple[tuple[str, int], ...]
+    # Members listed by name only because their summary is too long; logged,
+    # not a catalog gap.
+    summary_omitted: int = 0
 
     @property
     def incomplete(self) -> bool:
@@ -241,7 +248,15 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         else:
             tools.append(tool)
 
-    spec_names = {spec.capability_id: spec.name for spec in specs}
+    # Each member's entry in its group description: "name: summary" or name.
+    summaries = {spec.capability_id: discovery_summary(spec) for spec in specs}
+    spec_names = {
+        spec.capability_id: (
+            spec.name if summaries[spec.capability_id] is None
+            else f"{spec.name}：{summaries[spec.capability_id]}"
+        )
+        for spec in specs
+    }
     groups: list[CatalogGroup] = []
     grouped: list[CatalogTool] = []
     for primary in dict.fromkeys(GROUP_BY_TARGET.values()):
@@ -262,6 +277,7 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         groups=tuple(groups),
         visible_count=len(specs),
         excluded=tuple(sorted(excluded.items())),
+        summary_omitted=sum(1 for tool in grouped if summaries[tool.capability_id] is None),
     )
 
 
@@ -364,13 +380,20 @@ def _with_group(tool: CatalogTool, group: str) -> CatalogTool:
     )
 
 
+def discovery_summary(spec: CapabilitySpec) -> str | None:
+    """First sentence of the short description, or None when it is too long."""
+
+    summary = spec.short_description.split("。", 1)[0]
+    return summary if len(summary) <= DISCOVERY_SUMMARY_MAX_CHARS else None
+
+
 def _group_description(
     primary: str, members: Sequence[CatalogTool], spec_names: dict[str, str]
 ) -> str:
     return (
         _GROUP_PURPOSES[primary]
         + "包含："
-        + "、".join(spec_names[tool.capability_id] for tool in members)
+        + "；".join(spec_names[tool.capability_id] for tool in members)
     )
 
 
@@ -395,8 +418,8 @@ def _description(spec: CapabilitySpec, schema: dict[str, Any]) -> str:
         else []
     )
     if hinted:
-        text += "。必填参数：" + "、".join(hinted)
-        text += "；缺少时先向用户询问，不要猜测。"
+        text = text.removesuffix("。") + "。必填参数：" + "、".join(hinted)
+        text += "；缺少时调用 ask_user 询问，不要猜测。"
     return text
 
 
@@ -405,6 +428,7 @@ def _count(excluded: dict[str, int], reason: str) -> None:
 
 
 __all__ = (
+    "DISCOVERY_SUMMARY_MAX_CHARS",
     "FAMILY_KEY_RULE",
     "G_MAX",
     "GROUP_BY_TARGET",
@@ -419,5 +443,6 @@ __all__ = (
     "ToolCatalog",
     "VisibleCatalog",
     "build_tool_catalog",
+    "discovery_summary",
     "visible_capabilities",
 )

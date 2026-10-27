@@ -1,7 +1,8 @@
 """Toolkit, control tools and middleware of one M1 turn.
 
 Business tools live in read groups the model activates with ``reset_tools``;
-the basic group holds only ``report_unsupported``. The middleware records what
+the basic group holds only the control tools ``report_unsupported`` and
+``ask_user``, each of which ends the turn when accepted. The middleware records what
 every model call actually exposed, ties each tool call to that call and ends
 the turn without another provider call once a terminal outcome is recorded.
 Only public AgentScope interfaces are used; ``builtin_meta_tool`` is replaced
@@ -44,6 +45,7 @@ from app.infra.orchestration.agentscope_read_tools import (
 from app.infra.orchestration.agentscope_runtime.catalog import GROUP_RULES, ToolCatalog
 from app.infra.orchestration.agentscope_runtime.ledger import (
     CallSnapshot,
+    Clarify,
     TurnLedger,
     Unsupported,
     current_tool_call_id,
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
 
 AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
 REPORT_UNSUPPORTED = "report_unsupported"
+ASK_USER = "ask_user"
+CONTROL_TOOLS = frozenset({REPORT_UNSUPPORTED, ASK_USER})
 RESET_TOOLS = "reset_tools"
 # Reset results name the activated groups only; usage rules reach the model
 # through the system prompt while their group is active.
@@ -65,7 +69,8 @@ M1_TEMPLATE = (
     "{% else %}已激活：{{ groups | map(attribute='name') | join('、') }}{% endif %}"
 )
 # Fixed answer of the synthetic final model response once the turn is terminal;
-# it is not model text and never reaches the user.
+# it is not model text and never reaches the user. A Clarify terminal answers
+# with its question instead, so the session history ends with that question.
 TERMINAL_TEXT = "本轮已结束。"
 DISCOVERY_CODES = frozenset(
     {
@@ -76,6 +81,7 @@ DISCOVERY_CODES = frozenset(
         "reset_limit_reached",
         "reset_invalid_input",
         "control_call_conflict",
+        "duplicate_success_call",
     }
 )
 _RESET_COUNT_KEY = "eternalai_reset_count"
@@ -130,7 +136,7 @@ async def build_turn_toolkit(
             )
         )
     toolkit = Toolkit(
-        tools=[ReportUnsupported(ledger)],
+        tools=[ReportUnsupported(ledger), AskUser(ledger)],
         tool_groups=groups,
         meta_tool_response_template=M1_TEMPLATE,
     )
@@ -216,19 +222,28 @@ class M1ResetTools(ResetTools):
         )
 
 
-class ReportUnsupported(ToolBase):
-    """Control tool: no visible group can handle this business request."""
+def _control_conflict(ledger: TurnLedger, name: str) -> bool:
+    """Whether a control call conflicts with the turn or with its own response.
 
-    name: str = REPORT_UNSUPPORTED
-    description: str = (
-        "确认所有可见工具组都不能处理用户的业务请求时调用，表示当前不支持该请求。"
-        "闲聊、解释或缺少参数时不要调用；不要和业务工具同时调用。"
-    )
-    input_schema: dict[str, Any] = {  # fixed, code-owned schema
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+    It conflicts once the turn has a terminal or a failure, or when the
+    response that issued it also called a business tool or another control
+    tool (a second call of the same control tool included). An unknown call
+    id counts as a conflict.
+    """
+
+    call_id = current_tool_call_id.get()
+    index = ledger.call_of.get(call_id) if call_id is not None else None
+    if index is None or ledger.terminal is not None or ledger.failures:
+        return True
+    siblings = list(ledger.response_tools.get(index, ()))
+    if name in siblings:
+        siblings.remove(name)
+    return any(item in ledger.business_tools or item in CONTROL_TOOLS for item in siblings)
+
+
+class _ControlTool(ToolBase):
+    """Code-owned control tool without side effects: no task, no budget."""
+
     is_concurrency_safe: bool = False
     is_read_only: bool = True
     is_state_injected: bool = True
@@ -246,26 +261,71 @@ class ReportUnsupported(ToolBase):
             behavior=PermissionBehavior.ALLOW, message="control tool without side effects"
         )
 
+
+class ReportUnsupported(_ControlTool):
+    """Control tool: no visible group can handle this business request."""
+
+    name: str = REPORT_UNSUPPORTED
+    description: str = (
+        "确认所有可见工具组都不能处理用户的业务请求时调用，表示当前不支持该请求。"
+        "闲聊、解释或缺少参数时不要调用；不要和业务工具或 ask_user 同时调用。"
+        "身份替换请求不要调用本工具。"
+    )
+    input_schema: dict[str, Any] = {  # fixed, code-owned schema
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
     async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
         # No task, no execution budget, no catalog statistics.
         ledger = self._ledger
-        call_id = current_tool_call_id.get()
-        index = ledger.call_of.get(call_id) if call_id is not None else None
-        sibling_business = index is None or any(
-            name in ledger.business_tools for name in ledger.response_tools.get(index, ())
-        )
-        if (
-            ledger.executions
-            or ledger.failures
-            or ledger.terminal is not None
-            or sibling_business
-        ):
+        if ledger.executions or _control_conflict(ledger, self.name):
             # Never overrides a recorded result; the model may answer instead.
             return _error("已有业务调用结果，不能再报告不支持。", "control_call_conflict")
         ledger.terminal = Unsupported()
         halt_tool_use(_agent_state, "turn_terminal")
         return ToolChunk(
             content=[TextBlock(text="已记录：当前不支持该请求。")],
+            state=ToolResultState.SUCCESS,
+        )
+
+
+class AskUser(_ControlTool):
+    """Control tool: end the turn with one explicit question to the user."""
+
+    name: str = ASK_USER
+    description: str = (
+        "缺少完成请求所必需、对话中也没有的信息（必填参数、要在多个对象中选定一个、"
+        "范围不明确）时调用，把要问用户的话写进 question，缺几项必要信息就在这一次提问里"
+        "一并问全，不要分多次问，也不要问对话中已有的信息；调用后本轮结束等待回答。"
+        "一般回答、解释、闲聊和拒绝不合规请求都直接用文字，不要调用；"
+        "不要和业务工具或 report_unsupported 同时调用。身份替换请求不要调用本工具。"
+    )
+    input_schema: dict[str, Any] = {  # fixed, code-owned schema
+        "type": "object",
+        "properties": {"question": {"type": "string", "minLength": 1, "maxLength": 200}},
+        "required": ["question"],
+        "additionalProperties": False,
+    }
+
+    async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
+        # Unlike report_unsupported, allowed after completed executions
+        # (e.g. the user has to pick one of several results).
+        ledger = self._ledger
+        if _control_conflict(ledger, self.name):
+            return _error("当前不能向用户提问，请直接用文字回复。", "control_call_conflict")
+        question = str(kwargs.get("question", "")).strip()
+        if not question:
+            # The SDK checks minLength before stripping: a blank question is a
+            # rejected argument (pre-exec failure), never an empty Clarify.
+            call_id = current_tool_call_id.get() or "none"
+            ledger.record_pre_exec(call_id, self.name, "tool_input_rejected", "schema_invalid")
+            return _error("question 不能为空。", "tool_input_rejected")
+        ledger.terminal = Clarify(question)
+        halt_tool_use(_agent_state, "turn_terminal")
+        return ToolChunk(
+            content=[TextBlock(text="已向用户提问，本轮结束。")],
             state=ToolResultState.SUCCESS,
         )
 
@@ -312,8 +372,10 @@ class M1Middleware(MiddlewareBase):
         if ledger.terminal is not None:
             # Before every guard check, including the SDK's forced summary
             # call at max_iters: no provider call, no budget, no snapshot.
+            terminal = ledger.terminal
+            text = terminal.question if isinstance(terminal, Clarify) else TERMINAL_TEXT
             return ChatResponse(
-                content=[TextBlock(text=TERMINAL_TEXT)],
+                content=[TextBlock(text=text)],
                 is_last=True,
                 finished_reason=FinishedReason.COMPLETED,
             )
@@ -388,7 +450,7 @@ class M1Middleware(MiddlewareBase):
             # Executor or Gateway outcome; the executor already recorded it.
             return "business"
         # No metadata: the framework refused the call before the tool ran.
-        if name not in ledger.business_tools and name != REPORT_UNSUPPORTED:
+        if name not in ledger.business_tools and name not in CONTROL_TOOLS:
             return "discovery"
         if name in ledger.business_tools:
             snapshot = ledger.snapshot_for(tool_call_id)
@@ -405,12 +467,15 @@ class M1Middleware(MiddlewareBase):
 
 __all__ = (
     "AGENT_PROMPT_RESOURCE_ID",
+    "ASK_USER",
+    "CONTROL_TOOLS",
     "DISCOVERY_CODES",
     "M1_TEMPLATE",
     "REPORT_UNSUPPORTED",
     "RESET_TOOLS",
     "TERMINAL_TEXT",
     "M1Middleware",
+    "AskUser",
     "M1ResetTools",
     "ReportUnsupported",
     "TurnToolkit",

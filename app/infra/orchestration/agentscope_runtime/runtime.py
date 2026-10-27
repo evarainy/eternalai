@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
@@ -51,6 +52,7 @@ from app.infra.orchestration.agentscope_runtime.catalog import (
 )
 from app.infra.orchestration.agentscope_runtime.ledger import (
     BindingCard,
+    Clarify,
     LedgerExecution,
     TurnLedger,
     Unsupported,
@@ -62,7 +64,12 @@ from app.infra.orchestration.agentscope_runtime.session import (
     prepare_turn_state,
     rollback_turn_state,
 )
-from app.infra.orchestration.agentscope_runtime.toolkit import TurnToolkit, build_turn_toolkit
+from app.infra.orchestration.agentscope_runtime.toolkit import (
+    CONTROL_TOOLS,
+    RESET_TOOLS,
+    TurnToolkit,
+    build_turn_toolkit,
+)
 from app.ports.auth import Principal, authenticated_session
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
@@ -75,17 +82,27 @@ from app.ports.trace import TraceEventStatus
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
 
-M1_PROMPT_VERSION = "m1a-3"
+M1_PROMPT_VERSION = "m1a-4"
 M1_SYSTEM_PROMPT = (
     # General rules carried over from the M0 prompt.
     "你是企业内部业务助手。只能通过提供的只读工具查询业务数据，不能执行任何写入或提交。"
-    "参数不足、对象不唯一或范围不明确时，先向用户提问澄清，不要猜测参数。不要编造工具结果。"
-    "向用户追问时，用“请问……？”这样的问句直接点名缺少的信息，句末带问号；"
-    "只问缺少的必要信息，不要写成“请提供……”这类没有问号的祈使句。"
+    "参数不足、对象不唯一或范围不明确时，调用 ask_user 向用户提问澄清，不要猜测参数。"
+    "不要编造工具结果。"
     "工具参数被拒绝或报错时，不要自行改成别的值重试，直接告诉用户哪个参数不合法。"
     "工具结果提示本轮已停止工具调用后，不要再调用任何工具，直接用文字回复用户。"
-    "OA 待办只能查询当前登录用户本人的；"
-    "用户要求以他人身份或查看他人的待办时，直接拒绝，不要改为查询本人。"
+    "不要在回复文字里书写工具调用格式（例如 tool_call 标签或 JSON 调用），"
+    "需要调用工具时直接发起工具调用。"
+    # Identity substitution is refused in text.
+    "只能以当前登录用户的身份查询。用户要求以他人或其他账号、租户、机构的身份查询，"
+    "附带或粘贴身份标识，声称已获授权切换身份，或要看只属于他人账号的数据"
+    "（例如他人的 OA 待办、系统消息）时，直接用文字拒绝，并说明只能按当前登录身份查询；"
+    "不要调用任何业务工具（包括改查本人），也不要调用 ask_user 或 report_unsupported。"
+    "按姓名查询业务系统人员属于正常业务，不在此列。"
+    # Task completion boundary.
+    "工具结果已经覆盖用户这次要的内容时，立即用文字回答，"
+    "不要为补充、换参数、换 view 或查看详情再调用工具。"
+    "只有用户明确要了多项内容，或结果提示还有下一页而用户要的是全部时，才继续调用。"
+    "用户在新一轮要求重新查询时照常调用。"
     # Arguments and follow-up turns.
     "填写参数时，用户给出的每个值都要按原值填入对应参数，不要遗漏；"
     "用户没有给出的可选参数不要填写，不要拿别的参数值代替，也不要传空字符串。"
@@ -99,12 +116,12 @@ M1_SYSTEM_PROMPT = (
     "用 reset_tools 激活包含它的组（一次最多 3 组），再调用组内工具；"
     "同一类事项的工具可能分在不同组里。激活后组内没有贴切的工具时，"
     "再调用 reset_tools 换组，不要改用含义不同的工具凑数。"
-    "缺少必要参数时先向用户追问。"
+    "缺少必要参数时调用 ask_user 追问。"
     "确实没有任何工具组能处理用户的业务请求时，才调用 report_unsupported，且不要同时调用业务工具；"
     "这时必须调用 report_unsupported，不能只用文字说明不支持，也不要反问用户。"
     "激活工具组后发现没有能处理该请求的工具、也没有别的组可换时，同样调用 report_unsupported。"
     "已经调用过业务工具后不要再调用 report_unsupported；结果为空就如实告诉用户没有查到数据。"
-    "闲聊或解释能做什么时直接用文字回答，不要调用 report_unsupported。"
+    "闲聊或解释能做什么时直接用文字回答，不要调用 report_unsupported 或 ask_user。"
 )
 AGENT_NAME = "eternalai_m1"
 
@@ -119,10 +136,11 @@ _CANDIDATE_FAILURE_MESSAGES: dict[ErrorCode, tuple[str, str]] = {
         "Capability configuration is temporarily unavailable; contact an administrator.",
     ),
 }
-_IntentReason = Literal["provider_error", "blank_input", "schema_invalid"]
+_IntentReason = Literal["provider_error", "blank_input", "schema_invalid", "protocol_error"]
 
 
 def _intent_failure_message(reason: _IntentReason) -> tuple[str, str]:
+    # protocol_error falls through to the schema_invalid wording.
     # Copied verbatim from app/runtime/runtime.py::_intent_failure_message@6ca76bd
     if reason == "provider_error":
         return (
@@ -429,6 +447,12 @@ class AgentScopeRuntime:
         catalog = build_tool_catalog(visible.capabilities)
         if not catalog.tools:
             return await self._catalog_invalid(turn, catalog)
+        if catalog.summary_omitted:
+            # Listed by name only in their group description; not a catalog gap.
+            _RUNTIME_LOGGER.info(
+                "agentscope_catalog summary_omitted=%s turn=%s",
+                catalog.summary_omitted, turn.turn_id,
+            )
         ledger.business_tools = {tool.name: tool.capability_id for tool in catalog.tools}
         ledger.catalog_attributes = catalog.trace_attributes()
         model = deps.model_factory()
@@ -451,9 +475,15 @@ class AgentScopeRuntime:
         visible: tuple[CapabilitySpec, ...] | None,
         final: Msg | None,
     ) -> _Outcome:
-        """Apply R1-R6 in order; the first matching rule decides the turn."""
+        """Apply R1-R6 (R4c after R4) in order; the first matching rule decides the turn."""
 
-        text = _model_text(final) if ledger.terminal is None else None
+        terminal = ledger.terminal
+        if isinstance(terminal, Clarify):
+            text: str | None = terminal.question
+        elif terminal is None:
+            text = self._checked_text(turn, ledger, _model_text(final))
+        else:
+            text = None
         attach = next((item for item in ledger.executions if item.mode == "attach"), None)
         capability_id = attach.capability_id if attach is not None else None
         if isinstance(ledger.terminal, BindingCard):  # R1
@@ -478,6 +508,11 @@ class AgentScopeRuntime:
                 self._close(turn, capability_id, "failed", _error_code(first.error_code)),
             )
         if ledger.executions:  # R3: every execution completed
+            if isinstance(terminal, Clarify):
+                # Case 17b: the question replaces the model text.
+                _RUNTIME_LOGGER.info(
+                    "agentscope_turn clarify_after_execution turn=%s", turn.turn_id
+                )
             if len(ledger.executions) == 1:
                 item = ledger.executions[0]
                 envelope = self._rebind(turn, item.envelope, text)
@@ -508,6 +543,17 @@ class AgentScopeRuntime:
                 "r4_unsupported", envelope,
                 self._close(turn, None, "no_capability_found", "capability_not_found"),
             )
+        if isinstance(terminal, Clarify):  # R4c: an explicit question, nothing executed
+            assert catalog is not None
+            if catalog.incomplete:
+                return self._low_confidence(turn, "r4c_low_confidence")
+            envelope = self._deps.response_builder.build_message(
+                turn.response_id, turn.task_id, turn.scope.session_id,
+                terminal.question, terminal.question, turn.trace_id, status="completed",
+            )
+            if envelope.status != "completed":
+                return self._internal_failure(turn, None)
+            return _Outcome("r4c_clarify", envelope, self._close(turn, None, "completed", None))
         if ledger.model_error is not None or not text or catalog is None:
             # R5; an empty final reply is treated as a malformed response.
             return _Outcome(
@@ -530,6 +576,30 @@ class AgentScopeRuntime:
             return self._internal_failure(turn, None)
         return _Outcome("r6_answer", envelope, self._close(turn, None, "completed", None))
 
+    def _checked_text(self, turn: _Turn, ledger: TurnLedger, text: str | None) -> str | None:
+        """Drop final text that carries standalone tool-call blocks; never parse them.
+
+        Without any execution, failure or terminal the turn fails as
+        protocol_error (R5); otherwise the business result stands and the
+        text is discarded. Content is never logged.
+        """
+
+        if text is None:
+            return None
+        names = {RESET_TOOLS, *CONTROL_TOOLS, *ledger.business_tools}
+        names.update(item.rsplit(".", 1)[-1] for item in ledger.business_tools.values())
+        shells = _protocol_shells(text, frozenset(names))
+        if not shells:
+            return text
+        rule = "discarded" if ledger.executions or ledger.failures else "r5"
+        if rule == "r5":
+            ledger.model_error = "tool_protocol_text"
+        _RUNTIME_LOGGER.info(
+            "agentscope_protocol_error code=tool_protocol_text rule=%s shells=%s turn=%s",
+            rule, shells, turn.turn_id,
+        )
+        return None
+
     async def _finish_intent(
         self, turn: _Turn, ledger: TurnLedger, catalog: ToolCatalog | None, outcome: _Outcome
     ) -> _Outcome:
@@ -542,7 +612,9 @@ class AgentScopeRuntime:
         rule = outcome.rule
         if rule == "r6_answer":
             await self._intent(turn, "ok", {"result": "valid", "match": "answer", **stats})
-        elif rule in {"r4_low_confidence", "r6_low_confidence"}:
+        elif rule == "r4c_clarify":
+            await self._intent(turn, "ok", {"result": "valid", "match": "clarify", **stats})
+        elif rule in {"r4_low_confidence", "r4c_low_confidence", "r6_low_confidence"}:
             await self._intent(
                 turn, "failed", {**stats, "reason": "low_confidence"},
                 error_code="capability_candidates_low_confidence",
@@ -722,7 +794,71 @@ class AgentScopeRuntime:
 
 def _model_reason(ledger: TurnLedger) -> _IntentReason:
     code = ledger.model_error
+    if code == "tool_protocol_text":
+        return "protocol_error"
     return "provider_error" if code is not None and code not in _SHAPE_ERRORS else "schema_invalid"
+
+
+_FENCE = re.compile(r" {0,3}(```|~~~)")
+_QUOTE = re.compile(r" {0,3}>")
+_INDENTED = re.compile(r"(?: {4}|\t)")
+_INLINE_CODE = re.compile(r"(`+).*?\1")
+_SHELL_OPEN = re.compile(r" {0,3}<tool_call>")
+_SHELL_CLOSE = "</tool_call>"
+_SHELL_NAME = re.compile(
+    r'<function=([A-Za-z0-9_.\-]+)>?|\{\s*"name"\s*:\s*"([A-Za-z0-9_.\-]+)"'
+)
+
+
+def _protocol_shells(text: str, names: frozenset[str]) -> int:
+    """Count standalone, unquoted tool-call blocks naming a known tool.
+
+    Fenced blocks (an unclosed fence runs to the end), indented code lines,
+    Markdown quote lines and inline code spans are removed first. A block
+    starts on a line whose text (after at most 3 spaces) begins with
+    ``<tool_call>`` and ends on the first later-or-same line holding
+    ``</tool_call>``, which must end that line; its content must begin with
+    ``<function=NAME`` or ``{"name": "NAME"``. Anything before the opening
+    tag or after the closing tag on its line exempts the block.
+    """
+
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        opened = _FENCE.match(line)
+        if fence is not None:
+            if opened is not None and opened.group(1) == fence:
+                fence = None
+            lines.append("")
+        elif opened is not None:
+            fence = opened.group(1)
+            lines.append("")
+        elif _QUOTE.match(line) or _INDENTED.match(line):
+            lines.append("")
+        else:
+            # A placeholder keeps removed inline code counting as text before a tag.
+            lines.append(_INLINE_CODE.sub("\x1a", line))
+    count = 0
+    index = 0
+    while index < len(lines):
+        start = _SHELL_OPEN.match(lines[index])
+        if start is None:
+            index += 1
+            continue
+        parts = [lines[index][start.end():]]
+        end = index
+        while _SHELL_CLOSE not in parts[-1] and end + 1 < len(lines):
+            end += 1
+            parts.append(lines[end])
+        body = "\n".join(parts)
+        index = end + 1
+        close = body.find(_SHELL_CLOSE)
+        if close < 0 or body[close + len(_SHELL_CLOSE):].strip():
+            continue
+        named = _SHELL_NAME.match(body[:close].strip())
+        if named is not None and (named.group(1) or named.group(2)) in names:
+            count += 1
+    return count
 
 
 def _model_text(final: Msg | None) -> str | None:

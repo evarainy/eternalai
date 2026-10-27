@@ -51,6 +51,7 @@ from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.knowledge.capability_selection import (
     CandidateBinding,
+    canonical_json,
     capability_fingerprint,
 )
 from app.ports.agent_orchestration import AgentOrchestrationPort, AgentResponseContext
@@ -89,6 +90,9 @@ _READ_FAILED_TEXT = "读取失败。"
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _PENDING_CLOSES: set[asyncio.Future[None]] = set()
 _HALTED_TEXT = "本轮已停止工具调用，请先向用户澄清。"
+# Code-owned completion hint added to every completed result the model sees.
+_COMPLETED_NOTE = "查询已成功。如已满足用户这次的请求，请直接回答，不要再调用工具。"
+_DUPLICATE_TEXT = "本轮已用相同参数成功查询过，结果见上文，请直接回答。"
 
 # Server-log convention shared with uvicorn.error.mcp_stages; code-owned values only.
 _TOOL_LOGGER = logging.getLogger("uvicorn.error.agentscope_read_tools")
@@ -285,6 +289,16 @@ async def _write_close(
 
 
 @dataclass(frozen=True, slots=True)
+class _CallKey:
+    """What makes two calls of one tool strictly the same in a turn."""
+
+    # Capability fingerprint in the exposure snapshot of the issuing call.
+    fingerprint: str
+    # sha256 of the canonical SDK-parsed arguments.
+    args_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class _TaskOutcome:
     execution: ExecutionResult
     raw_execution: ExecutionResult
@@ -333,6 +347,20 @@ class ToolExecutor:
             # it, but the model never saw this tool. A discovery error.
             self._log("not_exposed", "tool_not_exposed", 0.0)
             return _chunk(_NOT_EXPOSED_TEXT, error_code="tool_not_exposed")
+        call = _CallKey(
+            snapshot.capability_fingerprints[self._name],
+            sha256(canonical_json(arguments).encode("utf-8")).hexdigest(),
+        )
+        if any(
+            item.execution.status == "completed"
+            and item.capability_id == self._binding.capability_id
+            and _CallKey(item.exposed_fingerprint, item.args_digest) == call
+            for item in ledger.executions
+        ):
+            # Strictly the same arguments already completed in this turn:
+            # a stop signal for the model; no task, no budget, no failure.
+            self._log("duplicate", "duplicate_success_call", 0.0)
+            return _chunk(_DUPLICATE_TEXT, error_code="duplicate_success_call")
         if not reserve_tool_execution(_agent_state, self._limits):
             return self._reject(call_id, "tool_execution_budget_exceeded", _HALTED_TEXT)
         if not self._session_matches():
@@ -340,8 +368,8 @@ class ToolExecutor:
         # Claimed synchronously, with no await since the check.
         if not ledger.turn_task_claimed:
             ledger.turn_task_claimed = True
-            return await self._attach(_agent_state, call_id, snapshot, arguments)
-        return await self._own(_agent_state, call_id, snapshot, arguments)
+            return await self._attach(_agent_state, call_id, snapshot, arguments, call)
+        return await self._own(_agent_state, call_id, snapshot, arguments, call)
 
     def _reject(self, call_id: str, error_code: str, text: str) -> ToolChunk:
         self._ledger.record_pre_exec(call_id, self._name, error_code, "execution_rejected")
@@ -365,6 +393,7 @@ class ToolExecutor:
         call_id: str,
         snapshot: CallSnapshot,
         arguments: dict[str, Any],
+        call: _CallKey,
     ) -> ToolChunk:
         scope, deps, ledger = self._scope, self._deps, self._ledger
         binding = self._binding
@@ -395,7 +424,7 @@ class ToolExecutor:
             )
             self._log("failed", "internal_error", started, task_id=ledger.task_id)
             return _chunk(_READ_FAILED_TEXT, error_code="internal_error", task_id=ledger.task_id)
-        return self._record(state, call_id, "attach", ledger.task_id, outcome, started)
+        return self._record(state, call_id, call, "attach", ledger.task_id, outcome, started)
 
     async def _own(
         self,
@@ -403,6 +432,7 @@ class ToolExecutor:
         call_id: str,
         snapshot: CallSnapshot,
         arguments: dict[str, Any],
+        call: _CallKey,
     ) -> ToolChunk:
         # Every await from task creation to terminal close sits inside this
         # boundary. The task id exists before the create call, so every exit
@@ -461,12 +491,15 @@ class ToolExecutor:
                 task_id, trace_id, outcome.envelope.response_id, "internal_error",
                 _READ_FAILED_TEXT,
             )
-        return self._record(state, call_id, "own", task_id, outcome, started, trace_id=trace_id)
+        return self._record(
+            state, call_id, call, "own", task_id, outcome, started, trace_id=trace_id
+        )
 
     def _record(
         self,
         state: AgentState,
         call_id: str,
+        call: _CallKey,
         mode: ExecutionMode,
         task_id: str,
         outcome: _TaskOutcome,
@@ -487,6 +520,8 @@ class ToolExecutor:
                 raw_execution=outcome.raw_execution,
                 verification=outcome.verification,
                 projected=outcome.envelope.data if completed else None,
+                args_digest=call.args_digest,
+                exposed_fingerprint=call.fingerprint,
             )
         )
         self._log(execution.status, execution.error_code or "none", started,
@@ -694,7 +729,11 @@ def _model_text(
     allowed: Collection[str],
 ) -> str:
     # Only the approved projection reaches the model, never raw provider data.
-    payload = {"status": execution.status, "message": message, "data": data}
+    # The completion note precedes data so truncation never cuts it.
+    payload: dict[str, Any] = {"status": execution.status, "message": message}
+    if execution.status == "completed":
+        payload["note"] = _COMPLETED_NOTE
+    payload["data"] = data
     text = json.dumps(payload, ensure_ascii=False, default=str)
     raw = text.encode("utf-8")
     truncated = len(raw) > MAX_TOOL_RESULT_BYTES

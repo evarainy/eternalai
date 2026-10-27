@@ -43,6 +43,8 @@ AgentScopeErrorCode: TypeAlias = Literal[
     "model_call_budget_exceeded",
     "forbidden_request_shape",
     "tool_call_budget_exceeded",
+    # Final model text carried a standalone tool-call block instead of a call.
+    "tool_protocol_text",
 ]
 
 # Fixed request contract (PLAN v1.3 section 4.1.1); not environment-tunable.
