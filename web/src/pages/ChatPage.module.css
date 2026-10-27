@@ -19,6 +19,7 @@
   min-height: 0;
   gap: 16px;
   grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 /* ---------- 左栏「我问过的」 ---------- */
@@ -85,7 +86,7 @@
 .main {
   display: flex;
   min-width: 0;
-  min-height: 0;
+  /* 高度由聊天路由的定高外壳（`AppShell` 的 `shellFixed`）逐级传下来，对话区在其中独自滚动。 */
   flex-direction: column;
 }
 
@@ -451,6 +452,11 @@
 @media (max-width: 1099px) {
   .page {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .sessionRail {
+    max-height: 40dvh;
   }
 }
 

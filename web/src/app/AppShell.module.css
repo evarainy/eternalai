@@ -22,6 +22,20 @@
 }
 
 /*
+ * 聊天路由专用：外壳吃满视口、不随内容增长，可收缩空间沿 `.stage` → `.content` → 页面逐级传递，
+ * 聊天页在其中自己滚动。其他路由不带此 class，仍按内容撑高。
+ */
+.shellFixed {
+  height: 100dvh;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.shellFixed .stage {
+  min-height: 0;
+}
+
+/*
  * 底图三套预设。换底图只换 `.shell` 上的这一个 class，组件一律不动。
  *
  * 2026-09-04：底图从 `background-attachment: fixed` 换成一层**自身 `position: fixed`** 的伪元素。

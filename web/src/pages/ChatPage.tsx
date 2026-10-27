@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentProps, FormEvent } from 'react';
+import type { ComponentProps, FormEvent, KeyboardEvent } from 'react';
 import { Conversations, Prompts, Sender, Welcome } from '@ant-design/x';
 import { useMutation } from '@tanstack/react-query';
 import { Alert, Button, Checkbox, Input, Space, Typography } from 'antd';
@@ -464,6 +464,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     reference: DFormCollectionReference; sessionId: string; authGeneration: number;
     ownerKey: string | null; serverSessionId: string;
   } | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
   const browserGeneration = useRef(0);
   const restoredScope = useRef<string | null>(null);
   const ownerKey = browserOwner === null ? null
@@ -757,6 +759,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     },
   });
 
+  // 新内容到达时滚到对话区底部；用户已向上翻看（离底部超过阈值）则不拉回。
+  useEffect(() => {
+    const element = transcriptRef.current;
+    if (element !== null && stickToBottom.current) element.scrollTop = element.scrollHeight;
+  }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission]);
+
   const submit = (retry?: ChatSubmission) => {
     const message = retry?.message ?? draft.trim();
     if (!message || requestInFlight.current) {
@@ -787,6 +795,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         ? collection.serverSessionId : null,
     };
     requestInFlight.current = true;
+    stickToBottom.current = true;
     if (retry === undefined) {
       setRetrySubmission(null);
       appendTranscript({ role: 'user', text: message });
@@ -842,6 +851,24 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     && (!browserIdentityReady || (browserTarget !== null && !browserTerminal)
       || pendingSubmission !== null);
 
+  const canSend = Boolean(draft.trim()) && !mutation.isPending
+    && !browserSubmissionBlocked && requestMetadataReady;
+
+  /**
+   * `Sender` 自带的 Enter 发送依赖其默认发送按钮回填的内部状态；这里用 `footer` 自绘按钮，该状态
+   * 永远停在初始值，Enter 因此发不出去。改由本处接管：Enter 发送，Shift/Ctrl/Alt/Meta+Enter 换行，
+   * 输入法组字（`isComposing` / `keyCode 229`）时不发送；可否发送与「发送」按钮的禁用条件一致。
+   * 返回 `false` 让 `Sender` 跳过它自己的 Enter 处理。
+   */
+  const handleRequestKeyDown = (event: KeyboardEvent): false | undefined => {
+    if (event.key !== 'Enter') return undefined;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
+    if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false;
+    event.preventDefault();
+    if (canSend) submit();
+    return false;
+  };
+
   const lastEntry = transcript.at(-1);
   const lastEntryFailed =
     lastEntry !== undefined &&
@@ -885,6 +912,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         <section className={styles.conversation} aria-label="办理会话">
           <div
             className={styles.transcript}
+            ref={transcriptRef}
+            onScroll={(event) => {
+              const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+              stickToBottom.current = scrollHeight - scrollTop - clientHeight < 80;
+            }}
             aria-live="polite"
             aria-busy={mutation.isPending}
           >
@@ -1035,7 +1067,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                     type="primary"
                     htmlType="submit"
                     loading={mutation.isPending}
-                    disabled={!draft.trim() || mutation.isPending || browserSubmissionBlocked || !requestMetadataReady}
+                    disabled={!canSend}
                   >
                     发送
                   </Button>
@@ -1047,7 +1079,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                   setRetrySubmission(null);
                 }
               }}
-              onSubmit={() => submit()}
+              onKeyDown={handleRequestKeyDown}
               placeholder="问点什么，比如：我今天有什么要办的"
               suffix={false}
               value={draft}

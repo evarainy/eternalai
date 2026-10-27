@@ -483,7 +483,7 @@ export function AppShell() {
 
   return (
     <div
-      className={`${styles.shell} ${styles[background]}`}
+      className={`${styles.shell} ${styles[background]}${isAIAssistantPage ? ` ${styles.shellFixed}` : ''}`}
       data-background={background}
       data-collapsed={collapsed ? 'true' : 'false'}
       style={shellCssVariables(collapsed)}

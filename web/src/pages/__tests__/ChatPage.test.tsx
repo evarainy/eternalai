@@ -447,6 +447,23 @@ describe('ChatPage request boundary', () => {
     ).toBe(false);
   });
 
+  it('sends on Enter only outside IME composition and without Shift', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(envelope())));
+    renderChat();
+    const input = screen.getByLabelText('办理请求');
+    fireEvent.change(input, { target: { value: '查询我的 OA 待办' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(runtimeMock.handle).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByText('办理完成');
+    expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses one client session across a normal page remount', async () => {
     vi.mocked(globalThis.crypto.randomUUID).mockReturnValue(SESSION_A);
     const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
