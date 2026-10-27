@@ -173,6 +173,13 @@ def _error(text: str, code: str) -> ToolChunk:
 class M1ResetTools(ResetTools):
     """reset_tools with sequential execution and checks before any state change."""
 
+    description: str = (
+        "本函数只装载或卸载分组，不执行业务。分组键是本函数的布尔参数，绝不是可调用函数名。"
+        "把所需分组设为 true；未指定及 false 均表示关闭。"
+        "使用本函数时须单独调用并等待返回，再从当前 tools 的 function.name 中选择业务函数。"
+        "返回的分组指引须遵守。全目录均无匹配项时使用 report_unsupported；"
+        "卸载全部分组不产生这个终态。"
+    )
     is_concurrency_safe: bool = False
 
     def __init__(
@@ -267,9 +274,9 @@ class ReportUnsupported(_ControlTool):
 
     name: str = REPORT_UNSUPPORTED
     description: str = (
-        "确认所有可见工具组都不能处理用户的业务请求时调用，表示当前不支持该请求。"
-        "闲聊、解释或缺少参数时不要调用；不要和业务工具或 ask_user 同时调用。"
-        "身份替换请求不要调用本工具。"
+        "业务请求超出全部可见能力时，用本工具完成不支持的答复，参数为空对象；不必先卸载分组。"
+        "仅缺输入时应使用 ask_user；普通对话及身份替换拒绝不适用。"
+        "已有业务执行结果或同批还有业务函数、另一终态工具时不使用。"
     )
     input_schema: dict[str, Any] = {  # fixed, code-owned schema
         "type": "object",
@@ -296,14 +303,10 @@ class AskUser(_ControlTool):
 
     name: str = ASK_USER
     description: str = (
-        "缺少完成请求所必需、对话中也没有有效值的信息时调用：工具必填参数缺失"
-        "（用户明确表示还没定、没提供或留空的都算缺失）、需要在几个对象中选定一个、范围不明确。"
-        "先对照要调用的工具的参数说明确认缺哪些必填项，把问题写进 question，一次问全，"
-        "不要分多次问；不要问可选参数、无关字段或对话中已有的信息；"
-        "已有候选对象时列出候选请用户选择。调用后本轮结束等待回答。"
-        "没有任何工具能处理的请求用 report_unsupported，不要用本工具询问其他需求；"
-        "一般回答、解释、闲聊和拒绝不合规请求都直接用文字，不要调用；"
-        "不要和业务工具或 report_unsupported 同时调用。身份替换请求不要调用本工具。"
+        "仅当补齐信息能继续完成原请求时使用。把尚缺的必需值或待选目标、范围合为一次 question；"
+        "已有值、选填项不问，已有选项就请选定。提交 question 后本轮结束。"
+        "说明缺值的句子不能充作字段值。目录没有相应能力应调用 report_unsupported，不询问替代需求。"
+        "与业务函数及另一终态工具互斥；身份替换请求不适用。"
     )
     input_schema: dict[str, Any] = {  # fixed, code-owned schema
         "type": "object",
