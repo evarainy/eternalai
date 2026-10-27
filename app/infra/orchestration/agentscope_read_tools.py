@@ -91,7 +91,11 @@ _CLOSE_TIMEOUT_SECONDS = 5.0
 _PENDING_CLOSES: set[asyncio.Future[None]] = set()
 _HALTED_TEXT = "本轮已停止工具调用，请先向用户澄清。"
 # Code-owned completion hint added to every completed result the model sees.
-_COMPLETED_NOTE = "查询已成功。如已满足用户这次的请求，请直接回答，不要再调用工具。"
+_COMPLETED_NOTE = (
+    "查询已成功。如已满足用户这次的请求，请直接回答，不要再调用工具。"
+    "用户之后的消息如果是新的查询、要求刷新、给出新条件或要看还没读过的页，须重新调用工具；"
+    "只是复述或解释已有结果时可以直接回答。"
+)
 _DUPLICATE_TEXT = "本轮已用相同参数成功查询过，结果见上文，请直接回答。"
 
 # Server-log convention shared with uvicorn.error.mcp_stages; code-owned values only.

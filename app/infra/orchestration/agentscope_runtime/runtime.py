@@ -82,15 +82,15 @@ from app.ports.trace import TraceEventStatus
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
 
-M1_PROMPT_VERSION = "m1a-4"
+M1_PROMPT_VERSION = "m1a-5"
 M1_SYSTEM_PROMPT = (
     # General rules carried over from the M0 prompt.
     "你是企业内部业务助手。只能通过提供的只读工具查询业务数据，不能执行任何写入或提交。"
-    "参数不足、对象不唯一或范围不明确时，调用 ask_user 向用户提问澄清，不要猜测参数。"
     "不要编造工具结果。"
     "工具参数被拒绝或报错时，不要自行改成别的值重试，直接告诉用户哪个参数不合法。"
     "工具结果提示本轮已停止工具调用后，不要再调用任何工具，直接用文字回复用户。"
-    "不要在回复文字里书写工具调用格式（例如 tool_call 标签或 JSON 调用），"
+    "不要在回复文字里书写工具调用格式"
+    "（例如 tool_call、tool_code、function 标签，函数调用写法或 JSON 调用），"
     "需要调用工具时直接发起工具调用。"
     # Identity substitution is refused in text.
     "只能以当前登录用户的身份查询。用户要求以他人或其他账号、租户、机构的身份查询，"
@@ -99,14 +99,16 @@ M1_SYSTEM_PROMPT = (
     "不要调用任何业务工具（包括改查本人），也不要调用 ask_user 或 report_unsupported。"
     "按姓名查询业务系统人员属于正常业务，不在此列。"
     # Task completion boundary.
-    "工具结果已经覆盖用户这次要的内容时，立即用文字回答，"
+    "本轮工具结果已经覆盖用户当前这条消息要的内容时，立即用文字回答，"
     "不要为补充、换参数、换 view 或查看详情再调用工具。"
     "只有用户明确要了多项内容，或结果提示还有下一页而用户要的是全部时，才继续调用。"
     "用户在新一轮要求重新查询时照常调用。"
     # Arguments and follow-up turns.
     "填写参数时，用户给出的每个值都要按原值填入对应参数，不要遗漏；"
     "用户没有给出的可选参数不要填写，不要拿别的参数值代替，也不要传空字符串。"
-    "回答业务数据必须以本轮调用工具得到的结果为准，不能直接复述之前轮次的结果。"
+    "用户的新消息是新的查询、要求刷新、给出新条件或要看还没读过的页时，"
+    "必须在本轮调用工具，用本轮结果回答，不能拿之前轮次的结果代替；"
+    "只是要求复述或解释之前已查到的结果时，可以直接根据已有结果回答。"
     "用户在后续轮次要求重新获取、再查一次或要最新结果而没有给出新条件时，"
     "这是只读查询：沿用上一次查询的工具和参数重新调用。"
     # Tool-group control rules.
@@ -116,9 +118,15 @@ M1_SYSTEM_PROMPT = (
     "用 reset_tools 激活包含它的组（一次最多 3 组），再调用组内工具；"
     "同一类事项的工具可能分在不同组里。激活后组内没有贴切的工具时，"
     "再调用 reset_tools 换组，不要改用含义不同的工具凑数。"
-    "缺少必要参数时调用 ask_user 追问。"
-    "确实没有任何工具组能处理用户的业务请求时，才调用 report_unsupported，且不要同时调用业务工具；"
-    "这时必须调用 report_unsupported，不能只用文字说明不支持，也不要反问用户。"
+    "处理业务请求按以下顺序决定：第一，确定能处理请求的工具；"
+    "确实没有任何工具组能处理时调用 report_unsupported，且不要同时调用业务工具，"
+    "不能只用文字说明不支持，也不要调用 ask_user 询问用户别的需求。"
+    "第二，对照该工具的参数说明逐项确认必填信息：用户明确表示还没定、没提供或留空的内容不是有效值，"
+    "不能填入参数，也不能用空字符串或自拟的值代替。"
+    "第三，缺少必填信息或需要在几个对象中选定时调用 ask_user，在一次提问里问全所有缺项；"
+    "只问完成请求必需的信息，不要索取可选参数或无关字段；"
+    "已有候选对象时列出候选请用户选择，不要改为让用户提供 ID。"
+    "第四，信息齐全时直接调用工具，不要再追问对话中已有的信息。"
     "激活工具组后发现没有能处理该请求的工具、也没有别的组可换时，同样调用 report_unsupported。"
     "已经调用过业务工具后不要再调用 report_unsupported；结果为空就如实告诉用户没有查到数据。"
     "闲聊或解释能做什么时直接用文字回答，不要调用 report_unsupported 或 ask_user。"
@@ -586,9 +594,7 @@ class AgentScopeRuntime:
 
         if text is None:
             return None
-        names = {RESET_TOOLS, *CONTROL_TOOLS, *ledger.business_tools}
-        names.update(item.rsplit(".", 1)[-1] for item in ledger.business_tools.values())
-        shells = _protocol_shells(text, frozenset(names))
+        shells = _protocol_shells(text, _final_call_names(ledger))
         if not shells:
             return text
         rule = "discarded" if ledger.executions or ledger.failures else "r5"
@@ -803,23 +809,48 @@ _FENCE = re.compile(r" {0,3}(```|~~~)")
 _QUOTE = re.compile(r" {0,3}>")
 _INDENTED = re.compile(r"(?: {4}|\t)")
 _INLINE_CODE = re.compile(r"(`+).*?\1")
-_SHELL_OPEN = re.compile(r" {0,3}<tool_call>")
-_SHELL_CLOSE = "</tool_call>"
-_SHELL_NAME = re.compile(
+_CALL_OPEN = re.compile(r" {0,3}<tool_call>")
+_CALL_CLOSE = "</tool_call>"
+_CALL_NAME = re.compile(
     r'<function=([A-Za-z0-9_.\-]+)>?|\{\s*"name"\s*:\s*"([A-Za-z0-9_.\-]+)"'
 )
+_FUNCTION_NAME = re.compile(r" {0,3}<function=([A-Za-z0-9_.\-]+)")
+_FUNCTION_CLOSE = "</function>"
+_CODE_OPEN = re.compile(r" {0,3}<?tool_code>")
+_CODE_NAME = re.compile(r"(?:print\()?([A-Za-z0-9_.\-]+)\s*\(")
+_CODE_CLOSE = "</tool_code>"
+
+
+def _final_call_names(ledger: TurnLedger) -> frozenset[str]:
+    """Tool names exposed to the model call that produced the final text.
+
+    Business tools add their capability id's last segment; reset_tools and
+    the control tools count only when that call exposed them too.
+    """
+
+    if not ledger.calls:
+        return frozenset()
+    names: set[str] = set()
+    for name in ledger.calls[max(ledger.calls)].tool_digests:
+        capability_id = ledger.business_tools.get(name)
+        if capability_id is not None:
+            names.update((name, capability_id.rsplit(".", 1)[-1]))
+        elif name == RESET_TOOLS or name in CONTROL_TOOLS:
+            names.add(name)
+    return frozenset(names)
 
 
 def _protocol_shells(text: str, names: frozenset[str]) -> int:
-    """Count standalone, unquoted tool-call blocks naming a known tool.
+    """Count standalone, unquoted tool-call shells naming an exposed tool.
 
     Fenced blocks (an unclosed fence runs to the end), indented code lines,
-    Markdown quote lines and inline code spans are removed first. A block
-    starts on a line whose text (after at most 3 spaces) begins with
-    ``<tool_call>`` and ends on the first later-or-same line holding
-    ``</tool_call>``, which must end that line; its content must begin with
-    ``<function=NAME`` or ``{"name": "NAME"``. Anything before the opening
-    tag or after the closing tag on its line exempts the block.
+    Markdown quote lines and inline code spans are removed first. A shell
+    starts on a line whose text (after at most 3 spaces) begins with its
+    opening token: ``<tool_call>`` (a closed block, or a block truncated at
+    the end of the text), ``<function=NAME`` or ``<tool_code>``/``tool_code>``
+    followed by ``NAME(``. A shell without a recognisable name never counts,
+    and text after a complete shell on the same line marks it as an
+    explanation rather than a call. Arguments are never parsed.
     """
 
     lines: list[str] = []
@@ -841,24 +872,117 @@ def _protocol_shells(text: str, names: frozenset[str]) -> int:
     count = 0
     index = 0
     while index < len(lines):
-        start = _SHELL_OPEN.match(lines[index])
-        if start is None:
-            index += 1
-            continue
-        parts = [lines[index][start.end():]]
-        end = index
-        while _SHELL_CLOSE not in parts[-1] and end + 1 < len(lines):
-            end += 1
-            parts.append(lines[end])
-        body = "\n".join(parts)
-        index = end + 1
-        close = body.find(_SHELL_CLOSE)
-        if close < 0 or body[close + len(_SHELL_CLOSE):].strip():
-            continue
-        named = _SHELL_NAME.match(body[:close].strip())
-        if named is not None and (named.group(1) or named.group(2)) in names:
-            count += 1
+        line = lines[index]
+        if (start := _CALL_OPEN.match(line)) is not None:
+            found, index = _call_block(lines, index, start.end(), names)
+        elif (function := _FUNCTION_NAME.match(line)) is not None:
+            found, index = _function_block(lines, index, function, names)
+        elif (code := _CODE_OPEN.match(line)) is not None:
+            found, index = _code_block(lines, index, code.end(), names)
+        else:
+            found, index = False, index + 1
+        count += found
     return count
+
+
+def _call_block(
+    lines: list[str], index: int, offset: int, names: frozenset[str]
+) -> tuple[bool, int]:
+    """A ``<tool_call>`` block: closed (A) or running to the end of the text (B)."""
+
+    parts = [lines[index][offset:]]
+    end = index
+    while _CALL_CLOSE not in parts[-1] and end + 1 < len(lines):
+        end += 1
+        parts.append(lines[end])
+    body = "\n".join(parts)
+    close = body.find(_CALL_CLOSE)
+    if close >= 0:
+        if body[close + len(_CALL_CLOSE):].strip():
+            return False, end + 1
+        named = _CALL_NAME.match(body[:close].strip())
+        return named is not None and (named.group(1) or named.group(2)) in names, end + 1
+    content = body.strip()
+    named = _CALL_NAME.match(content)
+    if named is None or (named.group(1) or named.group(2)) not in names:
+        return False, end + 1
+    if named.group(1) is not None and not _header_ok(content, named.end(1)):
+        return False, end + 1
+    return True, end + 1
+
+
+def _function_block(
+    lines: list[str], index: int, function: re.Match[str], names: frozenset[str]
+) -> tuple[bool, int]:
+    """A bare ``<function=NAME`` block, closed by ``</function>`` or truncated."""
+
+    line = lines[index]
+    end = index
+    close = line.find(_FUNCTION_CLOSE, function.end())
+    while close < 0 and end + 1 < len(lines):
+        end += 1
+        close = lines[end].find(_FUNCTION_CLOSE)
+    found = (
+        function.group(1) in names
+        and _header_ok(line, function.end(1))
+        and (close < 0 or not lines[end][close + len(_FUNCTION_CLOSE):].strip())
+    )
+    return found, end + 1
+
+
+def _code_block(
+    lines: list[str], index: int, offset: int, names: frozenset[str]
+) -> tuple[bool, int]:
+    """A ``tool_code>`` opener whose first content is ``NAME(``."""
+
+    segment = lines[index][offset:]
+    end = index
+    if not segment.strip():
+        end = next((i for i in range(index + 1, len(lines)) if lines[i].strip()), index)
+        if end == index:
+            return False, index + 1
+        segment = lines[end]
+    call = segment.strip()
+    named = _CODE_NAME.match(call)
+    if named is None:
+        return False, index + 1
+    name = named.group(1)
+    if name not in names and name.rsplit(".", 1)[-1] not in names:
+        return False, end + 1
+    return _call_tail_ok(call[call.index("("):]), end + 1
+
+
+def _header_ok(text: str, name_end: int) -> bool:
+    """After ``<function=NAME`` only an optional ``>`` and a tag, JSON or nothing."""
+
+    rest = text[name_end:].split("\n", 1)[0]
+    rest = rest.removeprefix(">").strip()
+    return not rest or rest.startswith(("<", "{"))
+
+
+def _call_tail_ok(call: str) -> bool:
+    """A call left open is truncated; a closed call may only be followed by ``</tool_code>``."""
+
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for position, char in enumerate(call):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return not call[position + 1:].strip().removeprefix(_CODE_CLOSE).strip()
+    return True
 
 
 def _model_text(final: Msg | None) -> str | None:
