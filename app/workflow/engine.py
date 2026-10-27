@@ -63,6 +63,7 @@ class _WorkflowCheckpoint:
     initial_input: dict[str, Any]
     request_context: RequestOrgContext
     step_outputs: dict[str, dict[str, Any]]
+    confirmation_barrier: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,29 @@ class WorkflowEngine:
                 raise McpFailure("mcp_operation_unavailable")
             _, gate = await self._governed.ensure_confirmation(current)
             return gate
+
+    async def rebind_governed_confirmation(
+        self,
+        task_id: str,
+        *,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+    ) -> HumanGateRequest | None:
+        """Re-key a governed card to the current login; None when not needed."""
+        if self._governed is None:
+            return None
+        op = await self._governed.store.by_task(task_id)
+        if op is None or self._governed.current_login_generation(op, expected_gate_request_id):
+            return None
+        async with self._governed.store.execution_guard(op):
+            current = await self._governed.store.by_task(task_id)
+            if current is None:
+                raise McpFailure("mcp_operation_unavailable")
+            return await self._governed.rebind_current_session(
+                current,
+                expected_action_digest=expected_action_digest,
+                expected_gate_request_id=expected_gate_request_id,
+            )
 
     async def retire_owned_confirmation(
         self,
@@ -388,6 +412,7 @@ class WorkflowEngine:
         ai_user_id: str,
         initial_input: Mapping[str, Any],
         request_context: RequestOrgContext,
+        confirmation_barrier: bool = False,
     ) -> WorkflowRunResult:
         definition = self._snapshot_definition(workflow_id, expected_version)
         self._validate_workflow_capability(workflow_capability, definition)
@@ -425,6 +450,7 @@ class WorkflowEngine:
                 initial_input=initial_input,
                 request_context=request_context,
                 step_outputs={},
+                confirmation_barrier=confirmation_barrier,
             )
         except (ValueError, VersionBindingMismatchError) as exc:
             if not isinstance(exc, VersionBindingMismatchError) and self._human_gate_port is None:
@@ -500,6 +526,7 @@ class WorkflowEngine:
                 initial_input=checkpoint.initial_input,
                 request_context=checkpoint.request_context,
                 step_outputs=deepcopy(checkpoint.step_outputs),
+                confirmation_barrier=checkpoint.confirmation_barrier,
             )
         except (ValueError, VersionBindingMismatchError) as exc:
             if (
@@ -539,6 +566,7 @@ class WorkflowEngine:
         initial_input: Mapping[str, Any],
         request_context: RequestOrgContext,
         step_outputs: dict[str, dict[str, Any]],
+        confirmation_barrier: bool = False,
     ) -> WorkflowRunResult:
 
         final_output: dict[str, Any] = {}
@@ -615,14 +643,25 @@ class WorkflowEngine:
                         max_attempts=max_attempts,
                     ),
                 )
-                execution = await self._gateway.execute_capability(
-                    task_id,
-                    session_id,
-                    ai_user_id,
-                    capability_id,
-                    arguments,
-                    request_context,
-                )
+                if confirmation_barrier and index != confirmed_step_index:
+                    execution = await self._gateway.execute_capability(
+                        task_id,
+                        session_id,
+                        ai_user_id,
+                        capability_id,
+                        arguments,
+                        request_context,
+                        confirmation_barrier=True,
+                    )
+                else:
+                    execution = await self._gateway.execute_capability(
+                        task_id,
+                        session_id,
+                        ai_user_id,
+                        capability_id,
+                        arguments,
+                        request_context,
+                    )
                 retryable_failure = (
                     execution.status in {"failed", "timeout"}
                     and execution.error_code in RETRYABLE_ERROR_CODES
@@ -669,6 +708,7 @@ class WorkflowEngine:
                     initial_input=deepcopy(dict(initial_input)),
                     request_context=deepcopy(request_context),
                     step_outputs=deepcopy(step_outputs),
+                    confirmation_barrier=confirmation_barrier,
                 )
                 return WorkflowRunResult(
                     workflow_id=definition.workflow_id,

@@ -194,6 +194,7 @@ class TestCapabilityGatewayPortProtocol:
             "arguments",
             "request_context",
             "workflow_authorization",
+            "confirmation_barrier",
         ]
         assert hints["task_id"] is str
         assert hints["session_id"] is str
@@ -204,6 +205,9 @@ class TestCapabilityGatewayPortProtocol:
         assert hints["workflow_authorization"] == GovernedWorkflowAuthorization | None
         assert signature.parameters["workflow_authorization"].kind is inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters["workflow_authorization"].default is None
+        assert hints["confirmation_barrier"] is bool
+        assert signature.parameters["confirmation_barrier"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert signature.parameters["confirmation_barrier"].default is False
         assert hints["return"] is ExecutionResult
         assert inspect.iscoroutinefunction(CapabilityGatewayPort.execute_capability)
 

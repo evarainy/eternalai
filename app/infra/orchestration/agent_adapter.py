@@ -61,7 +61,9 @@ class AgentOrchestrationAdapter:
         approved_projections: Mapping[
             str, tuple[str, str | None, str, ApprovedResponseProjection]
         ] | None = None,
+        confirmation_barrier: bool = False,
     ) -> None:
+        self._confirmation_barrier = confirmation_barrier
         self._capability_registry = capability_registry
         self._gateway = gateway
         self._workflow_engine = workflow_engine
@@ -185,6 +187,14 @@ class AgentOrchestrationAdapter:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
+        if self._confirmation_barrier and capability.type == "action":
+            # Defense in depth: the confirmation-barrier runtime exposes no
+            # action capability, so one reaching here is never executed.
+            return ExecutionResult(
+                status="failed",
+                error_code="internal_error",
+                trace_id=request_context.request_id,
+            )
         self._assert_approved_capability(capability)
         if self._validate_workflow is not None and (
             capability.type == "workflow" or capability.capability_id == OVERVIEW_ID
@@ -205,16 +215,29 @@ class AgentOrchestrationAdapter:
                     error_code="internal_error",
                     trace_id=request_context.request_id,
                 )
-            result = await self._workflow_engine.execute(
-                workflow_id=capability.capability_id,
-                expected_version=capability.version,
-                workflow_capability=capability,
-                task_id=task_id,
-                session_id=session_id,
-                ai_user_id=ai_user_id,
-                initial_input=arguments,
-                request_context=request_context,
-            )
+            if self._confirmation_barrier:
+                result = await self._workflow_engine.execute(
+                    workflow_id=capability.capability_id,
+                    expected_version=capability.version,
+                    workflow_capability=capability,
+                    task_id=task_id,
+                    session_id=session_id,
+                    ai_user_id=ai_user_id,
+                    initial_input=arguments,
+                    request_context=request_context,
+                    confirmation_barrier=True,
+                )
+            else:
+                result = await self._workflow_engine.execute(
+                    workflow_id=capability.capability_id,
+                    expected_version=capability.version,
+                    workflow_capability=capability,
+                    task_id=task_id,
+                    session_id=session_id,
+                    ai_user_id=ai_user_id,
+                    initial_input=arguments,
+                    request_context=request_context,
+                )
             if capability.capability_id == OVERVIEW_ID and result.status == "completed":
                 try:
                     OAReadOverviewOutput.model_validate(result.output)

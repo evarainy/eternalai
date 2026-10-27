@@ -181,6 +181,7 @@ def test_execute_forwards_every_argument_and_returns_engine_result_unchanged() -
             "ai_user_id": "user-1",
             "initial_input": {"field": "value"},
             "request_context": context,
+            "confirmation_barrier": False,
         }
         assert result is spy.execute_result
 

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import compare_digest
@@ -33,6 +33,7 @@ from app.knowledge.capability_selection import (
     capability_fingerprint,
     is_safe_capability_id,
 )
+from app.mcp.models import McpFailure
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.agent_orchestration import (
     AgentOrchestrationPort,
@@ -234,6 +235,9 @@ class _ConfirmationClaim:
     governed_terminal: GovernedTerminalResult | None = None
     response_trace_pending: bool = False
     completion_remembered: bool = False
+    # Set once a governed card was re-keyed to the current login (M1B §3.8);
+    # governed cleanup must then target this generation, not the original.
+    governed_rebind: _PendingWorkflow | None = None
 
 
 @dataclass
@@ -2391,6 +2395,7 @@ class RuntimeImpl:
             claim.cleanup_in_progress = True
         try:
             assert pending.owner is not None
+            target = claim.governed_rebind or pending
             governed = False
             if self._workflow_engine is not None:
                 task = await self._task_store.get_task(pending.task_id)
@@ -2402,8 +2407,8 @@ class RuntimeImpl:
                     raise RuntimeError("Confirmation cleanup owner mismatch")
                 governed = await self._workflow_engine.retire_owned_confirmation(
                     pending.task_id,
-                    pending.action_digest or "",
-                    pending.gate_request_id or "",
+                    target.action_digest or "",
+                    target.gate_request_id or "",
                     claim.cleanup_reason,
                 )
                 if not governed:
@@ -2415,7 +2420,7 @@ class RuntimeImpl:
                     action = await self._workflow_engine.pending_confirmation_action_digest(
                         pending.task_id
                     )
-                    if action == pending.action_digest:
+                    if action == target.action_digest:
                         result = await self._workflow_engine.finalize_governed_task(
                             task_id=pending.task_id
                         )
@@ -2426,7 +2431,7 @@ class RuntimeImpl:
                         )
                         if (
                             isinstance(result, GovernedTerminalResult)
-                            and current_action == pending.action_digest
+                            and current_action == target.action_digest
                         ):
                             self._retain_governed_terminal(pending_key, pending, result)
             if not governed and not claim.cleanup_governed_only:
@@ -2602,8 +2607,30 @@ class RuntimeImpl:
         action_type: Literal["confirm", "reject", "cancel"],
     ) -> tuple[ResponseEnvelope, UserActionOutcome]:
         try:
+            try:
+                effective = await self._rebind_governed_pending(pending_key, pending, memory_key)
+            except McpFailure as exc:
+                claim = self._claimed_pending_confirmations[
+                    _pending_confirmation_claim_key(pending_key, pending)
+                ]
+                if action_type != "confirm" or claim.governed_rebind is not None:
+                    raise
+                # Nothing was decided or re-keyed: keep the card claimable and
+                # never fall back to the original login's authorization.
+                envelope = self._response_builder.build_failed(
+                    str(uuid4()),
+                    pending.task_id,
+                    session_id,
+                    "当前登录尚未完成该业务系统授权或授权已失效，请重新授权后再点确认；本次未执行。",
+                    "The current login has no valid authorization for this business "
+                    "system; authorize again, then confirm. Nothing was executed.",
+                    pending.trace_id,
+                    data={"error_code": _mcp_route_error(exc.code)},
+                )
+                self._release_unstarted_claim(pending_key, pending)
+                return envelope, "action_gate_unavailable"
             if action_type != "confirm":
-                await self._record_confirmation_decision(pending, memory_key, "rejected")
+                await self._record_confirmation_decision(effective, memory_key, "rejected")
                 return await self._retire_pending_confirmation(
                     pending_key=pending_key,
                     pending=pending,
@@ -2614,6 +2641,7 @@ class RuntimeImpl:
             envelope = await self._resume_pending_workflow(
                 pending_key=pending_key,
                 pending=pending,
+                effective=effective,
                 session_id=session_id,
                 memory_key=memory_key,
             )
@@ -2700,6 +2728,63 @@ class RuntimeImpl:
         if claim.state == "confirmation_invalidated":
             return envelope, "confirmation_invalidated"
         return envelope, "accepted"
+
+    async def _rebind_governed_pending(
+        self,
+        pending_key: tuple[str, str, str],
+        pending: _PendingWorkflow,
+        owner: SessionMemoryKey,
+    ) -> _PendingWorkflow:
+        """Re-key a claimed governed card to the current login before any decision."""
+        if (
+            self._workflow_engine is None
+            or self._human_gate_port is None
+            or pending.gate_request_id is None
+            or pending.action_digest is None
+        ):
+            return pending
+        request = await self._workflow_engine.rebind_governed_confirmation(
+            pending.task_id,
+            expected_action_digest=pending.action_digest,
+            expected_gate_request_id=pending.gate_request_id,
+        )
+        if request is None:
+            return pending
+        effective = replace(
+            pending,
+            gate_request_id=request.request_id,
+            action_digest=request.action_digest,
+            request_digest=request.request_digest,
+        )
+        self._claimed_pending_confirmations[
+            _pending_confirmation_claim_key(pending_key, pending)
+        ].governed_rebind = effective
+        if (
+            request.task_id != pending.task_id
+            or request.requested_for_ai_user_id != owner.ai_user_id
+            or request.requested_session_id != owner.session_id
+            or request.requested_tenant_id != owner.tenant_id
+            or request.binding_manifest_digest != pending.binding_manifest_digest
+        ):
+            raise VersionBindingMismatchError("Rebound governed gate does not match the card")
+        return effective
+
+    def _release_unstarted_claim(
+        self,
+        pending_key: tuple[str, str, str],
+        pending: _PendingWorkflow,
+    ) -> None:
+        """Drop a claim that made no decision, so the same card stays claimable."""
+        claim_key = _pending_confirmation_claim_key(pending_key, pending)
+        with self._pending_confirmation_claim_lock:
+            claim = self._claimed_pending_confirmations.get(claim_key)
+            if (
+                claim is not None
+                and claim.state == "processing"
+                and claim.governed_rebind is None
+                and self._pending_workflows.get(pending_key) is pending
+            ):
+                self._forget_confirmation_claim(claim_key, claim)
 
     def _retain_governed_terminal(
         self,
@@ -2926,6 +3011,7 @@ class RuntimeImpl:
         *,
         pending_key: tuple[str, str, str],
         pending: _PendingWorkflow,
+        effective: _PendingWorkflow,
         session_id: str,
         memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
@@ -2934,7 +3020,7 @@ class RuntimeImpl:
 
         response_id = str(uuid4())
         if self._human_gate_port is not None:
-            await self._record_confirmation_decision(pending, memory_key, "confirmed")
+            await self._record_confirmation_decision(effective, memory_key, "confirmed")
         if self._human_gate_port is None:
             exec_result = await self._orchestration.resume_capability(
                 task_id=pending.task_id,
@@ -2944,7 +3030,7 @@ class RuntimeImpl:
             exec_result = await self._orchestration.resume_capability(
                 task_id=pending.task_id,
                 confirmed=True,
-                expected_action_digest=pending.action_digest,
+                expected_action_digest=effective.action_digest,
             )
         terminal = exec_result._governed_terminal
         if isinstance(terminal, GovernedTerminalResult):
@@ -3856,6 +3942,17 @@ def _is_stale_workflow_confirmation_message(message: str) -> bool:
 
 def _pending_workflow_key(tenant_id: str, session_id: str, ai_user_id: str) -> tuple[str, str, str]:
     return tenant_id, session_id, ai_user_id
+
+
+def _mcp_route_error(code: str) -> ErrorCode:
+    """Same mapping as the Gateway's governed route failures."""
+    identity_codes: dict[str, ErrorCode] = {
+        "mcp_identity_unbound": "identity_unbound",
+        "mcp_identity_pending": "identity_unbound",
+        "mcp_identity_expired": "identity_expired",
+        "mcp_identity_revoked": "identity_revoked",
+    }
+    return identity_codes.get(code, "policy_denied")
 
 
 def _owner_key(owner: ConfirmationOwner) -> SessionMemoryKey:

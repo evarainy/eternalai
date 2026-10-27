@@ -219,6 +219,7 @@ class CapabilityGateway:
         request_context: RequestOrgContext,
         *,
         workflow_authorization: GovernedWorkflowAuthorization | None = None,
+        confirmation_barrier: bool = False,
     ) -> ExecutionResult:
         trace_id = request_context.request_id
         oa_read = capability_id in _CHAT_STAGE_CAPABILITIES
@@ -670,6 +671,30 @@ class CapabilityGateway:
                 return ExecutionResult(
                     status="waiting_user",
                     error_code="confirm_required",
+                    trace_id=trace_id,
+                )
+            if (
+                confirmation_barrier
+                and policy_decision.decision == "allow"
+                and (capability_spec is None or capability_spec.type != "query")
+            ):
+                # Policy allow is not a human confirmation: before the confirmed
+                # step, a non-query leaf never reaches an Adapter.
+                for event_type in ("policy_checked", "blocked_by_policy"):
+                    await self._record_step(
+                        trace_id,
+                        task_id,
+                        session_id,
+                        request_context.tenant_id,
+                        ai_user_id,
+                        event_type,
+                        "blocked",
+                        capability_id=capability_id,
+                        error_code="policy_denied",
+                    )
+                return ExecutionResult(
+                    status="denied",
+                    error_code="policy_denied",
                     trace_id=trace_id,
                 )
             await self._record_step(

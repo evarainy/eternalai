@@ -37,6 +37,7 @@ class WorkflowEngineAdapter:
         ai_user_id: str,
         initial_input: Mapping[str, Any],
         request_context: RequestOrgContext,
+        confirmation_barrier: bool = False,
     ) -> WorkflowRunResult:
         return await self._engine.execute(
             workflow_id=workflow_id,
@@ -47,6 +48,7 @@ class WorkflowEngineAdapter:
             ai_user_id=ai_user_id,
             initial_input=initial_input,
             request_context=request_context,
+            confirmation_barrier=confirmation_barrier,
         )
 
     async def resume(
@@ -90,6 +92,19 @@ class WorkflowEngineAdapter:
 
     async def governed_confirmation(self, task_id: str) -> HumanGateRequest | None:
         return await self._engine.governed_confirmation(task_id)
+
+    async def rebind_governed_confirmation(
+        self,
+        task_id: str,
+        *,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+    ) -> HumanGateRequest | None:
+        return await self._engine.rebind_governed_confirmation(
+            task_id,
+            expected_action_digest=expected_action_digest,
+            expected_gate_request_id=expected_gate_request_id,
+        )
 
     async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None:
         return await self._engine.finalize_governed_task(task_id=task_id)

@@ -18,9 +18,10 @@ from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
 from app.infra.adapters.business_mcp.catalog import catalog
 from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.mcp.driver import McpDriver
+from app.mcp.connections import McpExecutionContextFactory
 from app.mcp.contracts import OutputContract
-from app.mcp.models import McpFailure, digest
-from app.mcp.operations import GovernedOperations
+from app.mcp.models import McpFailure, ToolBinding, digest
+from app.mcp.operations import GovernedOperations, _rebind_digest
 from app.ports.auth import (
     AuthenticatedSessionContext,
     Principal,
@@ -32,8 +33,10 @@ from app.ports.human_gate import (
     VersionBinding,
     build_task_version_binding_manifest,
 )
+from app.ports.mcp_store import Connection
 from app.ports.workflow_store import WorkflowOperation
 from app.runtime.response_projection import project_response_data
+from app.workflow.models import GovernedWorkflowPolicy
 from tests.infra.mcp.test_transport import Peer, Tokens, authorization, serving
 from tests.mcp.test_contracts import VALID
 from tests.workflow.test_mcp_recovery import BusinessPeer
@@ -825,3 +828,202 @@ def test_real_adapter_preview_result_survives_operation_json_and_response_projec
             assert api.view(reloaded.model_copy(update={"public_result": None})).result is None
 
         asyncio.run(run())
+
+
+class RebindMcpStore:
+    """Current-login MCP state for cross-login rebind (M1B §3.8)."""
+
+    def __init__(self, connection: Connection) -> None:
+        self.current = connection
+
+    async def mapping(self, capability_id, version):
+        return ToolBinding(
+            capability_id=capability_id,
+            capability_version=version,
+            service_config_id="service-a",
+            remote_tool="clothing_plan_preview",
+            input_digest="synthetic-input",
+            safety_digest="synthetic-safety",
+            output_contract_version="1",
+            policy_version="1",
+            internal_only=True,
+        )
+
+    async def connection(self, *, tenant_id, user_id, service_config_id):
+        return self.current
+
+    async def resolve(self, context):
+        if (
+            context.connection_id != self.current.connection_id
+            or context.login_session_fingerprint != self.current.login_session_fingerprint
+        ):
+            raise McpFailure("mcp_authorization_invalid")
+        return "synthetic-secret"
+
+
+async def rebind_fixture(**connection_changes):
+    h = await fixture()
+    original = await h.operations._gate(h.op, h.op.context, h.op.action_digest, h.op.expires_at)
+    h.op = h.store.op = h.op.model_copy(
+        update={
+            "gate_request_id": original.request_id,
+            "identity_evidence_digest": digest("synthetic-subject"),
+        }
+    )
+    new_login = AuthenticatedSessionContext(
+        principal=h.session.principal,
+        fingerprint=b"new-login",
+        expires_at=h.session.expires_at + timedelta(hours=1),
+    )
+    connection = Connection(
+        tenant_id=h.op.context.tenant_id,
+        user_id=h.op.context.user_id,
+        service_config_id="service-a",
+        connection_id=h.op.context.connection_id,
+        registration_id=h.op.context.registration_id,
+        service_config_version=h.op.context.service_config_version,
+        binding_epoch=2,
+        grant_epoch=2,
+        login_session_fingerprint=new_login.fingerprint.hex(),
+        state="ACTIVE",
+        identity_evidence="synthetic-subject",
+    ).model_copy(update=connection_changes)
+    h.operations.contexts = McpExecutionContextFactory(RebindMcpStore(connection), h.store, h.gates)
+    h.operations.manifests = {
+        h.op.outer_capability_id: GovernedWorkflowPolicy(
+            service_config_id="service-a",
+            outer_capability_id=h.op.outer_capability_id,
+            leaf_capability_id=h.op.leaf_capability_id,
+            remote_tool=h.op.remote_tool,
+            version=h.op.leaf_version,
+        )
+    }
+    h.original_gate, h.new_login = original, new_login
+    return h
+
+
+async def _rebind(h, op=None):
+    async with h.store.execution_guard(h.store.op):
+        return await h.operations.rebind_current_session(
+            op or h.store.op,
+            expected_action_digest=h.op.action_digest,
+            expected_gate_request_id=h.original_gate.request_id,
+        )
+
+
+def test_rebind_same_login_returns_none_without_writes():
+    async def run():
+        h = await rebind_fixture()
+        token = authenticated_session.set(h.session)
+        try:
+            assert await _rebind(h) is None
+            assert h.store.op == h.op and h.store.transitions == []
+            assert len(h.gates._requests) == 1
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+def test_rebind_renews_op_and_gate_under_the_current_login_idempotently():
+    async def run():
+        h = await rebind_fixture()
+        token = authenticated_session.set(h.new_login)
+        try:
+            with pytest.raises(McpFailure, match="^mcp_authorization_invalid$"):
+                await h.operations.owned(h.op)  # The old-login op is still rejected.
+            request = await _rebind(h)
+            renewed = h.store.op
+            assert request is not None and request.request_id != h.original_gate.request_id
+            assert h.store.transitions == ["WAITING_LOCAL_CONFIRM"]
+            assert renewed.revision == h.op.revision + 1
+            assert renewed.gate_request_id == request.request_id
+            assert renewed.context.login_session_fingerprint == h.new_login.fingerprint.hex()
+            assert renewed.context.connection_id == h.op.context.connection_id
+            assert (renewed.context.binding_epoch, renewed.context.grant_epoch) == (2, 2)
+            assert renewed.action_digest == request.action_digest == _rebind_digest(
+                h.op.action_digest, h.op.revision, renewed.context
+            )
+            assert renewed.expires_at == request.expires_at <= h.op.expires_at
+            assert request.binding_manifest_digest == h.original_gate.binding_manifest_digest
+            assert await h.gates.get_decision(h.original_gate.request_id) is None
+            await h.operations.owned(renewed)
+            assert await _rebind(h) == request
+            assert h.store.transitions == ["WAITING_LOCAL_CONFIRM"]
+            assert len(h.gates._requests) == 2
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "case,code",
+    [
+        ("login_not_authorized", "mcp_authorization_invalid"),
+        ("connection_inactive", "mcp_identity_expired"),
+        ("evidence_discontinuous", "mcp_authorization_invalid"),
+        ("connection_changed", "mcp_authorization_invalid"),
+        ("registration_changed", "mcp_authorization_invalid"),
+        ("op_ready", "mcp_operation_conflict"),
+        ("op_sent", "mcp_operation_conflict"),
+        ("op_expired", "mcp_confirmation_expired"),
+        ("gate_decided", "mcp_operation_conflict"),
+        ("other_account", "mcp_authorization_invalid"),
+    ],
+)
+def test_rebind_rejections_leave_op_and_gates_unchanged(case, code):
+    async def run():
+        connection_changes = {
+            "login_not_authorized": {"login_session_fingerprint": b"synthetic".hex()},
+            "connection_inactive": {"state": "DISCONNECTED"},
+            "evidence_discontinuous": {"identity_evidence": "other-subject"},
+            "connection_changed": {"connection_id": "connection-b"},
+            "registration_changed": {"registration_id": "registration-b"},
+        }.get(case, {})
+        h = await rebind_fixture(**connection_changes)
+        op_changes = {
+            "op_ready": {"state": "READY"},
+            "op_sent": {"send_started": True},
+            "op_expired": {"expires_at": datetime.now(UTC) - timedelta(seconds=1)},
+        }.get(case)
+        if op_changes is not None:
+            h.op = h.store.op = h.op.model_copy(update=op_changes)
+        if case == "gate_decided":
+            gate = h.original_gate
+            await h.gates.record_decision(
+                HumanGateDecisionRecord(
+                    request_id=gate.request_id,
+                    task_id=gate.task_id,
+                    decided_by_ai_user_id=gate.requested_for_ai_user_id,
+                    decided_session_id=gate.requested_session_id,
+                    decided_tenant_id=gate.requested_tenant_id,
+                    decision="confirmed",
+                    request_digest=gate.request_digest,
+                    binding_manifest_digest=gate.binding_manifest_digest,
+                    decided_at=gate.requested_at,
+                )
+            )
+        session = h.new_login
+        if case == "other_account":
+            session = AuthenticatedSessionContext(
+                principal=Principal(
+                    ai_user_id="other-user",
+                    display_name="Other",
+                    roles=(),
+                    org_ctx=h.session.principal.org_ctx,
+                ),
+                fingerprint=h.new_login.fingerprint,
+                expires_at=h.new_login.expires_at,
+            )
+        token = authenticated_session.set(session)
+        try:
+            with pytest.raises(McpFailure) as rejected:
+                await _rebind(h)
+            assert rejected.value.code == code
+            assert h.store.op == h.op and h.store.transitions == []
+            assert list(h.gates._requests) == [h.original_gate.request_id]
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
