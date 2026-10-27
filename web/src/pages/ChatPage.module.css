@@ -85,7 +85,13 @@
 .main {
   display: flex;
   min-width: 0;
-  min-height: 0;
+  /*
+   * 外壳 `.shell` 只有 `min-height:100vh`，没有定高，`flex:1; min-height:0` 这一串压不住对话区，
+   * 消息一多就把整页撑长。这里给右侧面板一个确定高度：视口 − 外壳上下 padding 32 − 顶栏最小高 72 −
+   * 间距 16；对话区在其中独自滚动。
+   */
+  height: calc(100dvh - 120px);
+  min-height: 420px;
   flex-direction: column;
 }
 
