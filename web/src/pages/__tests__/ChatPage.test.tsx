@@ -456,6 +456,7 @@ describe('ChatPage request boundary', () => {
 
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
     expect(runtimeMock.handle).not.toHaveBeenCalled();
 
     fireEvent.keyDown(input, { key: 'Enter' });
