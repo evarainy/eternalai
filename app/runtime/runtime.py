@@ -143,6 +143,16 @@ class _PendingWorkflow:
     monotonic_deadline: float | None = None
 
 
+@dataclass(frozen=True)
+class _StagedWaiting:
+    pending_key: tuple[str, str, str]
+    expected: _PendingWorkflow | None
+    replacement: _PendingWorkflow | None
+    response_id: str
+    execution: ExecutionResult
+    confirmation: ConfirmationPreview | None
+
+
 _CONFIRMATION_TTL_SECONDS = 600
 _PARTIAL_CANDIDATE_NOTICE = (
     "本次仅在相关性最高的部分能力中选择；若目标不符，请补充具体操作。",
@@ -756,68 +766,14 @@ class RuntimeImpl:
                     raise DFormCollectionError("collection_version_conflict")
                 if record.version >= 32:
                     raise DFormCollectionError("collection_limit_reached")
-        await self._expire_pending_confirmations(memory_key)
+        if reference is None:
+            confirmation_envelope = await self._deterministic_confirmation(memory_key, message)
+            if confirmation_envelope is not None:
+                return confirmation_envelope
+        else:
+            await self._expire_pending_confirmations(memory_key)
         pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
-        if reference is None and pending is not None and pending.owner == memory_key:
-            if _is_explicit_workflow_confirmation(message, pending):
-                outcome = self._claim_confirmation(pending_key, pending, memory_key)
-                if outcome is not None:
-                    return await self._build_stale_confirmation_response(
-                        pending=pending,
-                        session_id=session_id,
-                        memory_key=memory_key,
-                    )
-                envelope, outcome = await self._process_pending_confirmation(
-                    pending_key=pending_key,
-                    pending=pending,
-                    session_id=session_id,
-                    memory_key=memory_key,
-                    action_type="confirm",
-                )
-                if outcome in {"action_version_conflict", "action_already_claimed"}:
-                    claim = self._claimed_pending_confirmations[
-                        _pending_confirmation_claim_key(pending_key, pending)
-                    ]
-                    if claim.cleanup_governed is False:
-                        return await self._finish_version_binding_failure(
-                            response_id=str(uuid4()),
-                            task_id=pending.task_id,
-                            session_id=session_id,
-                            trace_id=pending.trace_id,
-                            capability_id=pending.capability_id,
-                            memory_key=memory_key,
-                        )
-                return envelope
-            if _is_stale_workflow_confirmation_message(message):
-                return await self._build_stale_confirmation_response(
-                    pending=pending,
-                    session_id=session_id,
-                    memory_key=memory_key,
-                )
-
-        if reference is None and _is_stale_workflow_confirmation_message(message):
-            confirmation_reference = message.strip().split()[-1]
-            cached = self._lookup_confirmation_outcome(memory_key, confirmation_reference)
-            if cached in {"cancelled", "confirmation_invalidated"}:
-                action_trace_id, action_task_id = str(uuid4()), str(uuid4())
-                await self._trace_port.record_step(
-                    action_trace_id,
-                    action_task_id,
-                    session_id,
-                    tenant_id=memory_key.tenant_id,
-                    ai_user_id=memory_key.ai_user_id,
-                    event_type="user_action",
-                    status="ok",
-                    attributes={"phase": "inbound", "action_type": "confirm"},
-                )
-                return await self._finish_user_action_attempt(
-                    action_trace_id=action_trace_id,
-                    action_task_id=action_task_id,
-                    session_id=session_id,
-                    memory_key=memory_key,
-                    outcome=cached or "confirmation_invalidated",
-                )
 
         task_id = collection.record.task_id if collection is not None else str(uuid4())
         trace_id = collection.record.trace_id if collection is not None else str(uuid4())
@@ -1445,112 +1401,32 @@ class RuntimeImpl:
                 error_code=exec_result.error_code,
                 attributes=exec_result.browser_diagnostic.attributes(),
             )
-        confirmation: ConfirmationPreview | None = None
-        gate_request_id: str | None = None
-        action_digest: str | None = None
-        request_digest: str | None = None
-        gate_manifest_digest: str | None = None
-        workflow_waiting = (
-            selected_capability.type == "workflow" and exec_result.status == "waiting_user"
+        staged = await self._stage_waiting(
+            pending_key=pending_key,
+            expected=pending,
+            memory_key=memory_key,
+            task_id=task_id,
+            trace_id=trace_id,
+            response_id=response_id,
+            capability=selected_capability,
+            arguments=capability_ref.arguments,
+            exec_result=exec_result,
+            binding_manifest=binding_manifest,
+            projection_snapshot=projection_snapshot,
         )
-        requested_at = self._utc_clock()
-        gate_expires_at = requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS)
-        monotonic_deadline = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
-        if workflow_waiting and self._human_gate_port is not None:
-            try:
-                if binding_manifest is None:
-                    raise VersionBindingMismatchError(
-                        "Waiting Workflow has no Task version binding"
-                    )
-                gate_request_id = response_id
-                gate_manifest_digest = binding_manifest.manifest_digest
-                if self._workflow_engine is None:
-                    raise VersionBindingMismatchError(
-                        "Waiting Workflow has no immutable action digest"
-                    )
-                action_digest = await self._workflow_engine.pending_confirmation_action_digest(
-                    task_id
-                )
-                confirmation = self._orchestration.prepare_confirmation(
-                    capability_id=selected_capability.capability_id,
-                    arguments=capability_ref.arguments,
-                    capability=selected_capability,
-                )
-                request_digest = immutable_request_digest(
-                    task_id=task_id,
-                    action_digest=action_digest,
-                    preview=confirmation.to_payload(),
-                    binding_manifest_digest=gate_manifest_digest,
-                )
-                persisted_gate = await self._workflow_engine.governed_confirmation(task_id)
-                if persisted_gate is not None:
-                    gate_request_id = persisted_gate.request_id
-                    response_id = persisted_gate.request_id
-                    action_digest = persisted_gate.action_digest
-                    request_digest = persisted_gate.request_digest
-                    gate_manifest_digest = persisted_gate.binding_manifest_digest
-                    gate_expires_at = persisted_gate.expires_at
-                    monotonic_deadline = self._monotonic_clock() + max(
-                        0,
-                        (gate_expires_at - self._utc_clock()).total_seconds(),
-                    )
-                else:
-                    await self._human_gate_port.create_request(
-                        HumanGateRequest(
-                            request_id=gate_request_id,
-                            task_id=task_id,
-                            requested_for_ai_user_id=ai_user_id,
-                            requested_session_id=session_id,
-                            requested_tenant_id=memory_key.tenant_id,
-                            action_digest=action_digest,
-                            request_digest=request_digest,
-                            binding_manifest_digest=gate_manifest_digest,
-                            requested_at=requested_at,
-                            expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
-                        )
-                    )
-            except (HumanGateConflictError, VersionBindingMismatchError):
-                if self._workflow_engine is not None:
-                    await self._workflow_engine.discard_checkpoint(task_id)
-                exec_result = ExecutionResult(
-                    status="failed",
-                    error_code="internal_error",
-                    trace_id=trace_id,
-                )
-                workflow_waiting = False
-                confirmation = None
-        if workflow_waiting:
-            replacement = _PendingWorkflow(
-                task_id=task_id,
+        response_id, exec_result = staged.response_id, staged.execution
+        confirmation = staged.confirmation
+        workflow_waiting = staged.replacement is not None
+        if workflow_waiting and not self._publish_staged(staged):
+            if self._workflow_engine is not None:
+                await self._workflow_engine.discard_checkpoint(task_id)
+            exec_result = ExecutionResult(
+                status="failed",
+                error_code="internal_error",
                 trace_id=trace_id,
-                response_id=response_id,
-                capability_id=capability_ref.capability_id,
-                projection_snapshot=projection_snapshot,
-                gate_request_id=gate_request_id,
-                action_digest=action_digest,
-                request_digest=request_digest,
-                binding_manifest_digest=gate_manifest_digest,
-                owner=memory_key,
-                expires_at=gate_expires_at,
-                monotonic_deadline=monotonic_deadline,
             )
-            await self._expire_pending_confirmations(memory_key)
-            if pending is not None and self._pending_workflows.get(pending_key) is None:
-                pending = None
-            if not self._publish_pending_workflow(
-                pending_key,
-                expected=pending,
-                replacement=replacement,
-            ):
-                if self._workflow_engine is not None:
-                    await self._workflow_engine.discard_checkpoint(task_id)
-                exec_result = ExecutionResult(
-                    status="failed",
-                    error_code="internal_error",
-                    trace_id=trace_id,
-                )
-                workflow_waiting = False
-                confirmation = None
+            workflow_waiting = False
+            confirmation = None
 
         if exec_result.status == "waiting_user" and confirmation is None:
             confirmation = self._orchestration.prepare_confirmation(
@@ -1683,6 +1559,133 @@ class RuntimeImpl:
             )
         return envelope
 
+    async def _stage_waiting(
+        self,
+        *,
+        pending_key: tuple[str, str, str],
+        expected: _PendingWorkflow | None,
+        memory_key: SessionMemoryKey,
+        task_id: str,
+        trace_id: str,
+        response_id: str,
+        capability: CapabilitySpec,
+        arguments: dict[str, Any],
+        exec_result: ExecutionResult,
+        binding_manifest: TaskVersionBindingManifest | None,
+        projection_snapshot: ProjectionContractSnapshot,
+    ) -> _StagedWaiting:
+        """Prepare a waiting confirmation without publishing it as claimable."""
+        confirmation: ConfirmationPreview | None = None
+        gate_request_id: str | None = None
+        action_digest: str | None = None
+        request_digest: str | None = None
+        gate_manifest_digest: str | None = None
+        workflow_waiting = (
+            capability.type == "workflow" and exec_result.status == "waiting_user"
+        )
+        requested_at = self._utc_clock()
+        gate_expires_at = requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS)
+        monotonic_deadline = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
+        if workflow_waiting and self._human_gate_port is not None:
+            try:
+                if binding_manifest is None:
+                    raise VersionBindingMismatchError(
+                        "Waiting Workflow has no Task version binding"
+                    )
+                gate_request_id = response_id
+                gate_manifest_digest = binding_manifest.manifest_digest
+                if self._workflow_engine is None:
+                    raise VersionBindingMismatchError(
+                        "Waiting Workflow has no immutable action digest"
+                    )
+                action_digest = await self._workflow_engine.pending_confirmation_action_digest(
+                    task_id
+                )
+                confirmation = self._orchestration.prepare_confirmation(
+                    capability_id=capability.capability_id,
+                    arguments=arguments,
+                    capability=capability,
+                )
+                request_digest = immutable_request_digest(
+                    task_id=task_id,
+                    action_digest=action_digest,
+                    preview=confirmation.to_payload(),
+                    binding_manifest_digest=gate_manifest_digest,
+                )
+                persisted_gate = await self._workflow_engine.governed_confirmation(task_id)
+                if persisted_gate is not None:
+                    gate_request_id = persisted_gate.request_id
+                    response_id = persisted_gate.request_id
+                    action_digest = persisted_gate.action_digest
+                    request_digest = persisted_gate.request_digest
+                    gate_manifest_digest = persisted_gate.binding_manifest_digest
+                    gate_expires_at = persisted_gate.expires_at
+                    monotonic_deadline = self._monotonic_clock() + max(
+                        0,
+                        (gate_expires_at - self._utc_clock()).total_seconds(),
+                    )
+                else:
+                    await self._human_gate_port.create_request(
+                        HumanGateRequest(
+                            request_id=gate_request_id,
+                            task_id=task_id,
+                            requested_for_ai_user_id=memory_key.ai_user_id,
+                            requested_session_id=memory_key.session_id,
+                            requested_tenant_id=memory_key.tenant_id,
+                            action_digest=action_digest,
+                            request_digest=request_digest,
+                            binding_manifest_digest=gate_manifest_digest,
+                            requested_at=requested_at,
+                            expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                        )
+                    )
+            except (HumanGateConflictError, VersionBindingMismatchError):
+                if self._workflow_engine is not None:
+                    await self._workflow_engine.discard_checkpoint(task_id)
+                exec_result = ExecutionResult(
+                    status="failed",
+                    error_code="internal_error",
+                    trace_id=trace_id,
+                )
+                workflow_waiting = False
+                confirmation = None
+        replacement: _PendingWorkflow | None = None
+        if workflow_waiting:
+            replacement = _PendingWorkflow(
+                task_id=task_id,
+                trace_id=trace_id,
+                response_id=response_id,
+                capability_id=capability.capability_id,
+                projection_snapshot=projection_snapshot,
+                gate_request_id=gate_request_id,
+                action_digest=action_digest,
+                request_digest=request_digest,
+                binding_manifest_digest=gate_manifest_digest,
+                owner=memory_key,
+                expires_at=gate_expires_at,
+                monotonic_deadline=monotonic_deadline,
+            )
+            await self._expire_pending_confirmations(memory_key)
+            if expected is not None and self._pending_workflows.get(pending_key) is None:
+                expected = None
+        return _StagedWaiting(
+            pending_key=pending_key,
+            expected=expected,
+            replacement=replacement,
+            response_id=response_id,
+            execution=exec_result,
+            confirmation=confirmation,
+        )
+
+    def _publish_staged(self, staged: _StagedWaiting) -> bool:
+        """Synchronous CAS publication; no await between check and swap."""
+        assert staged.replacement is not None
+        return self._publish_pending_workflow(
+            staged.pending_key,
+            expected=staged.expected,
+            replacement=staged.replacement,
+        )
+
     async def _finish_browser_admission(
         self,
         principal: Principal,
@@ -1772,6 +1775,79 @@ class RuntimeImpl:
             trace_summary=diagnostic,
         )
 
+    async def _deterministic_confirmation(
+        self,
+        memory_key: SessionMemoryKey,
+        message: str,
+    ) -> ResponseEnvelope | None:
+        """Text confirmation and stale card references, before any ordinary turn."""
+        session_id = memory_key.session_id
+        await self._expire_pending_confirmations(memory_key)
+        pending_key = _pending_workflow_key(
+            memory_key.tenant_id, memory_key.session_id, memory_key.ai_user_id
+        )
+        pending = self._pending_workflows.get(pending_key)
+        if pending is not None and pending.owner == memory_key:
+            if _is_explicit_workflow_confirmation(message, pending):
+                outcome = self._claim_confirmation(pending_key, pending, memory_key)
+                if outcome is not None:
+                    return await self._build_stale_confirmation_response(
+                        pending=pending,
+                        session_id=session_id,
+                        memory_key=memory_key,
+                    )
+                envelope, outcome = await self._process_pending_confirmation(
+                    pending_key=pending_key,
+                    pending=pending,
+                    session_id=session_id,
+                    memory_key=memory_key,
+                    action_type="confirm",
+                )
+                if outcome in {"action_version_conflict", "action_already_claimed"}:
+                    claim = self._claimed_pending_confirmations[
+                        _pending_confirmation_claim_key(pending_key, pending)
+                    ]
+                    if claim.cleanup_governed is False:
+                        return await self._finish_version_binding_failure(
+                            response_id=str(uuid4()),
+                            task_id=pending.task_id,
+                            session_id=session_id,
+                            trace_id=pending.trace_id,
+                            capability_id=pending.capability_id,
+                            memory_key=memory_key,
+                        )
+                return envelope
+            if _is_stale_workflow_confirmation_message(message):
+                return await self._build_stale_confirmation_response(
+                    pending=pending,
+                    session_id=session_id,
+                    memory_key=memory_key,
+                )
+
+        if _is_stale_workflow_confirmation_message(message):
+            confirmation_reference = message.strip().split()[-1]
+            cached = self._lookup_confirmation_outcome(memory_key, confirmation_reference)
+            if cached in {"cancelled", "confirmation_invalidated"}:
+                action_trace_id, action_task_id = str(uuid4()), str(uuid4())
+                await self._trace_port.record_step(
+                    action_trace_id,
+                    action_task_id,
+                    session_id,
+                    tenant_id=memory_key.tenant_id,
+                    ai_user_id=memory_key.ai_user_id,
+                    event_type="user_action",
+                    status="ok",
+                    attributes={"phase": "inbound", "action_type": "confirm"},
+                )
+                return await self._finish_user_action_attempt(
+                    action_trace_id=action_trace_id,
+                    action_task_id=action_task_id,
+                    session_id=session_id,
+                    memory_key=memory_key,
+                    outcome=cached or "confirmation_invalidated",
+                )
+        return None
+
     async def handle_user_action(
         self,
         channel: Literal["web", "cli", "api", "mock"],
@@ -1780,13 +1856,23 @@ class RuntimeImpl:
         action: UserAction,
     ) -> ResponseEnvelope:
         del channel
+        return await self._confirmation_action(
+            SessionMemoryKey(
+                tenant_id=principal.org_ctx.tenant_id,
+                session_id=session_id,
+                ai_user_id=principal.ai_user_id,
+            ),
+            action,
+        )
+
+    async def _confirmation_action(
+        self,
+        memory_key: SessionMemoryKey,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        session_id = memory_key.session_id
         action_trace_id = str(uuid4())
         action_task_id = str(uuid4())
-        memory_key = SessionMemoryKey(
-            tenant_id=principal.org_ctx.tenant_id,
-            session_id=session_id,
-            ai_user_id=principal.ai_user_id,
-        )
         await self._trace_port.record_step(
             action_trace_id,
             action_task_id,
@@ -1798,7 +1884,7 @@ class RuntimeImpl:
             attributes={"phase": "inbound", "action_type": action.action_type},
         )
 
-        pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, principal.ai_user_id)
+        pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, memory_key.ai_user_id)
         if self._human_gate_port is None:
             return await self._finish_user_action_attempt(
                 action_trace_id=action_trace_id,
