@@ -674,6 +674,15 @@ _RESPONSE_CASES = [
     ),
     ("failed", "adapter_error", "build_failed", "操作失败", "Operation failed.", "failed", "none"),
     (
+        "failed",
+        "adapter_http_500",
+        "build_failed",
+        "操作失败",
+        "Operation failed.",
+        "failed",
+        "none",
+    ),
+    (
         "no_capability_found",
         "capability_not_found",
         "build_no_capability_found",
@@ -692,6 +701,17 @@ _RESPONSE_CASES = [
         "confirm_card",
     ),
 ]
+
+
+# Conversation copy specific to OA (O1 / N1); every other target keeps the generic text.
+_OA_RESPONSE_MESSAGES = {
+    "identity_expired": (
+        "OA 登录已失效，自动重新登录未成功。"
+        "请到“账号绑定”重新验证 OA 密码，或退出本系统后重新登录。"
+    ),
+    "adapter_timeout": "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。",
+    "adapter_http_500": "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。",
+}
 
 
 @pytest.mark.parametrize(
@@ -715,6 +735,8 @@ def test_build_response_forwards_each_branch_to_the_real_builder_contract(
     capability_id: str,
     target: str | None,
 ) -> None:
+    if target == "oa" and error in _OA_RESPONSE_MESSAGES:
+        message = _OA_RESPONSE_MESSAGES[error]
     builder = RecordingBuilder()
     adapter, registry, gateway, engine = _adapter(builder=builder)
     context = _response_context(capability_id)

@@ -31,6 +31,7 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
+_DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS = 300
 _DEFAULT_OA_USER_PROFILE_PATH = "/api/hrm/resource/getResourceBaseTitle"
 # Identity is read on every page load, so it gets a tighter ceiling than the
 # capability reads: a slow OA must not stretch the first paint.
@@ -303,6 +304,9 @@ class ProductionSettings:
     llm_enable_thinking: bool
     health_timeout_seconds: float
     csrf_allowed_origins: frozenset[str] = field(default_factory=frozenset)
+    # SESSION_COOKIE_TTL_S is the idle window; the absolute cap is off when None.
+    session_absolute_ttl_seconds: int | None = None
+    session_renew_min_interval_seconds: int = _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS
     # Runtime behind /api/v1/runtime; AgentScope is imported only for "agentscope".
     runtime_engine: RuntimeEngine = "legacy"
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
@@ -395,6 +399,28 @@ class ProductionSettings:
             "SESSION_COOKIE_SECURE",
             default=True,
         )
+        session_cookie_ttl_seconds = _required_positive_int(source, "SESSION_COOKIE_TTL_S")
+        # Unset or blank (compose passthrough) keeps the absolute cap off.
+        absolute_ttl_raw = source.get("SESSION_ABSOLUTE_TTL_S", "").strip()
+        session_absolute_ttl_seconds = (
+            _parse_positive_int(absolute_ttl_raw, "SESSION_ABSOLUTE_TTL_S")
+            if absolute_ttl_raw
+            else None
+        )
+        if (
+            session_absolute_ttl_seconds is not None
+            and session_absolute_ttl_seconds <= session_cookie_ttl_seconds
+        ):
+            raise RuntimeError("SESSION_ABSOLUTE_TTL_S must exceed SESSION_COOKIE_TTL_S")
+        session_renew_min_interval_seconds = _positive_int(
+            source,
+            "SESSION_RENEW_MIN_INTERVAL_S",
+            _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS,
+        )
+        if session_renew_min_interval_seconds >= session_cookie_ttl_seconds:
+            raise RuntimeError(
+                "SESSION_RENEW_MIN_INTERVAL_S must be less than SESSION_COOKIE_TTL_S"
+            )
         csrf_allowed_origins = _csrf_allowed_origins(source)
         if not session_cookie_secure and any(
             origin.startswith("https://") for origin in csrf_allowed_origins
@@ -429,10 +455,9 @@ class ProductionSettings:
                 source,
                 "OA_CREDENTIAL_TTL_S",
             ),
-            session_cookie_ttl_seconds=_required_positive_int(
-                source,
-                "SESSION_COOKIE_TTL_S",
-            ),
+            session_cookie_ttl_seconds=session_cookie_ttl_seconds,
+            session_absolute_ttl_seconds=session_absolute_ttl_seconds,
+            session_renew_min_interval_seconds=session_renew_min_interval_seconds,
             session_cookie_secure=session_cookie_secure,
             credential_encryption_key=_base64_key(
                 source,

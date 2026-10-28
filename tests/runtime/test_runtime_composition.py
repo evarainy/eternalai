@@ -920,8 +920,11 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         authentication=None,
         session_tokens=None,
         session_revocations=MemorySessionRevocations(),
-        session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
+        session_binder=SimpleNamespace(
+            bind=lambda *_args: "unused", restore_scope=lambda *_args: "unused"
+        ),
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
+        principal_role_reader=SimpleNamespace(list_roles=AsyncMock()),
         health_checks={},
         mcp_service=None,
         health_timeout_seconds=settings.health_timeout_seconds,

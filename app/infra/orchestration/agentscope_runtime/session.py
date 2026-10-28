@@ -45,7 +45,8 @@ class _Entry:
     state: AgentState
     busy: bool
     last_used: float
-    hard_expiry: datetime
+    # Login-instance deadline (survives renewal); None means the instance has none.
+    hard_expiry: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +83,7 @@ class SessionCoordinator:
         digest = hmac.new(self._secret, _KEY_DOMAIN + fingerprint, sha256).hexdigest()
         return (tenant_id, ai_user_id, digest, session_id)
 
-    def acquire(self, key: SessionKey, *, expires_at: datetime) -> AgentState:
+    def acquire(self, key: SessionKey, *, expires_at: datetime | None) -> AgentState:
         """Mark the session busy and return its state; raise if already busy.
 
         No await between the check and the set, so two turns cannot both pass.
@@ -152,7 +153,10 @@ class SessionCoordinator:
             key
             for key, entry in self._entries.items()
             if not entry.busy
-            and (now - entry.last_used > self._idle_ttl or entry.hard_expiry <= utc_now)
+            and (
+                now - entry.last_used > self._idle_ttl
+                or (entry.hard_expiry is not None and entry.hard_expiry <= utc_now)
+            )
         ]
         for key in expired:
             del self._entries[key]

@@ -456,6 +456,8 @@ class AgentOrchestrationAdapter:
                     if execution.error_code in {"identity_expired", "identity_revoked"}
                     else "需要连接业务账号，请到 Apps 完成授权"
                 )
+            elif target_system == "oa" and execution.error_code == "identity_expired":
+                identity_message = _OA_IDENTITY_EXPIRED_MESSAGE
             return self._response_builder.build_operator_handback_bind_required(
                 context.response_id,
                 context.task_id,
@@ -466,12 +468,16 @@ class AgentOrchestrationAdapter:
                 target_system,
                 reason_code=execution.error_code or "identity_unbound",
             )
+        oa_unreachable = target_system == "oa" and execution.error_code in {
+            "adapter_timeout",
+            "adapter_http_500",
+        }
         if execution.status == "timeout":
             return self._response_builder.build_failed(
                 context.response_id,
                 context.task_id,
                 context.session_id,
-                "操作超时，请重试",
+                _OA_UNREACHABLE_MESSAGE if oa_unreachable else "操作超时，请重试",
                 "Gateway timeout.",
                 execution.trace_id or context.trace_id,
             )
@@ -480,7 +486,7 @@ class AgentOrchestrationAdapter:
                 context.response_id,
                 context.task_id,
                 context.session_id,
-                "操作失败",
+                _OA_UNREACHABLE_MESSAGE if oa_unreachable else "操作失败",
                 "Operation failed.",
                 execution.trace_id or context.trace_id,
             )
@@ -613,6 +619,12 @@ def _mcp_recovery_reference(
     ):
         return None
     return {"operation_id": operation_id, "state": state}
+
+
+_OA_IDENTITY_EXPIRED_MESSAGE = (
+    "OA 登录已失效，自动重新登录未成功。请到“账号绑定”重新验证 OA 密码，或退出本系统后重新登录。"
+)
+_OA_UNREACHABLE_MESSAGE = "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。"
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:

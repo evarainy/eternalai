@@ -7,7 +7,9 @@
 import type {
   LoginApiV1AuthLoginPostBody,
   LoginResponse,
-  LogoutResponse
+  LogoutResponse,
+  RenewResponse,
+  SessionStatusResponse
 } from './auth.schemas';
 
 import { customInstance } from '../../api/mutator';
@@ -40,5 +42,31 @@ export const logoutApiV1AuthLogoutPost = (
       );
     }
 
+/**
+ * @summary Renew
+ */
+export const renewApiV1AuthRenewPost = (
+
+ ) => {
+      return customInstance<RenewResponse>(
+      {url: `/api/v1/auth/renew`, method: 'POST'
+    },
+      );
+    }
+
+/**
+ * @summary Session
+ */
+export const sessionApiV1AuthSessionGet = (
+
+ ) => {
+      return customInstance<SessionStatusResponse>(
+      {url: `/api/v1/auth/session`, method: 'GET'
+    },
+      );
+    }
+
 export type LoginApiV1AuthLoginPostResult = NonNullable<Awaited<ReturnType<typeof loginApiV1AuthLoginPost>>>
 export type LogoutApiV1AuthLogoutPostResult = NonNullable<Awaited<ReturnType<typeof logoutApiV1AuthLogoutPost>>>
+export type RenewApiV1AuthRenewPostResult = NonNullable<Awaited<ReturnType<typeof renewApiV1AuthRenewPost>>>
+export type SessionApiV1AuthSessionGetResult = NonNullable<Awaited<ReturnType<typeof sessionApiV1AuthSessionGet>>>

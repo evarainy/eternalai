@@ -136,6 +136,17 @@
             ],
             "title": "Org Status",
             "type": "string"
+          },
+          "restore_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restore Scope"
           }
         },
         "required": [

@@ -322,7 +322,7 @@ class DFormManagement:
             and captured is not None
             and captured.principal == principal == actor.verified.principal
             and captured.fingerprint == actor.verified.fingerprint
-            and captured.expires_at == actor.verified.expires_at
+            and captured.instance_expires_at == actor.verified.instance_expires_at
         )
 
     async def _caller(

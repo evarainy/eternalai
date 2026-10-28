@@ -62,19 +62,43 @@ class SessionTokenError(AuthenticationError):
 
 @dataclass(frozen=True)
 class VerifiedSessionToken:
-    """Trusted metadata; never carries the original bearer credential."""
+    """Trusted metadata; never carries the original bearer credential.
+
+    ``expires_at`` is always this ticket's own deadline and is the only value
+    execution gates may use. ``instance_expires_at`` is reserved for bindings
+    held across requests that must survive renewal of the same login
+    instance; ``None`` means the instance has no deadline and must never be
+    passed to an execution gate.
+    """
 
     principal: Principal = field(repr=False)
     fingerprint: bytes = field(repr=False)
     expires_at: datetime
-    version: Literal[1, 2]
+    version: Literal[1, 2, 3]
+    absolute_expires_at: datetime | None = None
+
+    @property
+    def instance_expires_at(self) -> datetime | None:
+        return self.absolute_expires_at if self.version == 3 else self.expires_at
 
 
 @dataclass(frozen=True)
 class AuthenticatedSessionContext:
+    """Verified request session; see ``VerifiedSessionToken`` for deadline rules.
+
+    Production constructs this only in ``require_session`` and passes the v3
+    fields explicitly; the defaults keep legacy (non-renewable) semantics.
+    """
+
     principal: Principal
     fingerprint: bytes = field(repr=False)
     expires_at: datetime
+    renewable: bool = False
+    absolute_expires_at: datetime | None = None
+
+    @property
+    def instance_expires_at(self) -> datetime | None:
+        return self.absolute_expires_at if self.renewable else self.expires_at
 
 
 # Request tasks inherit this only from the verified HTTP authentication dependency.
@@ -192,6 +216,19 @@ class SessionTokenPort(Protocol):
     def verify(self, token: str) -> Principal: ...
 
     def inspect(self, token: str) -> VerifiedSessionToken: ...
+
+    def renew(
+        self, token: str
+    ) -> tuple[str, VerifiedSessionToken] | Literal["legacy", "throttled", "capped"]:
+        """Reissue a valid v3 ticket of the same instance, or say why not."""
+        ...
+
+    def inspect_for_revocation(self, token: str) -> VerifiedSessionToken | None:
+        """Like ``inspect`` but also accepts an expired v3 ticket; revocation only.
+
+        Returns None for an expired v1/v2 ticket. Only login and logout may call it.
+        """
+        ...
 
 
 class CredentialStorePort(Protocol):
