@@ -17,18 +17,26 @@ const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as con
 const AUTH_COOKIE_LOCK = 'eternalai-auth-cookie';
 const AUTH_LOCK_WAIT_MS = 10_000;
 const EXPIRY_GRACE_MS = 2_000;
+// Mirrors the server's default SESSION_RENEW_MIN_INTERVAL_S; only gates the immediate check.
+const RENEW_MIN_INTERVAL_MS = 300_000;
 const MAX_TIMER_MS = 2_147_483_647;
 
 // Only these DOM events count as use; status reads, OA keepalive and business APIs never do.
 let lastInputAt = 0;
 let inputWatchers = 0;
-const onInput = () => { lastInputAt = Date.now(); };
+const inputListeners = new Set<() => void>();
+const onInput = () => {
+  lastInputAt = Date.now();
+  for (const listener of inputListeners) listener();
+};
 
-function watchInput(): () => void {
+function watchInput(listener?: () => void): () => void {
+  if (listener !== undefined) inputListeners.add(listener);
   if (inputWatchers++ === 0) {
     for (const event of ACTIVITY_EVENTS) window.addEventListener(event, onInput, { passive: true });
   }
   return () => {
+    if (listener !== undefined) inputListeners.delete(listener);
     if (--inputWatchers === 0) {
       for (const event of ACTIVITY_EVENTS) window.removeEventListener(event, onInput);
     }
@@ -161,7 +169,6 @@ export function useAppSessionRenewal(): void {
     let lastRenewRequestAt = Date.now();
     let expiryTimer: number | undefined;
     let localDeadline = Number.POSITIVE_INFINITY;
-    const stopWatching = watchInput();
     const isCurrent = () => live && useAuthStore.getState().status === 'authenticated'
       && useAuthStore.getState().generation === generation;
 
@@ -202,6 +209,11 @@ export function useAppSessionRenewal(): void {
         renewInFlight = false;
       }
     };
+    // The first input after a long idle renews at once instead of waiting for the next tick, so a
+    // card created right after it is not capped by the old idle deadline. tick() dedupes in-flight.
+    const stopWatching = watchInput(() => {
+      if (Date.now() - lastRenewRequestAt >= RENEW_MIN_INTERVAL_MS) void tick();
+    });
     const onVisible = () => {
       if (document.visibilityState === 'visible' && Date.now() >= localDeadline) void check();
     };

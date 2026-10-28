@@ -19,8 +19,13 @@ function session() {
 const calls = (url: string) => vi.mocked(globalThis.fetch).mock.calls
   .filter(([input]) => String(input) === url).length;
 
+// Each test starts a day later, so module-level input time from an earlier test is in the past.
+let clock = Date.UTC(2026, 9, 29);
+
 beforeEach(() => {
   vi.useFakeTimers();
+  clock += 86_400_000;
+  vi.setSystemTime(clock);
   useAuthStore.setState({ status: 'authenticated', generation: 30 });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
@@ -29,6 +34,7 @@ beforeEach(() => {
         : session();
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   });
+  vi.mocked(globalThis.fetch).mockClear();
 });
 
 afterEach(() => {
@@ -76,4 +82,26 @@ it('app_renewal_keeps_running_after_oa_keepalive_reports_disabled', async () => 
   // Without new input after the last renew request, no further renew is sent.
   await minute();
   expect(calls(RENEW_URL)).toBe(3);
+});
+
+it('first_input_after_a_long_idle_renews_at_once_without_waiting_for_the_tick', async () => {
+  renderHook(() => { useAppSessionRenewal(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(6 * 60_000 + 30_000); });
+  expect(calls(RENEW_URL)).toBe(0);
+
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(calls(RENEW_URL)).toBe(1);
+
+  // Inside the minimum interval further input waits for the regular tick.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+    window.dispatchEvent(new KeyboardEvent('keydown'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(calls(RENEW_URL)).toBe(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+  expect(calls(RENEW_URL)).toBe(2);
 });
