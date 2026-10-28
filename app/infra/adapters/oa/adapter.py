@@ -307,7 +307,8 @@ class OAReadAdapter:
                 if probe == "alive":
                     return "retry"
                 if probe == "unavailable":
-                    return None
+                    # Unreachable OA is not proof of expiry; no relogin, no reread.
+                    return _adapter_error(argument_keys, "provider_transport")
                 trigger = "local_expiry"
             elif isinstance(cause, OALiveIdentityExpired):
                 trigger = "read_identity_expired"

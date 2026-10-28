@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, AsyncIterator, cast
 from unittest.mock import AsyncMock, Mock
@@ -184,6 +185,16 @@ class FakeBindingStore:
         expected_write: CredentialWriteStamp,
     ) -> PasswordBindingCredential:
         raise AssertionError
+
+    async def recovery_state(
+        self, ai_user_id: str, *, tenant_id: str
+    ) -> CredentialRecoveryState | None:
+        return None
+
+    async def extend_session_expiry(
+        self, snapshot: CredentialSnapshot, expires_at: datetime
+    ) -> bool:
+        return False
 
 
 class FakeAcquirer:
@@ -1101,8 +1112,26 @@ class FakeRecoveryStore(FakeBindingStore):
         self.claims += 1
         return await super().claim_write(snapshot)
 
-    async def recovery_state(self, ai_user_id: str, *, tenant_id: str):
+    async def recovery_state(
+        self, ai_user_id: str, *, tenant_id: str
+    ) -> CredentialRecoveryState | None:
         return self.state
+
+    async def extend_session_expiry(
+        self, snapshot: CredentialSnapshot, expires_at: datetime
+    ) -> bool:
+        state = self.state
+        if (
+            snapshot != state.snapshot
+            or state.revoked
+            or state.binding_state not in {"unverified", "active"}
+            or state.session_expires_at is None
+        ):
+            return False
+        self.state = replace(
+            state, session_expires_at=max(state.session_expires_at, expires_at)
+        )
+        return True
 
     async def mark_poll_succeeded(self, ai_user_id, target_system, *, tenant_id, expected_write):
         await super().mark_poll_succeeded(
