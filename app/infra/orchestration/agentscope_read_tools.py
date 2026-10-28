@@ -54,7 +54,11 @@ from app.knowledge.capability_selection import (
     canonical_json,
     capability_fingerprint,
 )
-from app.ports.agent_orchestration import AgentOrchestrationPort, AgentResponseContext
+from app.ports.agent_orchestration import (
+    AgentOrchestrationPort,
+    AgentResponseContext,
+    ConfirmationPreview,
+)
 from app.ports.auth import AuthenticatedSessionContext, authenticated_session
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
@@ -63,6 +67,7 @@ from app.ports.evaluation import BusinessVerification, EvaluationScope
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGatePort,
+    TaskVersionBindingManifest,
     VersionBindingMismatchError,
     build_task_version_binding_manifest,
 )
@@ -73,6 +78,7 @@ from app.ports.response_projection_contract import (
     ApprovedResponseProjectionError,
     ProjectionContractSnapshot,
 )
+from app.ports.runtime import ConfirmationCoordinatorPort
 from app.ports.task_store import (
     SessionStorePort,
     TaskEventRecord,
@@ -120,6 +126,8 @@ class AgentScopeRuntimeDependencies:
     model_factory: Callable[[], ChatModelBase]
     model_name: str
     session_idle_ttl_seconds: int
+    # Deterministic confirmation entry points shared with the legacy runtime.
+    confirmations: ConfirmationCoordinatorPort
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +156,20 @@ class ReadToolScope:
             channel=channel,
             fingerprint=session.fingerprint,
         )
+
+
+def session_matches(scope: ReadToolScope) -> bool:
+    """Whether the request's verified login is still the one the turn started with."""
+
+    session = authenticated_session.get()
+    return (
+        session is not None
+        and session.principal.ai_user_id == scope.ai_user_id
+        and session.principal.org_ctx.tenant_id == scope.tenant_id
+        and session.expires_at > datetime.now(UTC)
+        and bool(scope.fingerprint)
+        and compare_digest(session.fingerprint, scope.fingerprint)
+    )
 
 
 def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
@@ -210,6 +232,28 @@ def close_once(
     closing = ClosingTask(close.task_id, future)
     ledger.closes[close.task_id] = closing
     return closing
+
+
+async def write_waiting_marks(
+    deps: AgentScopeRuntimeDependencies,
+    scope: ReadToolScope,
+    task_id: str,
+    trace_id: str,
+    *,
+    error_code: ErrorCode | None = None,
+) -> None:
+    """Waiting marks of a proposal, written before it may be published.
+
+    Same order as the legacy waiting terminal: envelope event, then the
+    waiting status; no terminal event, evaluation or finalize.
+    """
+
+    await deps.trace_port.record_step(
+        trace_id, task_id, scope.session_id,
+        tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
+        event_type="response_envelope_created", status="ok",
+    )
+    await deps.task_store.update_status(task_id, "waiting_user", error_code)
 
 
 async def await_close(closing: ClosingTask, remaining: float | None) -> bool:
@@ -319,6 +363,9 @@ class ToolExecutor:
     its own task (own). Results go to the turn ledger; the runtime summarizes.
     """
 
+    # Capability type this executor runs; the write-proposal executor runs workflows.
+    capability_type: str = "query"
+
     def __init__(
         self,
         scope: ReadToolScope,
@@ -375,21 +422,44 @@ class ToolExecutor:
             return await self._attach(_agent_state, call_id, snapshot, arguments, call)
         return await self._own(_agent_state, call_id, snapshot, arguments, call)
 
+    async def run_claimed(
+        self,
+        state: AgentState,
+        call_id: str,
+        snapshot: CallSnapshot,
+        arguments: dict[str, Any],
+    ) -> ToolChunk:
+        """Run a call the caller already checked and claimed the turn task for."""
+
+        call = _CallKey(
+            snapshot.capability_fingerprints[self._name],
+            sha256(canonical_json(arguments).encode("utf-8")).hexdigest(),
+        )
+        return await self._attach(state, call_id, snapshot, arguments, call)
+
+    async def _stage_card(
+        self,
+        task_id: str,
+        trace_id: str,
+        response_id: str,
+        capability: CapabilitySpec,
+        arguments: dict[str, Any],
+        execution: ExecutionResult,
+        manifest: TaskVersionBindingManifest,
+        snapshot: CallSnapshot,
+        projection: ProjectionContractSnapshot,
+    ) -> tuple[str, ExecutionResult, ConfirmationPreview | None]:
+        """Response id, execution and confirmation card of a result; reads have no card."""
+
+        return response_id, execution, None
+
     def _reject(self, call_id: str, error_code: str, text: str) -> ToolChunk:
         self._ledger.record_pre_exec(call_id, self._name, error_code, "execution_rejected")
         self._log("rejected", error_code, 0.0)
         return _chunk(text, error_code=error_code)
 
     def _session_matches(self) -> bool:
-        session = authenticated_session.get()
-        return (
-            session is not None
-            and session.principal.ai_user_id == self._scope.ai_user_id
-            and session.principal.org_ctx.tenant_id == self._scope.tenant_id
-            and session.expires_at > datetime.now(UTC)
-            and bool(self._scope.fingerprint)
-            and compare_digest(session.fingerprint, self._scope.fingerprint)
-        )
+        return session_matches(self._scope)
 
     async def _attach(
         self,
@@ -579,7 +649,7 @@ class ToolExecutor:
         if (
             selection is None
             or selection.rule != "exact_id"
-            or selection.capability.type != "query"
+            or selection.capability.type != self.capability_type
             or not _matches_binding(selection.capability, self._binding)
             or capability_fingerprint(selection.capability)
             != snapshot.capability_fingerprints[self._name]
@@ -646,6 +716,10 @@ class ToolExecutor:
             )
         except VersionBindingMismatchError:
             execution = _failed("internal_error", trace_id)
+        response_id, execution, confirmation = await self._stage_card(
+            task_id, trace_id, response_id, capability, arguments, execution, manifest,
+            snapshot, projection,
+        )
         raw_execution = execution
         execution, verification = evaluate_required_postconditions(
             execution,
@@ -660,6 +734,7 @@ class ToolExecutor:
         try:
             envelope = deps.orchestration.build_response(
                 context=context, execution=execution, projection=projection,
+                confirmation=confirmation,
                 business_verification=verification if verification.rule_id else None,
             )
         except ApprovedResponseProjectionError:
@@ -839,4 +914,6 @@ __all__ = (
     "ToolExecutor",
     "await_close",
     "close_once",
+    "session_matches",
+    "write_waiting_marks",
 )

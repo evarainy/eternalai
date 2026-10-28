@@ -17,6 +17,7 @@ from app.ports.capability_gateway import ExecutionResult
 from app.ports.evaluation import BusinessVerification
 from app.ports.human_gate import VersionBinding
 from app.ports.response_envelope import ResponseEnvelope
+from app.ports.runtime import StagedWaiting
 
 ExecutionMode = Literal["attach", "own"]
 FailureKind = Literal["execution", "pre_exec"]
@@ -68,6 +69,13 @@ class BindingCard:
 
 
 @dataclass(frozen=True, slots=True)
+class Proposal:
+    """A write proposal waits for user confirmation; its card ends the turn."""
+
+    execution_index: int
+
+
+@dataclass(frozen=True, slots=True)
 class Unsupported:
     """The model reported that no visible group can handle the request."""
 
@@ -109,7 +117,7 @@ class TurnLedger:
     catalog_attributes: Mapping[str, Any]
     executions: list[LedgerExecution] = field(default_factory=list)
     failures: list[LedgerFailure] = field(default_factory=list)
-    terminal: BindingCard | Unsupported | Clarify | None = None
+    terminal: BindingCard | Proposal | Unsupported | Clarify | None = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
     call_of: dict[str, int] = field(default_factory=dict)
@@ -119,6 +127,16 @@ class TurnLedger:
     # Set synchronously by the executor when a call takes the turn task.
     turn_task_claimed: bool = False
     reset_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Write tool name -> capability id; a subset of business_tools.
+    write_tools: Mapping[str, str] = field(default_factory=dict)
+    # Waiting proposal staged with the coordinator but not yet published.
+    staged: StagedWaiting | None = None
+    # Bounded futures the session waits for before rollback and release.
+    interrupt: asyncio.Future[bool] | None = None
+    abandon: asyncio.Future[None] | None = None
+    # Set once the proposal is published: the coordinator alone closes the
+    # turn task from then on.
+    handoff: bool = False
 
     def snapshot_for(self, call_id: str | None) -> CallSnapshot | None:
         """Exposure snapshot of the model call that issued ``call_id``."""
@@ -145,6 +163,7 @@ __all__ = (
     "LedgerExecution",
     "LedgerFailure",
     "PreExecReason",
+    "Proposal",
     "TurnLedger",
     "Unsupported",
     "current_tool_call_id",

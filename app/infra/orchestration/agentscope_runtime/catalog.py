@@ -1,9 +1,12 @@
-"""Visible read catalog of one M1 turn, as native tools in AgentScope tool groups.
+"""Visible catalog of one M1 turn, as native tools in AgentScope tool groups.
 
 Visibility copies the legacy Runtime rule (an unsafe id, a policy error or an
-unexpected verdict makes the whole catalog invalid); only query capabilities
-are kept and there is no lexical pre-selection. Grouping is a pure function of
-the visible definitions so offline evaluation can call it directly.
+unexpected verdict makes the whole catalog invalid). Query capabilities become
+read tools and workflow capabilities become write-proposal tools in their own
+write groups; action and mock capabilities are never visible, and browser
+capabilities are excluded silently (counted only). There is no lexical
+pre-selection. Grouping is a pure function of the visible definitions so
+offline evaluation can call it directly.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ import hashlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -52,6 +55,18 @@ GROUP_BY_TARGET: dict[str | None, str] = {
     "hikvision_ivms": "ivms_query",
     None: "general_query",
 }
+# Workflow capabilities only; a write tool never joins a read group.
+WRITE_GROUP_BY_TARGET: dict[str | None, str] = {
+    "oa": "oa_action",
+    "business_platform": "business_action",
+    "u8": "u8_action",
+    "hikvision_ivms": "ivms_action",
+    None: "general_action",
+}
+VISIBLE_TYPES = frozenset({"query", "workflow"})
+# Out of this path's scope: excluded before grouping and only counted.
+SCOPE_EXCLUDED_PREFIX = "browser."
+ToolKind = Literal["read", "write"]
 # Second-level split inside one primary group, applied only when the primary
 # group does not fit in one chunk: {group: ((subgroup, (capability suffix,
 # ...)), ...)}. Subgroup names must not contain "_other_".
@@ -66,7 +81,17 @@ _GROUP_PURPOSES: dict[str, str] = {
     "u8_query": "查询 U8 系统中的业务数据。",
     "ivms_query": "查询海康 iVMS 平台中的数据。",
     "general_query": "查询其他系统中的数据。",
+    "oa_action": "在 OA 中发起需确认的流程。调用后只生成确认卡片，用户确认后才执行。",
+    "business_action": "在业务平台中发起需确认的流程。调用后只生成确认卡片，用户确认后才执行。",
+    "u8_action": "在 U8 系统中发起需确认的流程。调用后只生成确认卡片，用户确认后才执行。",
+    "ivms_action": "在海康 iVMS 平台中发起需确认的流程。调用后只生成确认卡片，用户确认后才执行。",
+    "general_action": "在其他系统中发起需确认的流程。调用后只生成确认卡片，用户确认后才执行。",
 }
+# Attached to every write group and shown only while that group is active.
+WRITE_GROUP_INSTRUCTIONS = (
+    "写入类工具一次只调用一个，并且要单独调用，不要与查询或其他工具放在同一次回复里；"
+    "调用后本轮结束并展示确认卡片，不要声称已经提交。"
+)
 # Usage rules by capability suffix, attached to the group holding that
 # capability and shown only while the group is active.
 GROUP_INSTRUCTIONS: dict[str, str] = {
@@ -80,7 +105,10 @@ GROUP_INSTRUCTIONS: dict[str, str] = {
         "用户没有给出时不要填写，也不要向用户索要。"
     ),
 }
-if sum(len(text) for text in GROUP_INSTRUCTIONS.values()) > MAX_GROUP_INSTRUCTIONS_CHARS:
+if (
+    sum(len(text) for text in GROUP_INSTRUCTIONS.values()) + len(WRITE_GROUP_INSTRUCTIONS)
+    > MAX_GROUP_INSTRUCTIONS_CHARS
+):
     raise RuntimeError("group_instructions_over_budget")
 
 
@@ -88,6 +116,9 @@ def _rules_digest() -> str:
     canonical = canonical_json(
         {
             "map": {str(key) if key else "none": value for key, value in GROUP_BY_TARGET.items()},
+            "write_map": {
+                str(key) if key else "none": value for key, value in WRITE_GROUP_BY_TARGET.items()
+            },
             "subgroups": {key: [list(item) for item in value] for key, value in SUBGROUPS.items()},
         }
     )
@@ -95,7 +126,7 @@ def _rules_digest() -> str:
 
 
 GROUP_RULES = (
-    f"groups-v3;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};"
+    f"groups-v4;gmax={G_MAX};desc={MAX_GROUP_DESCRIPTION_CHARS};"
     f"summary=first-sentence<={DISCOVERY_SUMMARY_MAX_CHARS};"
     f"family={FAMILY_KEY_RULE};map={_rules_digest()}"
 )
@@ -110,6 +141,7 @@ class CatalogTool:
     input_schema: dict[str, Any]
     schema_digest: str
     binding: CandidateBinding
+    kind: ToolKind = "read"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +167,13 @@ class ToolCatalog:
     def incomplete(self) -> bool:
         return bool(self.excluded)
 
+    def group_of(self, capability_id: str) -> str | None:
+        """Group holding the tool of ``capability_id``; None when it is not a tool."""
+
+        return next(
+            (tool.group for tool in self.tools if tool.capability_id == capability_id), None
+        )
+
     def trace_attributes(self) -> dict[str, Any]:
         """Value-free catalog statistics; the control tool is never counted."""
 
@@ -152,6 +191,8 @@ class ToolCatalog:
 class VisibleCatalog:
     capabilities: tuple[CapabilitySpec, ...]
     active_count: int
+    # Visible capabilities outside this path's scope (browser.*); counted only.
+    scope_excluded: int = 0
 
 
 async def visible_capabilities(
@@ -163,7 +204,7 @@ async def visible_capabilities(
     channel: RequestChannel,
     request_id: str | None = None,
 ) -> VisibleCatalog | None:
-    """This request's policy-previewed active query set, or None if invalid."""
+    """This request's policy-previewed active query/workflow set, or None if invalid."""
 
     # Same rule as the legacy Runtime's _visible_capabilities.
     try:
@@ -191,9 +232,14 @@ async def visible_capabilities(
         if verdict != "defer":
             return None
         visible.append(item.model_copy(deep=True))
+    typed = [item for item in visible if item.type in VISIBLE_TYPES]
+    in_scope = tuple(
+        item for item in typed if not item.capability_id.startswith(SCOPE_EXCLUDED_PREFIX)
+    )
     return VisibleCatalog(
-        capabilities=tuple(item for item in visible if item.type == "query"),
+        capabilities=in_scope,
         active_count=len(active),
+        scope_excluded=len(typed) - len(in_scope),
     )
 
 
@@ -207,7 +253,10 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         if _TOOL_NAME.fullmatch(name) is None:
             _count(excluded, "tool_name_invalid")
             continue
-        group = GROUP_BY_TARGET.get(spec.target_system)
+        kind: ToolKind = "write" if spec.type == "workflow" else "read"
+        group = (WRITE_GROUP_BY_TARGET if kind == "write" else GROUP_BY_TARGET).get(
+            spec.target_system
+        )
         if group is None:
             _count(excluded, "group_unmapped")
             continue
@@ -238,6 +287,7 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
                     target_system=spec.target_system,
                     intent_tags=tuple(spec.intent_tags),
                 ),
+                kind=kind,
             )
         )
     names = [tool.name for tool in candidates]
@@ -259,7 +309,8 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
     }
     groups: list[CatalogGroup] = []
     grouped: list[CatalogTool] = []
-    for primary in dict.fromkeys(GROUP_BY_TARGET.values()):
+    primaries = (*GROUP_BY_TARGET.values(), *WRITE_GROUP_BY_TARGET.values())
+    for primary in dict.fromkeys(primaries):
         members = [tool for tool in tools if tool.group == primary]
         for group_name, chunk in _split(primary, members, spec_names, excluded):
             renamed = [_with_group(tool, group_name) for tool in chunk]
@@ -268,7 +319,7 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
                 CatalogGroup(
                     name=group_name,
                     description=_group_description(primary, chunk, spec_names),
-                    instructions=_group_instructions(chunk),
+                    instructions=_group_instructions(primary, chunk),
                     tool_names=tuple(tool.name for tool in renamed),
                 )
             )
@@ -377,6 +428,7 @@ def _with_group(tool: CatalogTool, group: str) -> CatalogTool:
         input_schema=tool.input_schema,
         schema_digest=tool.schema_digest,
         binding=tool.binding,
+        kind=tool.kind,
     )
 
 
@@ -397,8 +449,9 @@ def _group_description(
     )
 
 
-def _group_instructions(members: Sequence[CatalogTool]) -> str | None:
-    texts = [
+def _group_instructions(primary: str, members: Sequence[CatalogTool]) -> str | None:
+    texts = [WRITE_GROUP_INSTRUCTIONS] if primary in WRITE_GROUP_BY_TARGET.values() else []
+    texts += [
         text
         for suffix, text in GROUP_INSTRUCTIONS.items()
         if any(_suffix(tool) == suffix for tool in members)
@@ -436,11 +489,16 @@ __all__ = (
     "GROUP_RULES",
     "MAX_GROUP_DESCRIPTION_CHARS",
     "RESERVED_TOOL_NAMES",
+    "SCOPE_EXCLUDED_PREFIX",
     "SUBGROUPS",
     "TOOL_GROUP_PROTOCOL_VERSION",
+    "VISIBLE_TYPES",
+    "WRITE_GROUP_BY_TARGET",
+    "WRITE_GROUP_INSTRUCTIONS",
     "CatalogGroup",
     "CatalogTool",
     "ToolCatalog",
+    "ToolKind",
     "VisibleCatalog",
     "build_tool_catalog",
     "discovery_summary",

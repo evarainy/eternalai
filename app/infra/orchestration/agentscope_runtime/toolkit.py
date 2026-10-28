@@ -1,8 +1,10 @@
 """Toolkit, control tools and middleware of one M1 turn.
 
-Business tools live in read groups the model activates with ``reset_tools``;
-the basic group holds only the control tools ``report_unsupported`` and
-``ask_user``, each of which ends the turn when accepted. The middleware records what
+Business tools live in read and write groups the model activates with
+``reset_tools``; write tools are external proposals the runtime handles
+outside the framework, never executed here. The basic group holds only the
+control tools ``report_unsupported`` and ``ask_user``, each of which ends the
+turn when accepted. The middleware records what
 every model call actually exposed, ties each tool call to that call and ends
 the turn without another provider call once a terminal outcome is recorded.
 Only public AgentScope interfaces are used; ``builtin_meta_tool`` is replaced
@@ -82,6 +84,7 @@ DISCOVERY_CODES = frozenset(
         "reset_invalid_input",
         "control_call_conflict",
         "duplicate_success_call",
+        "write_proposal_conflict",
     }
 )
 _RESET_COUNT_KEY = "eternalai_reset_count"
@@ -113,6 +116,9 @@ async def build_turn_toolkit(
         tools: list[ToolBase] = []
         for tool in catalog.tools:
             if tool.group != group.name:
+                continue
+            if tool.kind == "write":
+                tools.append(ProposeWrite(tool.name, tool.description, tool.input_schema))
                 continue
             executor = ToolExecutor(scope, deps, ledger, tool.binding, tool.name, limits)
             tools.append(
@@ -239,6 +245,30 @@ def _control_conflict(ledger: TurnLedger, name: str) -> bool:
     if name in siblings:
         siblings.remove(name)
     return any(item in ledger.business_tools or item in CONTROL_TOOLS for item in siblings)
+
+
+class ProposeWrite(ToolBase):
+    """External write proposal: the framework parks the call and never runs it."""
+
+    is_external_tool: bool = True
+    is_read_only: bool = False
+    is_concurrency_safe: bool = False
+
+    def __init__(self, name: str, description: str, input_schema: dict[str, Any]) -> None:
+        super().__init__()
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision:
+        return PermissionDecision(
+            behavior=PermissionBehavior.ALLOW,
+            message="external proposal; business confirmation enforced by HumanGate",
+        )
 
 
 class _ControlTool(ToolBase):
@@ -480,6 +510,7 @@ __all__ = (
     "M1Middleware",
     "AskUser",
     "M1ResetTools",
+    "ProposeWrite",
     "ReportUnsupported",
     "TurnToolkit",
     "build_turn_toolkit",

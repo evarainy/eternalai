@@ -921,6 +921,7 @@ def build_production_components(
                 ),
                 model_name=settings.llm_model,
                 session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
+                confirmations=runtime,
             )
         )
     resolved_authentication = (

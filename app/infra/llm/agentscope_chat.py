@@ -13,7 +13,8 @@ import asyncio
 import logging
 import re
 import secrets
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from time import monotonic
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
 from agentscope.agent import Agent, ContextConfig, InjectionConfig, ModelConfig, ReActConfig
 from agentscope.credential import OpenAICredential
-from agentscope.event import ToolResultEndEvent, ToolResultStartEvent
+from agentscope.event import ToolResultEndEvent, ToolResultStartEvent, UserInterruptEvent
 from agentscope.message import Msg, ToolCallBlock, ToolResultState
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatResponse, FinishedReason, OpenAIChatModel
@@ -106,6 +107,10 @@ _STATE_KEY = "eternalai_model_guard"
 _HALT_KEY = "eternalai_tool_halt"
 _EXECUTION_KEY = "eternalai_tool_executions"
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# Bound of one interrupt of a parked reply; it lives inside the interrupt
+# task itself, so it holds after every waiter is gone.
+_INTERRUPT_TIMEOUT_SECONDS = 5.0
+_PENDING_INTERRUPTS: set[asyncio.Future[bool]] = set()
 
 # Absolute end of the current bounded turn (event-loop clock); tool-side waits
 # such as task closes must fit inside it.
@@ -207,6 +212,33 @@ def new_turn_deadline(limits: TurnLimits) -> float:
     return asyncio.get_running_loop().time() + limits.turn_timeout_seconds
 
 
+@asynccontextmanager
+async def bounded_turn_scope(deadline: float) -> AsyncIterator[None]:
+    """Run the body within the turn's absolute wall-clock budget.
+
+    ``deadline`` is an absolute event-loop time set when the caller's turn
+    began. Every reply and every step awaited in the body shares it; running
+    out of it raises ``AgentScopeModelError("turn_timeout")``.
+    """
+
+    started = monotonic()
+    token = _TURN_DEADLINE.set(deadline)
+    turn_token = _TURN_ID.set(secrets.token_hex(8)) if _TURN_ID.get() is None else None
+    try:
+        async with asyncio.timeout_at(deadline):
+            yield
+    except TimeoutError:
+        _log_turn_failure("turn_timeout", started)
+        raise AgentScopeModelError("turn_timeout") from None
+    except AgentScopeModelError as exc:
+        _log_turn_failure(exc.code, started)
+        raise
+    finally:
+        _TURN_DEADLINE.reset(token)
+        if turn_token is not None:
+            _TURN_ID.reset(turn_token)
+
+
 async def run_bounded_turn(
     agent: Agent, inputs: Msg | list[Msg], *, deadline: float
 ) -> Msg:
@@ -218,22 +250,47 @@ async def run_bounded_turn(
     is out of contract for this seam.
     """
 
+    async with bounded_turn_scope(deadline):
+        return await agent.reply(inputs)
+
+
+def start_interrupt(agent: Agent, reply_id: str) -> asyncio.Future[bool]:
+    """Close the parked calls of ``reply_id`` in an independent bounded task.
+
+    The future resolves to whether the reply is no longer parked; it never
+    raises. Cancelling a waiter does not cancel the interrupt, and the
+    module-level set keeps it referenced until it ends.
+    """
+
+    future = asyncio.ensure_future(_bounded_interrupt(agent, reply_id))
+    _PENDING_INTERRUPTS.add(future)
+    future.add_done_callback(_PENDING_INTERRUPTS.discard)
+    return future
+
+
+async def _bounded_interrupt(agent: Agent, reply_id: str) -> bool:
     started = monotonic()
-    token = _TURN_DEADLINE.set(deadline)
-    turn_token = _TURN_ID.set(secrets.token_hex(8)) if _TURN_ID.get() is None else None
     try:
-        async with asyncio.timeout_at(deadline):
-            return await agent.reply(inputs)
+        async with asyncio.timeout(_INTERRUPT_TIMEOUT_SECONDS):
+            await agent.reply(UserInterruptEvent(reply_id=reply_id))
     except TimeoutError:
-        _log_turn_failure("turn_timeout", started)
-        raise AgentScopeModelError("turn_timeout") from None
-    except AgentScopeModelError as exc:
-        _log_turn_failure(exc.code, started)
-        raise
-    finally:
-        _TURN_DEADLINE.reset(token)
-        if turn_token is not None:
-            _TURN_ID.reset(turn_token)
+        _log_interrupt("failed", "timeout", "TimeoutError", started)
+        return False
+    except Exception as exc:
+        _log_interrupt("failed", "error", type(exc).__name__, started)
+        return False
+    closed = not agent.state.has_awaiting_tool_calls(agent.name)
+    _log_interrupt("ok" if closed else "failed", "none" if closed else "still_parked",
+                   "none", started)
+    return closed
+
+
+def _log_interrupt(result: str, reason: str, error_class: str, started: float) -> None:
+    _MODEL_LOGGER.info(
+        "agentscope_interrupt result=%s reason=%s error_class=%s elapsed_ms=%s turn=%s",
+        result, reason, error_class if error_class.isidentifier() else "other",
+        round((monotonic() - started) * 1000), current_turn_id(),
+    )
 
 
 def bind_turn_id() -> tuple[str, Token[str | None]]:
@@ -505,6 +562,7 @@ __all__ = (
     "ToolErrorKind",
     "TurnLimits",
     "bind_turn_id",
+    "bounded_turn_scope",
     "build_chat_model",
     "current_turn_id",
     "halt_tool_use",
@@ -515,6 +573,7 @@ __all__ = (
     "reserve_tool_execution",
     "reset_turn_id",
     "run_bounded_turn",
+    "start_interrupt",
     "tool_execution_count",
     "tool_halt_reason",
     "turn_seconds_remaining",

@@ -3,7 +3,8 @@
 Keys combine tenant, user, bound session id and an HMAC of the verified login
 ticket fingerprint under a per-process random key, so the raw fingerprint
 (the revocation key) is never kept. One turn at a time per key: the busy flag
-is set synchronously and cleared only after every close of the turn ended.
+is set synchronously and cleared only after every close, interrupt and
+abandon of the turn ended, and after any rollback that waited for them.
 State is lost on restart (single worker, process memory).
 """
 
@@ -19,15 +20,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agentscope.message import Msg
 from agentscope.state import AgentState
 
-from app.infra.llm.agentscope_chat import current_turn_id
+from app.infra.llm.agentscope_chat import current_turn_id, start_interrupt
 from app.ports.runtime import RuntimeSessionBusyError
 
 if TYPE_CHECKING:
+    from agentscope.agent import Agent
     from agentscope.model import ChatModelBase
 
 MAX_SESSIONS = 500
@@ -108,20 +110,38 @@ class SessionCoordinator:
             entry.busy = False
             entry.last_used = self._clock()
 
-    def release_after(self, key: SessionKey, futures: Collection[asyncio.Future[None]]) -> None:
-        """Release once every given close has actually ended (count-down, no gather)."""
+    def release_after(
+        self,
+        key: SessionKey,
+        futures: Collection[asyncio.Future[Any]],
+        *,
+        before_release: Callable[[], None] | None = None,
+    ) -> None:
+        """Release once every given future has actually ended (count-down, no gather).
+
+        ``before_release`` runs synchronously after the last future ends and
+        before the session can take its next turn; futures that failed count
+        as ended.
+        """
+
+        def _finish() -> None:
+            try:
+                if before_release is not None:
+                    before_release()
+            finally:
+                self.release(key)
 
         pending = [future for future in futures if not future.done()]
         if not pending:
-            self.release(key)
+            _finish()
             return
         remaining = len(pending)
 
-        def _done(_: asyncio.Future[None]) -> None:
+        def _done(_: asyncio.Future[Any]) -> None:
             nonlocal remaining
             remaining -= 1
             if remaining == 0:
-                self.release(key)
+                _finish()
 
         for future in pending:
             future.add_done_callback(_done)
@@ -143,6 +163,19 @@ class SessionCoordinator:
                 del self._entries[key]
                 return True
         return False
+
+
+def start_parked_interrupt(agent: Agent, state: AgentState) -> asyncio.Future[bool] | None:
+    """Interrupt a reply left parked on an external call, or None if none is parked.
+
+    Called under the busy flag before ``prepare_turn_state``; the caller
+    registers the future before awaiting it so release waits for it.
+    """
+
+    if not state.has_awaiting_tool_calls(agent.name):
+        return None
+    _SESSION_LOGGER.info("agentscope_parked_closed turn=%s", current_turn_id())
+    return start_interrupt(agent, state.reply_id)
 
 
 async def prepare_turn_state(
@@ -222,4 +255,5 @@ __all__ = (
     "TurnSnapshot",
     "prepare_turn_state",
     "rollback_turn_state",
+    "start_parked_interrupt",
 )
