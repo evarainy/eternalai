@@ -598,7 +598,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 业务 MCP 授权就绪状态只在进程内 | 后端重启后须重新授权，页面可能仍显示已连接；计数脚本的未授权前置检查只作缓解。PR #229 解决同一用户重新登录后的重新授权，不解决重启后的状态持久化 | 无（不阻塞 M0） | 待分配（M1 不承担） | 授权状态持久化或页面如实反映就绪状态，并完成实际流程核对 | PR #224、PR #229；`m0-runs/M0_SAMPLES_FROZEN.md` run5 记录、`m0-runs/M0_count_console.js` |
-| 外部授权服务不支持 refresh_token | 外部服务不下发 refresh_token，授权最长 1 小时，到期须人工重新授权，常驻使用受限 | 外部授权服务能力（无仓库 task_id） | `P2-AUTH-RENEWAL-MCP-001`（R-MCP，开工待 D5 与外部 E1，见 DECISIONS 2026-10-28） | 外部服务支持 refresh_token，或产品裁定可接受的重新授权流程 | PR #224；`m0-runs/M0_A0_PROBE2.md` |
+| 业务 MCP 授权使用中会断（含外部授权服务不支持 refresh_token） | 现状为授权到期即失效（外部服务不下发 refresh_token，授权最长 1 小时），需用户手动重新授权，不满足 2026-10-27“使用中不能断”；2026-10-28 雨爷裁决不做到期前提醒加人工重授权的过渡方案，等外部完善后再做，记欠账 | 外部 E1（授权服务增加 refresh_token、吊销端点、offline_access；无仓库 task_id） | `P2-AUTH-RENEWAL-MCP-001`（R-MCP，待 E1 完成后开工） | 授权服务提供刷新令牌后，R-MCP 完成自动续期并真实验证 | 仓库外 `RENEWAL_PLAN.md` §4；DECISIONS 2026-10-28；PR #224；`m0-runs/M0_A0_PROBE2.md` |
 | M0 门槛由 36 次降为 12 次的统计限制 | 2026-10-26 决定采用 12 条各 1 次、门槛 12/12，并只重测未通过样本；提示词变更后 rev4 全部重跑。统计强度降低，不能据此估计逐样本稳定性 | 无 | 待分配（M1 前或首次生产灰度前复核） | 以更大样本复测，或明确接受 12 次口径作为最终 M0 验收 | PR #224；`m0-runs/M0_SAMPLES_FROZEN.md` rev4、`m0-runs/M0_COUNT_RESULTS.run6.json` |
 | 他人账号被拒时前端只显示通用 409 文案 | 后端仍按合同拒绝其他用户（fixed_owner_other_user），前端通用提示未说明服务已由其他用户授权 | 无 | 待分配（MCP 授权前端文案棒） | 显示明确的其他用户已授权提示，或裁决维持通用文案 | PR #229「验证结果」真实操作验收第 3 项 |
 | OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒） | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
@@ -642,7 +642,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 
 ### Runtime 替换 M1 收口新增欠债与已批需求（2026-10-28）
 
-M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`；分配 ID 不等于排期，后继排序待雨爷确认，R-MCP 另待 D5（见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
+M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`；分配 ID 不等于排期，后继排序待雨爷确认，R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
