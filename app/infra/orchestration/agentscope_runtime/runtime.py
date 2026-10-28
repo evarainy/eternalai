@@ -549,8 +549,11 @@ class AgentScopeRuntime:
         if interrupt is not None:
             ledger.interrupt = interrupt
             await asyncio.shield(interrupt)
+        # Groups are kind-homogeneous; only read groups carry over a turn.
         progress.snapshot = await prepare_turn_state(
-            state, read_groups=[group.name for group in catalog.groups], model=model
+            state,
+            read_groups={tool.group for tool in catalog.tools if tool.kind == "read"},
+            model=model,
         )
         return catalog, visible.capabilities, agent
 

@@ -29,6 +29,7 @@ from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.llm.agentscope_chat import M1_TURN_LIMITS
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
+from app.infra.orchestration.agentscope_runtime.catalog import WRITE_GROUP_INSTRUCTIONS
 from app.infra.orchestration.agentscope_runtime.runtime import AGENT_NAME, AgentScopeRuntime
 from app.infra.orchestration.agentscope_runtime.session import SessionCoordinator
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
@@ -55,6 +56,9 @@ SESSION_ID = "session-proposal"
 WRITE_ID = "oa.leave_apply"
 WRITE_TOOL = "oa__leave_apply"
 WRITE_GROUP = "oa_action"
+READ_ID = "oa.leave_balance"
+READ_TOOL = "oa__leave_balance"
+READ_GROUP = "oa_query"
 _INPUT_SCHEMA = {
     "type": "object",
     "properties": {"days": {"type": "integer", "description": "请假天数"}},
@@ -86,6 +90,14 @@ def _workflow() -> CapabilitySpec:
     )
 
 
+def _query() -> CapabilitySpec:
+    return _workflow().model_copy(
+        update={"capability_id": READ_ID, "name": "查询假期余额", "type": "query",
+                "input_schema_digest": f"input-{READ_ID}",
+                "short_description": "查询本人剩余假期。"}
+    )
+
+
 def _calls(*calls: tuple[str, dict[str, Any]]) -> ChatResponse:
     return ChatResponse(
         content=[
@@ -114,10 +126,16 @@ class ScriptedModel(OpenAIChatModel):
         )
         self.steps = steps
         self.calls = 0
+        # (messages, tools) as received by each call, serialized.
+        self.seen: list[tuple[str, str]] = []
 
     async def _call_api(self, model_name: str, messages: Any, tools: Any = None,
                         tool_choice: Any = None, **kwargs: Any) -> ChatResponse:
         self.calls += 1
+        self.seen.append(
+            (json.dumps(messages, ensure_ascii=False, default=str),
+             json.dumps(tools, ensure_ascii=False, default=str))
+        )
         step = self.steps.pop(0)
         return step if isinstance(step, ChatResponse) else await step()
 
@@ -565,3 +583,30 @@ def test_confirmation_entries_require_a_valid_login(login: str) -> None:
                               ai_user_id="ai-user-1")
     assert accepted.coordinator.messages == [(owner, "确认", "request-1")]
     assert accepted.coordinator.actions == [owner] and accepted.model.calls == 0
+
+
+def test_next_turn_drops_activated_write_groups_and_keeps_read_groups() -> None:
+    async def exercise() -> tuple[Harness, list[str], ResponseEnvelope]:
+        harness = Harness([
+            _calls(("reset_tools", {READ_GROUP: True, WRITE_GROUP: True})),
+            _text("好的"),
+            _text("你好"),
+        ])
+        harness.registry.items[READ_ID] = _query()
+        harness.login()
+        await harness.send("先看看")
+        _, entry = harness.state()
+        after_first = list(entry.state.tool_context.activated_groups)
+        envelope = await harness.send("你好")
+        return harness, after_first, envelope
+
+    harness, after_first, envelope = asyncio.run(exercise())
+    assert after_first == [READ_GROUP, WRITE_GROUP]
+    assert envelope.status != "failed" and harness.model.calls == 3
+    # The next turn's first model call: the read group carries over, the write
+    # group, its tool and its instructions do not.
+    messages, tools = harness.model.seen[2]
+    assert READ_TOOL in tools and WRITE_TOOL not in tools
+    assert WRITE_GROUP_INSTRUCTIONS not in messages
+    _, entry = harness.state()
+    assert entry.state.tool_context.activated_groups == [READ_GROUP]
