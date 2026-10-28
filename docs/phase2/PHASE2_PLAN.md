@@ -601,7 +601,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 | 业务 MCP 授权使用中会断（含外部授权服务不支持 refresh_token） | 现状为授权到期即失效（外部服务不下发 refresh_token，授权最长 1 小时），需用户手动重新授权，不满足 2026-10-27“使用中不能断”；2026-10-28 雨爷裁决不做到期前提醒加人工重授权的过渡方案，等外部完善后再做，记欠账 | 外部 E1（授权服务增加 refresh_token、吊销端点、offline_access；无仓库 task_id） | `P2-AUTH-RENEWAL-MCP-001`（R-MCP，待 E1 完成后开工） | 授权服务提供刷新令牌后，R-MCP 完成自动续期并真实验证 | 仓库外 `RENEWAL_PLAN.md` §4；DECISIONS 2026-10-28；PR #224；`m0-runs/M0_A0_PROBE2.md` |
 | M0 门槛由 36 次降为 12 次的统计限制 | 2026-10-26 决定采用 12 条各 1 次、门槛 12/12，并只重测未通过样本；提示词变更后 rev4 全部重跑。统计强度降低，不能据此估计逐样本稳定性 | 无 | 待分配（M1 前或首次生产灰度前复核） | 以更大样本复测，或明确接受 12 次口径作为最终 M0 验收 | PR #224；`m0-runs/M0_SAMPLES_FROZEN.md` rev4、`m0-runs/M0_COUNT_RESULTS.run6.json` |
 | 他人账号被拒时前端只显示通用 409 文案 | 后端仍按合同拒绝其他用户（fixed_owner_other_user），前端通用提示未说明服务已由其他用户授权 | 无 | 待分配（MCP 授权前端文案棒） | 显示明确的其他用户已授权提示，或裁决维持通用文案 | PR #229「验证结果」真实操作验收第 3 项 |
-| OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒） | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
+| OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒）；其边界并入 `P2-RUNTIME-AGENTSCOPE-M3-001`、`P2-RUNTIME-AGENTSCOPE-M5-001` 的真实使用验收 | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
 | MCP 换绑验收用开发库副本保留 | 真实验收的本机开发库副本仍保留，删除须专项授权；真实验收待外部服务恢复的旧阻塞已于 2026-10-26 关闭 | 无 | 待用户授权处置 | 获准删除副本库，或确认长期保留 | PR #229「本棒新增欠债」第 1、4 项及真实验收环境说明 |
 | 极简查人问法仍可能 low_confidence | 不含「业务系统 / 人员 / 姓名 / 信息 / 查询」等词的问法可能与能力零词面重合；超过 8 个可见能力时仍可能未入选，PR #232 未扩 K 或改 selector；新路径由 M1A 去掉词面预筛承接，旧路径不修 | 无 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（新路径） | 新路径成为默认入口或旧路径退役 | PR #232「本棒新增欠债」第 2 项 |
 | D 表单浏览器纵切在本机关闭 | 主线本机启动缺 d_form 授权配置（d_form_authorization_missing），仓库外启动器暂设 BROWSER_ENABLED=0；开发库已升级不代表浏览器纵切已接通 | 无对应 task_id（待提供本机授权配置） | 待定（下一根 D 表单真实浏览器验收棒） | 配置具备后以 BROWSER_ENABLED=1 完成一次真实纵切验收，具体填写、保存、提交仍分别取得授权 | PR #232；`controller-dispatch/sonnet_devmain_switch.out.md`、`m0-runs/DEV_start_backend.py` |
@@ -642,19 +642,22 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 
 ### Runtime 替换 M1 收口新增欠债与已批需求（2026-10-28）
 
-M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`，以及 M3 D 人工交接 `P2-RUNTIME-AGENTSCOPE-M3-001`、M4 Excel 与流程增量 `P2-RUNTIME-AGENTSCOPE-M4-001`、M5 集成与验收 `P2-RUNTIME-AGENTSCOPE-M5-001`；分配 ID 不等于排期。已批后继顺序（雨爷 2026-10-28）：R-APP → M2 → M3 → M4 → M5 → M6，R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
+M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`，以及 M3 D 人工交接 `P2-RUNTIME-AGENTSCOPE-M3-001`、M4 Excel 与流程增量 `P2-RUNTIME-AGENTSCOPE-M4-001`、M5 集成与验收 `P2-RUNTIME-AGENTSCOPE-M5-001`；分配 ID 不等于排期。已批后继顺序（雨爷 2026-10-28，经 Astra high 评审调整）：R-APP → M2 → M3 → M4 → M6 代码与退役准备 → M5 最终候选验收 → M6 实际切换，M3 合同在 M2 浏览器接线前先固定，R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 真实写入验收未做 | 开发库无可确认的治理写能力（0 个 workflow、0 个治理 MCP 写工具，唯一写类 browser.form.fill_stop 新路径不暴露），远端无撤销入口；确认链路只有 C1–C6 与独立 Monitor 证据，未做真实确认→发送→撤销 | 业务平台提供写工具撤销/草稿可见性说明 | 首个启用治理写能力的棒（待分配） | 一次真实确认→发送→撤销通过 | 仓库外 `runtime-agentscope-20261021/M1B_H2A_CANDIDATES.md`、`M1B_PR_BODY.md` 欠债 12 |
 | R-OA 欠债 1：V3/V4/V5 待重做、V9 开发环境未运行 | 此前浏览器跑的是旧页面，后端 0 次保活请求，V3/V4/V5 结果作废；刷新后真实环境已见心跳 alive 与本地截止延长，但前台连续使用 1 小时以上（V3）、OA 网页退出后问待办（V4）、浏览器同时登录 OA（V5）须重做；开发启动器后台轮询未安装，V9 未运行、未验证 | 无（R-OA 已合并） | 待雨爷重做验收；V9 须在启用后台轮询的环境（无新 task_id） | V3/V4/V5 重做通过并取得脱敏日志；V9 与 V10 在对应环境取得脱敏日志 | `P2-AUTH-RENEWAL-OA-001` 交付记录；仓库外 `M1B_REAL_ACCEPTANCE.md`「R-OA 保活复测」、`RENEWAL_PLAN.md` §7.4 |
 | R-OA 欠债 2：E2 OA 管理员待确认项 | errorCode 002 官方含义；服务端会话 idle / 绝对超时时长；心跳是否轮换 Cookie（若轮换核心 cookie，需补“合并写回”）；多会话并存与互踢规则；登录失败锁定阈值 | 外部 E2（OA 管理员；非仓库 task_id） | 答复后由 GOV-SYNC 同步（无仓库 task_id） | 取得书面答复并核对实现假设 | 仓库外 `RENEWAL_PLAN.md` §8 E2、`oa-session-research/OA_SESSION_FACTS.md` |
-| R-OA 欠债 3：已激活浏览器绑定用户不自动恢复 | 需要单独设计“保留主体核验 + 绑定围栏”的恢复路径，R-OA 对 active 浏览器绑定不自动重登 | 无 | 待分配（另案方案获批后） | 另案方案获批并实现，或裁决接受 | 仓库外 `RENEWAL_PLAN.md` §3.4 |
+| R-OA 欠债 3：已激活浏览器绑定用户不自动恢复 | 需要单独设计“保留主体核验 + 绑定围栏”的恢复路径，R-OA 对 active 浏览器绑定不自动重登 | 无 | 待分配（另案方案获批后）；其边界并入 `P2-RUNTIME-AGENTSCOPE-M3-001`、`P2-RUNTIME-AGENTSCOPE-M5-001` 的真实使用验收 | 另案方案获批并实现，或裁决接受 | 仓库外 `RENEWAL_PLAN.md` §3.4 |
 | R-OA 欠债 4：对话内 O1/N1 文案 | 对话侧失效文案在 `agent_adapter.py`，为避免与 M1B 文件重叠未在 R-OA 改 | 无（归 R-APP 范围） | `P2-AUTH-RENEWAL-APP-001` | R-APP 合并并在真实对话核对文案 | 仓库外 `RENEWAL_PLAN.md` §0、§7 |
 | R-OA 欠债 5：恢复冷却、互踢熔断与保活节流只在进程内 | 方案规定不做 DB schema 变更，进程重启即清空 | 无 | 待分配（需 schema 专项授权） | 取得 schema 专项授权后改为跨进程持久化，或裁决接受进程内语义 | 仓库外 `RENEWAL_PLAN.md` §6.1 |
 | `talk_context_get` 远端返回不符已批准输出合同 | 2026-10-28 真实验收中一次调用以 `schema_mismatch:overlay:sources` 被按合同拒收（`adapter_payload_invalid`）；非 M1B 改动，按合同拒收属预期，远端返回与合同的差异待核对 | 业务平台合同核对（外部） | 待分配（先核对业务平台合同） | 业务平台确认返回形态并修正合同或远端，真实调用不再被拒收 | 仓库外 `M1B_REAL_ACCEPTANCE.md` 结果记录 |
 | 聊天页模型下拉框（雨爷 2026-10-28） | 需求：运行时热切换模型、不重启后端，所有人可切；仅新运行时；后端按白名单校验。新增接口属公共契约，开工前须出短方案 | `P2-RUNTIME-AGENTSCOPE-M6-001` 完成 | 待分配（M6 完成时做） | 短方案获批，白名单校验、热切换与新运行时限定在真实流程核对通过 | 雨爷 2026-10-28 需求；`AGENTS.md` 运行时合同（模型可由 env 覆盖） |
 | 对话进行中小字显示当前步骤（雨爷 2026-10-28） | 需求：只显示步骤名、不含业务数据；推送或短轮询均可，不做逐字流式 | `P2-RUNTIME-AGENTSCOPE-M6-001` 完成 | 待分配（M6 完成时做） | 步骤名在真实对话中显示，且核对不含业务数据 | 雨爷 2026-10-28 需求 |
+| M4 业务输入待雨爷提供 | 总体方案 §10 的 3～4 个流程、D 计数、报表列 / 来源 / 公式、跨系统关联键、业务回执、目标机器与日期尚未提供，不能承诺完整 M4 工期；M4 基础设施可以先做 | 雨爷 / 业务方提供上述输入 | `P2-RUNTIME-AGENTSCOPE-M4-001` | 业务输入全部提供并核对，具体流程与报表按其实现；基础设施部分不受此限 | 仓库外 `PLAN.md` §7、§10、§12；`ORDER_REVIEW_astra.md` |
+| M5 / 切换前残余债的接受范围待雨爷决定 | M1A 开发集三项门槛未达与留出集未运行、目标机 Docker 离线验收、真实写入验收三类残余，须在 M5 最终候选验收前由雨爷决定补齐或明确接受的范围；15 题真实验收与 26 题 Golden 均不能核销评测债，M5 不得宣称评测全通过 | 雨爷决定；外部 vLLM 升级、目标机与部署授权 | `P2-RUNTIME-AGENTSCOPE-M5-001` | 三类残余逐项补齐，或经雨爷明确裁决接受并记录范围 | 本节「真实写入验收未做」、M1「M1A 离线评测门槛未达」「M1A 留出集验收未运行」、M0「目标环境离线安装与同路径运行」；`ORDER_REVIEW_astra.md` |
+| 浏览器 / Jev 线后继未登记 | 当前候选、包、接缝与验收映射都未核对，SSOT 中没有 Jev 后继登记；不能把旧浏览器独立候选等同 Jev，也不自动并入 M3 | 无 | 待 GOV-SYNC 分配 | 核对当前候选、包、接缝与验收映射后分配 task_id，或裁决并入 M3 | `app/infra/browser/openrouter_jev.py::open_openrouter_jev`；`scripts/run_browser_synthetic_jev_launcher.py`；`ORDER_REVIEW_astra.md` |
 
 ## 6. P2 不做什么
 
