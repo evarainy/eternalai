@@ -706,10 +706,10 @@ _RESPONSE_CASES = [
 # Conversation copy specific to OA (O1 / N1); every other target keeps the generic text.
 _OA_RESPONSE_MESSAGES = {
     "identity_expired": (
-        "OA 登录已失效，自动重新登录未成功。"
-        "请到“账号绑定”重新验证 OA 密码，或退出本系统后重新登录。"
+        "OA 登录已过期，自动重新登录未成功。"
+        "请到“账号绑定”重新认证 OA 密码或重新绑定，或退出本系统后重新登录。"
     ),
-    "adapter_timeout": "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。",
+    "adapter_timeout": "连接 OA 超时，请稍后再试；您的登录状态没有变化。",
     "adapter_http_500": "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。",
 }
 
