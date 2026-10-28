@@ -48,6 +48,7 @@ from app.infra.adapters.oa.provider import (
     OALivePermissionDenied,
     OALiveProviderError,
     OALiveRequestError,
+    OALiveSessionSuspected,
     OALiveTimeout,
     ReplayOAReadProvider,
     report_oa_structural_drift,
@@ -56,9 +57,17 @@ from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
-from app.ports.auth import OASessionCredential
+from app.ports.auth import (
+    AuthenticatedSessionContext,
+    CredentialSnapshot,
+    OASessionCredential,
+    Principal,
+    PrincipalOrgContext,
+    authenticated_session,
+)
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.credential_binding import CredentialRecoveryState
 from app.ports.identity_mapping import IdentityCheckResult
 from app.ports.secret_provider import (
     CredentialExpiredError,
@@ -3564,3 +3573,152 @@ def test_success_trace_persists_empty_keys_and_explicit_none_stage(
     assert [
         event["event_type"] for event in trace_events if event["attributes"]
     ] == ["adapter_called"]
+
+
+class _FailThenReplayProvider(ReplayOAReadProvider):
+    requires_credential = True
+
+    def __init__(self, contract_pack_dir: Path, failures: list[Exception]) -> None:
+        super().__init__(contract_pack_dir)
+        self.failures = failures
+        self.calls = 0
+
+    async def list_pending_workflows(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OAPendingWorkflowCollection:
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return await super().list_pending_workflows(None)
+
+
+class _FakeSessionRenewal:
+    def __init__(self, probe: str, outcome: str = "recovered") -> None:
+        self.probe_result = probe
+        self.outcome = outcome
+        self.observed: list[str] = []
+        self.probes: list[OASessionCredential | None] = []
+        self.recoveries: list[str] = []
+
+    async def observe(self, *, tenant_id: str, ai_user_id: str) -> CredentialRecoveryState:
+        self.observed.append(ai_user_id)
+        return CredentialRecoveryState(
+            snapshot=CredentialSnapshot(tenant_id, ai_user_id, "oa", "binding", 1, 1, 1),
+            binding_state="unverified", poll_status="active", poll_failure_count=0,
+            updated_at=datetime(2026, 10, 28, tzinfo=UTC), revoked=False, has_password=True,
+            session_expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+            session_write_marker=b"marker-one",
+        )
+
+    async def probe(self, *, tenant_id: str, ai_user_id: str, observed: Any,
+                    credential: OASessionCredential | None) -> str:
+        self.probes.append(credential)
+        return self.probe_result
+
+    async def recover(self, *, tenant_id: str, ai_user_id: str, observed: Any,
+                      trigger: str) -> str:
+        self.recoveries.append(trigger)
+        return self.outcome
+
+    async def keepalive(self, principal: Any) -> Any:
+        raise AssertionError
+
+
+_SIGNED_IN_USER = "usr_v1_" + "a" * 43
+
+
+def _run_signed_in(adapter: OAReadAdapter, credential_ref: str) -> Any:
+    principal = Principal(
+        ai_user_id=_SIGNED_IN_USER, display_name="Synthetic", roles=(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
+    )
+    token = authenticated_session.set(AuthenticatedSessionContext(
+        principal, b"f" * 32, datetime.now(UTC) + timedelta(hours=1),
+    ))
+    try:
+        return asyncio.run(adapter.execute(
+            "oa.list_pending_workflows", {}, {"credential_ref": credential_ref},
+        ))
+    finally:
+        authenticated_session.reset(token)
+
+
+def test_unconfirmed_002_with_live_heartbeat_keeps_business_failure_without_relogin() -> None:
+    provider = _FailThenReplayProvider(
+        CONTRACT_PACK, [OALiveSessionSuspected("synthetic", step="split")]
+    )
+    renewal = _FakeSessionRenewal(probe="alive")
+    credential = _credential()
+    adapter = OAReadAdapter(
+        provider, secret_provider=StaticSecretProvider(credential), session_renewal=renewal,
+    )
+
+    result = _run_signed_in(adapter, f"oa-session-v1:{_SIGNED_IN_USER}")
+
+    assert (result.status, result.error_code) == ("error", "adapter_error")
+    assert renewal.probes == [credential]
+    assert renewal.recoveries == []
+    assert provider.calls == 1
+
+
+def test_002_with_dead_heartbeat_recovers_once_and_rereads_once() -> None:
+    provider = _FailThenReplayProvider(
+        CONTRACT_PACK, [OALiveSessionSuspected("synthetic", step="split")]
+    )
+    renewal = _FakeSessionRenewal(probe="dead")
+    adapter = OAReadAdapter(
+        provider, secret_provider=StaticSecretProvider(_credential()), session_renewal=renewal,
+    )
+
+    result = _run_signed_in(adapter, f"oa-session-v1:{_SIGNED_IN_USER}")
+
+    assert result.status == "success"
+    assert renewal.recoveries == ["oa_002"]
+    assert provider.calls == 2
+
+
+def test_002_persisting_after_relogin_is_not_recovered_again() -> None:
+    provider = _FailThenReplayProvider(CONTRACT_PACK, [
+        OALiveSessionSuspected("synthetic", step="split"),
+        OALiveSessionSuspected("synthetic", step="split"),
+    ])
+    renewal = _FakeSessionRenewal(probe="dead")
+    adapter = OAReadAdapter(
+        provider, secret_provider=StaticSecretProvider(_credential()), session_renewal=renewal,
+    )
+
+    result = _run_signed_in(adapter, f"oa-session-v1:{_SIGNED_IN_USER}")
+
+    assert (result.status, result.error_code) == ("error", "adapter_error")
+    assert renewal.recoveries == ["oa_002"]
+    assert provider.calls == 2
+
+
+def test_failed_recovery_reports_identity_expired_without_rereading() -> None:
+    provider = _FailThenReplayProvider(CONTRACT_PACK, [OALiveIdentityExpired("synthetic")])
+    renewal = _FakeSessionRenewal(probe="dead", outcome="browser_bound")
+    adapter = OAReadAdapter(
+        provider, secret_provider=StaticSecretProvider(_credential()), session_renewal=renewal,
+    )
+
+    result = _run_signed_in(adapter, f"oa-session-v1:{_SIGNED_IN_USER}")
+
+    assert (result.status, result.error_code) == ("error", "identity_expired")
+    assert renewal.recoveries == ["read_identity_expired"]
+    assert provider.calls == 1
+
+
+def test_recovery_never_runs_for_a_reference_other_than_the_signed_in_user() -> None:
+    provider = _FailThenReplayProvider(CONTRACT_PACK, [OALiveIdentityExpired("synthetic")])
+    renewal = _FakeSessionRenewal(probe="dead")
+    adapter = OAReadAdapter(
+        provider, secret_provider=StaticSecretProvider(_credential()), session_renewal=renewal,
+    )
+
+    result = _run_signed_in(adapter, "oa-session-v1:usr_v1_" + "b" * 43)
+
+    assert (result.status, result.error_code) == ("error", "identity_expired")
+    assert renewal.observed == []
+    assert renewal.recoveries == []
+    assert provider.calls == 1

@@ -647,3 +647,75 @@ def test_credential_reads_require_tenant(dispatch_db):
             ).scalar_one() == 2
 
     run_synthetic_db(exercise())
+
+
+def test_heartbeat_extension_moves_only_the_local_session_deadline() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = f"usr_v1_{uuid4().hex}"
+    expires_at = datetime.now(UTC) + timedelta(minutes=5)
+    columns = (
+        "updated_at, binding_id, binding_state, binding_revision, credential_write_revision,"
+        " refresh_epoch, refresh_operation_id, refresh_deadline, nonce, poll_status,"
+        " poll_failure_count, revoked_at, expires_at"
+    )
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            store = PostgreSQLCredentialStore(session_factory=factory, encryption_key=bytes(32))
+            await store.store(
+                ai_user_id, "oa",
+                OASessionCredential(
+                    oa_user_id=SecretStr(f"oa-{uuid4().hex}"),
+                    cookies={"loginuuids": SecretStr(f"cookie-{uuid4().hex}")},
+                    expires_at=expires_at,
+                ),
+                tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
+            )
+
+            async def row() -> dict[str, Any]:
+                async with factory() as session:
+                    found = (await session.execute(
+                        text(f"SELECT {columns} FROM oa_session_credentials"
+                             " WHERE tenant_id = 'default' AND ai_user_id = :ai_user_id"),
+                        {"ai_user_id": ai_user_id},
+                    )).mappings().one()
+                return dict(found)
+
+            before = await row()
+            state = await store.recovery_state(ai_user_id, tenant_id="default")
+            assert state is not None
+            extended_to = expires_at + timedelta(hours=1)
+
+            assert await store.extend_session_expiry(state.snapshot, extended_to) is True
+            after = await row()
+            assert after["expires_at"] == extended_to
+            assert {k: v for k, v in after.items() if k != "expires_at"} == {
+                k: v for k, v in before.items() if k != "expires_at"
+            }
+            assert await store.extend_session_expiry(state.snapshot, expires_at) is True
+            assert (await row())["expires_at"] == extended_to
+
+            await store.unbind_password(ai_user_id, "oa", tenant_id="default")
+            unbound = await store.recovery_state(ai_user_id, tenant_id="default")
+            assert unbound is not None and unbound.binding_state == "unbound"
+            assert await store.extend_session_expiry(
+                unbound.snapshot, extended_to + timedelta(hours=1)
+            ) is False
+            assert (await row())["expires_at"] == extended_to
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
