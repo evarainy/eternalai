@@ -3,6 +3,8 @@ import { create } from 'zustand';
 import { getReturnPath } from '../pages/loginNavigation';
 import { useAIDockStore } from '../stores/aiDockStore';
 import type { AIDockMode, TranscriptEntry } from '../stores/aiDockStore';
+import { parsePageContext } from '../contracts/pageContext';
+import type { PageContextDeclaration } from '../contracts/pageContext';
 import { useAuthStore } from '../stores/authStore';
 import { setBeforeInvalidate } from '../stores/sessionDraftStore';
 import type { InvalidateReason } from '../stores/sessionDraftStore';
@@ -30,6 +32,7 @@ type OpenDockMode = Exclude<AIDockMode, 'closed'>;
 
 interface DockSnapshot {
   draft: string;
+  pageContext?: PageContextDeclaration | null;
   mode: AIDockMode;
   lastOpenMode: OpenDockMode;
   sessionContextMode: 'general' | 'page';
@@ -131,6 +134,7 @@ function captureForReauth(
     path: getReturnPath({ from: `${window.location.pathname}${window.location.search}` }),
     dock: {
       draft: dock.draft,
+      pageContext: dock.pageContextDeclaration ?? dock.restoredPageContext,
       mode: dock.mode,
       lastOpenMode: dock.lastOpenMode,
       sessionContextMode: dock.sessionContextMode,
@@ -200,6 +204,16 @@ export function returnUnsentMessage(identity: UnsentIdentity, message: string): 
   });
 }
 
+function parsedPageContext(value: unknown): PageContextDeclaration | null {
+  if (value === null || value === undefined) return null;
+  try {
+    return parsePageContext(value);
+  } catch {
+    // An unreadable binding never matches a page, so the page's own rule starts a new chat.
+    return null;
+  }
+}
+
 function consumeSnapshot(scope: string | null, generation: number): void {
   const snapshot = readStored();
   removeStored();
@@ -207,15 +221,15 @@ function consumeSnapshot(scope: string | null, generation: number): void {
   // Generations restart on a full reload, so only the account scope decides here.
   if (snapshot === null || scope === null || snapshot.scope !== scope) return;
   const current = useAIDockStore.getState();
-  const restoreSession = current.sessionId === null;
+  current.restoreSession({
+    draft: snapshot.dock.draft,
+    sessionId: snapshot.dock.sessionId,
+    sessionContextMode: snapshot.dock.sessionContextMode === 'general' ? 'general' : 'page',
+    transcript: snapshot.dock.transcript,
+    confirmationResults: snapshot.dock.confirmationResults,
+    pageContext: parsedPageContext(snapshot.dock.pageContext),
+  });
   useAIDockStore.setState({
-    ...(current.draft.length === 0 ? { draft: snapshot.dock.draft } : {}),
-    ...(restoreSession ? {
-      sessionId: snapshot.dock.sessionId,
-      sessionContextMode: snapshot.dock.sessionContextMode === 'general' ? 'general' : 'page',
-      transcript: snapshot.dock.transcript,
-      confirmationResults: snapshot.dock.confirmationResults,
-    } : {}),
     ...(current.mode === 'closed' && snapshot.dock.mode !== 'closed' ? {
       mode: snapshot.dock.mode === 'pinned' ? 'pinned' : 'drawer',
       lastOpenMode: snapshot.dock.lastOpenMode === 'pinned' ? 'pinned' : 'drawer',

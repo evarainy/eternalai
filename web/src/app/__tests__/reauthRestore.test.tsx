@@ -136,3 +136,42 @@ it('401_returns_the_message_to_the_input_and_late_old_generation_callbacks_chang
   returnUnsentMessage(withdrawn, 'please summarize');
   expect(window.sessionStorage.getItem(REAUTH_STORAGE_KEY)).toBe(newer);
 });
+
+function workObjectsContext(workObjectId = 'work-1') {
+  return {
+    surface_id: 'work-objects',
+    organization_scope: null,
+    work_object_refs: [{ work_object_id: workObjectId }],
+    source_refs: [],
+    filters: [{ field: 'view', operator: 'equals', value: 'today', source: 'visible_control' }],
+    selected_metric: null,
+    allowed_capabilities: ['oa.work.read'],
+    freshness: { state: 'reported', observed_at: '2026-10-28T09:00:00Z' },
+    visibility: 'principal',
+  };
+}
+
+it('relogin_on_a_page_context_page_keeps_the_draft_when_the_page_declares_the_same_context', () => {
+  renderHook(() => { useReauthRestore(); }, { wrapper: Wrapper });
+  act(() => {
+    useAIDockStore.getState().registerPageContext(workObjectsContext());
+    useAIDockStore.setState({
+      draft: 'half typed', sessionId: 'session-w',
+      transcript: [{ role: 'user', text: 'earlier question', requestId: 'r-w' }],
+    });
+    useAuthStore.getState().markUnauthenticated();
+    useAIDockStore.getState().clearSession();
+  });
+
+  signInWith('scope-a');
+  // The work-objects page declares its context only after its data loads, i.e. after restore.
+  act(() => { useAIDockStore.getState().registerPageContext(workObjectsContext()); });
+  expect(useAIDockStore.getState()).toMatchObject({
+    draft: 'half typed', sessionId: 'session-w', contextNotice: null,
+    transcript: [{ role: 'user', text: 'earlier question', requestId: 'r-w' }],
+  });
+
+  // Isolation is unchanged: another object binding still starts a new conversation.
+  act(() => { useAIDockStore.getState().registerPageContext(workObjectsContext('work-2')); });
+  expect(useAIDockStore.getState()).toMatchObject({ draft: '', sessionId: null, transcript: [] });
+});
