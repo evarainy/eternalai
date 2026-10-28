@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useAuthStore } from './authStore';
+import type { AuthenticationStatus } from './authStore';
 
 export const LEGACY_DISPATCH_DRAFT_KEY = 'eternalai.work-dispatch.draft';
 export const LEGACY_SOFTWARE_DRAFT_KEY = 'eternalai.apps.new-software-draft';
@@ -16,7 +17,21 @@ function currentToken(): DraftSessionToken | null {
 const useSession = create<{ token: DraftSessionToken | null }>(() => ({ token: currentToken() }));
 const invalidators = new Set<() => void>();
 
-function invalidate() {
+export type InvalidateReason = 'auth' | 'pagehide' | 'pageshow' | 'dispose';
+type AuthSnapshot = Readonly<{ status: AuthenticationStatus; generation: number }>;
+let beforeInvalidate: ((reason: InvalidateReason, previous: AuthSnapshot) => void) | null = null;
+
+/** The single pre-clear hook: slots and the Dock are still intact when it runs. */
+export function setBeforeInvalidate(
+  hook: ((reason: InvalidateReason, previous: AuthSnapshot) => void) | null,
+) {
+  beforeInvalidate = hook;
+}
+
+function invalidate(reason: InvalidateReason, previous: AuthSnapshot = useAuthStore.getState()) {
+  try {
+    beforeInvalidate?.(reason, previous);
+  } catch { /* Capture is best effort; invalidation must still happen. */ }
   revision += 1;
   // Clear snapshots before notifying React, including batched auth transitions.
   for (const clear of invalidators) clear();
@@ -24,11 +39,13 @@ function invalidate() {
 }
 
 const unsubscribeAuth = useAuthStore.subscribe((state, previous) => {
-  if (state.status !== previous.status || state.generation !== previous.generation) invalidate();
+  if (state.status !== previous.status || state.generation !== previous.generation) {
+    invalidate('auth', { status: previous.status, generation: previous.generation });
+  }
 });
-const onPageHide = () => invalidate();
+const onPageHide = () => invalidate('pagehide');
 const onPageShow = (event: PageTransitionEvent) => {
-  if (event.persisted) invalidate();
+  if (event.persisted) invalidate('pageshow');
 };
 window.addEventListener('pagehide', onPageHide);
 window.addEventListener('pageshow', onPageShow);
@@ -39,7 +56,7 @@ export function disposeDraftSession() {
   unsubscribeAuth();
   window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('pageshow', onPageShow);
-  invalidate();
+  invalidate('dispose');
   invalidators.clear();
 }
 if (import.meta.hot) import.meta.hot.dispose(disposeDraftSession);

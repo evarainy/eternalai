@@ -16,6 +16,8 @@ export type TranscriptEntry =
   | {
       role: 'user';
       text: string;
+      /** Local-only submission id, so a 401 can withdraw exactly this echo. */
+      requestId?: string;
     }
   | ProjectedResponse;
 

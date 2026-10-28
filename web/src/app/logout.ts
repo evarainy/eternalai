@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { logoutApiV1AuthLogoutPost } from '../generated/auth/auth';
 import { useAuthStore } from '../stores/authStore';
 import { notifyIdentityRecheck } from './identity';
+import { discardReauthSnapshot } from './reauthRestore';
+import { withAuthCookieLock } from './sessionKeepalive';
 
 export function useLogout() {
   const generation = useAuthStore((state) => state.generation);
@@ -23,7 +25,7 @@ export function useLogout() {
       useAuthStore.getState().generation === expectedGeneration;
     setOperation({ generation: expectedGeneration, pending: true, failed: false });
     try {
-      const result: unknown = await logoutApiV1AuthLogoutPost();
+      const result: unknown = await withAuthCookieLock(() => logoutApiV1AuthLogoutPost());
       if (
         typeof result !== 'object' || result === null ||
         !('authenticated' in result) || result.authenticated !== false ||
@@ -31,6 +33,8 @@ export function useLogout() {
       ) throw new Error('Logout response was not confirmed');
       if (!isCurrent()) return;
       setOperation(null);
+      // A deliberate logout never leaves a restore copy behind in this tab.
+      discardReauthSnapshot('logged_out');
       useAuthStore.getState().markUnauthenticated(expectedGeneration);
       notifyIdentityRecheck();
     } catch {

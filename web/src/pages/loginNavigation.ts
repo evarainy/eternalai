@@ -7,6 +7,7 @@ const NAMED_PROTECTED_PATHS = new Set([
   '/search',
   '/work-dispatch',
   '/work-objects',
+  '/work-object-series',
 ]);
 
 export function getReturnPath(state: unknown): string {

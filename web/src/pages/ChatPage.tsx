@@ -49,6 +49,7 @@ import type { UIComponentTargetSystem, UserAction } from '../generated/runtime/r
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
+import { returnUnsentMessage } from '../app/reauthRestore';
 import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
@@ -480,6 +481,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const identityCheck = useRef(0);
   const requestInFlight = useRef(false);
   const activeSubmission = useRef<ChatSubmission | null>(null);
+  // Only a first send may be withdrawn on 401; a retry follows an unconfirmed outcome.
+  const freshSubmissions = useRef(new WeakSet<ChatSubmission>());
   const browserSubmitContext = useRef<{
     controller: AbortController; ownerKey: string;
   } | null>(null);
@@ -740,6 +743,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       } catch (error) {
         const projectedError = projectRequestError(error);
         if (projectedError === null && submission.owner === null) {
+          // Plain runtime handling authenticates before any work, so this send never happened.
+          // Browser-capable sends can fail authentication after admission and stay unconfirmed.
+          if (error instanceof ApiError && error.status === 401
+              && freshSubmissions.current.has(submission)) {
+            returnUnsentMessage({
+              generation: submission.authGeneration, sessionId, requestId: submission.requestId,
+            }, message);
+          }
           throw error;
         }
         const result = submission.owner !== null ? unconfirmedSubmission()
@@ -798,7 +809,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     stickToBottom.current = true;
     if (retry === undefined) {
       setRetrySubmission(null);
-      appendTranscript({ role: 'user', text: message });
+      freshSubmissions.current.add(submission);
+      appendTranscript({ role: 'user', text: message, requestId: submission.requestId });
       setDraft('');
     }
     activeSubmission.current = submission;

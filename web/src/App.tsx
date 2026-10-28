@@ -22,8 +22,9 @@ import {
   lazyRouteComponents,
 } from './app/lazyRoutes';
 import type { LazyRouteComponents } from './app/lazyRoutes';
+import { useReauthRestore } from './app/reauthRestore';
 import { RouteLoadBoundary } from './app/RouteLoadingFallback';
-import { useSessionKeepalive } from './app/sessionKeepalive';
+import { useAppSessionRenewal, useSessionKeepalive } from './app/sessionKeepalive';
 import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
 import { getReturnPath } from './pages/loginNavigation';
 import { useAIDockStore } from './stores/aiDockStore';
@@ -48,6 +49,7 @@ export function AuthenticationEffects() {
   // 刷新后向后端确认一次会话。恢复登录态以**后端确认**为准，不看任何客户端保存的状态。
   useIdentityBootstrap();
   const revalidationFailed = useIdentityRevalidation();
+  useReauthRestore();
 
   useEffect(() => {
     const clearIdentityState = () => {
@@ -72,6 +74,11 @@ export function AuthenticationEffects() {
 export function SessionKeepaliveBanner() {
   const message = useSessionKeepalive();
   return message === null ? null : <div role="status">{message}</div>;
+}
+
+export function AppSessionRenewal() {
+  useAppSessionRenewal();
+  return null;
 }
 
 export function ProtectedRoute() {
@@ -149,6 +156,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
         <BrowserRouter>
           <AuthenticationEffects />
           <SessionKeepaliveBanner />
+          <AppSessionRenewal />
           <Routes>
             <Route
               path="/health"
