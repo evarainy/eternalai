@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
+from uuid import uuid4
 
-from app.composition import build_runtime
+from app.composition import build_agentscope_runtime_stack, build_runtime
 from app.execution_fabric.mock_adapters.error_injection import (
     InjectionAwareAdapter,
     MockInjectionDuration,
@@ -25,7 +28,12 @@ from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.ports.adapter import AdapterPort, AdapterResult, MockErrorMode
-from app.ports.auth import Principal, PrincipalOrgContext
+from app.ports.auth import (
+    AuthenticatedSessionContext,
+    Principal,
+    PrincipalOrgContext,
+    authenticated_session,
+)
 from app.ports.capability_gateway import RequestChannel, RequestOrgContext
 from app.ports.capability_registry import (
     CapabilityAutomationLevel,
@@ -45,6 +53,7 @@ from app.ports.identity_mapping import (
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
 from app.ports.response_envelope import ResponseEnvelope
+from app.ports.runtime import RuntimePort, chat_client_request_id
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.ports.work_object_handling import WorkObjectHandlingSelector
 from app.workflow.engine import WorkflowEngine
@@ -54,6 +63,7 @@ from app.workflow.models import (
     WorkflowInputRef,
     WorkflowStep,
 )
+from scripts.golden_agentscope_model import golden_model_factory
 from scripts.golden_task_assertions import judge_assertions
 from scripts.golden_task_fixture_support import FIXTURES_DIR, apply_mock_state, load_fixture
 
@@ -91,6 +101,9 @@ FROZEN_GT_IDS = (
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
+# legacy is the required gate; agentscope is a local, non-gating replay.
+GoldenEngine = Literal["legacy", "agentscope"]
+GOLDEN_ENGINES: tuple[GoldenEngine, ...] = ("legacy", "agentscope")
 
 
 @dataclass(frozen=True)
@@ -487,7 +500,7 @@ class FakePolicyGuard:
         )
 
 
-def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
+def evaluate_golden_task(gt_id: str, engine: GoldenEngine = "legacy") -> GoldenTaskResult:
     fixture = load_fixture(gt_id)
     category = str(fixture["category"])
     reasons: list[str] = []
@@ -495,7 +508,7 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
     injection_status: Literal["passed", "failed"] = "passed"
     clear_injection()
     try:
-        observation = asyncio.run(_run_fixture(fixture))
+        observation = asyncio.run(_run_fixture(fixture, engine))
         expected_trace = _expected_trace_for_matrix(fixture)
         judgement = judge_assertions(
             envelope=observation.envelope,
@@ -532,7 +545,7 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
 
     if _injection_enabled(fixture):
         try:
-            injection_judgement = asyncio.run(_run_injection_companion(fixture))
+            injection_judgement = asyncio.run(_run_injection_companion(fixture, engine))
             injection_status = injection_judgement.status
             reasons.extend(
                 f"injection companion: {reason}"
@@ -599,7 +612,9 @@ def judge_injection_companion_assertions(
     )
 
 
-async def _run_injection_companion(fixture: dict[str, Any]) -> RunnerAssertionJudgement:
+async def _run_injection_companion(
+    fixture: dict[str, Any], engine: GoldenEngine = "legacy"
+) -> RunnerAssertionJudgement:
     injection = _required_enabled_injection(fixture)
     payload = cast(dict[str, Any], injection["payload"])
     capability_id = _fixture_capability_id(fixture)
@@ -611,7 +626,7 @@ async def _run_injection_companion(fixture: dict[str, Any]) -> RunnerAssertionJu
             duration=_mock_injection_duration(payload.get("duration")),
             error_detail=_serialize_error_detail(payload.get("error_detail")),
         )
-        observation = await _run_fixture(fixture)
+        observation = await _run_fixture(fixture, engine)
         return judge_injection_companion_assertions(
             envelope=observation.envelope,
             trace_steps=observation.trace_steps,
@@ -624,8 +639,13 @@ async def _run_injection_companion(fixture: dict[str, Any]) -> RunnerAssertionJu
         clear_injection()
 
 
-def evaluate_all_golden_tasks() -> list[GoldenTaskResult]:
-    return [evaluate_golden_task(gt_id) for gt_id in GT_IDS]
+def evaluate_all_golden_tasks(
+    engine: GoldenEngine = "legacy", gt_ids: Sequence[str] | None = None
+) -> list[GoldenTaskResult]:
+    return [
+        evaluate_golden_task(gt_id, engine)
+        for gt_id in (GT_IDS if gt_ids is None else gt_ids)
+    ]
 
 
 def build_summary(results: Sequence[GoldenTaskResult]) -> dict[str, Any]:
@@ -671,6 +691,7 @@ def build_summary(results: Sequence[GoldenTaskResult]) -> dict[str, Any]:
 
 async def _run_fixture(
     fixture: dict[str, Any],
+    engine: GoldenEngine = "legacy",
 ) -> FixtureObservation:
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
@@ -707,27 +728,44 @@ async def _run_fixture(
         if definitions
         else None
     )
-    runtime = build_runtime(
-        task_store=task_store,
-        session_store=ExistingSessionStore(),
-        capability_registry=capability_registry,
-        gateway=gateway,
-        trace_port=trace_port,
-        llm_provider=_llm_for_fixture(fixture),
-        structured_output=JSONStructuredOutputProvider(),
-        intent_model="golden-task-intent-model",
-        workflow_engine=workflow_engine,
-        human_gate_port=human_gate_port,
+    runtime_kwargs: dict[str, Any] = {
+        "task_store": task_store,
+        "session_store": ExistingSessionStore(),
+        "capability_registry": capability_registry,
+        "gateway": gateway,
+        "trace_port": trace_port,
+        "llm_provider": _llm_for_fixture(fixture),
+        "structured_output": JSONStructuredOutputProvider(),
+        "intent_model": "golden-task-intent-model",
+        "workflow_engine": workflow_engine,
+        "human_gate_port": human_gate_port,
+    }
+    principal = Principal(
+        ai_user_id=str(given["ai_user_id"]),
+        display_name="Golden Task User",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="golden-test"),
     )
+    runtime: RuntimePort
+    login_token = None
+    if engine == "agentscope":
+        runtime = _agentscope_runtime(fixture, runtime_kwargs)
+        # Synthetic verified login: the runner's principal, valid for 1 hour.
+        login_token = authenticated_session.set(
+            AuthenticatedSessionContext(
+                principal=principal,
+                fingerprint=hashlib.sha256(
+                    str(fixture["golden_task_id"]).encode("utf-8")
+                ).digest(),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+    else:
+        runtime = build_runtime(**runtime_kwargs)
     try:
         _apply_fixture_adapter_injections(given)
         session_id = f"session-{fixture['golden_task_id'].lower()}"
-        principal = Principal(
-            ai_user_id=str(given["ai_user_id"]),
-            display_name="Golden Task User",
-            roles=("user",),
-            org_ctx=PrincipalOrgContext(tenant_id="golden-test"),
-        )
+        _new_chat_request(engine)
         envelope = await runtime.handle_user_message(
             channel=cast(RequestChannel, when.get("channel", "web")),
             principal=principal,
@@ -749,6 +787,7 @@ async def _run_fixture(
                 )
                 definitions[replacement.workflow_id] = replacement
                 source_definition_version_after_first = replacement.version
+            _new_chat_request(engine)
             envelope = await runtime.handle_user_message(
                 channel=cast(RequestChannel, when.get("channel", "web")),
                 principal=principal,
@@ -774,8 +813,38 @@ async def _run_fixture(
             ),
         )
     finally:
+        if login_token is not None:
+            authenticated_session.reset(login_token)
         reset_adapters()
         clear_injection()
+
+
+def _agentscope_runtime(
+    fixture: dict[str, Any], runtime_kwargs: dict[str, Any]
+) -> RuntimePort:
+    given = cast(dict[str, Any], fixture["given"])
+    when = cast(dict[str, Any], fixture["when"])
+    specs = [
+        _build_capability_spec(raw)
+        for raw in cast(Sequence[dict[str, Any]], given["registered_capabilities"])
+    ]
+    intent = _synthetic_intent(fixture)
+    raw_confirmation = when.get("confirmation_message")
+    confirmation_message = None if raw_confirmation is None else str(raw_confirmation)
+    return build_agentscope_runtime_stack(
+        **runtime_kwargs,
+        model_factory=lambda: golden_model_factory(
+            intent=intent,
+            capability_specs=specs,
+            confirmation_message=confirmation_message,
+        ),
+    )
+
+
+def _new_chat_request(engine: GoldenEngine) -> None:
+    # The chat API sets a new client request id per turn; the runner mirrors it.
+    if engine == "agentscope":
+        chat_client_request_id.set(str(uuid4()))
 
 
 def _build_adapter_spies(
@@ -918,10 +987,31 @@ def _build_workflow_input_ref(raw: Any) -> WorkflowInputRef:
 def _llm_for_fixture(fixture: dict[str, Any]) -> MockLLMProvider:
     """Supply synthetic model output; validate it through the real JSON parser."""
     provider = MockLLMProvider()
+    when = cast(dict[str, Any], fixture["when"])
+    provider.register(
+        str(when["message"]),
+        LLMCompletionResponse(
+            content=_synthetic_intent_content(fixture),
+            model_used="golden-task-intent-model",
+        ),
+    )
+    return provider
+
+
+def _synthetic_intent(fixture: dict[str, Any]) -> dict[str, Any] | None:
+    """The synthetic intent as data; None when it is deliberately malformed."""
+    try:
+        intent = json.loads(_synthetic_intent_content(fixture))
+    except ValueError:
+        return None
+    return intent if isinstance(intent, dict) else None
+
+
+def _synthetic_intent_content(fixture: dict[str, Any]) -> str:
+    """Synthetic intent text derived from given/when only, never from then_*."""
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
     capabilities = cast(Sequence[dict[str, Any]], given["registered_capabilities"])
-    message = str(when["message"])
     if "intent_output" in given:
         content = json.dumps(given["intent_output"], ensure_ascii=False)
     elif not capabilities:
@@ -941,11 +1031,7 @@ def _llm_for_fixture(fixture: dict[str, Any]) -> MockLLMProvider:
             },
             ensure_ascii=False,
         )
-    provider.register(
-        message,
-        LLMCompletionResponse(content=content, model_used="golden-task-intent-model"),
-    )
-    return provider
+    return content
 
 
 def _expected_trace_for_matrix(fixture: dict[str, Any]) -> dict[str, Any]:

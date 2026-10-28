@@ -159,8 +159,9 @@ class Orchestration(AgentOrchestrationAdapter):
     async def resolve_task_version_bindings(
         self, *, capability: CapabilitySpec, intent_version_binding: VersionBinding
     ) -> AgentTaskVersionBindings:
+        # A workflow capability projects through its workflow binding.
         tool = VersionBinding(
-            resource_type="tool",
+            resource_type="workflow",
             resource_id=capability.capability_id,
             version=capability.version,
             digest=hashlib.sha256(capability.model_dump_json().encode()).hexdigest(),

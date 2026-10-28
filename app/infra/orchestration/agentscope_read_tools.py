@@ -667,9 +667,11 @@ class ToolExecutor:
             manifest = build_task_version_binding_manifest(
                 task_id=task_id, bindings=resolved.bindings, locked_at=datetime.now(UTC)
             )
+            # A workflow projects through its workflow binding, as in the legacy Runtime.
+            resource_type = "workflow" if capability.type == "workflow" else "tool"
             matching = tuple(
                 binding for binding in manifest.bindings
-                if binding.resource_type == "tool" and binding.resource_id == capability_id
+                if binding.resource_type == resource_type and binding.resource_id == capability_id
             )
             if not projection.matches(capability) or matching != (resolved.projection_binding,):
                 raise VersionBindingMismatchError("projection binding differs from capability")
