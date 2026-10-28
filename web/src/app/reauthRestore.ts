@@ -114,7 +114,14 @@ function captureForReauth(
   const next = useAuthStore.getState();
   if (reason === 'pageshow') {
     // Restored from the back/forward cache with live state: the sealed copy is not needed.
+    const stored = readStored();
     removeStored();
+    // Unsaved forms were reset on pagehide; hand back the copy of this very session only.
+    if (stored?.forms !== undefined && knownScope !== null && next.status === 'authenticated'
+        && knownScope.generation === next.generation && stored.generation === next.generation
+        && stored.scope === knownScope.scope) {
+      usePendingForms.setState({ forms: stored.forms });
+    }
     return;
   }
   if (reason === 'auth' && next.status === 'authenticated') {
