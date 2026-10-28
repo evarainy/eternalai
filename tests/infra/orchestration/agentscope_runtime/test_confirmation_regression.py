@@ -487,6 +487,12 @@ def test_c5_new_question_completes_and_keeps_the_card(
         assert answer.task_id != card.task_id and answer.status != "failed"
         assert stack.model_log[-1] == QUESTION
         assert not _parked(stack)
+        # The parked reply is interrupted, not dropped: the earlier user turn stays.
+        (entry,) = stack.runtime._sessions._entries.values()
+        assert [
+            "".join(b.text for b in m.content if isinstance(b, TextBlock))
+            for m in entry.state.context if m.role == "user"
+        ] == [START, QUESTION]
         await _assert_card_untouched(stack, card)
 
     asyncio.run(run())
@@ -651,7 +657,14 @@ def test_c6_other_account_neither_sees_nor_rebinds_the_card() -> None:
 
     async def run() -> None:
         stack, card, governed = await _completed_through_apps()
-        # The owner's click repairs the card into a claim record first.
+        # Before the owner repairs it, a foreign click must not repair the card.
+        pending = dict(stack.coordinator._pending_workflows)
+        assert pending
+        assert _outcome(await _click(stack, card.response_id, login=other)) == (
+            "confirmation_invalidated"
+        )
+        assert stack.coordinator._pending_workflows == pending
+        # The owner's click repairs the card into a claim record.
         assert _outcome(await _click(stack, card.response_id)) == "action_already_claimed"
         assert not stack.coordinator._pending_workflows
         assert _outcome(await _click(stack, card.response_id, login=other)) == (

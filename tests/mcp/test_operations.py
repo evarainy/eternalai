@@ -929,7 +929,17 @@ def test_rebind_renews_op_and_gate_under_the_current_login_idempotently():
     async def run():
         h = await rebind_fixture()
         token = authenticated_session.set(h.new_login)
+        store = h.operations.contexts.store
+        reauthorized = store.current
         try:
+            # Before MCP re-authorization the connection still resolves the old
+            # login; the op is rejected by the current session fingerprint alone.
+            store.current = reauthorized.model_copy(
+                update={"login_session_fingerprint": h.op.context.login_session_fingerprint}
+            )
+            with pytest.raises(McpFailure, match="^mcp_authorization_invalid$"):
+                await h.operations.owned(h.op)
+            store.current = reauthorized
             with pytest.raises(McpFailure, match="^mcp_authorization_invalid$"):
                 await h.operations.owned(h.op)  # The old-login op is still rejected.
             request = await _rebind(h)
@@ -1023,6 +1033,18 @@ def test_rebind_rejections_leave_op_and_gates_unchanged(case, code):
             assert rejected.value.code == code
             assert h.store.op == h.op and h.store.transitions == []
             assert list(h.gates._requests) == [h.original_gate.request_id]
+            if case == "other_account":
+                # The context builder checks the principal itself, not only its callers.
+                with pytest.raises(McpFailure, match="^mcp_authorization_invalid$"):
+                    await h.operations.contexts.build(
+                        task_id=h.op.context.task_id,
+                        chat_session_id=h.op.context.chat_session_id,
+                        user_id=h.op.context.user_id,
+                        tenant_id=h.op.context.tenant_id,
+                        mapping=await h.operations.contexts.store.mapping(
+                            h.op.leaf_capability_id, h.op.leaf_version
+                        ),
+                    )
         finally:
             authenticated_session.reset(token)
 
