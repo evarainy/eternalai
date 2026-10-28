@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { create } from 'zustand';
 import { getReturnPath } from '../pages/loginNavigation';
 import { useAIDockStore } from '../stores/aiDockStore';
 import type { AIDockMode, TranscriptEntry } from '../stores/aiDockStore';
@@ -43,6 +44,8 @@ interface ReauthSnapshot {
   generation: number;
   path: string;
   dock: DockSnapshot;
+  /** §3.7 unsaved page forms, already normalized by each form's own parser. */
+  forms?: Record<string, unknown>;
   returned: string[];
 }
 
@@ -52,7 +55,15 @@ export interface UnsentIdentity {
   readonly requestId: string;
 }
 
+interface FormReader {
+  read: () => unknown;
+  isPristine: () => boolean;
+}
+
 let knownScope: { generation: number; scope: string } | null = null;
+const formReaders = new Map<string, FormReader>();
+// Restored forms wait here until their component is mounted and still untouched.
+const usePendingForms = create<{ forms: Record<string, unknown> }>(() => ({ forms: {} }));
 // Why the session ended in this tab; null until it ends, 'logged_out' for a deliberate logout.
 let notice: 'expired' | 'principal_changed' | 'logged_out' | null = null;
 
@@ -71,7 +82,8 @@ function readStored(): ReauthSnapshot | null {
     const dock = parsed.dock;
     if (typeof dock.draft !== 'string' || !Array.isArray(dock.transcript)
         || !(dock.sessionId === null || typeof dock.sessionId === 'string')
-        || !isRecord(dock.confirmationResults)) return null;
+        || !isRecord(dock.confirmationResults)
+        || !(parsed.forms === undefined || isRecord(parsed.forms))) return null;
     return parsed as unknown as ReauthSnapshot;
   } catch {
     return null;
@@ -108,6 +120,8 @@ function captureForReauth(
   }
   if (previous.status !== 'authenticated' || (reason !== 'auth' && reason !== 'pagehide')) return;
   if (reason === 'auth' && notice === null) notice = 'expired';
+  const forms = captureForms();
+  if (reason === 'auth') usePendingForms.setState({ forms: {} });
   if (knownScope === null || knownScope.generation !== previous.generation) return;
   const dock = useAIDockStore.getState();
   writeStored({
@@ -124,8 +138,17 @@ function captureForReauth(
       transcript: dock.transcript,
       confirmationResults: dock.confirmationResults,
     },
+    forms,
     returned: [],
   });
+}
+
+function captureForms(): Record<string, unknown> {
+  const forms = { ...usePendingForms.getState().forms };
+  for (const [name, reader] of formReaders) {
+    if (!reader.isPristine()) forms[name] = reader.read();
+  }
+  return forms;
 }
 
 setBeforeInvalidate(captureForReauth);
@@ -135,6 +158,7 @@ if (import.meta.hot) import.meta.hot.dispose(() => setBeforeInvalidate(null));
 export function discardReauthSnapshot(reason: 'logged_out' | 'principal_changed'): void {
   knownScope = null;
   notice = reason;
+  usePendingForms.setState({ forms: {} });
   removeStored();
 }
 
@@ -197,6 +221,7 @@ function consumeSnapshot(scope: string | null, generation: number): void {
       lastOpenMode: snapshot.dock.lastOpenMode === 'pinned' ? 'pinned' : 'drawer',
     } : {}),
   });
+  usePendingForms.setState({ forms: snapshot.forms ?? {} });
 }
 
 /** Unseal only after a fresh /me of the current generation; every outcome consumes the copy. */
@@ -213,4 +238,43 @@ export function useReauthRestore(): void {
       ? data.restore_scope : null;
     consumeSnapshot(scope, generation);
   }, [status, generation, data]);
+}
+
+interface ReauthForm<T> {
+  /** False keeps the form out of capture and restore (e.g. series or prefilled composers). */
+  enabled?: boolean;
+  read: () => T;
+  /** The form's own normalizer; it drops anything outside the draft type. */
+  parse: (raw: unknown) => T;
+  apply: (value: T) => void;
+  isPristine: () => boolean;
+}
+
+/**
+ * Let an unsaved page form survive a re-login of the same account. A restored value is applied
+ * once, only while the form is still untouched; it is never saved to a slot or submitted.
+ */
+export function useReauthForm<T>(name: string, form: ReauthForm<T>): void {
+  const latest = useRef(form);
+  const enabled = form.enabled ?? true;
+  useEffect(() => { latest.current = form; });
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const reader: FormReader = {
+      read: () => latest.current.parse(latest.current.read()),
+      isPristine: () => latest.current.isPristine(),
+    };
+    formReaders.set(name, reader);
+    return () => {
+      if (formReaders.get(name) === reader) formReaders.delete(name);
+    };
+  }, [name, enabled]);
+  const pending = usePendingForms((state) => (enabled ? state.forms[name] : undefined));
+  useEffect(() => {
+    if (pending === undefined || !latest.current.isPristine()) return;
+    usePendingForms.setState((state) => ({
+      forms: Object.fromEntries(Object.entries(state.forms).filter(([key]) => key !== name)),
+    }));
+    latest.current.apply(latest.current.parse(pending));
+  }, [name, pending]);
 }

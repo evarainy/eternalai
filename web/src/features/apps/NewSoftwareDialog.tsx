@@ -1,3 +1,4 @@
+import { useReauthForm } from '../../app/reauthRestore';
 import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
 import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { useState } from 'react';
@@ -12,6 +13,7 @@ import {
   SOFTWARE_SOURCES,
   dedupeVisibleTo,
   loadNewSoftwareDraft,
+  parseNewSoftwareDraft,
   saveNewSoftwareDraft,
 } from './newSoftwareDraft';
 import type { NewSoftwareDraft } from './newSoftwareDraft';
@@ -42,6 +44,13 @@ export function NewSoftwareDialog(props: NewSoftwareDialogProps) {
 
 function SoftwareForm({ onClose, open, token }: NewSoftwareDialogProps & { token: DraftSessionToken }) {
   const [draft, setDraft] = useState<NewSoftwareDraft>(() => loadNewSoftwareDraft(token));
+  const [initialDraft] = useState(draft);
+  useReauthForm('new-software', {
+    read: () => draft,
+    parse: parseNewSoftwareDraft,
+    isPristine: () => JSON.stringify(draft) === JSON.stringify(initialDraft),
+    apply: setDraft,
+  });
   const [visibleToInput, setVisibleToInput] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
