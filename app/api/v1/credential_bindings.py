@@ -19,6 +19,8 @@ from app.ports.credential_binding import (
     CredentialBindingVerifierPort,
     CredentialBindingView,
     CredentialTargetSystem,
+    OAKeepaliveView,
+    OASessionRenewalPort,
     PasswordBindingCredential,
 )
 
@@ -50,9 +52,11 @@ class CredentialBindingService:
         *,
         store: CredentialBindingStorePort,
         verifier: CredentialBindingVerifierPort,
+        oa_session_keeper: OASessionRenewalPort | None = None,
     ) -> None:
         self._store = store
         self._verifier = verifier
+        self._oa_session_keeper = oa_session_keeper
 
     async def get(
         self,
@@ -167,6 +171,15 @@ class CredentialBindingService:
         except Exception:
             _raise_binding_failed()
 
+    async def keepalive_oa(self, principal: Principal) -> OAKeepaliveView:
+        """Heartbeat only the caller's own OA Session while the user is active."""
+        if self._oa_session_keeper is None:
+            return OAKeepaliveView(oa="disabled")
+        try:
+            return await self._oa_session_keeper.keepalive(principal)
+        except Exception:
+            _raise_binding_unavailable()
+
     async def browser_binding_status(self, principal: Principal) -> BrowserBindingStatusView:
         try:
             return await self._store.get_browser_binding_status(principal)
@@ -213,6 +226,13 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> CredentialBindingView:
         return await configured().unbind(principal, target_system)
+
+    @router.post("/oa/keepalive", response_model=OAKeepaliveView)
+    async def keepalive_oa(
+        principal: Principal = Depends(require_principal),
+    ) -> OAKeepaliveView:
+        # Same CSRF-protected principal dependency as the other binding mutations.
+        return await configured().keepalive_oa(principal)
 
     @router.post(
         "/oa/browser-activation", response_model=BrowserBindingActivationView,

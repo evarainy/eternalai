@@ -1050,7 +1050,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
             ) : null}
             <Sender
-              autoSize={{ minRows: 3, maxRows: 6 }}
+              autoSize={{ minRows: 1, maxRows: 4 }}
               className={styles.sender}
               components={{ input: RequestTextArea }}
               disabled={mutation.isPending}

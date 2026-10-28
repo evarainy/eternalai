@@ -40,6 +40,9 @@ from app.credential_polling import (
     CredentialPollingPolicy,
     CredentialPollingScheduler,
     CredentialPollingService,
+    CredentialRecoveryPolicy,
+    CredentialSessionRecovery,
+    OASessionKeeper,
 )
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
@@ -70,6 +73,7 @@ from app.infra.adapters.oa.profile import (
 )
 from app.infra.adapters.oa.provider import (
     LiveOAReadProvider,
+    OASessionHeartbeat,
     ReplayOAReadProvider,
     report_oa_structural_drift,
 )
@@ -153,12 +157,13 @@ from app.ports.adapter import AdapterPort
 from app.ports.auth import (
     AuthenticationPort,
     CredentialStorePort,
+    OASessionCredential,
     SessionRevocationStorePort,
     SessionTokenPort,
 )
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
-from app.ports.credential_binding import CredentialBindingVerifierPort
+from app.ports.credential_binding import CredentialBindingVerifierPort, OASessionRenewalPort
 from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.job_queue import JobQueuePort
@@ -323,10 +328,61 @@ def build_user_profile_port(
     )
 
 
+def build_oa_session_keeper(
+    *,
+    settings: ProductionSettings,
+    credential_store: PostgreSQLCredentialStore,
+    authentication: AuthenticationPort,
+    polling_policy: CredentialPollingPolicy,
+) -> OASessionKeeper | None:
+    """Live-OA heartbeat plus one-shot recovery through the stored password binding."""
+
+    if settings.oa_read_adapter_mode != "live":
+        return None
+    recovery = CredentialSessionRecovery(
+        binding_store=credential_store,
+        tenant_id=settings.source_tenant_id,
+        acquirer=OAPasswordCredentialAcquirer(
+            session_factory=make_urllib_session_factory(
+                base_url=settings.oa_base_url,
+                timeout_seconds=settings.oa_timeout_seconds,
+            ),
+            authentication=authentication,
+            binding_store=credential_store,
+            tenant_id=settings.source_tenant_id,
+        ),
+        policy=polling_policy,
+        recovery_policy=CredentialRecoveryPolicy(
+            cooldown_seconds=settings.oa_recovery_cooldown_seconds,
+            wait_seconds=settings.oa_recovery_wait_seconds,
+            kick_window_seconds=settings.oa_recovery_kick_window_seconds,
+        ),
+    )
+    tenant_id = settings.source_tenant_id
+
+    async def load_session(ai_user_id: str) -> OASessionCredential | None:
+        return await credential_store.load(ai_user_id, "oa", tenant_id=tenant_id)
+
+    return OASessionKeeper(
+        binding_store=credential_store,
+        tenant_id=tenant_id,
+        load_session=load_session,
+        heartbeat=OASessionHeartbeat(
+            base_url=settings.oa_base_url,
+            heartbeat_path=settings.oa_heartbeat_path,
+            timeout_seconds=settings.oa_timeout_seconds,
+        ),
+        recovery=recovery,
+        credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        heartbeat_interval_seconds=settings.oa_heartbeat_interval_seconds,
+    )
+
+
 def build_oa_read_adapter(
     *,
     settings: ProductionSettings,
     credential_store: CredentialStorePort,
+    session_renewal: OASessionRenewalPort | None = None,
 ) -> AdapterPort:
     """Build the configured OA read adapter without runtime fallback."""
 
@@ -421,6 +477,7 @@ def build_oa_read_adapter(
             secret_provider=CredentialStoreSecretProvider(
                 credential_store=credential_store, tenant_id=settings.source_tenant_id
             ),
+            session_renewal=session_renewal,
         )
     raise RuntimeError("OA_READ_ADAPTER_MODE is invalid")
 
@@ -754,8 +811,44 @@ def build_production_components(
         if identity_mapping is None
         else identity_mapping
     )
+    resolved_authentication = (
+        build_authentication_port(
+            oa_base_url=settings.oa_base_url,
+            oa_timeout_seconds=settings.oa_timeout_seconds,
+            credential_store=credential_store,
+            role_reader=build_principal_role_reader(session_factory=session_factory),
+            identity_hmac_key=settings.identity_hmac_key,
+            credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+            tenant_id=settings.source_tenant_id,
+        )
+        if authentication is None
+        else authentication
+    )
+    credential_polling_policy = CredentialPollingPolicy(
+        interval_seconds=settings.credential_poll_interval_seconds,
+        maximum_backoff_seconds=settings.credential_poll_maximum_backoff_seconds,
+        work_start_hour=settings.credential_poll_work_start_hour,
+        work_end_hour=settings.credential_poll_work_end_hour,
+        timezone_name=settings.credential_poll_timezone,
+        global_concurrency=settings.credential_poll_global_concurrency,
+        scheduler_tick_seconds=settings.credential_poll_scheduler_tick_seconds,
+    )
+    # Authentication and polling policy are built first: the OA read adapter and
+    # the keepalive endpoint share one keeper (heartbeat + recovery state).
+    oa_session_keeper = build_oa_session_keeper(
+        settings=settings,
+        credential_store=credential_store,
+        authentication=resolved_authentication,
+        polling_policy=credential_polling_policy,
+    )
     resolved_adapters = (
-        {"oa": build_oa_read_adapter(settings=settings, credential_store=credential_store)}
+        {
+            "oa": build_oa_read_adapter(
+                settings=settings,
+                credential_store=credential_store,
+                session_renewal=oa_session_keeper,
+            )
+        }
         if adapters is None
         else dict(adapters)
     )
@@ -1065,19 +1158,6 @@ def build_production_components(
             model_name=settings.llm_model,
             session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
         )
-    resolved_authentication = (
-        build_authentication_port(
-            oa_base_url=settings.oa_base_url,
-            oa_timeout_seconds=settings.oa_timeout_seconds,
-            credential_store=credential_store,
-            role_reader=build_principal_role_reader(session_factory=session_factory),
-            identity_hmac_key=settings.identity_hmac_key,
-            credential_ttl_seconds=settings.oa_credential_ttl_seconds,
-            tenant_id=settings.source_tenant_id,
-        )
-        if authentication is None
-        else authentication
-    )
     resolved_binding_verifier = credential_binding_verifier
     if resolved_binding_verifier is None:
         if not isinstance(resolved_authentication, OACredentialVerifier):
@@ -1172,6 +1252,7 @@ def build_production_components(
     credential_binding_service = CredentialBindingService(
         store=credential_store,
         verifier=resolved_binding_verifier,
+        oa_session_keeper=oa_session_keeper,
     )
     user_profile = build_user_profile_port(
         settings=settings,
@@ -1180,15 +1261,6 @@ def build_production_components(
     session_factory_for_background = make_urllib_session_factory(
         base_url=settings.oa_base_url,
         timeout_seconds=settings.oa_timeout_seconds,
-    )
-    credential_polling_policy = CredentialPollingPolicy(
-        interval_seconds=settings.credential_poll_interval_seconds,
-        maximum_backoff_seconds=settings.credential_poll_maximum_backoff_seconds,
-        work_start_hour=settings.credential_poll_work_start_hour,
-        work_end_hour=settings.credential_poll_work_end_hour,
-        timezone_name=settings.credential_poll_timezone,
-        global_concurrency=settings.credential_poll_global_concurrency,
-        scheduler_tick_seconds=settings.credential_poll_scheduler_tick_seconds,
     )
     credential_polling_service = CredentialPollingService(
         binding_store=credential_store,
@@ -1345,6 +1417,7 @@ __all__ = (
     "build_admin_registry_service",
     "build_credential_store",
     "build_oa_read_adapter",
+    "build_oa_session_keeper",
     "build_production_components",
     "build_principal_role_reader",
     "build_runtime",

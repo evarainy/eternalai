@@ -23,6 +23,7 @@ import {
 } from './app/lazyRoutes';
 import type { LazyRouteComponents } from './app/lazyRoutes';
 import { RouteLoadBoundary } from './app/RouteLoadingFallback';
+import { useSessionKeepalive } from './app/sessionKeepalive';
 import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
 import { getReturnPath } from './pages/loginNavigation';
 import { useAIDockStore } from './stores/aiDockStore';
@@ -66,6 +67,11 @@ export function AuthenticationEffects() {
   return status === 'authenticated' && revalidationFailed
     ? <div role="alert">暂时无法确认登录状态</div>
     : null;
+}
+
+export function SessionKeepaliveBanner() {
+  const message = useSessionKeepalive();
+  return message === null ? null : <div role="status">{message}</div>;
 }
 
 export function ProtectedRoute() {
@@ -142,6 +148,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AuthenticationEffects />
+          <SessionKeepaliveBanner />
           <Routes>
             <Route
               path="/health"

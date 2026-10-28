@@ -44,6 +44,7 @@ from app.infra.adapters.oa.contracts import (
     normalize_system_message_records,
 )
 from app.ports.auth import OASessionCredential
+from app.ports.credential_binding import OASessionHeartbeatResult
 
 _CHAT_STAGE_LOGGER = logging.getLogger("uvicorn.error.chat_stages")
 _CHAT_STAGE_NODES = frozenset({
@@ -191,6 +192,10 @@ _SESSION_EXPIRED_CODES = frozenset(
         "session_invalid",
     }
 )
+# Observed once with a stale Session (2026-10-27), not an official OA meaning: such
+# a rejection is only a suspicion that the heartbeat must confirm before relogin.
+_PENDING_SESSION_SUSPECT_CODES = frozenset({"002"})
+_HEARTBEAT_ALIVE_STATUS = "1"
 _PERMISSION_DENIED_CODES = frozenset(
     {
         "403",
@@ -264,6 +269,18 @@ class OALiveIdentityUnbound(OALiveProviderError):
 
 class OALiveIdentityExpired(OALiveProviderError):
     """The local or upstream OA Session requires reauthentication."""
+
+
+class OALiveSessionSuspected(OALiveIdentityExpired):
+    """OA returned a code observed with stale Sessions; liveness is unproven until probed."""
+
+    def __init__(self, message: str, *, step: str) -> None:
+        super().__init__(message)
+        self.step = step
+
+
+class OALiveSessionLocallyExpired(OALiveIdentityExpired):
+    """Only the locally recorded Session deadline has passed; OA was not asked."""
 
 
 class OALivePermissionDenied(OALiveProviderError):
@@ -576,7 +593,7 @@ class LiveOAReadProvider:
             if ttl_status == "invalid":
                 raise OALiveRequestError("OA credential expiry is invalid")
             if ttl_status == "expired":
-                raise OALiveIdentityExpired("OA Session has expired")
+                raise OALiveSessionLocallyExpired("OA Session has expired")
             cookie_header = build_cookie_header(credential.cookies)
             opener = self._opener_factory()
 
@@ -594,7 +611,7 @@ class LiveOAReadProvider:
             )
             split_payload = None
             if payload_error_kind is not None:
-                _raise_pending_workflow_payload_error(payload_error_kind)
+                _raise_pending_workflow_payload_error(payload_error_kind, step="split")
             sessionkey = parsed_value
             parsed_value = None
             payload_error_kind = None
@@ -616,7 +633,7 @@ class LiveOAReadProvider:
             )
             counts_payload = None
             if payload_error_kind is not None:
-                _raise_pending_workflow_payload_error(payload_error_kind)
+                _raise_pending_workflow_payload_error(payload_error_kind, step="counts")
             authoritative_count = parsed_value
             parsed_value = None
             payload_error_kind = None
@@ -644,7 +661,7 @@ class LiveOAReadProvider:
                 )
                 datas_payload = None
                 if payload_error_kind is not None:
-                    _raise_pending_workflow_payload_error(payload_error_kind)
+                    _raise_pending_workflow_payload_error(payload_error_kind, step="datas")
                 page_records, response_page_size = parsed_value
                 parsed_value = None
                 payload_error_kind = None
@@ -742,7 +759,7 @@ class LiveOAReadProvider:
             if ttl_status == "invalid":
                 raise OALiveRequestError("OA credential expiry is invalid")
             if ttl_status == "expired":
-                raise OALiveIdentityExpired("OA Session has expired")
+                raise OALiveSessionLocallyExpired("OA Session has expired")
             cookie_header = build_cookie_header(credential.cookies)
             opener = self._opener_factory()
 
@@ -1048,6 +1065,153 @@ class LiveOAReadProvider:
         if not isinstance(payload, dict):
             raise ValueError("OA response must be a JSON object")
         return {str(key): value for key, value in payload.items()}
+
+
+_SESSION_LOGGER = logging.getLogger("uvicorn.error.oa_session")
+_HEARTBEAT_MAX_RESPONSE_BYTES = 4_096
+
+
+class OASessionHeartbeat:
+    """Official OA heartbeat: proves or disproves Session liveness, never mints one.
+
+    ``alive``/``dead`` are verified answers; timeout, transport, 5xx, 403 and non-JSON
+    raise the existing Live errors so callers treat the probe as unavailable.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        heartbeat_path: str,
+        timeout_seconds: float,
+        opener_factory: Callable[[], _OARequestOpener] | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._base_url, self._allowed_origin = validate_base_url(base_url)
+        self._heartbeat_path = validate_endpoint_path(heartbeat_path)
+        if timeout_seconds <= 0:
+            raise ValueError("OA HTTP timeout must be positive")
+        self._timeout_seconds = timeout_seconds
+        self._opener_factory = opener_factory or self._build_isolated_opener
+        self._clock = clock
+
+    def _build_isolated_opener(self) -> OpenerDirector:
+        return build_opener(
+            ProxyHandler({}),
+            SameOriginRedirectHandler(self._allowed_origin),
+        )
+
+    async def __call__(self, credential: OASessionCredential) -> OASessionHeartbeatResult:
+        started = monotonic()
+        http_status: int | None = None
+        cookie_names: tuple[str, ...] = ()
+        result: str = "unavailable"
+        cookie_header = build_cookie_header(credential.cookies)
+        request = Request(
+            f"{self._base_url}{self._heartbeat_path}?"
+            f"{int(self._clock().timestamp() * 1000)}",
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Cookie": cookie_header,
+                "Referer": f"{self._base_url}/wui/index.html",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/86.0.4240.111 Safari/537.36"
+                ),
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            method="GET",
+        )
+        cookie_header = ""
+        try:
+            http_status, cookie_names, payload = await asyncio.to_thread(
+                self._open, self._opener_factory(), request
+            )
+            try:
+                _raise_for_business_error(payload)
+            except OALiveIdentityExpired:
+                result = "dead"
+            else:
+                status = payload.get("status")
+                alive = (
+                    isinstance(status, (str, int))
+                    and not isinstance(status, bool)
+                    and str(status).strip() == _HEARTBEAT_ALIVE_STATUS
+                )
+                result = "alive" if alive else "dead"
+        except OALiveIdentityExpired:
+            result = "dead"
+        except HTTPError as exc:
+            http_status = int(exc.code)
+            if http_status == 401:
+                result = "dead"
+            else:
+                _raise_heartbeat_unavailable(_http_error_kind(http_status))
+        except OALiveProviderError:
+            raise
+        except (TimeoutError, socket.timeout):
+            _raise_heartbeat_unavailable("timeout")
+        except URLError as exc:
+            _raise_heartbeat_unavailable(
+                "timeout" if isinstance(exc.reason, (TimeoutError, socket.timeout))
+                else "request_error"
+            )
+        except (UnicodeError, ValueError):
+            _raise_heartbeat_unavailable("payload_invalid")
+        except OSError:
+            _raise_heartbeat_unavailable("request_error")
+        finally:
+            del request
+            _SESSION_LOGGER.info(
+                "oa_heartbeat result=%s http_status=%s set_cookie_names=%s elapsed_ms=%s",
+                result,
+                http_status if http_status is not None else "null",
+                ",".join(cookie_names) or "-",
+                round((monotonic() - started) * 1000),
+            )
+        return "alive" if result == "alive" else "dead"
+
+    def _open(
+        self, opener: _OARequestOpener, request: Request
+    ) -> tuple[int, tuple[str, ...], dict[str, Any]]:
+        with opener.open(request, timeout=self._timeout_seconds) as response:
+            status_code = int(response.getcode())
+            cookie_names = _set_cookie_names(getattr(response, "headers", None))
+            raise_for_http_status(status_code)
+            raw = response.read(_HEARTBEAT_MAX_RESPONSE_BYTES + 1)
+        if len(raw) > _HEARTBEAT_MAX_RESPONSE_BYTES:
+            raise ValueError("OA heartbeat response exceeds the size limit")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("OA heartbeat response must be a JSON object")
+        return status_code, cookie_names, {str(key): value for key, value in payload.items()}
+
+
+def _set_cookie_names(headers: object) -> tuple[str, ...]:
+    """Return only syntactically valid Set-Cookie names; values are never kept."""
+
+    get_all = getattr(headers, "get_all", None)
+    if not callable(get_all):
+        return ()
+    names: set[str] = set()
+    for header in get_all("Set-Cookie") or ():
+        name = str(header).split("=", 1)[0].strip()
+        if _COOKIE_NAME_PATTERN.fullmatch(name) is not None:
+            names.add(name)
+    return tuple(sorted(names))
+
+
+def _raise_heartbeat_unavailable(kind: str) -> NoReturn:
+    if kind == "timeout":
+        raise OALiveTimeout("OA heartbeat timed out")
+    if kind == "http_server":
+        raise OALiveHTTPServerError("OA heartbeat returned a server error")
+    if kind == "permission_denied":
+        raise OALivePermissionDenied("OA heartbeat permission was denied")
+    if kind == "payload_invalid":
+        raise OALivePayloadInvalid("OA heartbeat response is invalid")
+    raise OALiveRequestError("OA heartbeat request failed")
 
 
 class SameOriginRedirectHandler(HTTPRedirectHandler):
@@ -1431,6 +1595,8 @@ def _consume_pending_workflow_value(
             _raise_for_business_error(value)
             _raise_for_pending_rejection(value, step=step)
         parsed_value = reader(value)
+    except OALiveSessionSuspected:
+        error_kind = "session_suspected"
     except OALiveIdentityExpired:
         error_kind = "identity_expired"
     except OALivePermissionDenied:
@@ -1452,7 +1618,9 @@ def _consume_pending_workflow_value(
     return parsed_value, error_kind
 
 
-def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
+def _raise_pending_workflow_payload_error(error_kind: str, *, step: str = "record") -> NoReturn:
+    if error_kind == "session_suspected":
+        raise OALiveSessionSuspected("OA rejected the request; Session is suspect", step=step)
     if error_kind == "identity_expired":
         raise OALiveIdentityExpired("OA Session is no longer valid")
     if error_kind == "permission_denied":
@@ -1482,15 +1650,19 @@ def _raise_for_pending_rejection(value: Any, *, step: str) -> None:
         if isinstance(error_code, (str, int)) and not isinstance(error_code, bool)
         else None
     )
+    suspected = text is not None and text.strip() in _PENDING_SESSION_SUSPECT_CODES
     _record_oa_stage("provider_transport", "failed", reason="oa_business_rejected")
     # Only a short code-shaped value is logged; anything else contributes its length.
     _CHAT_STAGE_LOGGER.info(
-        "oa_business_rejected step=%s error_code=%s error_code_length=%s trace=%s",
+        "oa_business_rejected step=%s error_code=%s error_code_length=%s classified=%s trace=%s",
         step,
         text if text is not None and _BUSINESS_ERROR_CODE.fullmatch(text) else "-",
         len(text) if text is not None else type(error_code).__name__,
+        "session_suspected" if suspected else "business_rejected",
         _structure_trace(),
     )
+    if suspected:
+        raise OALiveSessionSuspected("OA rejected the request; Session is suspect", step=step)
     raise OALiveBusinessRejected("OA rejected the pending-workflow request")
 
 
@@ -1761,8 +1933,11 @@ __all__ = (
     "OALivePermissionDenied",
     "OALiveProviderError",
     "OALiveRequestError",
+    "OALiveSessionLocallyExpired",
+    "OALiveSessionSuspected",
     "OALiveTimeout",
     "OAReadProvider",
+    "OASessionHeartbeat",
     "OAStructuralDriftReporter",
     "ReplayOAReadProvider",
     "SameOriginRedirectHandler",
