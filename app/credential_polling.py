@@ -307,6 +307,7 @@ class CredentialSessionRecovery:
         # Process-local only: real login attempts, own recoveries and kick suspicion.
         self._login_attempted_at: dict[tuple[str, str], float] = {}
         self._recovered_at: dict[tuple[str, str], float] = {}
+        self._recovered_marker: dict[tuple[str, str], bytes | None] = {}
         self._kick_counts: dict[tuple[str, str], int] = {}
         self._suspended: set[tuple[str, str]] = set()
 
@@ -320,7 +321,7 @@ class CredentialSessionRecovery:
         if tenant_id != self._tenant_id or observed.snapshot.ai_user_id != ai_user_id:
             return "binding_unavailable"
         key = (tenant_id, ai_user_id)
-        if key in self._suspended or self._suspected_kick(key):
+        if key in self._suspended or self._suspected_kick(key, observed):
             return "suspended"
         attempted = self._login_attempted_at.get(key)
         if (
@@ -341,11 +342,16 @@ class CredentialSessionRecovery:
             verdict = await self._reread(observed)
             return "unavailable" if verdict == "unchanged" else verdict
 
-    def _suspected_kick(self, key: tuple[str, str]) -> bool:
-        """Count verified failures of a Session this process wrote within the window."""
+    def _suspected_kick(
+        self, key: tuple[str, str], observed: CredentialRecoveryState
+    ) -> bool:
+        """Count verified failures of the very Session this process wrote within the window."""
 
         recovered = self._recovered_at.get(key)
         if recovered is None:
+            return False
+        if observed.session_write_marker != self._recovered_marker.get(key):
+            # A failure of an older or foreign Session is not evidence of a kick.
             return False
         since_recovery = self._monotonic() - recovered
         if since_recovery > self._recovery_policy.kick_window_seconds:
@@ -423,10 +429,12 @@ class CredentialSessionRecovery:
                 ai_user_id, "oa", tenant_id=tenant_id, expected_write=stamp
             )
             succeeded = True
-        verdict = await self._reread(observed)
-        if verdict == "refreshed_by_other" and succeeded:
+        final = await self._read(observed)
+        verdict = _judge_recovery(observed, final, self._validated_now())
+        if verdict == "refreshed_by_other" and succeeded and final is not None:
             # The kick count survives recoveries; only a failure outside the window resets it.
             self._recovered_at[key] = self._monotonic()
+            self._recovered_marker[key] = final.session_write_marker
             return "recovered"
         return "unavailable" if verdict == "unchanged" else verdict
 
@@ -483,7 +491,7 @@ class OASessionKeeper:
         self._tenant_id = tenant_id
         self._load_session = load_session
         self._heartbeat = heartbeat
-        # None stops every automatic relogin (rollback / suspected kick), heartbeat stays.
+        # None stops every automatic relogin (rollback), heartbeat stays.
         self._recovery = recovery
         self._credential_ttl = timedelta(seconds=credential_ttl_seconds)
         self._throttle_seconds = heartbeat_interval_seconds - 5
@@ -541,7 +549,7 @@ class OASessionKeeper:
     ) -> RecoveryOutcome:
         started = self._monotonic()
         outcome: RecoveryOutcome = (
-            "suspended"
+            "recovery_disabled"
             if self._recovery is None
             else await self._recovery.recover_session(
                 tenant_id=tenant_id, ai_user_id=ai_user_id, observed=observed

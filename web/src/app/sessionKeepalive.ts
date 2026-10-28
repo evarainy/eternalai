@@ -12,7 +12,7 @@ const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as con
 const OA_KEEPALIVE_STATUSES = [
   'alive', 'recovered', 'refreshed_by_other', 'backoff', 'unavailable',
   'binding_unavailable', 'rejected', 'captcha_required', 'browser_bound',
-  'suspended', 'disabled',
+  'suspended', 'recovery_disabled', 'disabled',
 ] as const;
 type OAKeepaliveStatus = (typeof OA_KEEPALIVE_STATUSES)[number];
 
@@ -20,6 +20,7 @@ export const OA_KEEPALIVE_MESSAGES = {
   captcha_required: 'OA 当前要求验证码，系统无法自动重新登录，请退出本系统后重新登录。',
   rejected: 'OA 密码可能已修改，自动登录已停止。请到“账号绑定”重新验证 OA 密码。',
   suspended: '检测到 OA 登录可能与其他登录冲突，已暂停自动重新登录。请到“账号绑定”重新验证，或联系管理员。',
+  recovery_disabled: 'OA 登录已失效，自动重新登录未成功。请到“账号绑定”重新验证 OA 密码，或退出本系统后重新登录。',
   unavailable: '暂时无法连接 OA，请稍后再试；您的登录状态没有变化。',
 } as const;
 
@@ -49,7 +50,8 @@ export function useSessionKeepalive(): string | null {
     let live = true;
     let inFlight = false;
     let unavailableCount = 0;
-    let lastActivity = Date.now();
+    // Only real input counts; a reload or an idle new tab does not keep OA alive.
+    let lastActivity = 0;
     const onActivity = () => { lastActivity = Date.now(); };
     const isCurrent = () => live && useAuthStore.getState().status === 'authenticated'
       && useAuthStore.getState().generation === generation;
@@ -73,7 +75,7 @@ export function useSessionKeepalive(): string | null {
         }
         unavailableCount = 0;
         setMessage(result === 'captcha_required' || result === 'rejected' || result === 'suspended'
-          ? OA_KEEPALIVE_MESSAGES[result] : null);
+          || result === 'recovery_disabled' ? OA_KEEPALIVE_MESSAGES[result] : null);
       } catch {
         // The keepalive is best effort; 401 is already handled by the shared mutator.
       } finally {

@@ -59,6 +59,7 @@ RecoveryOutcome: TypeAlias = Literal[
     "captcha_required",
     "browser_bound",
     "suspended",
+    "recovery_disabled",
 ]
 OAKeepaliveStatus: TypeAlias = Literal[
     "alive",
@@ -71,6 +72,7 @@ OAKeepaliveStatus: TypeAlias = Literal[
     "captcha_required",
     "browser_bound",
     "suspended",
+    "recovery_disabled",
     "disabled",
 ]
 

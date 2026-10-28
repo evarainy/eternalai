@@ -797,6 +797,7 @@ class PostgreSQLCredentialStore:
                         "UPDATE oa_session_credentials SET"
                         " expires_at = GREATEST(expires_at, :expires_at)"
                         f" WHERE {_SNAPSHOT_WHERE} AND revoked_at IS NULL"
+                        " AND binding_state IN ('unverified', 'active')"
                         " AND encrypted_payload IS NOT NULL AND expires_at IS NOT NULL"
                         " RETURNING binding_id"
                     ),
