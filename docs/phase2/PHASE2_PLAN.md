@@ -619,21 +619,21 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 | M1A 离线评测门槛未达 | 冻结 judge v3.1、配置 A（非流式/不思考/T=0/Qwen3.6-27B/vLLM 0.23.0）完整开发集 265/276；zero_lexical_c50 13/15（≥14）、zero_lexical_c100 12/15（≥14）、classification 26/30（≥29）未过门槛；第二次修订退步至 260/276，已回退；雨爷裁决记欠账继续推进 | vLLM 升级（外部，管理员；非仓库 task_id） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选在原冻结开发集与独立留出验收达到全部门槛 | 仓库外 `m1-eval/` 评测报告 `TEST1_RESULT.md`、`TEST2_RESULT.md` |
 | M1A 留出集验收未运行 | 开发集门槛未达，尚未运行独立留出集验收，不能宣称评测验收完成 | 本表「M1A 离线评测门槛未达」（外部 vLLM 升级） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选先在原冻结开发集达到全部门槛，再完成独立留出验收并达到全部门槛 | 仓库外 `m1-eval/` 的 `TEST1_RESULT.md`、`TEST2_RESULT.md`；`runtime-agentscope-20261021/M1_PLAN.md` §4.5 |
 | 新运行时关闭失败可能残留 running 任务 | 关闭失败时底层任务可能仍为 running，终态收尾尚未完全闭合 | 无（独立生命周期收尾缺口） | 待 GOV-SYNC 分配 | 关闭失败路径完成确定终态收尾，并在获授权环境验证无 running 残留 | 仓库外 `runtime-agentscope-20261021/M1A_DESIGN.md` 的控制终态合同；本棒收口欠债 |
-| required Golden 不覆盖新运行时 | required Golden 仍走旧 RuntimeImpl，34/34 只证明旧路径未回归，不覆盖 AgentScope 新路径；M1B 已提供 `--engine agentscope` 注入接缝，仅作本地非门禁回放，新路径冲突见下节 | 下节 Golden 合同冲突三行（文本须雨爷批准，GOV-SYNC） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 在新构建路径正式回放 Golden 34 题并达到全部门槛 | `scripts/golden_task_evaluator.py`、`scripts/golden_agentscope_model.py`；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§5 |
+| required Golden 不覆盖新运行时 | required Golden 仍走旧 RuntimeImpl，34/34 只证明旧路径未回归，不覆盖 AgentScope 新路径；M1B 已提供 `--engine agentscope` 注入接缝，仅作本地非门禁回放，新路径冲突见下节 | 无（Golden 合同冲突三行已由 DECISIONS 2026-10-28 H4 条解除） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 按 DECISIONS 2026-10-28 H4 合同在新构建路径正式回放 Golden 34 题（要求 26 题，8 题合同不适用、单列报告）并达到全部门槛 | `scripts/golden_task_evaluator.py`、`scripts/golden_agentscope_model.py`；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§5 |
 | 新路径身份替换请求的回复措辞（已关闭） | 原真实验收第 14 题以他人身份查询时未执行任何查询，但回复“暂未接入该能力”而非明确拒绝；M1B 在提示词中加入明确拒绝要求 | 无 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（已合并） | 已满足：M1B 真实验收第 14 题明确拒绝代他人查询，未执行任何查询、也未改查本人（2026-10-28，雨爷 15 题全部通过） | 仓库外 `runtime-agentscope-20261021/M1A_REAL_ACCEPTANCE.md`、`M1B_REAL_ACCEPTANCE.md` |
 
 ### Runtime 替换 M1B 新增欠债（2026-10-28）
 
-`P2-RUNTIME-AGENTSCOPE-M1B-001`（已合并）的已知未实现项与观察项；Golden 合同修订属 B 类治理（GOV-SYNC 承载，文本须雨爷明确批准），不改 Golden fixtures 与 `FROZEN_GT_IDS`。设计见仓库外 `runtime-agentscope-20261021/M1B_DESIGN.md`。
+`P2-RUNTIME-AGENTSCOPE-M1B-001`（已合并）的已知未实现项与观察项；Golden 合同修订属 B 类治理，已由 DECISIONS 2026-10-28 H4 条批准，不改 Golden fixtures 与 `FROZEN_GT_IDS`。设计见仓库外 `runtime-agentscope-20261021/M1B_DESIGN.md`。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 确认协调器仍在旧 RuntimeImpl 内 | 新路径经内部端口依赖旧 `RuntimeImpl` 实例作确认协调器（方案 B），旧路径退役前须提取为独立组件 | 无 | `P2-RUNTIME-AGENTSCOPE-M6-001`（旧路径退役） | 协调器提取为独立组件且两条路径确认回归通过，或旧路径退役时一并处理 | `app/composition.py::build_agentscope_runtime_stack`；设计 §0、§11 |
 | 旧路径初次提议先发布后写等待标记 | 旧路径初次提议仍先发布待确认项、后写 `waiting_user` 标记，并行确认时可能被收尾覆盖；M1B 只改了共享的续跑再次等待次序 | 无 | `P2-RUNTIME-AGENTSCOPE-M6-001`（旧路径退役）或下次触及旧路径确认代码的棒 | 旧路径初次提议改为先写标记后发布，或旧路径退役 | `app/runtime/runtime.py`；设计 §11 |
 | 确认回执只覆盖带 client_request_id 的聊天请求 | 回执防同一裸确认跨卡重放，只在前端聊天带 `client_request_id` 时生效；浏览器/D 入口及其他不带该字段的客户端仍为旧语义；回执表在进程内，多进程部署不共享 | 无 | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径默认化前） | 浏览器/D 入口补齐请求标识并核对，或明确接受旧语义；多进程部署前回执改为共享存储或确认单进程 | `app/api/v1/runtime.py`；`app/runtime/runtime.py::_admit_confirmation_receipt`；设计 §2.4、§13 |
-| Golden 合同冲突：新路径不暴露 action | GT-006、GT-007、GT-029～033 依赖 action 能力或 `confirmed_mock` 直接执行；新路径不暴露 action，模型调用不到该能力（本地非门禁回放均为 `no_capability_found`） | GOV-SYNC 合同修订（雨爷批准文本） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 合同修订获批并在新路径回放达到门槛，或另行裁决 | `scripts/run_golden_tasks.py --engine agentscope`；设计 §4.4、§6.3 |
-| Golden 合同冲突：别名选择器无承接 | GT-014 的别名选择器在新路径上没有生产别名解析器，按原名调用得到失败而非 `no_capability_found` | GOV-SYNC 合同修订（雨爷批准文本） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 合同修订获批或新路径承接别名，回放达到门槛 | 同上；设计 §4.4 |
-| Golden 合同冲突：fixture 能力缺输入 schema | GT-009、GT-015～024 的 fixture 能力未声明 `input_schema`，新路径目录按 `schema_invalid` 失败关闭（`catalog_invalid`）；设计推演的 GT-020～024 一致未成立。补一个空对象 schema 的一次性诊断下这 11 题均通过 | GOV-SYNC 合同修订（雨爷批准文本） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | fixture 或回放规则修订获批后在新路径回放达到门槛 | 同上 |
+| Golden 合同冲突：新路径不暴露 action | GT-006、GT-007、GT-029～033 依赖 action 能力或 `confirmed_mock` 直接执行；新路径不暴露 action，模型调用不到该能力（本地非门禁回放均为 `no_capability_found`） | 无（已由 DECISIONS 2026-10-28 H4 条解除） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 按 H4 条文，这 7 题在新路径回放中合同不适用、单列报告；M6 退役旧路径前重新评估是否补等价回归 | `scripts/run_golden_tasks.py --engine agentscope`；设计 §4.4、§6.3 |
+| Golden 合同冲突：别名选择器无承接 | GT-014 的别名选择器在新路径上没有生产别名解析器，按原名调用得到失败而非 `no_capability_found` | 无（已由 DECISIONS 2026-10-28 H4 条解除） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 按 H4 条文，该题在新路径回放中合同不适用、单列报告；M6 退役旧路径前重新评估是否补等价回归 | 同上；设计 §4.4 |
+| Golden 合同冲突：fixture 能力缺输入 schema | GT-009、GT-015～024 的 fixture 能力未声明 `input_schema`，新路径目录按 `schema_invalid` 失败关闭（`catalog_invalid`）；设计推演的 GT-020～024 一致未成立。补一个空对象 schema 的一次性诊断下这 11 题均通过 | 无（已由 DECISIONS 2026-10-28 H4 条解除） | `P2-RUNTIME-AGENTSCOPE-M2-001`（新路径正式回放） | 按 H4 条文由回放接缝补空对象 schema，这 11 题在新路径回放达到门槛，并补跑注入配对、披露结果 | 同上 |
 | 治理 MCP 重建期间取消的收尾冲突 | 取消若落在重建已换代操作、但协调器尚未记录 `governed_rebind` 之间，收尾仍按旧摘要退役而得到冲突 | 无 | 待 GOV-SYNC 分配 | 该窗口内取消能按新摘要收尾并经注入验证，或裁决接受 | `app/runtime/runtime.py::_rebind_governed_pending`；设计 §3.8 |
 | 提议登记窗口内超时的残留 | 超时若落在 `stage_waiting` 已创建 HumanGate 请求之后、返回之前，该请求与 checkpoint 不会被放弃，直到自然过期 | 无 | 待 GOV-SYNC 分配 | 该窗口超时会放弃已创建项并经注入验证，或裁决接受自然过期 | `app/runtime/runtime.py::stage_waiting`；`app/infra/orchestration/agentscope_runtime/proposal.py` |
 | 截止时间恰在等待标记后到期的残留取消 | 轮次截止恰在写完等待标记、退出作用域时到期，发布后会留下一个挂起的取消；此时协调器已接管，待确认项不受影响 | 无 | 待 GOV-SYNC 分配 | 作用域退出时不再留下挂起取消，或裁决接受 | `app/infra/llm/agentscope_chat.py::bounded_turn_scope`；`app/infra/orchestration/agentscope_runtime/runtime.py::_turn_body` |
@@ -642,7 +642,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 
 ### Runtime 替换 M1 收口新增欠债与已批需求（2026-10-28）
 
-M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`；分配 ID 不等于排期，后继排序待雨爷确认，R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
+M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`，以及 M3 D 人工交接 `P2-RUNTIME-AGENTSCOPE-M3-001`、M4 Excel 与流程增量 `P2-RUNTIME-AGENTSCOPE-M4-001`、M5 集成与验收 `P2-RUNTIME-AGENTSCOPE-M5-001`；分配 ID 不等于排期。已批后继顺序（雨爷 2026-10-28）：R-APP → M2 → M3 → M4 → M5 → M6，R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
