@@ -612,6 +612,156 @@ def build_runtime(
     )
 
 
+def build_agentscope_runtime_stack(
+    *,
+    task_store: TaskStorePort,
+    session_store: SessionStorePort,
+    capability_registry: CapabilityRegistryPort,
+    gateway: CapabilityGatewayPort,
+    trace_port: TracePort,
+    llm_provider: LLMProviderPort,
+    structured_output: StructuredOutputPort,
+    intent_model: str,
+    model_factory: Callable[[], Any],
+    workflow_engine: WorkflowEngine | None = None,
+    validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None = None,
+    session_memory: SessionMemory | None = None,
+    semantic_knowledge: BasicKnowledge | None = None,
+    evaluator: TerminalEvaluator | None = None,
+    overview_evaluator: OverviewPostconditionEvaluator | None = None,
+    human_gate_port: HumanGatePort | None = None,
+    candidate_policy: CapabilityCandidatePolicyPort | None = None,
+    capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None = None,
+    mcp_result_profiles: Mapping[str, ServiceConfig] | None = None,
+    d_form_collection_store: DFormCollectionStorePort | None = None,
+    document_qa: DocumentQAService | None = None,
+    approved_projections: Mapping[
+        str, tuple[str, str | None, str, ApprovedResponseProjection]
+    ] | None = None,
+    session_idle_ttl_seconds: int = 1800,
+) -> RuntimePort:
+    """The AgentScope runtime over the same wiring as ``build_runtime``.
+
+    The legacy Runtime built here is the confirmation coordinator; the
+    AgentScope path shares its workflow engine, HumanGate, registry and
+    gateway. ``model_factory`` is the model seam (production, Golden, eval).
+    """
+    resolved_policy = MinimalPolicyGuard() if candidate_policy is None else candidate_policy
+    resolved_knowledge = semantic_knowledge or BasicKnowledge()
+    resolved_evaluator = evaluator or TerminalEvaluator()
+    resolved_overview = overview_evaluator or OverviewPostconditionEvaluator()
+    coordinator = build_runtime(
+        task_store=task_store,
+        session_store=session_store,
+        capability_registry=capability_registry,
+        gateway=gateway,
+        trace_port=trace_port,
+        llm_provider=llm_provider,
+        structured_output=structured_output,
+        intent_model=intent_model,
+        workflow_engine=workflow_engine,
+        validate_workflow=validate_workflow,
+        session_memory=session_memory,
+        semantic_knowledge=resolved_knowledge,
+        evaluator=resolved_evaluator,
+        overview_evaluator=resolved_overview,
+        human_gate_port=human_gate_port,
+        candidate_policy=resolved_policy,
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        d_form_collection_store=d_form_collection_store,
+        document_qa=document_qa,
+        approved_projections=approved_projections,
+    )
+    return _build_agentscope_runtime(
+        coordinator,
+        task_store=task_store,
+        session_store=session_store,
+        capability_registry=capability_registry,
+        gateway=gateway,
+        trace_port=trace_port,
+        workflow_engine=workflow_engine,
+        validate_workflow=validate_workflow,
+        knowledge=resolved_knowledge,
+        evaluator=resolved_evaluator,
+        overview_evaluator=resolved_overview,
+        human_gate_port=human_gate_port,
+        candidate_policy=resolved_policy,
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
+        model_factory=model_factory,
+        model_name=intent_model,
+        session_idle_ttl_seconds=session_idle_ttl_seconds,
+    )
+
+
+def _build_agentscope_runtime(
+    coordinator: RuntimeImpl,
+    *,
+    task_store: TaskStorePort,
+    session_store: SessionStorePort,
+    capability_registry: CapabilityRegistryPort,
+    gateway: CapabilityGatewayPort,
+    trace_port: TracePort,
+    workflow_engine: WorkflowEngine | None,
+    validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None,
+    knowledge: BasicKnowledge,
+    evaluator: TerminalEvaluator,
+    overview_evaluator: OverviewPostconditionEvaluator,
+    human_gate_port: HumanGatePort | None,
+    candidate_policy: CapabilityCandidatePolicyPort,
+    capability_formatters: Mapping[str, Callable[[dict[str, Any]], str]] | None,
+    mcp_result_profiles: Mapping[str, ServiceConfig] | None,
+    approved_projections: Mapping[
+        str, tuple[str, str | None, str, ApprovedResponseProjection]
+    ] | None,
+    model_factory: Callable[[], Any],
+    model_name: str,
+    session_idle_ttl_seconds: int,
+) -> RuntimePort:
+    """The single wiring of the AgentScope path; AgentScope is imported only here."""
+    from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
+    from app.infra.orchestration.agentscope_runtime import build_agentscope_runtime
+
+    if human_gate_port is None:
+        raise ValueError("The AgentScope runtime requires a HumanGate port")
+    # Same engine as the coordinator, so a proposal resumes on its checkpoint;
+    # the barrier keeps every unconfirmed write leaf from being sent.
+    orchestration = AgentOrchestrationAdapter(
+        capability_registry=capability_registry,
+        gateway=gateway,
+        workflow_engine=(
+            WorkflowEngineAdapter(workflow_engine) if workflow_engine is not None else None
+        ),
+        response_builder=ResponseEnvelopeBuilder(),
+        validate_workflow=validate_workflow,
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
+        confirmation_barrier=True,
+    )
+    return build_agentscope_runtime(
+        AgentScopeRuntimeDependencies(
+            capability_registry=capability_registry,
+            candidate_policy=candidate_policy,
+            orchestration=orchestration,
+            task_store=task_store,
+            session_store=session_store,
+            trace_port=trace_port,
+            human_gate=human_gate_port,
+            response_builder=ResponseEnvelopeBuilder(),
+            knowledge=knowledge,
+            terminal_evaluator=evaluator,
+            overview_evaluator=overview_evaluator,
+            model_factory=model_factory,
+            model_name=model_name,
+            session_idle_ttl_seconds=session_idle_ttl_seconds,
+            confirmations=coordinator,
+        )
+    )
+
+
 def build_production_components(
     settings: ProductionSettings,
     *,
@@ -984,37 +1134,29 @@ def build_production_components(
     agentscope_runtime: RuntimePort | None = None
     if settings.runtime_engine == "agentscope":
         from app.infra.llm.agentscope_chat import build_chat_model
-        from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
-        from app.infra.orchestration.agentscope_runtime import build_agentscope_runtime
 
-        agentscope_runtime = build_agentscope_runtime(
-            AgentScopeRuntimeDependencies(
-                capability_registry=capability_registry,
-                candidate_policy=policy_guard,
-                orchestration=AgentOrchestrationAdapter(
-                    capability_registry=capability_registry,
-                    gateway=gateway,
-                    workflow_engine=None,
-                    response_builder=ResponseEnvelopeBuilder(),
-                    validate_workflow=validate_workflow,
-                    capability_formatters=capability_formatters,
-                    mcp_result_profiles=mcp_result_profiles,
-                    approved_projections=approved_projections,
-                ),
-                task_store=task_store,
-                session_store=session_store,
-                trace_port=resolved_trace_port,
-                human_gate=human_gate_port,
-                response_builder=ResponseEnvelopeBuilder(),
-                knowledge=BasicKnowledge(static_items=knowledge_items),
-                terminal_evaluator=terminal_evaluator,
-                overview_evaluator=overview_evaluator,
-                model_factory=partial(
-                    build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
-                ),
-                model_name=settings.llm_model,
-                session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
-            )
+        agentscope_runtime = _build_agentscope_runtime(
+            runtime,
+            task_store=task_store,
+            session_store=session_store,
+            capability_registry=capability_registry,
+            gateway=gateway,
+            trace_port=resolved_trace_port,
+            workflow_engine=workflow_engine,
+            validate_workflow=validate_workflow,
+            knowledge=BasicKnowledge(static_items=knowledge_items),
+            evaluator=terminal_evaluator,
+            overview_evaluator=overview_evaluator,
+            human_gate_port=human_gate_port,
+            candidate_policy=policy_guard,
+            capability_formatters=capability_formatters,
+            mcp_result_profiles=mcp_result_profiles,
+            approved_projections=approved_projections,
+            model_factory=partial(
+                build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
+            ),
+            model_name=settings.llm_model,
+            session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
         )
     resolved_binding_verifier = credential_binding_verifier
     if resolved_binding_verifier is None:
@@ -1270,6 +1412,7 @@ def build_production_components(
 
 __all__ = (
     "ProductionComponents",
+    "build_agentscope_runtime_stack",
     "build_authentication_port",
     "build_admin_registry_service",
     "build_credential_store",

@@ -21,6 +21,7 @@ from app.ports.runtime import (
     RuntimePort,
     RuntimeSessionBusyError,
     UserActionOutcome,
+    chat_client_request_id,
     d_form_collection_reference,
 )
 from app.ports.task_store import DFormCollectionError
@@ -258,6 +259,8 @@ def make_router(
                 ) from None
         token = browser_request_scope.set(scope)
         collection_token = d_form_collection_reference.set(body.d_form_collection)
+        # Read only by the AgentScope runtime's confirmation receipts.
+        request_id_token = chat_client_request_id.set(body.client_request_id)
         try:
             return await bound_runtime.handle_user_message(
                 channel=body.channel,
@@ -275,6 +278,7 @@ def make_router(
         except RuntimeSessionBusyError:
             raise _session_busy() from None
         finally:
+            chat_client_request_id.reset(request_id_token)
             d_form_collection_reference.reset(collection_token)
             browser_request_scope.reset(token)
 

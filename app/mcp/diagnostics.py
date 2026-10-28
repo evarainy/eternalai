@@ -34,6 +34,7 @@ GrantReason = Literal[
     "principal_mismatch",
     "session_expired",
     "resolve_failed",
+    "subject_unverified",
 ]
 
 

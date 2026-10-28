@@ -37,11 +37,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="emit the summary JSON and fail when Golden Task thresholds fail",
     )
+    parser.add_argument(
+        "--engine",
+        choices=("legacy", "agentscope"),
+        default="legacy",
+        help="runtime under test; agentscope is a local, non-gating replay",
+    )
+    parser.add_argument(
+        "--ids",
+        help="comma-separated Golden Task ids to run instead of all of them",
+    )
     args = parser.parse_args(argv)
+    if args.gate and (args.engine != "legacy" or args.ids):
+        parser.error("--gate judges the full legacy run only")
+
+    # Arguments are passed only when given, so the default call is unchanged.
+    selection: dict[str, Any] = {}
+    if args.engine != "legacy":
+        selection["engine"] = args.engine
+    if args.ids:
+        selection["gt_ids"] = [item.strip() for item in args.ids.split(",") if item.strip()]
 
     try:
         evaluate_all_golden_tasks, build_summary = _load_runner()
-        summary = build_summary(evaluate_all_golden_tasks())
+        summary = build_summary(evaluate_all_golden_tasks(**selection))
     except Exception as exc:
         print(f"Golden Task runner infrastructure failure: {exc}", file=sys.stderr)
         return 2
@@ -190,7 +209,7 @@ def _count_results(
 
 
 def _load_runner() -> tuple[
-    Callable[[], list[Any]],
+    Callable[..., list[Any]],
     Callable[[Sequence[Any]], dict[str, Any]],
 ]:
     from scripts.golden_task_evaluator import build_summary, evaluate_all_golden_tasks

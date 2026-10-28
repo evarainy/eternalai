@@ -81,4 +81,5 @@ class CapabilityGatewayPort(Protocol):
         request_context: RequestOrgContext,
         *,
         workflow_authorization: GovernedWorkflowAuthorization | None = None,
+        confirmation_barrier: bool = False,
     ) -> ExecutionResult: ...

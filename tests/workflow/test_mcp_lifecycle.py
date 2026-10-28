@@ -33,12 +33,15 @@ async def governed_chat(*, gate=None):
     chat = await _build_harness(gate=gate)
     pending = next(iter(chat.runtime._pending_workflows.values()))
     h = await fixture()
+    # The op belongs to the login used below; cross-login rebind is covered in
+    # tests/mcp/test_operations.py.
     context = h.op.context.model_copy(
         update={
             "task_id": pending.task_id,
             "user_id": pending.owner.ai_user_id,
             "tenant_id": pending.owner.tenant_id,
             "chat_session_id": pending.owner.session_id,
+            "login_session_fingerprint": b"fresh-login".hex(),
         }
     )
     h.op = h.op.model_copy(

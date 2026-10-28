@@ -63,6 +63,7 @@ class WorkflowEnginePort(Protocol):
         ai_user_id: str,
         initial_input: Mapping[str, Any],
         request_context: RequestOrgContext,
+        confirmation_barrier: bool = False,
     ) -> WorkflowRunResult: ...
 
     async def resume(
@@ -90,6 +91,14 @@ class WorkflowEnginePort(Protocol):
     async def pending_confirmation_action_digest(self, task_id: str) -> str: ...
 
     async def governed_confirmation(self, task_id: str) -> HumanGateRequest | None: ...
+
+    async def rebind_governed_confirmation(
+        self,
+        task_id: str,
+        *,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+    ) -> HumanGateRequest | None: ...
 
     async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None: ...
 

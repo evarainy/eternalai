@@ -589,7 +589,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | M0 正式工具调用计数（已关闭）及覆盖缺口 | PR #224 已合并；2026-10-26 rev4 冻结后 run6 按 12 条各 1 次、12/12 通过，真实授权与冻结不再是阻塞；「先读标识再查详情」与日期条件仍以两次独立人员查询和标点条件替代，chat template 与工具解析器名称仍未取得 | 无（计数已完成；覆盖与元数据仍待补） | 待分配（剩余覆盖与元数据补验；M1 不承担，验收记录继续注明缺失） | 计数义务已满足；剩余覆盖缺口经后续真实接通补验或明确裁决，服务端元数据由管理员提供或裁决不需 | PR #224；仓库外 `m0-runs/M0_SAMPLES_FROZEN.md`、`M0_COUNT_RESULTS.run6.json` |
 | 目标环境离线安装与同路径运行 | 雨爷 2026-10-22 决定：短期内本机即开发、测试与服务器环境，目标环境离线安装验收推迟到全部开发完成后打 Docker 镜像推服务器阶段；本机 Windows（Python 3.12.14）离线包安装与同路径运行已验证，不阻塞 M0 | 全部开发完成（Docker 镜像与服务器阶段） | 待 GOV-SYNC 分配（Docker 镜像与服务器部署阶段） | 以 `uv.lock` 构建的镜像在目标服务器由批准来源离线安装后，同一模型接缝在实际 vLLM 上可运行 | `docs/dev/dependency_policy.md` AgentScope 生产传递依赖清单 |
 | 浏览器运行镜像随之安装 AgentScope 闭包 | `infra/docker/browser-runtime` 两个 Dockerfile 以 `uv sync --frozen --no-dev` 安装全部生产依赖，现包含 AgentScope 及其传递依赖；构建需可访问固定提交归档，未构建验证镜像 | 无（不阻塞 M0） | 待 GOV-SYNC 分配（随整体切换或镜像范围裁决） | 镜像构建实测通过，或裁定浏览器镜像排除该包并同步其构建入口 | `infra/docker/browser-runtime/Dockerfile.production` |
-| M0 计数用内部认证路由的去留 | `POST /api/v1/runtime/agentscope-m0/turn` 仅在 `AGENTSCOPE_M0_TURN_ENABLED` 严格为 "1" 时注册，供 M0 正式计数；2026-10-27 已获专项删除授权，并入 M1A 执行，仓库外计数证据保留 | 无（PR #224 正式计数已完成） | `P2-RUNTIME-AGENTSCOPE-M1A-001` | M1A 按 DECISIONS 授权清单删除路由、runner、开关及对应接线/参数，并确认生产配置未开启 | `app/api/v1/agentscope_m0.py`；`app/application.py::create_app` |
+| M0 计数用内部认证路由的去留（已关闭） | 2026-10-27 专项删除授权已由 M1A 执行，路由、runner、开关及接线已删；M1B 核对 `app/ scripts/ tests/ web/ docs/phase2/` 仅 DECISIONS 与本表历史记录提及该开关，仓库内部署脚本与仓库外启动脚本均不含该开关，仓库外计数证据保留 | 无 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（已执行） | 已满足 | DECISIONS 2026-10-27 第 5 项；`app/application.py::create_app` |
 | AgentScope 类型限于 infra 的架构守卫 | 现有 import 边界规则未声明 `agentscope` 只能出现在 `app/infra`；2026-10-27 已批准由 M1A 承接该边界规则 | 无（不阻塞 M0） | `P2-RUNTIME-AGENTSCOPE-M1A-001` | `tests/architecture/` 增加对应边界规则并在 required CI 通过，或另经裁决不设 | `tests/architecture/test_import_boundaries.py::_boundary_rules` |
 
 
@@ -619,8 +619,26 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，当前串行后继�
 | M1A 离线评测门槛未达 | 冻结 judge v3.1、配置 A（非流式/不思考/T=0/Qwen3.6-27B/vLLM 0.23.0）完整开发集 265/276；zero_lexical_c50 13/15（≥14）、zero_lexical_c100 12/15（≥14）、classification 26/30（≥29）未过门槛；第二次修订退步至 260/276，已回退；雨爷裁决记欠账继续推进 | vLLM 升级（外部，管理员；非仓库 task_id） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选在原冻结开发集与独立留出验收达到全部门槛 | 仓库外 `m1-eval/` 评测报告 `TEST1_RESULT.md`、`TEST2_RESULT.md` |
 | M1A 留出集验收未运行 | 开发集门槛未达，尚未运行独立留出集验收，不能宣称评测验收完成 | 本表「M1A 离线评测门槛未达」（外部 vLLM 升级） | vLLM 升级后的复测棒（task_id 待 GOV-SYNC 分配） | 新候选先在原冻结开发集达到全部门槛，再完成独立留出验收并达到全部门槛 | 仓库外 `m1-eval/` 的 `TEST1_RESULT.md`、`TEST2_RESULT.md`；`runtime-agentscope-20261021/M1_PLAN.md` §4.5 |
 | 新运行时关闭失败可能残留 running 任务 | 关闭失败时底层任务可能仍为 running，终态收尾尚未完全闭合 | 无（独立生命周期收尾缺口） | 待 GOV-SYNC 分配 | 关闭失败路径完成确定终态收尾，并在获授权环境验证无 running 残留 | 仓库外 `runtime-agentscope-20261021/M1A_DESIGN.md` 的控制终态合同；本棒收口欠债 |
-| required Golden 不覆盖新运行时 | required Golden 仍走旧 RuntimeImpl，34/34 只证明旧路径未回归，不覆盖 AgentScope 新路径 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（Golden 注入接缝） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | 在新构建路径正式回放 Golden 34 题并达到全部门槛 | `scripts/golden_task_evaluator.py`；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§5 |
-| 新路径身份替换请求的回复措辞 | 真实验收第 14 题：以他人身份查询时未执行任何查询，但回复“暂未接入该能力”，未明确说明不能代他人查询；离线 identity_injection 6/6 未暴露此差异 | 无 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（提示词随写路径一并修订） | 新路径真实验收中身份替换请求得到明确拒绝且不执行任何查询 | 仓库外 `runtime-agentscope-20261021/M1A_REAL_ACCEPTANCE.md` |
+| required Golden 不覆盖新运行时 | required Golden 仍走旧 RuntimeImpl，34/34 只证明旧路径未回归，不覆盖 AgentScope 新路径；M1B 已提供 `--engine agentscope` 注入接缝，仅作本地非门禁回放，新路径冲突见下节 | 下节 Golden 合同冲突三行（文本须雨爷批准，GOV-SYNC） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | 在新构建路径正式回放 Golden 34 题并达到全部门槛 | `scripts/golden_task_evaluator.py`、`scripts/golden_agentscope_model.py`；仓库外 `runtime-agentscope-20261021/M1_PLAN.md` §0、§5 |
+| 新路径身份替换请求的回复措辞 | 真实验收第 14 题：以他人身份查询时未执行任何查询，但回复“暂未接入该能力”，未明确说明不能代他人查询；离线 identity_injection 6/6 未暴露此差异。M1B 已在提示词中加入明确拒绝要求，真实模型效果未验证 | 无 | `P2-RUNTIME-AGENTSCOPE-M1B-001`（真实验收核对） | 新路径真实验收中身份替换请求得到明确拒绝且不执行任何查询 | 仓库外 `runtime-agentscope-20261021/M1A_REAL_ACCEPTANCE.md` |
+
+### Runtime 替换 M1B 新增欠债（2026-10-28）
+
+`P2-RUNTIME-AGENTSCOPE-M1B-001` 的已知未实现项与观察项；Golden 合同修订属 B 类治理（GOV-SYNC 承载，文本须雨爷明确批准），本棒不改 Golden fixtures 与 `FROZEN_GT_IDS`。设计见仓库外 `runtime-agentscope-20261021/M1B_DESIGN.md`。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 确认协调器仍在旧 RuntimeImpl 内 | 新路径经内部端口依赖旧 `RuntimeImpl` 实例作确认协调器（方案 B），旧路径退役前须提取为独立组件 | 无 | 旧路径退役棒（M6，task_id 待 GOV-SYNC 分配） | 协调器提取为独立组件且两条路径确认回归通过，或旧路径退役时一并处理 | `app/composition.py::build_agentscope_runtime_stack`；设计 §0、§11 |
+| 旧路径初次提议先发布后写等待标记 | 旧路径初次提议仍先发布待确认项、后写 `waiting_user` 标记，并行确认时可能被收尾覆盖；M1B 只改了共享的续跑再次等待次序 | 无 | 旧路径退役或下次触及旧路径确认代码的棒（待 GOV-SYNC 分配） | 旧路径初次提议改为先写标记后发布，或旧路径退役 | `app/runtime/runtime.py`；设计 §11 |
+| 确认回执只覆盖带 client_request_id 的聊天请求 | 回执防同一裸确认跨卡重放，只在前端聊天带 `client_request_id` 时生效；浏览器/D 入口及其他不带该字段的客户端仍为旧语义；回执表在进程内，多进程部署不共享 | 无 | M2（新路径默认化前，task_id 待 GOV-SYNC 分配） | 浏览器/D 入口补齐请求标识并核对，或明确接受旧语义；多进程部署前回执改为共享存储或确认单进程 | `app/api/v1/runtime.py`；`app/runtime/runtime.py::_admit_confirmation_receipt`；设计 §2.4、§13 |
+| Golden 合同冲突：新路径不暴露 action | GT-006、GT-007、GT-029～033 依赖 action 能力或 `confirmed_mock` 直接执行；新路径不暴露 action，模型调用不到该能力（本地非门禁回放均为 `no_capability_found`） | GOV-SYNC 合同修订（雨爷批准文本） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | 合同修订获批并在新路径回放达到门槛，或另行裁决 | `scripts/run_golden_tasks.py --engine agentscope`；设计 §4.4、§6.3 |
+| Golden 合同冲突：别名选择器无承接 | GT-014 的别名选择器在新路径上没有生产别名解析器，按原名调用得到失败而非 `no_capability_found` | GOV-SYNC 合同修订（雨爷批准文本） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | 合同修订获批或新路径承接别名，回放达到门槛 | 同上；设计 §4.4 |
+| Golden 合同冲突：fixture 能力缺输入 schema | GT-009、GT-015～024 的 fixture 能力未声明 `input_schema`，新路径目录按 `schema_invalid` 失败关闭（`catalog_invalid`）；设计推演的 GT-020～024 一致未成立。补一个空对象 schema 的一次性诊断下这 11 题均通过 | GOV-SYNC 合同修订（雨爷批准文本） | M2 新路径正式回放棒（task_id 待 GOV-SYNC 分配） | fixture 或回放规则修订获批后在新路径回放达到门槛 | 同上 |
+| 治理 MCP 重建期间取消的收尾冲突 | 取消若落在重建已换代操作、但协调器尚未记录 `governed_rebind` 之间，收尾仍按旧摘要退役而得到冲突 | 无 | 待 GOV-SYNC 分配 | 该窗口内取消能按新摘要收尾并经注入验证，或裁决接受 | `app/runtime/runtime.py::_rebind_governed_pending`；设计 §3.8 |
+| 提议登记窗口内超时的残留 | 超时若落在 `stage_waiting` 已创建 HumanGate 请求之后、返回之前，该请求与 checkpoint 不会被放弃，直到自然过期 | 无 | 待 GOV-SYNC 分配 | 该窗口超时会放弃已创建项并经注入验证，或裁决接受自然过期 | `app/runtime/runtime.py::stage_waiting`；`app/infra/orchestration/agentscope_runtime/proposal.py` |
+| 截止时间恰在等待标记后到期的残留取消 | 轮次截止恰在写完等待标记、退出作用域时到期，发布后会留下一个挂起的取消；此时协调器已接管，待确认项不受影响 | 无 | 待 GOV-SYNC 分配 | 作用域退出时不再留下挂起取消，或裁决接受 | `app/infra/llm/agentscope_chat.py::bounded_turn_scope`；`app/infra/orchestration/agentscope_runtime/runtime.py::_turn_body` |
+| 治理 MCP 重建失败不分错误码 | 换登录确认时重建失败一律提示重新授权并保留卡片可领取；`mcp_confirmation_expired` 与 `mcp_operation_conflict` 不可通过重新授权恢复，应走 `confirmation_invalidated` 收尾。当前失败关闭、不发送、不降级，受 600 s 确认 TTL 限制；设计 §3.8 原文不区分错误码，改动须在 DECISIONS 记一笔 | 无 | 待 GOV-SYNC 分配 | 这两个码改走失效收尾（仅 `mcp_authorization_invalid` 与 `mcp_identity_*` 保留可重试）并记入 DECISIONS，或裁决接受现状 | `app/runtime/runtime.py::_process_pending_confirmation`；`app/mcp/operations.py::GovernedOperations.rebind_current_session`；设计 §3.8 |
+| 观察项：只读 workflow 进入写组 | 新路径按设计把全部 workflow（含 OA 概览等只读 workflow）放入写组，可能改变读问题的工具选择；只在评测与真实验收中观察 | 无 | M1B 完整开发集评测与真实验收 | 评测与真实验收未见读选择退化，或据结果另行裁决分组 | `app/infra/orchestration/agentscope_runtime/catalog.py::build_tool_catalog`；设计 §3.1 |
 
 ## 6. P2 不做什么
 

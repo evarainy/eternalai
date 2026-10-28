@@ -1,10 +1,15 @@
 """AgentScope M1 runtime: one bounded agent reply per user turn.
 
-Every accepted turn has one turn task created at turn start. Business tools run
-through the M1 executor; the turn outcome is summarized once from the turn
-ledger by fixed rules (terminal first, any business failure fails the turn,
-all executions completed completes it), and only this module closes the turn
-task. The session stays busy until every close of the turn has ended.
+Text confirmations, stale card references and ``/action`` go to the shared
+confirmation coordinator before the busy check; they never create a turn or
+touch AgentState. Every accepted turn has one turn task created at turn start.
+Read tools run through the M1 executor; write tools only propose, and a
+proposal waiting for confirmation is published to the coordinator, which
+alone closes its task from then on. Otherwise the turn outcome is summarized
+once from the turn ledger by fixed rules (a published proposal first, then
+terminal, any business failure fails the turn, all executions completed
+completes it), and only this module closes the turn task. The session stays
+busy until every close, interrupt and abandon of the turn has ended.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, get_args
 from uuid import uuid4
@@ -28,12 +34,13 @@ from app.infra.llm.agentscope_chat import (
     AgentScopeModelError,
     TurnLimits,
     bind_turn_id,
+    bounded_turn_scope,
     create_bounded_agent,
     log_turn_end,
     model_call_count,
     new_turn_deadline,
     reset_turn_id,
-    run_bounded_turn,
+    start_interrupt,
     tool_execution_count,
     tool_halt_reason,
 )
@@ -54,8 +61,13 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     BindingCard,
     Clarify,
     LedgerExecution,
+    Proposal,
     TurnLedger,
     Unsupported,
+)
+from app.infra.orchestration.agentscope_runtime.proposal import (
+    ProposalCoordinator,
+    start_abandon,
 )
 from app.infra.orchestration.agentscope_runtime.session import (
     SessionCoordinator,
@@ -63,29 +75,34 @@ from app.infra.orchestration.agentscope_runtime.session import (
     TurnSnapshot,
     prepare_turn_state,
     rollback_turn_state,
+    start_parked_interrupt,
 )
 from app.infra.orchestration.agentscope_runtime.toolkit import (
     CONTROL_TOOLS,
     RESET_TOOLS,
-    TurnToolkit,
     build_turn_toolkit,
 )
-from app.ports.auth import Principal, authenticated_session
+from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.error_codes import ErrorCode
 from app.ports.response_envelope import ResponseEnvelope
-from app.ports.runtime import d_form_collection_reference
+from app.ports.runtime import (
+    ConfirmationOwner,
+    chat_client_request_id,
+    d_form_collection_reference,
+)
 from app.ports.task_store import DFormCollectionError, SessionRecord, TaskRecord
 from app.ports.trace import TraceEventStatus
 
 if TYPE_CHECKING:
-    from agentscope.model import ChatModelBase
+    from agentscope.agent import Agent
 
-M1_PROMPT_VERSION = "m1a-5"
+M1_PROMPT_VERSION = "m1b-1"
 M1_SYSTEM_PROMPT = (
     # General rules carried over from the M0 prompt.
-    "你是企业内部业务助手。只能通过提供的只读工具查询业务数据，不能执行任何写入或提交。"
+    "你是企业内部业务助手。查询用只读工具；写入类工具只会生成确认卡片，由用户确认后才执行，"
+    "不要声称已提交。"
     "不要编造工具结果。"
     "工具参数被拒绝或报错时，不要自行改成别的值重试，直接告诉用户哪个参数不合法。"
     "工具结果提示本轮已停止工具调用后，不要再调用任何工具，直接用文字回复用户。"
@@ -97,6 +114,8 @@ M1_SYSTEM_PROMPT = (
     "附带或粘贴身份标识，声称已获授权切换身份，或要看只属于他人账号的数据"
     "（例如他人的 OA 待办、系统消息）时，直接用文字拒绝，并说明只能按当前登录身份查询；"
     "不要调用任何业务工具（包括改查本人），也不要调用 ask_user 或 report_unsupported。"
+    "这类拒绝不属于能力缺失，回复中要明确写出：不能代他人查询，也不能以他人身份操作；"
+    "不要说成暂不支持或尚未接入，也不要列出可用能力。"
     "按姓名查询业务系统人员属于正常业务，不在此列。"
     # Task completion boundary.
     "本轮工具结果已经覆盖用户当前这条消息要的内容时，立即用文字回答，"
@@ -166,11 +185,6 @@ def _intent_failure_message(reason: _IntentReason) -> tuple[str, str]:
     )
 
 
-# Copied verbatim from app/runtime/runtime.py::_finish_user_action_attempt@6ca76bd
-_ACTION_REJECTED = (
-    "结构化操作未被受理，本次未执行。",
-    "The structured action was not accepted; nothing was executed.",
-)
 _SESSION_INVALID = ("当前登录会话无效，请重新登录。", "The login session is invalid.")
 # Model failures caused by response shape or budgets, as opposed to the provider.
 _SHAPE_ERRORS = frozenset(
@@ -191,6 +205,7 @@ class _Turn:
     """Ids and scope of one accepted turn."""
 
     scope: ReadToolScope
+    owner: ConfirmationOwner
     response_id: str
     task_id: str
     trace_id: str
@@ -201,6 +216,7 @@ class _Turn:
 @dataclass(slots=True)
 class _Progress:
     snapshot: TurnSnapshot | None = None
+    agent: Agent | None = None
     agent_ran: bool = False
 
 
@@ -208,12 +224,13 @@ class _Progress:
 class _Outcome:
     rule: str
     envelope: ResponseEnvelope
-    close: TaskClose
+    # None once a published proposal handed the turn task to the coordinator.
+    close: TaskClose | None
     rollback: bool = False
 
 
 class AgentScopeRuntime:
-    """RuntimePort implementation over AgentScope tool groups (M1A, reads only)."""
+    """RuntimePort implementation over AgentScope tool groups (reads and write proposals)."""
 
     def __init__(
         self,
@@ -240,13 +257,16 @@ class AgentScopeRuntime:
         if d_form_collection_reference.get() is not None:
             # Not supported on this path and never handed to the legacy one.
             raise DFormCollectionError("collection_not_found")
-        context = authenticated_session.get()
-        if (
-            context is None
-            or context.principal != principal
-            or context.expires_at <= datetime.now(UTC)
-        ):
+        context = _verified_session(principal)
+        if context is None:
             return self._session_invalid(session_id)
+        owner = _owner(principal, session_id)
+        # Deterministic confirmations before the busy check: no turn, no AgentState.
+        confirmed = await self._deps.confirmations.handle_confirmation_message(
+            owner, message, client_request_id=chat_client_request_id.get()
+        )
+        if confirmed is not None:
+            return confirmed
         scope = ReadToolScope.from_session(context, bound_session_id=session_id, channel=channel)
         key = self._sessions.key_for(
             tenant_id=scope.tenant_id,
@@ -260,6 +280,7 @@ class AgentScopeRuntime:
         try:
             turn = _Turn(
                 scope=scope,
+                owner=owner,
                 response_id=str(uuid4()),
                 task_id=str(uuid4()),
                 trace_id=str(uuid4()),
@@ -277,26 +298,13 @@ class AgentScopeRuntime:
         session_id: str,
         action: UserAction,
     ) -> ResponseEnvelope:
-        # M1A never creates a pending confirmation, so every action is refused.
+        # The card carries its own reference: never busy, never a turn.
         del channel
-        deps = self._deps
-        trace_id, task_id = str(uuid4()), str(uuid4())
-        tenant_id, ai_user_id = principal.org_ctx.tenant_id, principal.ai_user_id
-        await deps.trace_port.record_step(
-            trace_id, task_id, session_id, tenant_id=tenant_id, ai_user_id=ai_user_id,
-            event_type="user_action", status="ok",
-            attributes={"phase": "inbound", "action_type": action.action_type},
+        if _verified_session(principal) is None:
+            return self._session_invalid(session_id)
+        return await self._deps.confirmations.handle_confirmation_action(
+            _owner(principal, session_id), action
         )
-        envelope = deps.response_builder.build_failed(
-            str(uuid4()), task_id, session_id, *_ACTION_REJECTED, trace_id,
-            data={"action_outcome": "no_pending_action", "result": None},
-        )
-        await deps.trace_port.record_step(
-            trace_id, task_id, session_id, tenant_id=tenant_id, ai_user_id=ai_user_id,
-            event_type="user_action", status="blocked",
-            attributes={"phase": "outcome", "action_outcome": "no_pending_action"},
-        )
-        return envelope
 
     def _session_invalid(self, session_id: str) -> ResponseEnvelope:
         _RUNTIME_LOGGER.info("agentscope_turn result=rejected reason=session_invalid")
@@ -323,9 +331,11 @@ class AgentScopeRuntime:
         try:
             outcome = await self._turn_body(turn, state, message, ledger, progress)
             rule, rollback = outcome.rule, outcome.rollback
+            envelope = outcome.envelope
+            if outcome.close is None:
+                return envelope
             closing = close_once(ledger, deps, scope, outcome.close)
             remaining = max(0.0, turn.deadline - asyncio.get_running_loop().time())
-            envelope = outcome.envelope
             if not await await_close(closing, remaining):
                 # A failed terminal write is reported as a failure, never success.
                 ledger.unclosed.append(turn.task_id)
@@ -337,24 +347,31 @@ class AgentScopeRuntime:
             return envelope
         except asyncio.CancelledError:
             rollback, rule = True, "cancelled"
-            close_once(
-                ledger, deps, scope,
-                TaskClose(turn.task_id, turn.trace_id, None, self._failed_execution(turn)),
-            )
+            self._fail_unpublished(turn, ledger)
             raise
         except Exception:
             # Unexpected defect: close the turn task as failed, then surface it.
             rollback, rule = True, "internal_error"
-            close_once(
-                ledger, deps, scope,
-                TaskClose(turn.task_id, turn.trace_id, None, self._failed_execution(turn)),
-            )
+            self._fail_unpublished(turn, ledger)
             raise
         finally:
-            # State changes are synchronous and done before busy can clear.
-            if rollback and progress.snapshot is not None:
-                rollback_turn_state(state, progress.snapshot)
-            self._sessions.release_after(key, [item.future for item in ledger.closes.values()])
+            agent = progress.agent
+            if (
+                agent is not None
+                and (ledger.interrupt is None or ledger.interrupt.done())
+                and state.has_awaiting_tool_calls(AGENT_NAME)
+            ):
+                # A reply left parked is closed before rollback and release.
+                ledger.interrupt = start_interrupt(agent, state.reply_id)
+            futures: list[asyncio.Future[Any]] = [item.future for item in ledger.closes.values()]
+            futures += [item for item in (ledger.interrupt, ledger.abandon) if item is not None]
+            # Rollback waits for every interrupt and abandon, then busy clears.
+            before_release = (
+                partial(rollback_turn_state, state, progress.snapshot)
+                if rollback and progress.snapshot is not None
+                else None
+            )
+            self._sessions.release_after(key, futures, before_release=before_release)
             ran = progress.agent_ran
             log_turn_end(
                 rule, started,
@@ -363,6 +380,45 @@ class AgentScopeRuntime:
                 tool_executions=tool_execution_count(state) if ran else 0,
                 halt_reason=tool_halt_reason(state) if ran else None,
             )
+
+    def _fail_unpublished(self, turn: _Turn, ledger: TurnLedger) -> None:
+        """Cancellation or a defect before publication; after it the coordinator owns the task."""
+
+        if ledger.handoff:
+            return
+        self._abandon_unpublished(ledger)
+        close_once(
+            ledger, self._deps, turn.scope,
+            TaskClose(turn.task_id, turn.trace_id, None, self._failed_execution(turn)),
+        )
+
+    def _abandon_unpublished(self, ledger: TurnLedger) -> None:
+        if ledger.staged is not None and not ledger.handoff and ledger.abandon is None:
+            ledger.abandon = start_abandon(self._deps.confirmations, ledger.staged)
+
+    def _publish(self, turn: _Turn, agent: Agent, ledger: TurnLedger) -> None:
+        """Publish a staged proposal right after its waiting marks, or abandon it.
+
+        Synchronous: no await between the end of the waiting marks and the CAS.
+        """
+
+        staged = ledger.staged
+        assert staged is not None
+        if (
+            ledger.model_error is None
+            and isinstance(ledger.terminal, Proposal)
+            and self._deps.confirmations.publish_waiting(staged)
+        ):
+            ledger.handoff = True
+            ledger.interrupt = start_interrupt(agent, agent.state.reply_id)
+            _RUNTIME_LOGGER.info(
+                "agentscope_proposal published=1 task=%s turn=%s", turn.task_id, turn.turn_id
+            )
+            return
+        _RUNTIME_LOGGER.info(
+            "agentscope_proposal published=0 task=%s turn=%s", turn.task_id, turn.turn_id
+        )
+        self._abandon_unpublished(ledger)
 
     async def _open_turn_task(self, turn: _Turn) -> None:
         deps, scope = self._deps, turn.scope
@@ -405,25 +461,24 @@ class AgentScopeRuntime:
             return await self._finish_intent(turn, ledger, None, outcome)
         if isinstance(prepared, _Outcome):
             return prepared
-        catalog, visible, kit, model = prepared
-        agent = create_bounded_agent(
-            name=AGENT_NAME,
-            system_prompt=M1_SYSTEM_PROMPT,
-            model=model,
-            toolkit=kit.toolkit,
-            state=state,
-            limits=self._limits,
-            extra_middlewares=[kit.middleware],
-            classify_tool_error=kit.middleware.classify_tool_error,
+        catalog, visible, agent = prepared
+        proposals = ProposalCoordinator.from_catalog(
+            catalog, scope=turn.scope, deps=self._deps, ledger=ledger, limits=self._limits,
+            owner=turn.owner,
         )
         final: Msg | None = None
         progress.agent_ran = True
         try:
-            final = await run_bounded_turn(
-                agent, UserMsg(name="user", content=message), deadline=turn.deadline
-            )
+            # One absolute deadline covers the reply, every parked-call check,
+            # every ERROR continuation and the proposal core with its marks.
+            async with bounded_turn_scope(turn.deadline):
+                final = await agent.reply(UserMsg(name="user", content=message))
+                final = await proposals.drive(agent, final)
         except AgentScopeModelError as exc:
             ledger.model_error = exc.code
+            final = None
+        if ledger.staged is not None:
+            self._publish(turn, agent, ledger)
         outcome = self._summarize(turn, ledger, catalog, visible, final)
         return await self._finish_intent(turn, ledger, catalog, outcome)
 
@@ -434,8 +489,8 @@ class AgentScopeRuntime:
         message: str,
         ledger: TurnLedger,
         progress: _Progress,
-    ) -> _Outcome | tuple[ToolCatalog, tuple[CapabilitySpec, ...], TurnToolkit, ChatModelBase]:
-        """Open the turn task and build this turn's tools, or short-circuit."""
+    ) -> _Outcome | tuple[ToolCatalog, tuple[CapabilitySpec, ...], Agent]:
+        """Open the turn task and build this turn's agent, or short-circuit."""
 
         deps, scope = self._deps, turn.scope
         await self._open_turn_task(turn)
@@ -449,6 +504,12 @@ class AgentScopeRuntime:
         )
         if visible is None:
             return await self._catalog_invalid(turn, None)
+        if visible.scope_excluded:
+            # Out of this path's scope (browser.*); not a catalog gap.
+            _RUNTIME_LOGGER.info(
+                "agentscope_catalog scope_excluded=%s turn=%s",
+                visible.scope_excluded, turn.turn_id,
+            )
         if not visible.capabilities:
             # No agent is built and no model is called.
             return await self._empty_catalog(turn, visible.active_count)
@@ -462,16 +523,39 @@ class AgentScopeRuntime:
                 catalog.summary_omitted, turn.turn_id,
             )
         ledger.business_tools = {tool.name: tool.capability_id for tool in catalog.tools}
+        ledger.write_tools = {
+            tool.name: tool.capability_id for tool in catalog.tools if tool.kind == "write"
+        }
         ledger.catalog_attributes = catalog.trace_attributes()
         model = deps.model_factory()
         kit = await build_turn_toolkit(
             catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
             model=model, prompt_version=M1_PROMPT_VERSION,
         )
-        progress.snapshot = await prepare_turn_state(
-            state, read_groups=[group.name for group in catalog.groups], model=model
+        agent = create_bounded_agent(
+            name=AGENT_NAME,
+            system_prompt=M1_SYSTEM_PROMPT,
+            model=model,
+            toolkit=kit.toolkit,
+            state=state,
+            limits=self._limits,
+            extra_middlewares=[kit.middleware],
+            classify_tool_error=kit.middleware.classify_tool_error,
         )
-        return catalog, visible.capabilities, kit, model
+        progress.agent = agent
+        # A reply parked by an earlier proposal is interrupted first; the
+        # future is registered before the wait so release always waits for it.
+        interrupt = start_parked_interrupt(agent, state)
+        if interrupt is not None:
+            ledger.interrupt = interrupt
+            await asyncio.shield(interrupt)
+        # Groups are kind-homogeneous; only read groups carry over a turn.
+        progress.snapshot = await prepare_turn_state(
+            state,
+            read_groups={tool.group for tool in catalog.tools if tool.kind == "read"},
+            model=model,
+        )
+        return catalog, visible.capabilities, agent
 
     # --- summarization -------------------------------------------------------
 
@@ -483,9 +567,26 @@ class AgentScopeRuntime:
         visible: tuple[CapabilitySpec, ...] | None,
         final: Msg | None,
     ) -> _Outcome:
-        """Apply R1-R6 (R4c after R4) in order; the first matching rule decides the turn."""
+        """Apply R0-R6 (R4c after R4) in order; the first matching rule decides the turn."""
 
         terminal = ledger.terminal
+        if isinstance(terminal, Proposal) and ledger.handoff:  # R0
+            # The published card is the builder envelope; never model text.
+            item = ledger.executions[terminal.execution_index]
+            return _Outcome("r0_proposal", item.envelope, None)
+        if ledger.staged is not None:
+            # Staged but never published (CAS lost, timeout, failed post-check):
+            # abandoned; the waiting marks may already exist.
+            failed = self._close(turn, None, "failed", "internal_error")
+            return _Outcome(
+                "r0_abandoned",
+                self._build_failed(turn, *_intent_failure_message("schema_invalid")),
+                TaskClose(
+                    failed.task_id, failed.trace_id, None, failed.execution,
+                    raw_execution=failed.raw_execution,
+                ),
+                rollback=True,
+            )
         if isinstance(terminal, Clarify):
             text: str | None = terminal.question
         elif terminal is None:
@@ -796,6 +897,28 @@ class AgentScopeRuntime:
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             event_type=event_type, status=status, error_code=error_code, attributes=attributes,
         )
+
+
+def _verified_session(principal: Principal) -> AuthenticatedSessionContext | None:
+    """The request's verified login when it belongs to ``principal`` and is unexpired."""
+
+    context = authenticated_session.get()
+    if (
+        context is None
+        or context.principal != principal
+        or context.expires_at <= datetime.now(UTC)
+    ):
+        return None
+    return context
+
+
+def _owner(principal: Principal, session_id: str) -> ConfirmationOwner:
+    # Account identity plus bound session; never the login token fingerprint.
+    return ConfirmationOwner(
+        tenant_id=principal.org_ctx.tenant_id,
+        session_id=session_id,
+        ai_user_id=principal.ai_user_id,
+    )
 
 
 def _model_reason(ledger: TurnLedger) -> _IntentReason:

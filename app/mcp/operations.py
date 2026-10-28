@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from app.mcp.connections import McpExecutionContextFactory
 from app.mcp.contracts import NON_IDEMPOTENT_TOOLS, SUBMIT_TOOLS, validate_input
+from app.mcp.diagnostics import record_mcp_event
 from app.mcp.models import McpFailure, digest
 from app.ports.auth import authenticated_session
 from app.ports.capability_gateway import CapabilityGatewayPort, RequestOrgContext
@@ -388,16 +389,151 @@ class GovernedOperations:
         ):
             raise McpFailure("mcp_authorization_invalid")
         await self.contexts.store.resolve(context)
+        self._proposal_intact(operation)
+
+    def _proposal_intact(self, operation: WorkflowOperation) -> None:
+        """The frozen proposal still matches its approved manifest and arguments."""
         policy = self.manifests.get(operation.outer_capability_id)
         if (
             policy is None
             or policy.version != operation.outer_version
             or policy.leaf_capability_id != operation.leaf_capability_id
-            or policy.service_config_id != context.service_config_id
+            or policy.service_config_id != operation.context.service_config_id
             or policy.remote_tool != operation.remote_tool
             or digest(operation.arguments) != operation.canonical_args_digest
         ):
             raise McpFailure("mcp_checkpoint_inconsistent")
+
+    @staticmethod
+    def current_login_generation(op: WorkflowOperation, expected_gate_request_id: str) -> bool:
+        """The op already belongs to the current login and the expected gate.
+
+        A read-only shortcut that needs no execution guard: every later step
+        re-validates ownership under the guard.
+        """
+        session = authenticated_session.get()
+        return (
+            session is not None
+            and session.fingerprint.hex() == op.context.login_session_fingerprint
+            and op.gate_request_id == expected_gate_request_id
+        )
+
+    async def rebind_current_session(
+        self,
+        op: WorkflowOperation,
+        *,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+    ) -> HumanGateRequest | None:
+        """Re-key an unconfirmed card to the same account's current login.
+
+        The caller holds ``store.execution_guard(op)``. The old authorization is
+        never reused: the context is rebuilt from the current session and its
+        active connection, and the op and gate are renewed through the store's
+        immutable-field transition. Returns None when the op already belongs to
+        the current login and the expected gate.
+        """
+        self.lifecycle_owner(op)
+        session = authenticated_session.get()
+        assert session is not None
+        same_login = session.fingerprint.hex() == op.context.login_session_fingerprint
+        if op.gate_request_id != expected_gate_request_id:
+            # Only this card's own completed rebind is idempotent.
+            if same_login and op.action_digest == _rebind_digest(
+                expected_action_digest, op.revision - 1, op.context
+            ):
+                request = (
+                    await self.gates.get_request(op.gate_request_id)
+                    if op.gate_request_id
+                    else None
+                )
+                if request is None:
+                    raise McpFailure("mcp_operation_conflict")
+                return request
+            raise McpFailure("mcp_operation_conflict")
+        if same_login:
+            return None
+        now = datetime.now(UTC)
+        if (
+            op.action_digest != expected_action_digest
+            or op.state != "WAITING_LOCAL_CONFIRM"
+            or op.send_started
+        ):
+            raise McpFailure("mcp_operation_conflict")
+        original = await self.gates.get_request(expected_gate_request_id)
+        if original is None or await self.gates.get_decision(original.request_id) is not None:
+            raise McpFailure("mcp_operation_conflict")
+        if op.expires_at <= now or original.expires_at <= now:
+            raise McpFailure("mcp_confirmation_expired")
+        self._proposal_intact(op)
+        mapping = await self.contexts.store.mapping(op.leaf_capability_id, op.leaf_version)
+        if mapping is None:
+            raise McpFailure("mcp_authorization_invalid")
+        context = await self.contexts.build(
+            task_id=op.context.task_id,
+            chat_session_id=op.context.chat_session_id,
+            user_id=op.context.user_id,
+            tenant_id=op.context.tenant_id,
+            mapping=mapping,
+        )
+        # The store persists a renewed context without workflow_authorization_ref;
+        # digest the same shape so the idempotent branch can match it.
+        context = context.model_copy(
+            update={"operation_id": op.operation_id, "workflow_authorization_ref": None}
+        )
+        connection = await self.contexts.store.connection(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            service_config_id=context.service_config_id,
+        )
+        evidence = connection.identity_evidence if connection is not None else None
+        continuous = (
+            bool(evidence)
+            and all(
+                getattr(context, key) == getattr(op.context, key)
+                for key in (
+                    "connection_id",
+                    "registration_id",
+                    "service_config_version",
+                    "capability_id",
+                    "capability_version",
+                )
+            )
+        )
+        if continuous and evidence is not None and digest(evidence) != op.identity_evidence_digest:
+            recovery = self.recovery_policies.get((context.service_config_id, op.remote_tool))
+            continuous = (
+                recovery is not None
+                and recovery.approved
+                and bool(recovery.version)
+                and recovery.same_subject(op.identity_evidence_digest, evidence)
+            )
+        if not continuous:
+            record_mcp_event(
+                "identity_check",
+                "failed",
+                task_id=op.context.task_id,
+                connection_id=context.connection_id,
+                error_code="mcp_authorization_invalid",
+                reason="subject_unverified",
+            )
+            raise McpFailure("mcp_authorization_invalid")
+        action_digest = _rebind_digest(op.action_digest, op.revision, context)
+        expires = min(
+            deadline
+            for deadline in (op.expires_at, session.expires_at, op.artifact_expires_at)
+            if deadline is not None
+        )
+        request = await self._gate(op, context, action_digest, expires)
+        await self.store.transition(
+            op,
+            state="WAITING_LOCAL_CONFIRM",
+            renewed_context=context,
+            renewed_action_digest=action_digest,
+            renewed_gate_expires_at=request.expires_at,
+            gate_request_id=request.request_id,
+        )
+        return request
 
     async def resume(
         self,
@@ -709,3 +845,16 @@ class GovernedOperations:
             if op.state == "FAILED" and op.confirmation_error_code is not None
             else "policy_denied",
         )
+
+
+def _rebind_digest(
+    original_action: str, revision: int, context: McpAuthorizationContext
+) -> str:
+    return digest(
+        {
+            "original_action": original_action,
+            "revision": revision,
+            "context": context.model_dump(),
+            "rebind": "same_account_login_v1",
+        }
+    )

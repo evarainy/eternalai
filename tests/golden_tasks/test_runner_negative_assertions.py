@@ -489,7 +489,7 @@ def test_fixture_expectation_blocks_reject_credential_canary(
 
     runner = importlib.import_module("scripts.golden_task_evaluator")
 
-    async def fake_run_fixture(_fixture: dict[str, Any]) -> Any:
+    async def fake_run_fixture(_fixture: dict[str, Any], _engine: str = "legacy") -> Any:
         return runner.FixtureObservation(
             envelope={
                 "status": "completed",

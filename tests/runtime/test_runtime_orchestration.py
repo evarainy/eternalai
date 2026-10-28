@@ -1134,6 +1134,7 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
             "_finish_user_action_attempt",
             "_confirmation_terminal_envelope",
             "_process_pending_confirmation",
+            "_process_pending_confirmation",
             "_build_stale_confirmation_response",
             "_complete_resumed_workflow",
             "_finish_version_binding_failure",
