@@ -476,7 +476,11 @@ class GovernedOperations:
             tenant_id=op.context.tenant_id,
             mapping=mapping,
         )
-        context = context.model_copy(update={"operation_id": op.operation_id})
+        # The store persists a renewed context without workflow_authorization_ref;
+        # digest the same shape so the idempotent branch can match it.
+        context = context.model_copy(
+            update={"operation_id": op.operation_id, "workflow_authorization_ref": None}
+        )
         connection = await self.contexts.store.connection(
             tenant_id=context.tenant_id,
             user_id=context.user_id,

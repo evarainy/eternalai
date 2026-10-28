@@ -164,6 +164,8 @@ class _StagedWaiting:
 
 _CONFIRMATION_TTL_SECONDS = 600
 _CONFIRMATION_RECEIPT_LIMIT = 1024
+# Per (tenant, ai_user): one account cannot exhaust the shared table for others.
+_CONFIRMATION_RECEIPT_OWNER_LIMIT = 32
 _ABANDON_TIMEOUT_SECONDS = 5.0
 _PARTIAL_CANDIDATE_NOTICE = (
     "本次仅在相关性最高的部分能力中选择；若目标不符，请补充具体操作。",
@@ -2291,7 +2293,9 @@ class RuntimeImpl:
             if receipt.message_digest != digest or receipt.state == "processing":
                 return "stale", receipt
             return "done", receipt
-        if len(receipts) >= _CONFIRMATION_RECEIPT_LIMIT:
+        if len(receipts) >= _CONFIRMATION_RECEIPT_LIMIT or sum(
+            1 for held in receipts if held[0] == key[0] and held[2] == key[2]
+        ) >= _CONFIRMATION_RECEIPT_OWNER_LIMIT:
             return "full", None
         receipt = _ConfirmationReceipt(
             gate_ref=(pending.gate_request_id or pending.response_id)

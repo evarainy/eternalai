@@ -637,6 +637,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，当前串行后继�
 | 治理 MCP 重建期间取消的收尾冲突 | 取消若落在重建已换代操作、但协调器尚未记录 `governed_rebind` 之间，收尾仍按旧摘要退役而得到冲突 | 无 | 待 GOV-SYNC 分配 | 该窗口内取消能按新摘要收尾并经注入验证，或裁决接受 | `app/runtime/runtime.py::_rebind_governed_pending`；设计 §3.8 |
 | 提议登记窗口内超时的残留 | 超时若落在 `stage_waiting` 已创建 HumanGate 请求之后、返回之前，该请求与 checkpoint 不会被放弃，直到自然过期 | 无 | 待 GOV-SYNC 分配 | 该窗口超时会放弃已创建项并经注入验证，或裁决接受自然过期 | `app/runtime/runtime.py::stage_waiting`；`app/infra/orchestration/agentscope_runtime/proposal.py` |
 | 截止时间恰在等待标记后到期的残留取消 | 轮次截止恰在写完等待标记、退出作用域时到期，发布后会留下一个挂起的取消；此时协调器已接管，待确认项不受影响 | 无 | 待 GOV-SYNC 分配 | 作用域退出时不再留下挂起取消，或裁决接受 | `app/infra/llm/agentscope_chat.py::bounded_turn_scope`；`app/infra/orchestration/agentscope_runtime/runtime.py::_turn_body` |
+| 治理 MCP 重建失败不分错误码 | 换登录确认时重建失败一律提示重新授权并保留卡片可领取；`mcp_confirmation_expired` 与 `mcp_operation_conflict` 不可通过重新授权恢复，应走 `confirmation_invalidated` 收尾。当前失败关闭、不发送、不降级，受 600 s 确认 TTL 限制；设计 §3.8 原文不区分错误码，改动须在 DECISIONS 记一笔 | 无 | 待 GOV-SYNC 分配 | 这两个码改走失效收尾（仅 `mcp_authorization_invalid` 与 `mcp_identity_*` 保留可重试）并记入 DECISIONS，或裁决接受现状 | `app/runtime/runtime.py::_process_pending_confirmation`；`app/mcp/operations.py::GovernedOperations.rebind_current_session`；设计 §3.8 |
 | 观察项：只读 workflow 进入写组 | 新路径按设计把全部 workflow（含 OA 概览等只读 workflow）放入写组，可能改变读问题的工具选择；只在评测与真实验收中观察 | 无 | M1B 完整开发集评测与真实验收 | 评测与真实验收未见读选择退化，或据结果另行裁决分组 | `app/infra/orchestration/agentscope_runtime/catalog.py::build_tool_catalog`；设计 §3.1 |
 
 ## 6. P2 不做什么
