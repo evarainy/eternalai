@@ -604,7 +604,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 | OA 密码绑定使既有浏览器绑定降级 | 密码绑定丢弃验证返回的会话凭据，存储只递增绑定版本并置 unverified，原浏览器绑定随之失效；仅代码结论，未运行取证 | 无 | 待分配（OA 绑定修复棒）；其边界并入 `P2-RUNTIME-AGENTSCOPE-M3-001`、`P2-RUNTIME-AGENTSCOPE-M5-001` 的真实使用验收 | 密码绑定成功后不再使已有浏览器绑定失效，或裁决该行为为预期 | PR #229；`m0-runs/M0_PLAN_OWNER_REBIND.md`「附：OA 绑定诊断」 |
 | MCP 换绑验收用开发库副本保留 | 真实验收的本机开发库副本仍保留，删除须专项授权；真实验收待外部服务恢复的旧阻塞已于 2026-10-26 关闭 | 无 | 待用户授权处置 | 获准删除副本库，或确认长期保留 | PR #229「本棒新增欠债」第 1、4 项及真实验收环境说明 |
 | 极简查人问法仍可能 low_confidence | 不含「业务系统 / 人员 / 姓名 / 信息 / 查询」等词的问法可能与能力零词面重合；超过 8 个可见能力时仍可能未入选，PR #232 未扩 K 或改 selector；新路径由 M1A 去掉词面预筛承接，旧路径不修 | 无 | `P2-RUNTIME-AGENTSCOPE-M1A-001`（新路径） | 新路径成为默认入口或旧路径退役 | PR #232「本棒新增欠债」第 2 项 |
-| D 表单浏览器纵切在本机关闭 | 主线本机启动缺 d_form 授权配置（d_form_authorization_missing），仓库外启动器暂设 BROWSER_ENABLED=0；开发库已升级不代表浏览器纵切已接通 | 无对应 task_id（待提供本机授权配置） | 待定（下一根 D 表单真实浏览器验收棒） | 配置具备后以 BROWSER_ENABLED=1 完成一次真实纵切验收，具体填写、保存、提交仍分别取得授权 | PR #232；`controller-dispatch/sonnet_devmain_switch.out.md`、`m0-runs/DEV_start_backend.py` |
+| D 表单浏览器纵切在本机关闭 | 主线本机启动报 d_form_authorization_missing，根因是 fixed_owner 模式的 D 源码指纹锁（批准常量与现行源码摘要不符）；雨爷 2026-10-29 决定取消该锁，P2-RUNTIME-AGENTSCOPE-M2-001 已删除常量文件与两处检查，本机任务配置 pool 摘要已更新到现行值并通过配置就绪检查；开发库 D 发布记录仍是旧摘要，需服务重启后由已登录用户经 D 管理接口 prepare→activate | 无 | P2-RUNTIME-AGENTSCOPE-M2-001（D 新路径真实验收） | 以 BROWSER_ENABLED=1 启动并激活现行摘要的 D 发布后完成一次真实纵切验收，具体填写、保存、提交仍分别取得授权 | PR #232、PR #242；`controller-dispatch/sonnet_devmain_switch.out.md`、`controller-dispatch/opus_m2_remove_fingerprint.out.md`、`m0-runs/DEV_start_backend_m2.py` |
 
 ### Runtime 替换 M1 已批分棒与新增欠债（2026-10-27）
 

@@ -152,14 +152,8 @@ def pool_manifest_digest(origin: str, chromium_sha256: str) -> bytes:
 def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadinessCode, ...]:
     """Local references only: neither PG nor browser nor a role/grant proof."""
     config = loaded.config
-    if config.authorization_mode == "fixed_owner":
-        from app.infra.browser.d_form_fixed_approval import APPROVED_FIXED_SOURCE_DIGEST
-
-        if (
-            loaded.settings.source_tenant_id != "default"
-            or source_digest() != APPROVED_FIXED_SOURCE_DIGEST
-        ):
-            raise DFormConfigurationError("d_form_authorization_missing")
+    if config.authorization_mode == "fixed_owner" and loaded.settings.source_tenant_id != "default":
+        raise DFormConfigurationError("d_form_authorization_missing")
     try:
         build_fill_stop_manifest(origin=config.origin)
     except Exception:
