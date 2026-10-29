@@ -494,6 +494,38 @@ class BrowserRequestHelpers:
                 return self.collection_response(snapshot, owner.session_id, category_options)
         return arguments
 
+    async def retain_unparsed(
+        self,
+        scope: BrowserRequestScope,
+        owner: SessionMemoryKey,
+        channel: Literal["web", "cli", "api", "mock"],
+        collection: DFormCollectionSnapshot,
+        category_options: tuple[str, ...] | None,
+    ) -> ResponseEnvelope:
+        """Keep an unconsumed record's arguments when a reply cannot be parsed."""
+        assert self.d_form_collection_store is not None
+        assert scope.attempt.message is not None
+        retained_record = collection.record
+        retained = retained_record.model_copy(
+            update={
+                "version": retained_record.version + 1,
+                "request_id": scope.client_request_id,
+                "request_digest": d_form_request_digest(scope.attempt.message, channel),
+            }
+        )
+        snapshot = await self.d_form_collection_store.save_d_form_collection(
+            retained,
+            tenant_id=owner.tenant_id,
+            ai_user_id=owner.ai_user_id,
+            session_id=owner.session_id,
+            expected_version=retained_record.version,
+        )
+        logging.getLogger(_LOGGER_NAME).warning("d_form_collection_reply_unparsed")
+        envelope = self.collection_response(snapshot, owner.session_id, category_options)
+        assert envelope.data is not None
+        envelope.data["input_error"] = "collection_reply_unparsed"
+        return envelope
+
     async def finish_admission(
         self,
         principal: Principal,

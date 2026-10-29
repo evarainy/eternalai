@@ -1,8 +1,10 @@
 """Toolkit, control tools and middleware of one M1 turn.
 
 Business tools live in read and write groups the model activates with
-``reset_tools``; write tools are external proposals the runtime handles
-outside the framework, never executed here. The basic group holds only the
+``reset_tools``; write tools and the registered browser tool are external
+calls the runtime handles outside the framework, never executed here. A D
+collection continuation exposes the browser tool alone, without groups or
+control tools. The basic group holds only the
 control tools ``report_unsupported`` and ``ask_user``, each of which ends the
 turn when accepted. The middleware records what
 every model call actually exposed, ties each tool call to that call and ends
@@ -108,9 +110,30 @@ async def build_turn_toolkit(
     limits: TurnLimits,
     model: ChatModelBase,
     prompt_version: str,
+    continuation_instructions: str | None = None,
 ) -> TurnToolkit:
-    """Register this turn's catalog as tool groups plus the two control tools."""
+    """Register this turn's catalog as tool groups plus the two control tools.
 
+    With ``continuation_instructions`` only the catalog's browser tool is
+    registered, as an always-exposed tool, and the instructions reach every
+    model call through the system prompt.
+    """
+
+    if continuation_instructions is not None:
+        browser: list[ToolBase] = [
+            BrowserTool(tool.name, tool.description, tool.input_schema)
+            for tool in catalog.tools
+            if tool.kind == "browser"
+        ]
+        middleware = M1Middleware(
+            catalog, ledger, group_of={}, model_name=model.model,
+            prompt_version=prompt_version, fixed_instructions=continuation_instructions,
+        )
+        return TurnToolkit(
+            toolkit=Toolkit(tools=browser, meta_tool_response_template=M1_TEMPLATE),
+            middleware=middleware,
+            group_of={},
+        )
     groups: list[ToolGroup] = []
     for group in catalog.groups:
         tools: list[ToolBase] = []
@@ -119,6 +142,9 @@ async def build_turn_toolkit(
                 continue
             if tool.kind == "write":
                 tools.append(ProposeWrite(tool.name, tool.description, tool.input_schema))
+                continue
+            if tool.kind == "browser":
+                tools.append(BrowserTool(tool.name, tool.description, tool.input_schema))
                 continue
             executor = ToolExecutor(scope, deps, ledger, tool.binding, tool.name, limits)
             tools.append(
@@ -271,6 +297,30 @@ class ProposeWrite(ToolBase):
         )
 
 
+class BrowserTool(ToolBase):
+    """External browser call: parked by the framework, checked and run by the runtime."""
+
+    is_external_tool: bool = True
+    is_read_only: bool = False
+    is_concurrency_safe: bool = False
+
+    def __init__(self, name: str, description: str, input_schema: dict[str, Any]) -> None:
+        super().__init__()
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision:
+        return PermissionDecision(
+            behavior=PermissionBehavior.ALLOW,
+            message="external browser call; admission enforced by the Gateway",
+        )
+
+
 class _ControlTool(ToolBase):
     """Code-owned control tool without side effects: no task, no budget."""
 
@@ -374,8 +424,10 @@ class M1Middleware(MiddlewareBase):
         group_of: Mapping[str, str],
         model_name: str,
         prompt_version: str,
+        fixed_instructions: str | None = None,
     ) -> None:
         self._catalog = catalog
+        self._fixed_instructions = fixed_instructions
         self._ledger = ledger
         self._group_of = group_of
         self._model_name = model_name
@@ -390,6 +442,8 @@ class M1Middleware(MiddlewareBase):
             for group in self._catalog.groups
             if group.name in active and group.instructions
         ]
+        if self._fixed_instructions is not None:
+            texts.append(self._fixed_instructions)
         if not texts:
             return current_prompt
         block = "\n".join(texts)
@@ -509,6 +563,7 @@ __all__ = (
     "TERMINAL_TEXT",
     "M1Middleware",
     "AskUser",
+    "BrowserTool",
     "M1ResetTools",
     "ProposeWrite",
     "ReportUnsupported",

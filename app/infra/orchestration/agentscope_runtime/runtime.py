@@ -10,6 +10,13 @@ once from the turn ledger by fixed rules (a published proposal first, then
 terminal, any business failure fails the turn, all executions completed
 completes it), and only this module closes the turn task. The session stays
 busy until every close, interrupt and abandon of the turn has ended.
+
+A trusted browser request (M2) runs inside the browser request shell: replay
+lookup and route ownership come before the busy check, the registered
+browser tool appears only for that request, and a D collection reply runs a
+continuation turn on the record's task. Once a browser persistent operation
+has started the shell alone closes the chat intent, and the session is
+released after that close.
 """
 
 from __future__ import annotations
@@ -36,9 +43,11 @@ from app.infra.llm.agentscope_chat import (
     bind_turn_id,
     bounded_turn_scope,
     create_bounded_agent,
+    expect_model,
     log_turn_end,
     model_call_count,
     new_turn_deadline,
+    reset_expected_model,
     reset_turn_id,
     start_interrupt,
     tool_execution_count,
@@ -51,14 +60,26 @@ from app.infra.orchestration.agentscope_read_tools import (
     await_close,
     close_once,
 )
+from app.infra.orchestration.agentscope_runtime.browser_handoff import (
+    BrowserHandoffCoordinator,
+    BrowserRequestShell,
+    BrowserTurnOwnership,
+    allowed_browser_keys,
+    browser_instructions,
+    continuation_instructions,
+)
 from app.infra.orchestration.agentscope_runtime.catalog import (
     TOOL_GROUP_PROTOCOL_VERSION,
+    CatalogTool,
     ToolCatalog,
+    VisibleCatalog,
     build_tool_catalog,
     visible_capabilities,
+    with_browser_tool,
 )
 from app.infra.orchestration.agentscope_runtime.ledger import (
     BindingCard,
+    BrowserSettled,
     Clarify,
     LedgerExecution,
     Proposal,
@@ -82,20 +103,36 @@ from app.infra.orchestration.agentscope_runtime.toolkit import (
     RESET_TOOLS,
     build_turn_toolkit,
 )
+from app.knowledge.capability_selection import capability_fingerprint
+from app.memory import SessionMemoryKey
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.browser_chat import BrowserOrdinarySubmissionPort
-from app.ports.browser_gateway import BrowserGatewayRegistration, BrowserIntentHandoffPort
+from app.ports.browser_gateway import (
+    BrowserGatewayDiagnostic,
+    BrowserGatewayRegistration,
+    BrowserIntentHandoffPort,
+    BrowserRequestScope,
+    browser_request_scope,
+)
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.error_codes import ErrorCode
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import (
     ConfirmationOwner,
+    DFormCollectionReference,
     chat_client_request_id,
     d_form_collection_reference,
 )
-from app.ports.task_store import DFormCollectionError, SessionRecord, TaskRecord
+from app.ports.task_store import (
+    DFormCollectionError,
+    DFormCollectionSnapshot,
+    SessionRecord,
+    TaskRecord,
+)
 from app.ports.trace import TraceEventStatus
+from app.runtime.browser_request import BrowserRequestHelpers
+from app.runtime.d_form_collection import CAPABILITY_ID as D_FORM_ID
 
 if TYPE_CHECKING:
     from agentscope.agent import Agent
@@ -203,6 +240,17 @@ def _error_code(code: str) -> ErrorCode:
 
 
 @dataclass(slots=True)
+class _BrowserTurn:
+    """The trusted browser request a turn runs in, and its D record when replying."""
+
+    scope: BrowserRequestScope
+    ownership: BrowserTurnOwnership
+    collection: DFormCollectionSnapshot | None = None
+    # The registered capability exposed as this turn's browser tool, if any.
+    spec: CapabilitySpec | None = None
+
+
+@dataclass(slots=True)
 class _Turn:
     """Ids and scope of one accepted turn."""
 
@@ -213,6 +261,7 @@ class _Turn:
     trace_id: str
     turn_id: str
     deadline: float
+    browser: _BrowserTurn | None = None
 
 
 @dataclass(slots=True)
@@ -246,9 +295,13 @@ class AgentScopeRuntime:
         self._sessions = sessions or SessionCoordinator(
             idle_ttl_seconds=deps.session_idle_ttl_seconds
         )
-        self._browser_handoff: BrowserIntentHandoffPort | None = None
-        self._browser_submission: BrowserOrdinarySubmissionPort | None = None
         self._browser_registration: BrowserGatewayRegistration | None = None
+        self._browser = BrowserRequestHelpers(
+            trace_port=deps.trace_port,
+            utc_clock=lambda: datetime.now(UTC),
+            d_form_collection_store=deps.d_form_collection_store,
+        )
+        self._browser_shell: BrowserRequestShell | None = None
 
     def install_browser(
         self,
@@ -258,17 +311,17 @@ class AgentScopeRuntime:
         registration: BrowserGatewayRegistration,
         configured_d_form_model: str | None = None,
     ) -> None:
-        """Install the browser handoff once; requests use it from M2 S3 on."""
+        """Install the browser handoff once; trusted browser requests use it."""
 
-        if self._browser_handoff is not None:
+        if self._browser_shell is not None:
             raise ValueError("browser_handoff_already_installed")
         # Same startup check as the legacy IntentRouter.install_browser_checks.
         expected = "glm-4.7" if configured_d_form_model is None else configured_d_form_model.strip()
         if not expected or self._deps.model_name != expected:
             raise ValueError("browser_intent_model_invalid")
-        self._browser_handoff = handoff
-        self._browser_submission = submission
+        self._browser.install(handoff, submission)
         self._browser_registration = registration
+        self._browser_shell = BrowserRequestShell(self._browser, handoff)
 
     async def handle_user_message(
         self,
@@ -279,40 +332,99 @@ class AgentScopeRuntime:
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
         del client_capabilities
-        if d_form_collection_reference.get() is not None:
-            # Not supported on this path and never handed to the legacy one.
-            raise DFormCollectionError("collection_not_found")
         context = _verified_session(principal)
         if context is None:
             return self._session_invalid(session_id)
+        reference = d_form_collection_reference.get()
+        browser_scope, shell = browser_request_scope.get(), self._browser_shell
+        if reference is not None and (browser_scope is None or shell is None):
+            # A reply needs a trusted browser request; never handed to the legacy path.
+            raise DFormCollectionError("collection_not_found")
         owner = _owner(principal, session_id)
-        # Deterministic confirmations before the busy check: no turn, no AgentState.
-        confirmed = await self._deps.confirmations.handle_confirmation_message(
-            owner, message, client_request_id=chat_client_request_id.get()
-        )
-        if confirmed is not None:
-            return confirmed
+        if reference is None:
+            # Deterministic confirmations before the busy check: no turn, no AgentState.
+            confirmed = await self._deps.confirmations.handle_confirmation_message(
+                owner, message, client_request_id=chat_client_request_id.get()
+            )
+            if confirmed is not None:
+                return confirmed
         scope = ReadToolScope.from_session(context, bound_session_id=session_id, channel=channel)
+        if browser_scope is None or shell is None:
+            return await self._accept(scope, context, owner, message, None)
+        if not browser_scope.matches(principal, session_id):
+            raise ValueError("browser_request_context_mismatch")
+        # Model calls of a browser request must be answered by the configured model.
+        expected = expect_model(self._deps.model_name)
+        try:
+            return await shell.handle(
+                browser_scope, channel, message, reference,
+                partial(self._accept_browser, scope, context, owner, message, reference),
+            )
+        finally:
+            reset_expected_model(expected)
+
+    async def _accept_browser(
+        self,
+        scope: ReadToolScope,
+        context: AuthenticatedSessionContext,
+        owner: ConfirmationOwner,
+        message: str,
+        reference: DFormCollectionReference | None,
+        ownership: BrowserTurnOwnership,
+    ) -> ResponseEnvelope:
+        """Inside the shell: recheck a D reference before the busy check, then the turn."""
+
+        browser_scope = browser_request_scope.get()
+        assert browser_scope is not None
+        collection: DFormCollectionSnapshot | None = None
+        if reference is not None:
+            admitted = await self._browser.admit_reference(
+                reference, browser_scope, context.principal, scope.session_id, scope.channel,
+            )
+            if isinstance(admitted, ResponseEnvelope):
+                return admitted
+            collection = admitted
+        return await self._accept(
+            scope, context, owner, message, _BrowserTurn(browser_scope, ownership, collection)
+        )
+
+    async def _accept(
+        self,
+        scope: ReadToolScope,
+        context: AuthenticatedSessionContext,
+        owner: ConfirmationOwner,
+        message: str,
+        browser: _BrowserTurn | None,
+    ) -> ResponseEnvelope:
         key = self._sessions.key_for(
             tenant_id=scope.tenant_id,
             ai_user_id=scope.ai_user_id,
             fingerprint=context.fingerprint,
-            session_id=session_id,
+            session_id=scope.session_id,
         )
         # Busy check before any task or event exists.
         # Cache bound to the login instance; each turn is still gated by _verified_session.
         state = self._sessions.acquire(key, expires_at=context.instance_expires_at)
+        record = browser.collection.record if browser and browser.collection else None
         turn_id, turn_token = bind_turn_id()
         try:
             turn = _Turn(
                 scope=scope,
                 owner=owner,
                 response_id=str(uuid4()),
-                task_id=str(uuid4()),
-                trace_id=str(uuid4()),
+                # A continuation runs on the record's task and trace (no task_created).
+                task_id=record.task_id if record is not None else str(uuid4()),
+                trace_id=record.trace_id if record is not None else str(uuid4()),
                 turn_id=turn_id,
                 deadline=new_turn_deadline(self._limits),
+                browser=browser,
             )
+            if browser is not None and record is not None:
+                # The record's task is never this turn's to close: the shell
+                # alone settles it, as after any browser persistent operation.
+                browser.ownership.browser_owned = True
+                browser.scope.attempt.task_id = turn.task_id
+                browser.scope.attempt.trace_id = turn.trace_id
             return await self._run_turn(turn, key, state, message)
         finally:
             reset_turn_id(turn_token)
@@ -397,7 +509,16 @@ class AgentScopeRuntime:
                 if rollback and progress.snapshot is not None
                 else None
             )
-            self._sessions.release_after(key, futures, before_release=before_release)
+            ownership = turn.browser.ownership if turn.browser is not None else None
+            if ownership is not None and ownership.browser_owned:
+                # Released by the shell, after its chat-intent close if it starts one.
+                ownership.defer_release(
+                    lambda extra: self._sessions.release_after(
+                        key, [*futures, *extra], before_release=before_release
+                    )
+                )
+            else:
+                self._sessions.release_after(key, futures, before_release=before_release)
             ran = progress.agent_ran
             log_turn_end(
                 rule, started,
@@ -408,9 +529,12 @@ class AgentScopeRuntime:
             )
 
     def _fail_unpublished(self, turn: _Turn, ledger: TurnLedger) -> None:
-        """Cancellation or a defect before publication; after it the coordinator owns the task."""
+        """Cancellation or a defect before publication; after it the coordinator owns the task.
 
-        if ledger.handoff:
+        Once a browser persistent operation started, the browser shell closes instead.
+        """
+
+        if ledger.handoff or (turn.browser is not None and turn.browser.ownership.browser_owned):
             return
         self._abandon_unpublished(ledger)
         close_once(
@@ -477,6 +601,8 @@ class AgentScopeRuntime:
         ledger: TurnLedger,
         progress: _Progress,
     ) -> _Outcome:
+        if turn.browser is not None and turn.browser.collection is not None:
+            return await self._continuation_body(turn, state, message, ledger, progress)
         # Preparation counts against the same absolute turn deadline.
         try:
             async with asyncio.timeout_at(turn.deadline):
@@ -488,25 +614,202 @@ class AgentScopeRuntime:
         if isinstance(prepared, _Outcome):
             return prepared
         catalog, visible, agent = prepared
+        browser = self._browser_coordinator(turn, ledger, catalog, message)
         proposals = ProposalCoordinator.from_catalog(
             catalog, scope=turn.scope, deps=self._deps, ledger=ledger, limits=self._limits,
-            owner=turn.owner,
+            owner=turn.owner, browser=browser,
         )
-        final: Msg | None = None
+        final = await self._drive(turn, agent, proposals, message, ledger, progress)
+        if ledger.staged is not None:
+            self._publish(turn, agent, ledger)
+        outcome = self._summarize(turn, ledger, catalog, visible, final)
+        return await self._finish_intent(turn, ledger, catalog, outcome)
+
+    async def _drive(
+        self,
+        turn: _Turn,
+        agent: Agent,
+        proposals: ProposalCoordinator,
+        message: str,
+        ledger: TurnLedger,
+        progress: _Progress,
+    ) -> Msg | None:
         progress.agent_ran = True
         try:
             # One absolute deadline covers the reply, every parked-call check,
             # every ERROR continuation and the proposal core with its marks.
             async with bounded_turn_scope(turn.deadline):
                 final = await agent.reply(UserMsg(name="user", content=message))
-                final = await proposals.drive(agent, final)
+                return await proposals.drive(agent, final)
         except AgentScopeModelError as exc:
             ledger.model_error = exc.code
-            final = None
-        if ledger.staged is not None:
-            self._publish(turn, agent, ledger)
-        outcome = self._summarize(turn, ledger, catalog, visible, final)
-        return await self._finish_intent(turn, ledger, catalog, outcome)
+            browser = turn.browser
+            if (
+                browser is not None
+                and browser.ownership.browser_owned
+                and not isinstance(ledger.terminal, BrowserSettled)
+                and (browser.collection is None or ledger.turn_task_claimed)
+            ):
+                # Stopped inside a browser persistent operation: the shell
+                # recovers and closes the chat intent; the turn never does.
+                if exc.code in {"turn_timeout", "timeout"}:
+                    raise TimeoutError from None
+                raise RuntimeError("browser_operation_unsettled") from None
+            return None
+
+    async def _continuation_body(
+        self,
+        turn: _Turn,
+        state: AgentState,
+        message: str,
+        ledger: TurnLedger,
+        progress: _Progress,
+    ) -> _Outcome:
+        """A D collection reply: the browser tool alone, on the record's task.
+
+        Never opens a task. A reply the model does not turn into an accepted
+        browser call keeps the collected fields (collection_reply_unparsed);
+        a consumed record replays its arguments without any model call.
+        """
+
+        deps, scope = self._deps, turn.scope
+        browser = turn.browser
+        assert browser is not None and browser.collection is not None
+        record = browser.collection.record
+        owner_key = _memory_key(scope)
+        async with asyncio.timeout_at(turn.deadline):
+            visible = await visible_capabilities(
+                deps.capability_registry, deps.candidate_policy,
+                ai_user_id=scope.ai_user_id, tenant_id=scope.tenant_id,
+                channel=scope.channel, request_id=turn.trace_id,
+                browser_capability_id=D_FORM_ID,
+            )
+            spec = self._browser_spec(turn, visible)
+            if (
+                spec is None
+                or spec.capability_id != D_FORM_ID
+                or spec.version != record.capability_version
+                or capability_fingerprint(spec) != record.capability_fingerprint
+            ):
+                raise DFormCollectionError("collection_version_conflict")
+            category_options = await self._browser.category_options(owner_key, spec)
+            catalog, tool = with_browser_tool(
+                build_tool_catalog(()), spec, browser_instructions(self._registration())
+            )
+            if tool is None:
+                raise DFormCollectionError("collection_version_conflict")
+            ledger.business_tools = {tool.name: tool.capability_id}
+            ledger.browser_tools = {tool.name: tool.capability_id}
+            ledger.catalog_attributes = catalog.trace_attributes()
+            coordinator = self._new_coordinator(
+                turn, ledger, tool, spec, message, category_options
+            )
+            if record.consumed:
+                # The sole winning reply replays the immutable arguments.
+                ledger.turn_task_claimed = True
+                await coordinator.run({})
+            else:
+                model = deps.model_factory()
+                kit = await build_turn_toolkit(
+                    catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
+                    model=model, prompt_version=M1_PROMPT_VERSION,
+                    continuation_instructions=continuation_instructions(
+                        dict(record.arguments), category_options
+                    ),
+                )
+                agent = create_bounded_agent(
+                    name=AGENT_NAME, system_prompt=M1_SYSTEM_PROMPT, model=model,
+                    toolkit=kit.toolkit, state=state, limits=self._limits,
+                    extra_middlewares=[kit.middleware],
+                    classify_tool_error=kit.middleware.classify_tool_error,
+                )
+                progress.agent = agent
+                interrupt = start_parked_interrupt(agent, state)
+                if interrupt is not None:
+                    ledger.interrupt = interrupt
+                    await asyncio.shield(interrupt)
+                progress.snapshot = await prepare_turn_state(state, read_groups=set(), model=model)
+        if not record.consumed:
+            proposals = ProposalCoordinator.from_catalog(
+                catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
+                owner=turn.owner, browser=coordinator,
+            )
+            await self._drive(turn, agent, proposals, message, ledger, progress)
+        terminal = ledger.terminal
+        if isinstance(terminal, BrowserSettled):
+            return _Outcome("browser_settled", terminal.envelope, terminal.close)
+        if record.consumed:
+            raise RuntimeError("browser_replay_unsettled")
+        envelope = await self._browser.retain_unparsed(
+            browser.scope, owner_key, scope.channel, browser.collection, category_options,
+        )
+        return _Outcome("collection_unparsed", envelope, None)
+
+    def _registration(self) -> BrowserGatewayRegistration:
+        assert self._browser_registration is not None
+        return self._browser_registration
+
+    def _browser_spec(self, turn: _Turn, visible: VisibleCatalog | None) -> CapabilitySpec | None:
+        """The registered browser capability when this request may expose it (§3.3)."""
+
+        browser, registration = turn.browser, self._browser_registration
+        deps, scope = self._deps, turn.scope
+        if browser is None or registration is None or visible is None:
+            return None
+        spec = visible.browser
+        if (
+            spec is None
+            or deps.browser_orchestration is None
+            or not browser.scope.matches(browser.scope.verified.principal, scope.session_id)
+            or browser.scope.verified.principal.ai_user_id != scope.ai_user_id
+            or registration.tenant_id != scope.tenant_id
+            or registration.user_id != scope.ai_user_id
+            or spec.capability_id != registration.capability_id
+            or spec.status != "active"
+            or spec.version != registration.capability_version
+            or spec.type != ("action" if registration.effect == "fill_stop" else "query")
+            or (registration.effect == "fill_stop" and deps.d_form_collection_store is None)
+        ):
+            return None
+        return spec
+
+    def _new_coordinator(
+        self,
+        turn: _Turn,
+        ledger: TurnLedger,
+        tool: CatalogTool,
+        spec: CapabilitySpec,
+        message: str,
+        category_options: tuple[str, ...] | None = None,
+    ) -> BrowserHandoffCoordinator:
+        browser, registration = turn.browser, self._registration()
+        orchestration = self._deps.browser_orchestration
+        assert browser is not None and orchestration is not None
+        return BrowserHandoffCoordinator(
+            deps=self._deps,
+            orchestration=orchestration,
+            helpers=self._browser,
+            registration=registration,
+            tool=tool,
+            allowed_keys=allowed_browser_keys(registration, spec),
+            scope=turn.scope,
+            browser_scope=browser.scope,
+            ownership=browser.ownership,
+            ledger=ledger,
+            message=message,
+            collection=browser.collection,
+            category_options=category_options,
+        )
+
+    def _browser_coordinator(
+        self, turn: _Turn, ledger: TurnLedger, catalog: ToolCatalog, message: str
+    ) -> BrowserHandoffCoordinator | None:
+        tool = next((item for item in catalog.tools if item.kind == "browser"), None)
+        if tool is None or turn.browser is None:
+            return None
+        spec = turn.browser.spec
+        assert spec is not None
+        return self._new_coordinator(turn, ledger, tool, spec, message)
 
     async def _prepare(
         self,
@@ -520,6 +823,11 @@ class AgentScopeRuntime:
 
         deps, scope = self._deps, turn.scope
         await self._open_turn_task(turn)
+        browser = turn.browser
+        if browser is not None:
+            # The Gateway admits the browser capability only on this turn's ids.
+            browser.scope.attempt.task_id = turn.task_id
+            browser.scope.attempt.trace_id = turn.trace_id
         if not message.strip():
             await self._intent(turn, "failed", {"result": "invalid", "reason": "blank_input"})
             return self._intent_failure(turn, "blank_input")
@@ -527,19 +835,32 @@ class AgentScopeRuntime:
             deps.capability_registry, deps.candidate_policy,
             ai_user_id=scope.ai_user_id, tenant_id=scope.tenant_id,
             channel=scope.channel, request_id=turn.trace_id,
+            browser_capability_id=(
+                self._browser_registration.capability_id
+                if browser is not None and self._browser_registration is not None
+                else None
+            ),
         )
         if visible is None:
             return await self._catalog_invalid(turn, None)
+        spec = self._browser_spec(turn, visible)
         if visible.scope_excluded:
             # Out of this path's scope (browser.*); not a catalog gap.
             _RUNTIME_LOGGER.info(
                 "agentscope_catalog scope_excluded=%s turn=%s",
                 visible.scope_excluded, turn.turn_id,
             )
-        if not visible.capabilities:
+        if not visible.capabilities and spec is None:
             # No agent is built and no model is called.
             return await self._empty_catalog(turn, visible.active_count)
         catalog = build_tool_catalog(visible.capabilities)
+        if spec is not None:
+            # Only for this trusted browser request; never carried to another turn.
+            assert browser is not None
+            catalog, tool = with_browser_tool(
+                catalog, spec, browser_instructions(self._registration())
+            )
+            browser.spec = spec if tool is not None else None
         if not catalog.tools:
             return await self._catalog_invalid(turn, catalog)
         if catalog.summary_omitted:
@@ -551,6 +872,9 @@ class AgentScopeRuntime:
         ledger.business_tools = {tool.name: tool.capability_id for tool in catalog.tools}
         ledger.write_tools = {
             tool.name: tool.capability_id for tool in catalog.tools if tool.kind == "write"
+        }
+        ledger.browser_tools = {
+            tool.name: tool.capability_id for tool in catalog.tools if tool.kind == "browser"
         }
         ledger.catalog_attributes = catalog.trace_attributes()
         model = deps.model_factory()
@@ -596,6 +920,9 @@ class AgentScopeRuntime:
         """Apply R0-R6 (R4c after R4) in order; the first matching rule decides the turn."""
 
         terminal = ledger.terminal
+        if isinstance(terminal, BrowserSettled):
+            # The coordinator's card or admission, never model text (§3.5 C').
+            return _Outcome("browser_settled", terminal.envelope, terminal.close)
         if isinstance(terminal, Proposal) and ledger.handoff:  # R0
             # The published card is the builder envelope; never model text.
             item = ledger.executions[terminal.execution_index]
@@ -691,10 +1018,17 @@ class AgentScopeRuntime:
             return _Outcome("r4c_clarify", envelope, self._close(turn, None, "completed", None))
         if ledger.model_error is not None or not text or catalog is None:
             # R5; an empty final reply is treated as a malformed response.
+            envelope = self._build_failed(turn, *_intent_failure_message(_model_reason(ledger)))
+            error_code: ErrorCode = "internal_error"
+            if turn.browser is not None:
+                # Browser-request mapping of the legacy path (M2 §3.6).
+                error_code, diagnostic = _browser_model_failure(ledger)
+                envelope = envelope.model_copy(
+                    update={"data": {"error_code": error_code, **diagnostic.attributes()}}
+                )
             return _Outcome(
-                "r5_model_error",
-                self._build_failed(turn, *_intent_failure_message(_model_reason(ledger))),
-                self._close(turn, None, "failed", "internal_error"),
+                "r5_model_error", envelope,
+                self._close(turn, None, "failed", error_code),
                 rollback=True,
             )
         # R6: a plain answer, follow-up question or chat.
@@ -945,6 +1279,25 @@ def _owner(principal: Principal, session_id: str) -> ConfirmationOwner:
         session_id=session_id,
         ai_user_id=principal.ai_user_id,
     )
+
+
+def _memory_key(scope: ReadToolScope) -> SessionMemoryKey:
+    return SessionMemoryKey(
+        tenant_id=scope.tenant_id, session_id=scope.session_id, ai_user_id=scope.ai_user_id
+    )
+
+
+def _browser_model_failure(ledger: TurnLedger) -> tuple[ErrorCode, BrowserGatewayDiagnostic]:
+    """Legacy browser-scope mapping of a model failure; model_not_available is a mismatch."""
+
+    code = ledger.model_error
+    if _model_reason(ledger) != "provider_error":
+        return "adapter_payload_invalid", BrowserGatewayDiagnostic("input", "input_invalid")
+    if code in {"timeout", "turn_timeout"}:
+        return "adapter_timeout", BrowserGatewayDiagnostic("llm", "llm_timeout")
+    if code == "model_not_available":
+        return "adapter_error", BrowserGatewayDiagnostic("llm", "model_mismatch")
+    return "adapter_error", BrowserGatewayDiagnostic("llm", "llm_unavailable")
 
 
 def _model_reason(ledger: TurnLedger) -> _IntentReason:

@@ -112,9 +112,6 @@ from app.runtime.d_form_collection import (
     CategoryEvidence,
     request_message,
 )
-from app.runtime.d_form_collection import (
-    request_digest as d_form_request_digest,
-)
 from app.runtime.document_qa import DocumentQAResult, DocumentQAService, document_failure
 from app.runtime.intent_router import (
     IntentFailureReason,
@@ -679,27 +676,13 @@ class RuntimeImpl:
         ):
             # An unparseable reply cannot discard already collected parameters.
             assert self._d_form_collection_store is not None and scope is not None
-            assert scope.attempt.message is not None
-            retained_record = collection.record
-            retained = retained_record.model_copy(
-                update={
-                    "version": retained_record.version + 1,
-                    "request_id": scope.client_request_id,
-                    "request_digest": d_form_request_digest(scope.attempt.message, channel),
-                }
+            return await self._browser.retain_unparsed(
+                scope,
+                memory_key,
+                channel,
+                collection,
+                category_options,
             )
-            snapshot = await self._d_form_collection_store.save_d_form_collection(
-                retained,
-                tenant_id=memory_key.tenant_id,
-                ai_user_id=ai_user_id,
-                session_id=session_id,
-                expected_version=retained_record.version,
-            )
-            logging.getLogger(__name__).warning("d_form_collection_reply_unparsed")
-            envelope = self._browser.collection_response(snapshot, session_id, category_options)
-            assert envelope.data is not None
-            envelope.data["input_error"] = "collection_reply_unparsed"
-            return envelope
         selection = intent_result.candidate_selection
         if selection is not None and selection.outcome != "ready":
             if selection.outcome == "empty":

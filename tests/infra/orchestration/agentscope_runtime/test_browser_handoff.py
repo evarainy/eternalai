@@ -1,0 +1,425 @@
+"""AgentScope runtime browser requests (M2 S3): tool exposure, admission and close ownership.
+
+The model is scripted; the handoff, submission and browser orchestration are
+recording fakes. Covered boundaries: the browser tool exists only for a
+trusted request of the same user and session; the barrier-free orchestration
+runs only the accepted browser call; the chat intent is closed exactly once,
+by the turn before a browser persistent operation and by the shell after it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any
+from uuid import uuid4
+
+import pytest
+
+from app.browser_skill.models import BrowserOwner
+from app.infra.orchestration.agentscope_runtime.browser_handoff import (
+    BROWSER_BINDING_RESOURCE_ID,
+)
+from app.ports.agent_orchestration import AgentTaskVersionBindings
+from app.ports.auth import authenticated_session
+from app.ports.browser_gateway import (
+    BrowserGatewayAdmission,
+    BrowserGatewayRegistration,
+    BrowserRequestScope,
+    browser_request_scope,
+)
+from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
+from app.ports.capability_registry import CapabilitySpec
+from app.ports.human_gate import VersionBinding
+from app.ports.response_envelope import ResponseEnvelope
+from app.ports.runtime import DFormCollectionReference, d_form_collection_reference
+from app.ports.task_store import DFormCollectionRecord, DFormCollectionSnapshot
+from app.version_binding import merge_version_bindings
+from tests.infra.orchestration.agentscope_runtime.test_proposal import (
+    SESSION_ID,
+    Harness,
+    Orchestration,
+    _calls,
+    _query,
+    _settle,
+    _text,
+)
+
+BROWSER_ID = "browser.oa.read"
+BROWSER_TOOL = "browser__oa__read"
+BROWSER_GROUP = "oa_browser"
+READ_TOOL = "oa__leave_balance"
+D_FORM_ID = "browser.form.fill_stop"
+D_FORM_TOOL = "browser__form__fill_stop"
+
+
+def _browser_capability() -> CapabilitySpec:
+    return _query().model_copy(
+        update={
+            "capability_id": BROWSER_ID,
+            "name": "浏览器读取",
+            "input_schema": {
+                "type": "object",
+                "properties": {"keyword": {"type": "string", "description": "关键词"}},
+                "required": ["keyword"],
+                "additionalProperties": False,
+            },
+            "input_schema_digest": f"input-{BROWSER_ID}",
+            "short_description": "由浏览器读取 OA 页面。",
+            "binding_required": True,
+        }
+    )
+
+
+def _d_form_capability() -> CapabilitySpec:
+    text = {"type": "string"}
+    return _browser_capability().model_copy(
+        update={
+            "capability_id": D_FORM_ID,
+            "name": "报修填写",
+            "type": "action",
+            "input_schema": {
+                "type": "object",
+                "properties": {"category": text, "position": text, "description": text},
+                "additionalProperties": False,
+            },
+            "input_schema_digest": f"input-{D_FORM_ID}",
+            "short_description": "填写 OA 报修表单后停止。",
+        }
+    )
+
+
+class CollectionStore:
+    """In-memory D records; the task status follows the record as in PostgreSQL."""
+
+    def __init__(self) -> None:
+        self.snapshots: dict[str, DFormCollectionSnapshot] = {}
+
+    async def get_d_form_collection(
+        self, *, task_id: str, **kwargs: Any
+    ) -> DFormCollectionSnapshot | None:
+        return self.snapshots.get(task_id)
+
+    async def find_d_form_collection_request(self, **kwargs: Any) -> None:
+        return None
+
+    async def save_d_form_collection(
+        self, record: DFormCollectionRecord, *, expected_version: int | None, **kwargs: Any
+    ) -> DFormCollectionSnapshot:
+        current = self.snapshots.get(record.task_id)
+        assert (current.record.version if current else None) == expected_version
+        snapshot = DFormCollectionSnapshot(
+            record=record, task_status="running" if record.consumed else "waiting_user"
+        )
+        self.snapshots[record.task_id] = snapshot
+        return snapshot
+
+
+class ToolBindings(Orchestration):
+    """Production selection and responses; bindings by capability type, execution scripted."""
+
+    async def resolve_task_version_bindings(
+        self, *, capability: CapabilitySpec, intent_version_binding: VersionBinding
+    ) -> AgentTaskVersionBindings:
+        tool = VersionBinding(
+            resource_type="workflow" if capability.type == "workflow" else "tool",
+            resource_id=capability.capability_id,
+            version=capability.version,
+            digest=hashlib.sha256(capability.model_dump_json().encode()).hexdigest(),
+        )
+        return AgentTaskVersionBindings(
+            bindings=merge_version_bindings((intent_version_binding,), (tool,)),
+            projection_binding=tool,
+        )
+
+    async def execute_capability(
+        self, *, request_context: RequestOrgContext, **kwargs: Any
+    ) -> ExecutionResult:
+        self.executions += 1
+        self.executed_ids.append(kwargs["capability"].capability_id)
+        return await self._execute()
+
+    executed_ids: list[str]
+
+
+class Handoff:
+    def __init__(self) -> None:
+        self.commits = 0
+        self.fail_calls = 0
+
+    @asynccontextmanager
+    async def try_request_route(self, scope: BrowserRequestScope) -> AsyncIterator[bool]:
+        yield True
+
+    async def commit(self, invocation: Any, admission: Any) -> None:
+        self.commits += 1
+
+    async def fail_if_open(self, scope: BrowserRequestScope, error_code: str) -> str:
+        self.fail_calls += 1
+        return "failed"
+
+
+class Submission:
+    async def lookup_ordinary_request(self, **kwargs: Any) -> ResponseEnvelope | None:
+        return None
+
+
+def _orchestration(
+    harness: Harness, execute: Callable[[], Awaitable[ExecutionResult]]
+) -> ToolBindings:
+    orchestration = ToolBindings(harness.registry, execute)
+    orchestration.executed_ids = []
+    return orchestration
+
+
+def _completed() -> Callable[[], Awaitable[ExecutionResult]]:
+    async def execute() -> ExecutionResult:
+        return ExecutionResult(status="completed", trace_id="t", data={"items": []})
+
+    return execute
+
+
+class BrowserHarness:
+    def __init__(
+        self,
+        steps: list[Any],
+        *,
+        user_id: str = "ai-user-1",
+        browser_execute: Callable[[], Awaitable[ExecutionResult]] | None = None,
+        fill_stop: bool = False,
+    ) -> None:
+        self.base = Harness(steps)
+        base = self.base
+        browser = _d_form_capability() if fill_stop else _browser_capability()
+        base.registry.items = {item.capability_id: item for item in (_query(), browser)}
+        base.orchestration = _orchestration(base, _completed())
+        self.browser = _orchestration(base, browser_execute or self._admitted)
+        deps = base.runtime._deps
+        object.__setattr__(deps, "orchestration", base.orchestration)
+        object.__setattr__(deps, "browser_orchestration", self.browser)
+        self.store = CollectionStore()
+        if fill_stop:
+            object.__setattr__(deps, "d_form_collection_store", self.store)
+            base.runtime._browser.d_form_collection_store = self.store  # type: ignore[assignment]
+        self.handoff = Handoff()
+        base.runtime.install_browser(
+            self.handoff,  # type: ignore[arg-type]
+            Submission(),  # type: ignore[arg-type]
+            registration=BrowserGatewayRegistration(
+                tenant_id="tenant-test",
+                user_id=user_id,
+                capability_id=browser.capability_id,
+                capability_version="1.0.0",
+                skill_id="skill.read",
+                skill_version="1",
+                source_kind="registered_site" if fill_stop else "registered_synthetic_fixture",
+                effect="fill_stop" if fill_stop else "read_only",
+            ),
+            configured_d_form_model="scripted",
+        )
+
+    async def _admitted(self) -> ExecutionResult:
+        scope = browser_request_scope.get()
+        assert scope is not None and scope.attempt.task_id and scope.attempt.trace_id
+        owner = BrowserOwner(tenant_id="tenant-test", user_id="ai-user-1", session_id=SESSION_ID)
+        return ExecutionResult(
+            status="running",
+            trace_id=scope.attempt.trace_id,
+            browser_admission=BrowserGatewayAdmission(
+                owner, "canonical-task", "canonical-trace", "accepted", "run-1", 3
+            ),
+        )
+
+    def open_scope(self, *, session_id: str = SESSION_ID) -> BrowserRequestScope:
+        context = authenticated_session.get()
+        assert context is not None
+        scope = BrowserRequestScope(context, session_id, str(uuid4()))
+        browser_request_scope.set(scope)
+        return scope
+
+    def tools_seen(self) -> str:
+        return " ".join(tools for _, tools in self.base.model.seen)
+
+    def statuses(self) -> list[str]:
+        return [item for item in self.base.timeline.entries if item.startswith("status:")]
+
+
+def _browser_steps(arguments: dict[str, Any]) -> list[Any]:
+    return [_calls(("reset_tools", {BROWSER_GROUP: True})), _calls((BROWSER_TOOL, arguments))]
+
+
+def test_browser_tool_only_for_a_trusted_request_of_the_same_user() -> None:
+    async def exposure(*, scoped: bool, user_id: str = "ai-user-1") -> BrowserHarness:
+        harness = BrowserHarness([_text("你好")], user_id=user_id)
+        harness.base.login()
+        if scoped:
+            harness.open_scope()
+        envelope = await harness.base.send("你好")
+        assert envelope.status == "completed"
+        return harness
+
+    trusted = asyncio.run(exposure(scoped=True))
+    assert BROWSER_GROUP in trusted.tools_seen()
+    unscoped = asyncio.run(exposure(scoped=False))
+    assert BROWSER_GROUP not in unscoped.tools_seen()
+    assert READ_TOOL.split("__")[0] + "_query" in unscoped.tools_seen()
+    other_user = asyncio.run(exposure(scoped=True, user_id="ai-user-2"))
+    assert BROWSER_GROUP not in other_user.tools_seen()
+
+
+def test_browser_request_of_another_session_never_reaches_a_turn() -> None:
+    async def exercise() -> BrowserHarness:
+        harness = BrowserHarness([_text("你好")])
+        harness.base.login()
+        harness.open_scope(session_id="session-other")
+        with pytest.raises(ValueError, match="browser_request_context_mismatch"):
+            await harness.base.send("你好")
+        return harness
+
+    harness = asyncio.run(exercise())
+    assert harness.base.model.calls == 0 and harness.base.tasks.records == {}
+
+
+def test_barrier_free_orchestration_runs_only_the_accepted_browser_call() -> None:
+    async def exercise(steps: list[Any]) -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(steps)
+        harness.base.login()
+        harness.open_scope()
+        envelope = await harness.base.send("查一下")
+        await _settle()
+        return harness, envelope
+
+    read, _ = asyncio.run(
+        exercise(
+            [
+                _calls(("reset_tools", {"oa_query": True})),
+                _calls((READ_TOOL, {"days": 1})),
+                _text("查到了"),
+            ]
+        )
+    )
+    assert read.base.orchestration.executed_ids == ["oa.leave_balance"]  # type: ignore[attr-defined]
+    assert read.browser.executions == 0
+    # An argument outside the registered properties is rejected before any execution.
+    extra, envelope = asyncio.run(exercise(_browser_steps({"keyword": "a", "user_id": "x"})))
+    assert envelope.status == "failed"
+    assert extra.browser.executions == 0 and extra.base.orchestration.executions == 0
+    assert extra.handoff.commits == 0 and extra.handoff.fail_calls == 0
+
+
+def test_admission_hands_off_once_and_freezes_the_browser_binding() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, Any]:
+        harness = BrowserHarness(_browser_steps({"keyword": "报修"}))
+        harness.base.login()
+        scope = harness.open_scope()
+        envelope = await harness.base.send("帮我读一下报修单")
+        await _settle()
+        assert scope.attempt.task_id is not None
+        manifest = await harness.base.runtime._deps.human_gate.get_task_binding(
+            scope.attempt.task_id
+        )
+        return harness, envelope, manifest
+
+    harness, envelope, manifest = asyncio.run(exercise())
+    assert envelope.status == "running" and envelope.data == {
+        "kind": "accepted",
+        "task_id": "canonical-task",
+        "run_id": "run-1",
+        "state_revision": 3,
+    }
+    assert harness.browser.executed_ids == [BROWSER_ID]
+    assert harness.base.orchestration.executions == 0
+    # The handoff closed the chat task: no close by the turn and no fail_if_open.
+    assert harness.handoff.commits == 1 and harness.handoff.fail_calls == 0
+    assert harness.statuses() == []
+    assert any(item.resource_id == BROWSER_BINDING_RESOURCE_ID for item in manifest.bindings)
+    _, entry = harness.base.state()
+    assert not entry.busy
+
+
+def test_failure_after_admission_started_is_closed_once_by_the_shell() -> None:
+    async def broken() -> ExecutionResult:
+        raise RuntimeError("admission transport failed")
+
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(_browser_steps({"keyword": "报修"}), browser_execute=broken)
+        harness.base.login()
+        harness.open_scope()
+        envelope = await harness.base.send("帮我读一下报修单")
+        await _settle()
+        return harness, envelope
+
+    harness, envelope = asyncio.run(exercise())
+    assert envelope.status == "running" and envelope.data is not None
+    assert envelope.data["kind"] == "unconfirmed"
+    assert harness.handoff.fail_calls == 1 and harness.handoff.commits == 0
+    # The turn never closed the task itself.
+    assert harness.statuses() == []
+    _, entry = harness.base.state()
+    assert not entry.busy
+
+
+def test_failure_before_any_browser_operation_is_closed_once_by_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable(*args: Any, **kwargs: Any) -> AgentTaskVersionBindings:
+        raise RuntimeError("binding store unavailable")
+
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(_browser_steps({"keyword": "报修"}))
+        monkeypatch.setattr(harness.browser, "resolve_task_version_bindings", unavailable)
+        harness.base.login()
+        harness.open_scope()
+        envelope = await harness.base.send("帮我读一下报修单")
+        await _settle()
+        return harness, envelope
+
+    harness, envelope = asyncio.run(exercise())
+    assert envelope.data is not None and envelope.data["kind"] == "unconfirmed"
+    assert harness.handoff.fail_calls == 0 and harness.browser.executions == 0
+    assert harness.statuses() == ["status:failed"]
+    _, entry = harness.base.state()
+    assert not entry.busy
+
+
+def test_collection_reply_never_opens_or_closes_a_task() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [
+                _calls(("reset_tools", {BROWSER_GROUP: True})),
+                _calls((D_FORM_TOOL, {"position": "三楼东侧", "description": "监控坏了"})),
+                _text("好的"),
+            ],
+            fill_stop=True,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("三楼东侧监控坏了")
+        await _settle()
+        assert card.data is not None and card.data["d_form_collection"] is not None
+        reference = card.data["d_form_collection"]
+        d_form_collection_reference.set(DFormCollectionReference(**reference))
+        harness.open_scope()
+        reply = await harness.base.send("先这样")
+        await _settle()
+        return harness, card, reply
+
+    harness, card, reply = asyncio.run(exercise())
+    assert card.status == "waiting_user" and card.data is not None
+    assert card.data["missing_fields"] == ["category"]
+    assert reply.status == "waiting_user" and reply.data is not None
+    assert reply.data["input_error"] == "collection_reply_unparsed"
+    assert reply.task_id == card.task_id
+    # One turn task only; the store owns its status, neither turn nor shell closes it.
+    assert list(harness.base.tasks.records) == [card.task_id]
+    assert harness.statuses() == [] and harness.handoff.fail_calls == 0
+    assert harness.store.snapshots[card.task_id].record.version == 2
+    assert harness.browser.executions == 0
+    # The reply exposed the browser tool alone: no groups, no control tools.
+    reply_tools = harness.base.model.seen[-1][1]
+    assert D_FORM_TOOL in reply_tools and "reset_tools" not in reply_tools
+    assert "ask_user" not in reply_tools
+    _, entry = harness.base.state()
+    assert not entry.busy

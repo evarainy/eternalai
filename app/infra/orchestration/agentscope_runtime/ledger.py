@@ -11,13 +11,16 @@ import asyncio
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.evaluation import BusinessVerification
 from app.ports.human_gate import VersionBinding
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import StagedWaiting
+
+if TYPE_CHECKING:
+    from app.infra.orchestration.agentscope_read_tools import TaskClose
 
 ExecutionMode = Literal["attach", "own"]
 FailureKind = Literal["execution", "pre_exec"]
@@ -76,6 +79,18 @@ class Proposal:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserSettled:
+    """The browser coordinator decided the turn (card, admission or its failure).
+
+    ``close`` is None when the store or the handoff already wrote the task
+    state (collection card, admission); otherwise the turn closes it once.
+    """
+
+    envelope: ResponseEnvelope
+    close: TaskClose | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Unsupported:
     """The model reported that no visible group can handle the request."""
 
@@ -117,7 +132,7 @@ class TurnLedger:
     catalog_attributes: Mapping[str, Any]
     executions: list[LedgerExecution] = field(default_factory=list)
     failures: list[LedgerFailure] = field(default_factory=list)
-    terminal: BindingCard | Proposal | Unsupported | Clarify | None = None
+    terminal: BindingCard | Proposal | Unsupported | Clarify | BrowserSettled | None = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
     call_of: dict[str, int] = field(default_factory=dict)
@@ -129,6 +144,8 @@ class TurnLedger:
     reset_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Write tool name -> capability id; a subset of business_tools.
     write_tools: Mapping[str, str] = field(default_factory=dict)
+    # Browser tool name -> capability id; a subset of business_tools (M2 §3.3).
+    browser_tools: Mapping[str, str] = field(default_factory=dict)
     # Waiting proposal staged with the coordinator but not yet published.
     staged: StagedWaiting | None = None
     # Bounded futures the session waits for before rollback and release.
@@ -156,6 +173,7 @@ class TurnLedger:
 
 __all__ = (
     "BindingCard",
+    "BrowserSettled",
     "CallSnapshot",
     "Clarify",
     "ClosingTask",
