@@ -22,8 +22,9 @@ _ANSWERED = DocumentQAResult("answered", "年假五天。", version="doc-v1")
 
 
 class FakeDocument:
-    def __init__(self, result: DocumentQAResult | None = None, *, block: bool = False,
-                 permitted: bool = True) -> None:
+    def __init__(
+        self, result: DocumentQAResult | None = None, *, block: bool = False, permitted: bool = True
+    ) -> None:
         self.result = result or _ANSWERED
         self.block = block
         self.permitted = permitted
@@ -33,8 +34,15 @@ class FakeDocument:
     def permits(self, *, tenant_id: str, ai_user_id: str) -> bool:
         return self.permitted
 
-    async def answer(self, *, question: str, tenant_id: str, ai_user_id: str,
-                     deadline: float | None = None, trace_id: str = "") -> DocumentQAResult:
+    async def answer(
+        self,
+        *,
+        question: str,
+        tenant_id: str,
+        ai_user_id: str,
+        deadline: float | None = None,
+        trace_id: str = "",
+    ) -> DocumentQAResult:
         self.questions.append(question)
         self.started.set()
         if self.block:
@@ -42,18 +50,19 @@ class FakeDocument:
         return self.result
 
 
-def _harness(document: FakeDocument, steps: list[Any] | None = None,
-             **options: Any) -> tuple[Harness, list[tuple[str, dict[str, Any] | None]]]:
+def _harness(
+    document: FakeDocument, steps: list[Any] | None = None, **options: Any
+) -> tuple[Harness, list[tuple[str, dict[str, Any] | None]]]:
     harness = Harness(steps or [], **options)
     harness.runtime._deps = replace(harness.runtime._deps, document_qa=document)  # type: ignore[arg-type]
     events: list[tuple[str, dict[str, Any] | None]] = []
     record = harness.trace.record_step
 
-    async def recording(trace_id: str, task_id: str, session_id: str, *, event_type: str,
-                        status: str, **kwargs: Any) -> None:
+    async def recording(
+        trace_id: str, task_id: str, session_id: str, *, event_type: str, status: str, **kwargs: Any
+    ) -> None:
         events.append((event_type, kwargs.get("attributes")))
-        await record(trace_id, task_id, session_id, event_type=event_type, status=status,
-                     **kwargs)
+        await record(trace_id, task_id, session_id, event_type=event_type, status=status, **kwargs)
 
     harness.trace.record_step = recording  # type: ignore[method-assign]
     harness.login()
@@ -76,14 +85,18 @@ def test_document_answer_closes_once_with_document_attributes() -> None:
     harness, document, envelope, events = asyncio.run(exercise())
     assert document.questions == ["年假几天"]
     assert envelope.status == "completed" and envelope.message == "年假五天。"
-    assert envelope.data == {"kind": "fixed_document_qa", "outcome": "answered",
-                             "error_code": None}
+    assert envelope.data == {"kind": "fixed_document_qa", "outcome": "answered", "error_code": None}
     assert harness.model.calls == 0
     assert [kind for kind, _ in events] == [
-        "task_created", "response_envelope_created", "task_completed", "evaluation_recorded",
+        "task_created",
+        "response_envelope_created",
+        "task_completed",
+        "evaluation_recorded",
     ]
     assert _envelope_attributes(events) == {
-        "kind": "fixed_document_qa", "outcome": "answered", "reason": "",
+        "kind": "fixed_document_qa",
+        "outcome": "answered",
+        "reason": "",
         "document_version": "doc-v1",
     }
     entries = harness.timeline.entries
@@ -96,8 +109,9 @@ def test_document_answer_closes_once_with_document_attributes() -> None:
 
 def test_document_failure_result_fails_the_task_with_its_reason() -> None:
     async def exercise() -> tuple[Harness, Any, list[Any]]:
-        document = FakeDocument(DocumentQAResult(
-            "failed", "文档问答超时", "adapter_timeout", "document_timeout"))
+        document = FakeDocument(
+            DocumentQAResult("failed", "文档问答超时", "adapter_timeout", "document_timeout")
+        )
         harness, events = _harness(document)
         envelope = await harness.send("请问年假几天")
         await _settle()

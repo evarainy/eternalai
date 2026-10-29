@@ -50,7 +50,7 @@ def document_question(
         or not service.permits(tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id)
     ):
         return None
-    return text[len(_DOCUMENT_PREFIX):].lstrip(_QUESTION_LEAD)
+    return text[len(_DOCUMENT_PREFIX) :].lstrip(_QUESTION_LEAD)
 
 
 def failure_reason(error: BaseException) -> str:
@@ -79,8 +79,11 @@ async def answer_document(
     deadline: float,
 ) -> DocumentTurn:
     result = await service.answer(
-        question=question, tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
-        deadline=deadline, trace_id=trace_id,
+        question=question,
+        tenant_id=scope.tenant_id,
+        ai_user_id=scope.ai_user_id,
+        deadline=deadline,
+        trace_id=trace_id,
     )
     return document_turn(builder, scope, response_id, task_id, trace_id, result)
 
@@ -97,13 +100,24 @@ def document_turn(
 
     def build(item: DocumentQAResult, data: dict[str, object]) -> ResponseEnvelope:
         return builder.build_message(
-            response_id, task_id, scope.session_id, item.message, item.message, trace_id,
-            status="failed" if item.outcome == "failed" else "completed", data=data,
+            response_id,
+            task_id,
+            scope.session_id,
+            item.message,
+            item.message,
+            trace_id,
+            status="failed" if item.outcome == "failed" else "completed",
+            data=data,
         )
 
-    envelope = build(result, {
-        "kind": "fixed_document_qa", "outcome": result.outcome, "error_code": result.error_code,
-    })
+    envelope = build(
+        result,
+        {
+            "kind": "fixed_document_qa",
+            "outcome": result.outcome,
+            "error_code": result.error_code,
+        },
+    )
     if result.outcome != "failed" and (
         envelope.message != result.message or envelope.status != "completed"
     ):
@@ -134,13 +148,21 @@ def _failure(reason: str, error_code: ErrorCode | None = None) -> DocumentQAResu
 def _close(task_id: str, trace_id: str, result: DocumentQAResult) -> TaskClose:
     execution = ExecutionResult(
         status="failed" if result.outcome == "failed" else "completed",
-        error_code=result.error_code, trace_id=trace_id,
+        error_code=result.error_code,
+        trace_id=trace_id,
     )
     return TaskClose(
-        task_id, trace_id, None, execution, raw_execution=execution, envelope_created=True,
+        task_id,
+        trace_id,
+        None,
+        execution,
+        raw_execution=execution,
+        envelope_created=True,
         response_attributes={
-            "kind": "fixed_document_qa", "outcome": result.outcome,
-            "reason": result.reason, "document_version": result.version,
+            "kind": "fixed_document_qa",
+            "outcome": result.outcome,
+            "reason": result.reason,
+            "document_version": result.version,
         },
     )
 
