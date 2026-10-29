@@ -154,6 +154,8 @@ class TurnLedger:
     # Set once the proposal is published: the coordinator alone closes the
     # turn task from then on.
     handoff: bool = False
+    # A fixed-document turn: no agent or model; the turn close carries its failures.
+    document_route: bool = False
 
     def snapshot_for(self, call_id: str | None) -> CallSnapshot | None:
         """Exposure snapshot of the model call that issued ``call_id``."""

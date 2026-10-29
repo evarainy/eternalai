@@ -271,6 +271,7 @@ class Coordinator:
             response_builder=ResponseEnvelopeBuilder(),
         )
         self.reply: ResponseEnvelope | None = None
+        self.pending = False
 
     async def handle_confirmation_message(self, owner: ConfirmationOwner, message: str, *,
                                           client_request_id: str | None) -> ResponseEnvelope | None:
@@ -282,6 +283,9 @@ class Coordinator:
         self.actions.append(owner)
         assert self.reply is not None
         return self.reply
+
+    def has_pending(self, owner: ConfirmationOwner) -> bool:
+        return self.pending
 
     async def stage_waiting(self, proposal: WaitingProposal) -> StagedWaiting:
         self.staged.append(proposal)

@@ -212,6 +212,8 @@ class TaskClose:
     verification: BusinessVerification | None = None
     # Only the turn task records response_envelope_created, once, first.
     envelope_created: bool = False
+    # Value-free attributes of response_envelope_created; only the document turn sets them.
+    response_attributes: dict[str, Any] | None = None
 
 
 def close_once(
@@ -305,6 +307,7 @@ async def _write_close(
         await deps.trace_port.record_step(
             *ids, tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             event_type="response_envelope_created", status="ok",
+            attributes=close.response_attributes,
         )
     status = _task_status(execution.status)
     await deps.task_store.update_status(close.task_id, status, execution.error_code)

@@ -77,6 +77,13 @@ from app.infra.orchestration.agentscope_runtime.catalog import (
     visible_capabilities,
     with_browser_tool,
 )
+from app.infra.orchestration.agentscope_runtime.document_route import (
+    answer_document,
+    document_question,
+    failure_close,
+    failure_reason,
+    timeout_turn,
+)
 from app.infra.orchestration.agentscope_runtime.ledger import (
     BindingCard,
     BrowserSettled,
@@ -262,6 +269,8 @@ class _Turn:
     turn_id: str
     deadline: float
     browser: _BrowserTurn | None = None
+    # Question of a fixed-document turn (M2 §4.2); None for every other turn.
+    document: str | None = None
 
 
 @dataclass(slots=True)
@@ -349,6 +358,15 @@ class AgentScopeRuntime:
             if confirmed is not None:
                 return confirmed
         scope = ReadToolScope.from_session(context, bound_session_id=session_id, channel=channel)
+        question = (
+            document_question(
+                self._deps.document_qa, self._deps.confirmations, owner, scope, message
+            )
+            if reference is None else None
+        )
+        if question is not None:
+            # Outside the browser shell: busy check as usual, then the document service.
+            return await self._accept(scope, context, owner, message, None, question)
         if browser_scope is None or shell is None:
             return await self._accept(scope, context, owner, message, None)
         if not browser_scope.matches(principal, session_id):
@@ -395,6 +413,7 @@ class AgentScopeRuntime:
         owner: ConfirmationOwner,
         message: str,
         browser: _BrowserTurn | None,
+        document: str | None = None,
     ) -> ResponseEnvelope:
         key = self._sessions.key_for(
             tenant_id=scope.tenant_id,
@@ -418,6 +437,7 @@ class AgentScopeRuntime:
                 turn_id=turn_id,
                 deadline=new_turn_deadline(self._limits),
                 browser=browser,
+                document=document,
             )
             if browser is not None and record is not None:
                 # The record's task is never this turn's to close: the shell
@@ -462,6 +482,7 @@ class AgentScopeRuntime:
             turn_id=turn.turn_id,
             business_tools={},
             catalog_attributes={},
+            document_route=turn.document is not None,
         )
         progress = _Progress()
         rollback = False
@@ -483,14 +504,14 @@ class AgentScopeRuntime:
                 envelope = self._build_failed(turn, *_intent_failure_message("schema_invalid"))
                 rule = "turn_unclosed"
             return envelope
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as error:
             rollback, rule = True, "cancelled"
-            self._fail_unpublished(turn, ledger)
+            self._fail_unpublished(turn, ledger, error)
             raise
-        except Exception:
+        except Exception as error:
             # Unexpected defect: close the turn task as failed, then surface it.
             rollback, rule = True, "internal_error"
-            self._fail_unpublished(turn, ledger)
+            self._fail_unpublished(turn, ledger, error)
             raise
         finally:
             agent = progress.agent
@@ -528,19 +549,22 @@ class AgentScopeRuntime:
                 halt_reason=tool_halt_reason(state) if ran else None,
             )
 
-    def _fail_unpublished(self, turn: _Turn, ledger: TurnLedger) -> None:
+    def _fail_unpublished(self, turn: _Turn, ledger: TurnLedger, error: BaseException) -> None:
         """Cancellation or a defect before publication; after it the coordinator owns the task.
 
         Once a browser persistent operation started, the browser shell closes instead.
+        A document turn closes with its own failure reason, through the same single close.
         """
 
         if ledger.handoff or (turn.browser is not None and turn.browser.ownership.browser_owned):
             return
         self._abandon_unpublished(ledger)
-        close_once(
-            ledger, self._deps, turn.scope,
-            TaskClose(turn.task_id, turn.trace_id, None, self._failed_execution(turn)),
+        close = (
+            failure_close(turn.task_id, turn.trace_id, failure_reason(error))
+            if ledger.document_route
+            else TaskClose(turn.task_id, turn.trace_id, None, self._failed_execution(turn))
         )
+        close_once(ledger, self._deps, turn.scope, close)
 
     def _abandon_unpublished(self, ledger: TurnLedger) -> None:
         if ledger.staged is not None and not ledger.handoff and ledger.abandon is None:
@@ -601,6 +625,8 @@ class AgentScopeRuntime:
         ledger: TurnLedger,
         progress: _Progress,
     ) -> _Outcome:
+        if turn.document is not None:
+            return await self._document_body(turn)
         if turn.browser is not None and turn.browser.collection is not None:
             return await self._continuation_body(turn, state, message, ledger, progress)
         # Preparation counts against the same absolute turn deadline.
@@ -624,6 +650,26 @@ class AgentScopeRuntime:
             self._publish(turn, agent, ledger)
         outcome = self._summarize(turn, ledger, catalog, visible, final)
         return await self._finish_intent(turn, ledger, catalog, outcome)
+
+    async def _document_body(self, turn: _Turn) -> _Outcome:
+        """Open the turn task and answer from the fixed document; no agent, no AgentState."""
+
+        service = self._deps.document_qa
+        assert service is not None and turn.document is not None
+        builder, scope = self._deps.response_builder, turn.scope
+        try:
+            async with asyncio.timeout_at(turn.deadline):
+                await self._open_turn_task(turn)
+                answered = await answer_document(
+                    service, builder, scope, response_id=turn.response_id,
+                    task_id=turn.task_id, trace_id=turn.trace_id, question=turn.document,
+                    deadline=turn.deadline,
+                )
+        except TimeoutError:
+            answered = timeout_turn(
+                builder, scope, turn.response_id, turn.task_id, turn.trace_id
+            )
+        return _Outcome(f"document_{answered.outcome}", answered.envelope, answered.close)
 
     async def _drive(
         self,

@@ -1364,6 +1364,13 @@ class RuntimeImpl:
     ) -> ResponseEnvelope:
         return await self._confirmation_action(_owner_key(owner), action)
 
+    def has_pending(self, owner: ConfirmationOwner) -> bool:
+        memory_key = _owner_key(owner)
+        pending_key = _pending_workflow_key(
+            memory_key.tenant_id, memory_key.session_id, memory_key.ai_user_id
+        )
+        return self._pending_workflows.get(pending_key) is not None
+
     async def stage_waiting(self, proposal: WaitingProposal) -> StagedWaiting:
         if proposal.intent_version_binding is None:
             raise VersionBindingMismatchError("Waiting proposal has no intent version binding")
