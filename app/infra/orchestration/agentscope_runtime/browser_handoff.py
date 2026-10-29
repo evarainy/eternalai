@@ -5,11 +5,11 @@ budget, cross-process route ownership, replay lookup before the busy check,
 and recovery. ``BrowserTurnOwnership`` records whether the turn entered a
 browser persistent operation; from then on the shell alone closes the chat
 intent, once, with ``fail_if_open``, unless the turn already started its own
-close of a settled browser result; the session is released only after every
-close. ``BrowserHandoffCoordinator`` runs one accepted browser tool call:
-server-side recheck, D collection, binding freeze, admission through the
-barrier-free orchestration and the handoff. It is the only holder of that
-orchestration and only runs the registered capability.
+close (a settled browser result, an admission diagnostic or a failed handoff);
+the session is released only after every close. ``BrowserHandoffCoordinator``
+runs one accepted browser tool call: server-side recheck, D collection, binding
+freeze, admission through the barrier-free orchestration and the handoff. It is
+the only holder of that orchestration and only runs the registered capability.
 """
 
 from __future__ import annotations
@@ -147,9 +147,15 @@ class BrowserTurnOwnership:
     def __init__(self) -> None:
         # Set synchronously before the first browser persistent write is awaited.
         self.browser_owned = False
-        # The turn's own close of a settled browser result; the shell then never closes.
+        # The close the turn already started (a settled browser result, an
+        # admission diagnostic or a failed handoff); the shell then never closes.
         self.turn_close: asyncio.Future[Any] | None = None
         self._release: Callable[[Collection[asyncio.Future[Any]]], None] | None = None
+
+    def own_close(self, close: asyncio.Future[Any]) -> None:
+        """Register a chat-intent close started inside the turn, before it is awaited."""
+
+        self.turn_close = close
 
     def defer_release(self, release: Callable[[Collection[asyncio.Future[Any]]], None]) -> None:
         self._release = release
@@ -440,7 +446,13 @@ class BrowserHandoffCoordinator:
         if execution.status == "running":
             principal = browser_scope.verified.principal
             envelope = await helpers.finish_admission(
-                principal, scope.session_id, task_id, trace_id, capability, execution
+                principal,
+                scope.session_id,
+                task_id,
+                trace_id,
+                capability,
+                execution,
+                close_started=self._ownership.own_close,
             )
             ledger.terminal = BrowserSettled(envelope)
             return
@@ -450,7 +462,8 @@ class BrowserHandoffCoordinator:
             "admission_uncertain",
         }:
             recovered = await helpers.recover_browser_request(browser_scope)
-            await helpers.close_intent(browser_scope)
+            # Cancelled while closing: the shell awaits this close instead of starting one.
+            await helpers.close_intent(browser_scope, self._ownership.own_close)
             ledger.terminal = BrowserSettled(
                 recovered
                 if recovered is not None

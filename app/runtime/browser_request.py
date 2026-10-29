@@ -330,8 +330,15 @@ class BrowserRequestHelpers:
 
         return asyncio.create_task(bounded())
 
-    async def close_intent(self, scope: BrowserRequestScope) -> None:
+    async def close_intent(
+        self,
+        scope: BrowserRequestScope,
+        started: Callable[[asyncio.Task[None]], None] | None = None,
+    ) -> None:
+        """``started`` receives the close task before it is awaited, so an owner can await it."""
         closing = self.start_close_intent(scope)
+        if started is not None:
+            started(closing)
         try:
             await asyncio.shield(closing)
         except asyncio.CancelledError:
@@ -534,6 +541,7 @@ class BrowserRequestHelpers:
         trace_id: str,
         capability: CapabilitySpec,
         result: ExecutionResult,
+        close_started: Callable[[asyncio.Task[None]], None] | None = None,
     ) -> ResponseEnvelope:
         scope, admission = browser_request_scope.get(), result.browser_admission
         if (
@@ -567,7 +575,7 @@ class BrowserRequestHelpers:
             except Exception:
                 pass  # Diagnostic failure must preserve the original failure path.
             # Known canonical admission survives an unavailable/uncertain I handoff.
-            await self.close_intent(scope)
+            await self.close_intent(scope, close_started)
             return self.browser_unconfirmed_response(scope, timeout=False)
         try:
             await self._trace_port.record_step(

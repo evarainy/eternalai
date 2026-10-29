@@ -26,6 +26,7 @@ from app.ports.agent_orchestration import AgentTaskVersionBindings
 from app.ports.auth import authenticated_session
 from app.ports.browser_gateway import (
     BrowserGatewayAdmission,
+    BrowserGatewayDiagnostic,
     BrowserGatewayRegistration,
     BrowserRequestScope,
     browser_request_scope,
@@ -395,6 +396,63 @@ def test_cancellation_during_the_turn_close_of_a_browser_result_closes_once(
     # The turn's close of the settled result is the only close: no fail_if_open.
     assert harness.handoff.fail_calls == 0 and harness.handoff.commits == 0
     assert harness.statuses() == ["status:completed"]
+    assert harness.base.timeline.entries.count("finalize") == 1
+    # The session stays busy until that close ends, then it is free.
+    assert busy_while_closing and not busy_after
+
+
+@pytest.mark.parametrize("case", ["admission_timeout", "admission_uncertain", "handoff_failed"])
+def test_cancellation_during_a_diagnostic_close_closes_once_and_keeps_the_session_busy(
+    case: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def uncertain() -> ExecutionResult:
+        timeout = case == "admission_timeout"
+        return ExecutionResult(
+            status="timeout" if timeout else "failed",
+            trace_id="t",
+            error_code="adapter_timeout" if timeout else "adapter_error",
+            browser_diagnostic=BrowserGatewayDiagnostic("admission", case),
+        )
+
+    async def exercise() -> tuple[BrowserHarness, bool, bool]:
+        harness = BrowserHarness(
+            _browser_steps({"keyword": "报修"}),
+            browser_execute=None if case == "handoff_failed" else uncertain,
+        )
+        handoff = harness.handoff
+        closing, gate = asyncio.Event(), asyncio.Event()
+
+        async def stalled(scope: BrowserRequestScope, error_code: str) -> str:
+            handoff.fail_calls += 1
+            closing.set()
+            await gate.wait()
+            return "failed"
+
+        async def unavailable(invocation: Any, admission: Any) -> None:
+            raise RuntimeError("handoff store unavailable")
+
+        monkeypatch.setattr(handoff, "fail_if_open", stalled)
+        if case == "handoff_failed":
+            monkeypatch.setattr(handoff, "commit", unavailable)
+        harness.base.login()
+        harness.open_scope()
+        request = asyncio.ensure_future(harness.base.send("帮我读一下报修单"))
+        await closing.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        await _settle()
+        _, entry = harness.base.state()
+        busy_while_closing = entry.busy
+        gate.set()
+        await _settle()
+        return harness, busy_while_closing, entry.busy
+
+    harness, busy_while_closing, busy_after = asyncio.run(exercise())
+    assert harness.browser.executed_ids == [BROWSER_ID]
+    # The close the turn started is the only close: the shell starts no second one.
+    assert harness.handoff.fail_calls == 1 and harness.handoff.commits == 0
+    assert harness.statuses() == []
     assert harness.base.timeline.entries.count("finalize") == 1
     # The session stays busy until that close ends, then it is free.
     assert busy_while_closing and not busy_after
