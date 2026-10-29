@@ -104,6 +104,23 @@ GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
 # legacy is the required gate; agentscope is a local, non-gating replay.
 GoldenEngine = Literal["legacy", "agentscope"]
 GOLDEN_ENGINES: tuple[GoldenEngine, ...] = ("legacy", "agentscope")
+# The new runtime exposes no ``action`` capability (H4(d)) and has no alias
+# selector (H4(e)); these tasks run in full and are reported as not_applicable
+# only when the run completes without a runner exception.
+AGENTSCOPE_NOT_APPLICABLE: dict[str, str] = {
+    "GT-006": "H4(d)",
+    "GT-007": "H4(d)",
+    "GT-029": "H4(d)",
+    "GT-030": "H4(d)",
+    "GT-031": "H4(d)",
+    "GT-032": "H4(d)",
+    "GT-033": "H4(d)",
+    "GT-014": "H4(e)",
+}
+# Replay-only: a fixture capability without ``input_schema`` is registered with
+# an empty object schema so the production projection stays strict.
+_AGENTSCOPE_EMPTY_INPUT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
+InjectionOutcome = Literal["ran_passed", "ran_failed", "none"]
 
 
 @dataclass(frozen=True)
@@ -118,14 +135,22 @@ class GoldenTaskResult:
     category: str
     status: GoldenTaskStatus
     reasons: list[str]
+    # agentscope replay only; legacy summary items keep their four keys.
+    injection: InjectionOutcome | None = None
+    observed: dict[str, Any] | None = None
 
     def to_summary_item(self) -> dict[str, Any]:
-        return {
+        item: dict[str, Any] = {
             "golden_task_id": self.golden_task_id,
             "category": self.category,
             "status": self.status,
             "reasons": self.reasons,
         }
+        if self.injection is not None:
+            item["injection"] = self.injection
+        if self.observed is not None:
+            item["observed"] = self.observed
+        return item
 
 
 @dataclass(frozen=True)
@@ -298,9 +323,13 @@ class AdapterSpy:
 
 
 class FakeCapabilityRegistry:
-    def __init__(self, capabilities: Sequence[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        capabilities: Sequence[dict[str, Any]],
+        engine: GoldenEngine = "legacy",
+    ) -> None:
         self._capabilities = {
-            str(capability["capability_id"]): _build_capability_spec(capability)
+            str(capability["capability_id"]): _build_capability_spec(capability, engine)
             for capability in capabilities
         }
 
@@ -506,6 +535,7 @@ def evaluate_golden_task(gt_id: str, engine: GoldenEngine = "legacy") -> GoldenT
     reasons: list[str] = []
     primary_status: Literal["passed", "failed"] = "failed"
     injection_status: Literal["passed", "failed"] = "passed"
+    runner_error = False
     clear_injection()
     try:
         observation = asyncio.run(_run_fixture(fixture, engine))
@@ -540,9 +570,11 @@ def evaluate_golden_task(gt_id: str, engine: GoldenEngine = "legacy") -> GoldenT
         reasons.extend(judgement.reasons)
     except AssertionError as exc:
         reasons.append(str(exc))
+        runner_error = True
     finally:
         clear_injection()
 
+    injection_outcome: InjectionOutcome = "none"
     if _injection_enabled(fixture):
         try:
             injection_judgement = asyncio.run(_run_injection_companion(fixture, engine))
@@ -553,17 +585,42 @@ def evaluate_golden_task(gt_id: str, engine: GoldenEngine = "legacy") -> GoldenT
             )
         except AssertionError as exc:
             injection_status = "failed"
+            runner_error = True
             reasons.append(f"injection companion: {exc}")
         finally:
             clear_injection()
+        injection_outcome = (
+            "ran_passed" if injection_status == "passed" else "ran_failed"
+        )
 
+    outcome = (
+        "passed"
+        if primary_status == "passed" and injection_status == "passed"
+        else "failed"
+    )
+    if engine != "agentscope":
+        return GoldenTaskResult(
+            golden_task_id=gt_id,
+            category=category,
+            status=outcome,
+            reasons=reasons,
+        )
+    clause = AGENTSCOPE_NOT_APPLICABLE.get(gt_id)
+    if clause is None or runner_error:
+        return GoldenTaskResult(
+            golden_task_id=gt_id,
+            category=category,
+            status=outcome,
+            reasons=reasons,
+            injection=injection_outcome,
+        )
     return GoldenTaskResult(
         golden_task_id=gt_id,
         category=category,
-        status="passed"
-        if primary_status == "passed" and injection_status == "passed"
-        else "failed",
+        status="not_applicable",
         reasons=reasons,
+        injection=injection_outcome,
+        observed={"clause": clause, "status": outcome, "reasons": list(reasons)},
     )
 
 
@@ -699,7 +756,7 @@ async def _run_fixture(
     trace_port = SpyTracePort()
     task_store = SpyTaskStore()
     capability_registry = FakeCapabilityRegistry(
-        cast(Sequence[dict[str, Any]], given["registered_capabilities"])
+        cast(Sequence[dict[str, Any]], given["registered_capabilities"]), engine
     )
     policy_guard = FakePolicyGuard(
         cast(dict[str, Any] | None, given.get("policy_fixture"))
@@ -749,7 +806,7 @@ async def _run_fixture(
     runtime: RuntimePort
     login_token = None
     if engine == "agentscope":
-        runtime = _agentscope_runtime(fixture, runtime_kwargs)
+        runtime = _agentscope_runtime(fixture, runtime_kwargs, engine)
         # Synthetic verified login: the runner's principal, valid for 1 hour.
         login_token = authenticated_session.set(
             AuthenticatedSessionContext(
@@ -820,12 +877,12 @@ async def _run_fixture(
 
 
 def _agentscope_runtime(
-    fixture: dict[str, Any], runtime_kwargs: dict[str, Any]
+    fixture: dict[str, Any], runtime_kwargs: dict[str, Any], engine: GoldenEngine
 ) -> RuntimePort:
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
     specs = [
-        _build_capability_spec(raw)
+        _build_capability_spec(raw, engine)
         for raw in cast(Sequence[dict[str, Any]], given["registered_capabilities"])
     ]
     intent = _synthetic_intent(fixture)
@@ -1128,14 +1185,21 @@ def _expected_injection_response_status(expected_error_code: str) -> str:
     return "failed"
 
 
-def _build_capability_spec(raw: dict[str, Any]) -> CapabilitySpec:
+def _build_capability_spec(
+    raw: dict[str, Any], engine: GoldenEngine = "legacy"
+) -> CapabilitySpec:
     capability_id = str(raw["capability_id"])
+    input_schema = raw.get("input_schema")
+    if input_schema is None:
+        input_schema = (
+            dict(_AGENTSCOPE_EMPTY_INPUT_SCHEMA) if engine == "agentscope" else {}
+        )
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
         type=cast(CapabilityType, raw.get("type", "query")),
         intent_tags=cast(list[str], raw.get("intent_tags", [])),
-        input_schema=cast(dict[str, Any], raw.get("input_schema", {})),
+        input_schema=cast(dict[str, Any], input_schema),
         output_schema=cast(dict[str, Any], raw.get("output_schema", {})),
         input_schema_digest=str(
             raw.get("input_schema_digest", f"digest_input_{capability_id}")

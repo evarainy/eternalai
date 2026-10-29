@@ -256,3 +256,124 @@ def test_main_infrastructure_failure_returns_two(
     assert exit_code == 2
     assert captured.out == ""
     assert "infrastructure failure" in captured.err
+
+
+def _agentscope_summary(
+    mutate: Any = None,
+) -> dict[str, Any]:
+    from scripts.golden_task_evaluator import AGENTSCOPE_NOT_APPLICABLE, GT_IDS
+    from scripts.golden_task_fixture_support import load_fixture
+
+    results: list[dict[str, Any]] = []
+    for gt_id in GT_IDS:
+        category = str(load_fixture(gt_id)["category"])
+        item = _item(
+            gt_id,
+            category,
+            "not_applicable" if gt_id in AGENTSCOPE_NOT_APPLICABLE else "passed",
+        )
+        item["injection"] = "ran_passed" if gt_id <= "GT-005" else "none"
+        results.append(item)
+    if mutate is not None:
+        mutate(results)
+    return _summary(results)
+
+
+def _by_id(results: list[dict[str, Any]], gt_id: str) -> dict[str, Any]:
+    return next(item for item in results if item["golden_task_id"] == gt_id)
+
+
+def test_agentscope_gate_passes_full_expected_summary() -> None:
+    summary = _agentscope_summary()
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(summary)
+
+    assert decision.reasons == []
+    assert summary["total"] == 34
+    assert summary["not_applicable"] == 8
+    assert summary["positive_passed"] == 10
+    assert summary["negative_passed"] == 16
+
+
+def test_agentscope_gate_fails_when_scored_task_not_passed() -> None:
+    def mutate(results: list[dict[str, Any]]) -> None:
+        _by_id(results, "GT-020")["status"] = "failed"
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(_agentscope_summary(mutate))
+
+    assert decision.passed is False
+    assert any("A3 scored tasks not passed: GT-020" in r for r in decision.reasons)
+
+
+def test_agentscope_gate_fails_when_not_applicable_set_differs() -> None:
+    def mutate(results: list[dict[str, Any]]) -> None:
+        _by_id(results, "GT-006")["status"] = "passed"
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(_agentscope_summary(mutate))
+
+    assert decision.passed is False
+    assert any("A2" in r and "GT-006" in r for r in decision.reasons)
+
+
+def test_agentscope_gate_fails_on_scored_task_marked_not_applicable() -> None:
+    def mutate(results: list[dict[str, Any]]) -> None:
+        _by_id(results, "GT-008")["status"] = "not_applicable"
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(_agentscope_summary(mutate))
+
+    assert decision.passed is False
+    assert any("A2" in r and "GT-008" in r for r in decision.reasons)
+
+
+def test_agentscope_gate_requires_injection_pairs_to_have_passed() -> None:
+    def mutate(results: list[dict[str, Any]]) -> None:
+        _by_id(results, "GT-003")["injection"] = "ran_failed"
+        _by_id(results, "GT-005")["injection"] = "none"
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(_agentscope_summary(mutate))
+
+    assert decision.passed is False
+    assert any("A4" in r and "GT-003, GT-005" in r for r in decision.reasons)
+
+
+def test_agentscope_gate_fails_on_missing_or_duplicated_ids() -> None:
+    def mutate(results: list[dict[str, Any]]) -> None:
+        results.pop()
+        results.append(dict(results[0]))
+
+    decision = run_golden_tasks.evaluate_agentscope_gate(_agentscope_summary(mutate))
+
+    assert decision.passed is False
+    assert any("A1 result ids differ" in r for r in decision.reasons)
+
+
+def test_main_agentscope_gate_uses_agentscope_rules(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    # Passes evaluate_gate (legacy thresholds) but not the agentscope contract.
+    summary = _passing_summary()
+    monkeypatch.setattr(
+        run_golden_tasks,
+        "_load_runner",
+        lambda: (lambda **_selection: [], lambda _results: summary),
+    )
+
+    legacy_exit = run_golden_tasks.main(["--gate"])
+    capsys.readouterr()
+    agentscope_exit = run_golden_tasks.main(["--engine", "agentscope", "--gate"])
+    captured = capsys.readouterr()
+
+    assert legacy_exit == 0
+    assert agentscope_exit == 1
+    assert "A1" in captured.err
+
+
+def test_gate_rejects_ids_selection(capsys: Any) -> None:
+    try:
+        run_golden_tasks.main(["--engine", "agentscope", "--gate", "--ids", "GT-001"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:  # pragma: no cover - argparse always exits
+        raise AssertionError("expected SystemExit")
+    assert "--ids" in capsys.readouterr().err

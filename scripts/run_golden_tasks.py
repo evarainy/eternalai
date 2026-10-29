@@ -17,6 +17,18 @@ if str(REPO_ROOT) not in sys.path:
 # Modifying this set requires explicit authorization from a future task and
 # human approval.
 GATE_SKIP_EXEMPT_GT_IDS: frozenset[str] = frozenset()
+# Scored tasks whose injection companion must have run and passed in the
+# agentscope replay (the only scored tasks with injection enabled).
+AGENTSCOPE_INJECTION_GT_IDS: tuple[str, ...] = (
+    "GT-001",
+    "GT-002",
+    "GT-003",
+    "GT-004",
+    "GT-005",
+)
+AGENTSCOPE_EXPECTED_TOTAL = 34
+AGENTSCOPE_SCORED_POSITIVE = 10
+AGENTSCOPE_SCORED_NEGATIVE = 16
 
 
 @dataclass(frozen=True)
@@ -41,15 +53,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--engine",
         choices=("legacy", "agentscope"),
         default="legacy",
-        help="runtime under test; agentscope is a local, non-gating replay",
+        help="runtime under test; agentscope replay is gated only locally, not in CI",
     )
     parser.add_argument(
         "--ids",
         help="comma-separated Golden Task ids to run instead of all of them",
     )
     args = parser.parse_args(argv)
-    if args.gate and (args.engine != "legacy" or args.ids):
-        parser.error("--gate judges the full legacy run only")
+    if args.gate and args.ids:
+        parser.error("--gate judges the full run only; omit --ids")
 
     # Arguments are passed only when given, so the default call is unchanged.
     selection: dict[str, Any] = {}
@@ -68,7 +80,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     json.dump(summary, sys.stdout, ensure_ascii=False, sort_keys=True)
     sys.stdout.write("\n")
     if args.gate:
-        decision = evaluate_gate(summary)
+        decision = (
+            evaluate_agentscope_gate(summary)
+            if args.engine == "agentscope"
+            else evaluate_gate(summary)
+        )
         if not decision.passed:
             for reason in decision.reasons:
                 print(f"Golden Task gate failed: {reason}", file=sys.stderr)
@@ -171,6 +187,76 @@ def evaluate_gate(summary: dict[str, Any]) -> GateDecision:
         )
 
     return GateDecision(passed=not reasons, reasons=reasons)
+
+
+def evaluate_agentscope_gate(summary: dict[str, Any]) -> GateDecision:
+    """Judge the full agentscope replay (M2_DESIGN §6.2); legacy rules still apply."""
+
+    try:
+        gt_ids, not_applicable = _load_agentscope_expectations()
+    except Exception as exc:
+        return GateDecision(passed=False, reasons=[f"A0 expectations unavailable: {exc}"])
+    results = list(cast(Sequence[dict[str, Any]], summary.get("results", [])))
+    reasons = list(evaluate_gate(summary).reasons)
+
+    ids = [str(item.get("golden_task_id", "<unknown>")) for item in results]
+    if len(ids) != len(set(ids)) or set(ids) != set(gt_ids):
+        reasons.append(
+            "A1 result ids differ from GT_IDS: "
+            f"missing={sorted(set(gt_ids) - set(ids))}, "
+            f"unexpected={sorted(set(ids) - set(gt_ids))}, "
+            f"duplicated={sorted({i for i in ids if ids.count(i) > 1})}"
+        )
+    if len(results) != AGENTSCOPE_EXPECTED_TOTAL:
+        reasons.append(
+            f"A1 total != {AGENTSCOPE_EXPECTED_TOTAL}: total={len(results)}"
+        )
+
+    actual_na = {
+        str(item.get("golden_task_id"))
+        for item in results
+        if item.get("status") == "not_applicable"
+    }
+    if actual_na != set(not_applicable):
+        reasons.append(
+            "A2 not_applicable set differs: "
+            f"missing={sorted(set(not_applicable) - actual_na)}, "
+            f"unexpected={sorted(actual_na - set(not_applicable))}"
+        )
+
+    scored = [item for item in results if str(item.get("golden_task_id")) not in not_applicable]
+    not_passed = sorted(
+        str(item.get("golden_task_id")) for item in scored if item.get("status") != "passed"
+    )
+    if not_passed:
+        reasons.append(f"A3 scored tasks not passed: {', '.join(not_passed)}")
+    for category, expected in (
+        ("positive", AGENTSCOPE_SCORED_POSITIVE),
+        ("negative", AGENTSCOPE_SCORED_NEGATIVE),
+    ):
+        passed = sum(
+            1
+            for item in scored
+            if item.get("category") == category and item.get("status") == "passed"
+        )
+        if passed != expected:
+            reasons.append(f"A3 scored {category} passed {passed}/{expected}")
+
+    by_id = {str(item.get("golden_task_id")): item for item in results}
+    not_ran = [
+        gt_id
+        for gt_id in AGENTSCOPE_INJECTION_GT_IDS
+        if by_id.get(gt_id, {}).get("injection") != "ran_passed"
+    ]
+    if not_ran:
+        reasons.append(f"A4 injection not ran_passed: {', '.join(not_ran)}")
+    return GateDecision(passed=not reasons, reasons=reasons)
+
+
+def _load_agentscope_expectations() -> tuple[tuple[str, ...], dict[str, str]]:
+    from scripts.golden_task_evaluator import AGENTSCOPE_NOT_APPLICABLE, GT_IDS
+
+    return GT_IDS, AGENTSCOPE_NOT_APPLICABLE
 
 
 def _int_summary_value(summary: dict[str, Any], key: str) -> int:
