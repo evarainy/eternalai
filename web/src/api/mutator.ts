@@ -7,6 +7,9 @@ interface AdminErrorEnvelope {
   };
 }
 
+/** The runtime's session-busy 409 carries only a code in `detail`, never a message. */
+export const RUNTIME_SESSION_BUSY_CODE = 'runtime_session_busy';
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -17,6 +20,13 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+function isSessionBusyBody(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || !('detail' in value)) return false;
+  const detail = value.detail;
+  return typeof detail === 'object' && detail !== null && 'code' in detail
+    && detail.code === RUNTIME_SESSION_BUSY_CODE;
 }
 
 function isAdminErrorEnvelope(value: unknown): value is AdminErrorEnvelope {
@@ -87,6 +97,9 @@ export const requestWithResponse = async <T>(
   if (!response.ok) {
     const errorBody: unknown = response.headers.get('content-type')?.includes('json') ? await response.json() : null;
     if (isAdminErrorEnvelope(errorBody)) throw new ApiError(response.status, errorBody.detail.code, errorBody.detail.message);
+    if (response.status === 409 && isSessionBusyBody(errorBody)) {
+      throw new ApiError(409, RUNTIME_SESSION_BUSY_CODE, 'The previous message is still being handled.');
+    }
     throw new ApiError(response.status, `http_${response.status}`, `HTTP ${response.status}: ${response.statusText}`);
   }
   const binary = responseType === 'blob';

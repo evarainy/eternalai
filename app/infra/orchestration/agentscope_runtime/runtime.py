@@ -22,6 +22,7 @@ released after that close.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -110,7 +111,9 @@ from app.infra.orchestration.agentscope_runtime.toolkit import (
     RESET_TOOLS,
     build_turn_toolkit,
 )
-from app.knowledge.capability_selection import capability_fingerprint
+from app.knowledge import BasicKnowledge
+from app.knowledge.bounded import bound_generated_knowledge
+from app.knowledge.capability_selection import canonical_json, capability_fingerprint
 from app.memory import SessionMemoryKey
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.browser_chat import BrowserOrdinarySubmissionPort
@@ -144,7 +147,7 @@ from app.runtime.d_form_collection import CAPABILITY_ID as D_FORM_ID
 if TYPE_CHECKING:
     from agentscope.agent import Agent
 
-M1_PROMPT_VERSION = "m1b-1"
+M1_PROMPT_VERSION = "m2-1"
 M1_SYSTEM_PROMPT = (
     # General rules carried over from the M0 prompt.
     "你是企业内部业务助手。查询用只读工具；写入类工具只会生成确认卡片，由用户确认后才执行，"
@@ -311,6 +314,7 @@ class AgentScopeRuntime:
             d_form_collection_store=deps.d_form_collection_store,
         )
         self._browser_shell: BrowserRequestShell | None = None
+        self._knowledge_digest = _knowledge_items_digest(deps.knowledge)
 
     def install_browser(
         self,
@@ -924,9 +928,17 @@ class AgentScopeRuntime:
         }
         ledger.catalog_attributes = catalog.trace_attributes()
         model = deps.model_factory()
+        # Once per ordinary turn; every model call of the turn sees the same items.
+        knowledge = bound_generated_knowledge(
+            deps.knowledge.context_items(message, visible.capabilities)
+        )
+        _RUNTIME_LOGGER.info(
+            "agentscope_knowledge items=%s turn=%s", len(knowledge), turn.turn_id
+        )
         kit = await build_turn_toolkit(
             catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
             model=model, prompt_version=M1_PROMPT_VERSION,
+            knowledge=knowledge, knowledge_digest=self._knowledge_digest,
         )
         agent = create_bounded_agent(
             name=AGENT_NAME,
@@ -1303,6 +1315,16 @@ class AgentScopeRuntime:
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             event_type=event_type, status=status, error_code=error_code, attributes=attributes,
         )
+
+
+def _knowledge_items_digest(knowledge: BasicKnowledge) -> str:
+    """Canonical digest of the whole static item set, taken once at build time."""
+
+    items = [
+        {"category": item.category, "keywords": list(item.keywords), "content": item.content}
+        for item in knowledge.static_items
+    ]
+    return hashlib.sha256(canonical_json(items).encode("utf-8")).hexdigest()
 
 
 def _verified_session(principal: Principal) -> AuthenticatedSessionContext | None:

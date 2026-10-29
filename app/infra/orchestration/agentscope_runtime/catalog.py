@@ -3,7 +3,8 @@
 Visibility copies the legacy Runtime rule (an unsafe id, a policy error or an
 unexpected verdict makes the whole catalog invalid). Query capabilities become
 read tools and workflow capabilities become write-proposal tools in their own
-write groups; action and mock capabilities are never visible, and browser
+write groups (except READ_WORKFLOW_IDS, which are read tools); action and mock
+capabilities are never visible, and browser
 capabilities are excluded silently (counted only). There is no lexical
 pre-selection. Grouping is a pure function of the visible definitions so
 offline evaluation can call it directly. The one registered browser
@@ -22,6 +23,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.infra.workflow.catalog import OVERVIEW_ID
 from app.knowledge.capability_selection import (
     CandidateBinding,
     ToolDefinitionRejected,
@@ -66,6 +68,8 @@ WRITE_GROUP_BY_TARGET: dict[str | None, str] = {
     None: "general_action",
 }
 VISIBLE_TYPES = frozenset({"query", "workflow"})
+# Workflows whose leaves are all queries: a read tool in its read group.
+READ_WORKFLOW_IDS = frozenset({OVERVIEW_ID})
 # Out of this path's scope: excluded before grouping and only counted.
 SCOPE_EXCLUDED_PREFIX = "browser."
 # Group of the registered browser tool; only that one tool, never activated
@@ -266,7 +270,11 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         if _TOOL_NAME.fullmatch(name) is None:
             _count(excluded, "tool_name_invalid")
             continue
-        kind: ToolKind = "write" if spec.type == "workflow" else "read"
+        kind: ToolKind = (
+            "write"
+            if spec.type == "workflow" and spec.capability_id not in READ_WORKFLOW_IDS
+            else "read"
+        )
         group = (WRITE_GROUP_BY_TARGET if kind == "write" else GROUP_BY_TARGET).get(
             spec.target_system
         )

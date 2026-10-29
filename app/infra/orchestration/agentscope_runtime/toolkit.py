@@ -16,7 +16,8 @@ after construction and checked (uv.lock pins the version; re-check on upgrade).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+import json
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +55,7 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     Unsupported,
     current_tool_call_id,
 )
+from app.knowledge.bounded import KNOWLEDGE_SYSTEM_PROMPT
 from app.knowledge.capability_selection import canonical_json
 from app.version_binding import prompt_version_binding
 
@@ -111,6 +113,8 @@ async def build_turn_toolkit(
     model: ChatModelBase,
     prompt_version: str,
     continuation_instructions: str | None = None,
+    knowledge: Sequence[str] = (),
+    knowledge_digest: str | None = None,
 ) -> TurnToolkit:
     """Register this turn's catalog as tool groups plus the two control tools.
 
@@ -128,6 +132,7 @@ async def build_turn_toolkit(
         middleware = M1Middleware(
             catalog, ledger, group_of={}, model_name=model.model,
             prompt_version=prompt_version, fixed_instructions=continuation_instructions,
+            knowledge_digest=knowledge_digest,
         )
         return TurnToolkit(
             toolkit=Toolkit(tools=browser, meta_tool_response_template=M1_TEMPLATE),
@@ -190,6 +195,8 @@ async def build_turn_toolkit(
         group_of=group_of,
         model_name=model.model,
         prompt_version=prompt_version,
+        knowledge=knowledge,
+        knowledge_digest=knowledge_digest,
     )
     return TurnToolkit(toolkit=toolkit, middleware=middleware, group_of=group_of)
 
@@ -425,9 +432,14 @@ class M1Middleware(MiddlewareBase):
         model_name: str,
         prompt_version: str,
         fixed_instructions: str | None = None,
+        knowledge: Sequence[str] = (),
+        knowledge_digest: str | None = None,
     ) -> None:
         self._catalog = catalog
         self._fixed_instructions = fixed_instructions
+        # Bounded once per turn by the runtime; never part of AgentState.
+        self._knowledge = tuple(knowledge)
+        self._knowledge_digest = knowledge_digest
         self._ledger = ledger
         self._group_of = group_of
         self._model_name = model_name
@@ -444,10 +456,18 @@ class M1Middleware(MiddlewareBase):
         ]
         if self._fixed_instructions is not None:
             texts.append(self._fixed_instructions)
-        if not texts:
-            return current_prompt
-        block = "\n".join(texts)
-        return f"{current_prompt}\n<tool-instructions>\n{block}\n</tool-instructions>"
+        prompt = current_prompt
+        if texts:
+            block = "\n".join(texts)
+            prompt = f"{prompt}\n<tool-instructions>\n{block}\n</tool-instructions>"
+        if self._knowledge:
+            payload = json.dumps(
+                {"semantic_system_knowledge": list(self._knowledge)},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            prompt = f"{prompt}\n<knowledge>\n{KNOWLEDGE_SYSTEM_PROMPT}\n{payload}\n</knowledge>"
+        return prompt
 
     async def on_model_call(
         self,
@@ -485,6 +505,7 @@ class M1Middleware(MiddlewareBase):
             response_schema={
                 "tools": [[name, digest] for name, digest in digests.items()],
                 "group_rules": GROUP_RULES,
+                "knowledge_items_digest": self._knowledge_digest,
             },
         )
         ledger.calls[index] = CallSnapshot(

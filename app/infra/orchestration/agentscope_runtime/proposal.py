@@ -105,8 +105,6 @@ class _Discovery:
 class WriteProposalExecutor(ToolExecutor):
     """Run one accepted write proposal on the turn task; stage a waiting result."""
 
-    capability_type = "workflow"
-
     def __init__(
         self,
         scope: ReadToolScope,

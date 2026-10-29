@@ -373,9 +373,6 @@ class ToolExecutor:
     its own task (own). Results go to the turn ledger; the runtime summarizes.
     """
 
-    # Capability type this executor runs; the write-proposal executor runs workflows.
-    capability_type: str = "query"
-
     def __init__(
         self,
         scope: ReadToolScope,
@@ -389,6 +386,8 @@ class ToolExecutor:
         self._deps = deps
         self._ledger = ledger
         self._binding = binding
+        # The type the registry must still report: query, or a read workflow.
+        self.capability_type = binding.capability_type
         self._name = name
         self._limits = limits
         self._allowed = frozenset(ledger.business_tools.values())

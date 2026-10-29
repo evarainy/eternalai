@@ -1,4 +1,4 @@
-import { customInstance } from '../../api/mutator';
+import { ApiError, customInstance, RUNTIME_SESSION_BUSY_CODE } from '../../api/mutator';
 import {
   isSafeBrowserId,
   parseBrowserRunProjection,
@@ -148,6 +148,14 @@ function jsonValue(value: unknown, depth = 0): unknown {
     result[key] = jsonValue(descriptor.value, depth + 1);
   }
   return result;
+}
+
+export const SESSION_BUSY_NOTICE = '上一条仍在处理，请稍后再发';
+
+/** The 409 for a send the server refused before any work because the session is busy. */
+export function isRuntimeSessionBusy(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409
+    && error.code === RUNTIME_SESSION_BUSY_CODE;
 }
 
 export function isClientConversationId(value: unknown): value is string {

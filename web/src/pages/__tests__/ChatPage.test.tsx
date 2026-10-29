@@ -1500,6 +1500,25 @@ describe('ChatPage HTTP failures', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the input and says the previous message is still being handled on a busy session', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response(
+        { detail: { code: 'runtime_session_busy' } },
+        { ok: false, status: 409, statusText: 'Conflict' },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    await sendMessage('请再查一下待办');
+
+    expect(await screen.findByText('上一条仍在处理，请稍后再发')).toBeInTheDocument();
+    expect(useAIDockStore.getState().draft).toBe('请再查一下待办');
+    expect(screen.getByLabelText('办理请求')).toHaveValue('请再查一下待办');
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('maps a network rejection to fixed safe text without exposing the error', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('RAW_NETWORK_DETAIL'));
     vi.stubGlobal('fetch', fetchMock);
