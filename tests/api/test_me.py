@@ -537,6 +537,7 @@ def test_openapi_declares_two_parameterless_reads() -> None:
         "avatar_path",
         "browser_owner_scope",
         "browser_skill_id",
+        "restore_scope",
     }
     assert model["properties"]["authenticated"]["const"] is True
     assert set(model["properties"]["org_status"]["enum"]) == {

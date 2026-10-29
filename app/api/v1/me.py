@@ -15,6 +15,7 @@ An OA outage therefore degrades the page, it does not log everybody out.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -98,6 +99,9 @@ class MeResponse(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
     browser_skill_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Opaque tenant + user + roles alias for the per-tab re-login snapshot; absent
+    # when not configured, in which case the browser keeps no snapshot.
+    restore_scope: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def make_router(
@@ -105,6 +109,7 @@ def make_router(
     require_principal: PrincipalDependency,
     *,
     browser_chat: BrowserChatPort | None = None,
+    restore_scope: Callable[[Principal], str] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -147,6 +152,7 @@ def make_router(
                 if cache_scope is not None else None
             ),
             browser_skill_id=browser_chat.skill_id if browser_chat is not None else None,
+            restore_scope=restore_scope(principal) if restore_scope is not None else None,
         )
 
     @router.get("/avatar", response_class=Response, responses=_AVATAR_RESPONSES)

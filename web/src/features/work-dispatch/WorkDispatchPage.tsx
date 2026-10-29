@@ -4,13 +4,14 @@ import { Button, Checkbox, Input, Radio, Select } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../../api/mutator';
+import { useReauthForm } from '../../app/reauthRestore';
 import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
 import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { readOptions, postDispatch, validReceipt, optionKey, targetOf, trimDispatchText } from './dispatchApi';
 import type { DispatchOption, DispatchOptionsResponse, DispatchRequest, OptionScope } from './dispatchApi';
 import { accessLost, dispatchFailure, logDispatchFailure } from './dispatchErrors';
 import { browserZone, localTime, timeChoices } from './dispatchTime';
-import { DISPATCH_KINDS, EMPTY_DRAFT, REMINDER_CHOICES, loadDraft, saveDraft, clearDraft } from './dispatchDraft';
+import { DISPATCH_KINDS, EMPTY_DRAFT, REMINDER_CHOICES, loadDraft, saveDraft, clearDraft, parseDraft } from './dispatchDraft';
 import type { DispatchDraft, DispatchKind } from './dispatchDraft';
 import AttachmentsPanel from './AttachmentsPanel';
 import type { AttachmentView } from './AttachmentsPanel';
@@ -81,6 +82,20 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
   const [chosenInstant, setChosenInstant] = useState(draft.dueInstant ?? '');
   const [legacyConfirmed, setLegacyConfirmed] = useState(false);
   const [timeConfirmed, setTimeConfirmed] = useState(!draft.dueAt || !!draft.dueInstant);
+  const [initialDraft] = useState(draft);
+  // Only the page-level new dispatch keeps unsaved text across a same-account re-login.
+  useReauthForm('work-dispatch', {
+    enabled: !series && initialRequest === undefined,
+    read: () => draft,
+    parse: parseDraft,
+    isPristine: () => JSON.stringify(draft) === JSON.stringify(initialDraft),
+    apply: (restored) => {
+      const next = restored.dueInstant ? { ...restored, dueAt: localTime(restored.dueInstant, zone) } : restored;
+      setDraft(next);
+      setChosenInstant(next.dueInstant ?? '');
+      setTimeConfirmed(!next.dueAt || !!next.dueInstant);
+    },
+  });
   const frozen = useRef<Submission | null>(null);
   const sending = useRef(false);
   const alive = useRef(true);

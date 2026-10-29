@@ -8,12 +8,16 @@ import type {
 import { useMutation } from '@tanstack/react-query';
 import Button from 'antd/es/button';
 import TextArea from 'antd/es/input/TextArea';
+import { ApiError } from '../api/mutator';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import { projectResponse } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
 import { useAIDockStore } from '../stores/aiDockStore';
+import { useAuthStore } from '../stores/authStore';
+import { returnUnsentMessage } from './reauthRestore';
+import type { UnsentIdentity } from './reauthRestore';
 import styles from './AIDock.module.css';
 
 /** 键盘移动浮动面板的步长；提供给不能使用鼠标拖动的用户。 */
@@ -91,13 +95,12 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const [dragging, setDragging] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async ({ message, identity }: { message: string; identity: UnsentIdentity }) => {
       try {
-        const sessionId = useAIDockStore.getState().ensureSession();
         return projectResponse(
           await handleApiV1RuntimeHandlePost({
             channel: 'web',
-            session_id: sessionId,
+            session_id: identity.sessionId,
             message,
             client_capabilities: {},
           }),
@@ -111,6 +114,10 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       }
     },
     onSuccess: (response) => appendTranscript(response),
+    // Authentication runs before the handler, so a 401 means the message was never processed.
+    onError: (error, { message, identity }) => {
+      if (error instanceof ApiError && error.status === 401) returnUnsentMessage(identity, message);
+    },
     onSettled: () => {
       requestInFlight.current = false;
     },
@@ -152,9 +159,14 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       return;
     }
     requestInFlight.current = true;
-    appendTranscript({ role: 'user', text: message });
+    const identity: UnsentIdentity = {
+      generation: useAuthStore.getState().generation,
+      sessionId: useAIDockStore.getState().ensureSession(),
+      requestId: crypto.randomUUID(),
+    };
+    appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
     setDraft('');
-    mutation.mutate(message);
+    mutation.mutate({ message, identity });
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {

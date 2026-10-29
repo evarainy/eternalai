@@ -210,6 +210,7 @@ class ProductionComponents:
     session_revocations: SessionRevocationStorePort
     session_binder: PrincipalSessionBinder
     session_cookie_ttl_seconds: int
+    principal_role_reader: PrincipalRoleReader
     health_timeout_seconds: float
     health_checks: Mapping[str, HealthCheck]
     user_profile: UserProfilePort
@@ -285,10 +286,18 @@ def build_session_token_port(
     signing_key: bytes,
     ttl_seconds: int,
     tenant_id: str,
+    absolute_ttl_seconds: int | None = None,
+    renew_min_interval_seconds: int = 300,
 ) -> SessionTokenPort:
     """Build the EternalAI session-token signer with an explicit key."""
 
-    return HMACSessionToken(signing_key=signing_key, ttl_seconds=ttl_seconds, tenant_id=tenant_id)
+    return HMACSessionToken(
+        signing_key=signing_key,
+        ttl_seconds=ttl_seconds,
+        tenant_id=tenant_id,
+        absolute_ttl_seconds=absolute_ttl_seconds,
+        renew_min_interval_seconds=renew_min_interval_seconds,
+    )
 
 
 def build_session_binder(
@@ -811,12 +820,13 @@ def build_production_components(
         if identity_mapping is None
         else identity_mapping
     )
+    principal_role_reader = build_principal_role_reader(session_factory=session_factory)
     resolved_authentication = (
         build_authentication_port(
             oa_base_url=settings.oa_base_url,
             oa_timeout_seconds=settings.oa_timeout_seconds,
             credential_store=credential_store,
-            role_reader=build_principal_role_reader(session_factory=session_factory),
+            role_reader=principal_role_reader,
             identity_hmac_key=settings.identity_hmac_key,
             credential_ttl_seconds=settings.oa_credential_ttl_seconds,
             tenant_id=settings.source_tenant_id,
@@ -1169,6 +1179,8 @@ def build_production_components(
         signing_key=settings.session_signing_key,
         ttl_seconds=settings.session_cookie_ttl_seconds,
         tenant_id=settings.source_tenant_id,
+        absolute_ttl_seconds=settings.session_absolute_ttl_seconds,
+        renew_min_interval_seconds=settings.session_renew_min_interval_seconds,
     )
     session_binder = build_session_binder(binding_key=settings.session_binding_key)
     admin_registry_service = build_admin_registry_service(
@@ -1395,6 +1407,7 @@ def build_production_components(
         session_revocations=session_revocations,
         session_binder=session_binder,
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
+        principal_role_reader=principal_role_reader,
         health_timeout_seconds=settings.health_timeout_seconds,
         health_checks=resolved_health_checks,
         organization_directory_scheduler=directory_scheduler,

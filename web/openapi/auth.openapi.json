@@ -27,6 +27,87 @@
         },
         "title": "LogoutResponse",
         "type": "object"
+      },
+      "RenewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "legacy",
+                  "throttled",
+                  "capped",
+                  "principal_changed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "renewed",
+              "unchanged",
+              "ended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RenewResponse",
+        "type": "object"
+      },
+      "SessionStatusResponse": {
+        "additionalProperties": false,
+        "description": "Deadlines of the presented ticket; ``absolute_expires_at`` null means no cap.",
+        "properties": {
+          "absolute_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absolute Expires At"
+          },
+          "idle_expires_at": {
+            "format": "date-time",
+            "title": "Idle Expires At",
+            "type": "string"
+          },
+          "server_time": {
+            "format": "date-time",
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idle_expires_at",
+          "absolute_expires_at",
+          "server_time"
+        ],
+        "title": "SessionStatusResponse",
+        "type": "object"
       }
     }
   },
@@ -107,6 +188,57 @@
           }
         },
         "summary": "Logout"
+      }
+    },
+    "/api/v1/auth/renew": {
+      "post": {
+        "operationId": "renew_api_v1_auth_renew_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "CSRF validation failed"
+          },
+          "503": {
+            "description": "Renewal is temporarily unavailable"
+          }
+        },
+        "summary": "Renew"
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "operationId": "session_api_v1_auth_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "503": {
+            "description": "Authentication is temporarily unavailable"
+          }
+        },
+        "summary": "Session"
       }
     }
   }

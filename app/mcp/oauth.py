@@ -382,7 +382,13 @@ class OAuthConnections:
         ):
             raise McpFailure("mcp_token_invalid")
         token_ttl_at = datetime.now(UTC) + timedelta(seconds=expires)
-        token_expires_at = min(session.expires_at, token_ttl_at)
+        # Bounded by the login instance (stable across renewal), not this ticket copy.
+        instance_expires_at = session.instance_expires_at
+        token_expires_at = (
+            token_ttl_at
+            if instance_expires_at is None
+            else min(instance_expires_at, token_ttl_at)
+        )
         record_mcp_event(
             "token_exchange",
             "success",
@@ -390,7 +396,7 @@ class OAuthConnections:
             connection_id=transaction.owner.connection_id,
             outbound_count=1,
             remaining_s=remaining_seconds(token_expires_at),
-            reason="session_cap" if session.expires_at < token_ttl_at else "token_ttl",
+            reason="session_cap" if token_expires_at < token_ttl_at else "token_ttl",
         )
         evidence = None
         if self.identity_policy.approved:

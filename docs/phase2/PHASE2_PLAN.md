@@ -659,6 +659,16 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | M5 / 切换前残余债的接受范围待雨爷决定 | M1A 开发集三项门槛未达与留出集未运行、目标机 Docker 离线验收、真实写入验收三类残余，须在 M5 最终候选验收前由雨爷决定补齐或明确接受的范围；15 题真实验收与 26 题 Golden 均不能核销评测债，M5 不得宣称评测全通过 | 雨爷决定；外部 vLLM 升级、目标机与部署授权 | `P2-RUNTIME-AGENTSCOPE-M5-001` | 三类残余逐项补齐，或经雨爷明确裁决接受并记录范围 | 本节「真实写入验收未做」、M1「M1A 离线评测门槛未达」「M1A 留出集验收未运行」、M0「目标环境离线安装与同路径运行」；`ORDER_REVIEW_astra.md` |
 | 浏览器 / Jev 线后继未登记 | 当前候选、包、接缝与验收映射都未核对，SSOT 中没有 Jev 后继登记；不能把旧浏览器独立候选等同 Jev，也不自动并入 M3 | 无 | 待 GOV-SYNC 分配 | 核对当前候选、包、接缝与验收映射后分配 task_id，或裁决并入 M3 | `app/infra/browser/openrouter_jev.py::open_openrouter_jev`；`scripts/run_browser_synthetic_jev_launcher.py`；`ORDER_REVIEW_astra.md` |
 
+### 使用中会话续期 R-APP 新增欠债（2026-10-28）
+
+`P2-AUTH-RENEWAL-APP-001` 合并时登记；方案为仓库外 `RAPP_PLAN_v1.3.md`，验证与评审证据留 PR #241。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| R-APP 欠债 1：真实环境验收未实测 | 方案 §7.2 的 V1–V8（连续使用跨 idle 边界、空闲约 2 小时失效与 A1 恢复、服务端已过期时发送的回填、跨标签登出、换账号不恢复、整页刷新、跨边界确认卡、O1/N1 对话文案、B 组表单）均未在真实环境执行；现场 `SESSION_COOKIE_TTL_S` 是否为 7200、浏览器是否支持 `navigator.locks` 也未核对。只有定向单测与静态评审证据。V3 的回填只验 AI 助手或未启用浏览器的 `/chat`（启用时见欠债 3）；V6 出卡前须已出现一次 `auth_session_renewed`，否则卡期仍按旧 idle 截止封顶 | 无（R-APP 已合并） | 待雨爷验收（无新 task_id） | V1–V8 逐项通过并取得脱敏日志与截图；取不到的项保持未实测并说明缺项 | 仓库外 `RAPP_PLAN_v1.3.md` §7.2；PR #241 验证结果 |
+| R-APP 欠债 2：O1/N1 措辞与方案原文不一致 | 方案 §4 的 O1/N1 原文缺少 Golden 冻结的关键词（GT-015、GT-021），按原文实现会使 Golden 失败；现措辞保留冻结关键词，语义一致但字面不同。恢复原文须修改 Golden fixture，属人工批准项 | 雨爷裁决 | 待分配（仅当批准修改 Golden fixture） | 雨爷裁决接受现措辞，或批准修改 Golden fixture 后恢复原文并通过 Golden gate | `app/infra/orchestration/agent_adapter.py`；PR #241 设计偏差说明 |
+| R-APP 欠债 3：浏览器垂直启用时 `/chat` 的 401 不回填输入 | 只要 `/me` 返回浏览器能力（`browserAvailable`），`/chat` 的每次提交都带 `owner`，不论是否勾选浏览器；该路径在准入写入请求行后仍可能因会话复核返回 401（`app/browser_skill/submission.py::_recheck`），回填会诱发重复办理，故只保留对话回显、不退回输入框。重新登录后该回显没有回复、没有重试入口（重试状态不进快照），也没有送达状态提示。AI 助手与未启用浏览器的 `/chat` 照常回填。后续项：恢复时给末尾无回复的回显加“未确认是否送达”提示（本棒不做） | 无 | 待分配 | 证明该路径所有 401 都发生在任何持久写入之前后接入回填，并补“未确认是否送达”提示；或裁决接受现状 | `web/src/pages/ChatPage.tsx` 提交 catch 分支；`RAPP_PLAN_v1.3.md` R7 |
+
 ## 6. P2 不做什么
 
 

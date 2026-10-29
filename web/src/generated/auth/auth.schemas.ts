@@ -13,6 +13,37 @@ export const LogoutResponseValue = {
 } as const;
 export type LogoutResponse = typeof LogoutResponseValue;
 
+export type RenewResponseReason = 'legacy' | 'throttled' | 'capped' | 'principal_changed' | null;
+
+export type RenewResponseSession = SessionStatusResponse | null;
+
+export type RenewResponseStatus = typeof RenewResponseStatus[keyof typeof RenewResponseStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const RenewResponseStatus = {
+  renewed: 'renewed',
+  unchanged: 'unchanged',
+  ended: 'ended',
+} as const;
+
+export interface RenewResponse {
+  reason?: RenewResponseReason;
+  session?: RenewResponseSession;
+  status: RenewResponseStatus;
+}
+
+export type SessionStatusResponseAbsoluteExpiresAt = string | null;
+
+/**
+ * Deadlines of the presented ticket; ``absolute_expires_at`` null means no cap.
+ */
+export interface SessionStatusResponse {
+  absolute_expires_at: SessionStatusResponseAbsoluteExpiresAt;
+  idle_expires_at: string;
+  server_time: string;
+}
+
 /**
  * One-shot OA login credential accepted only by the authentication adapter.
  */

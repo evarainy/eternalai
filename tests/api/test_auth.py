@@ -976,3 +976,161 @@ def test_roles_are_tenant_scoped(dispatch_db):
             ) == {"synthetic-TA", "synthetic-TB"}
 
     run(exercise())
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = float(int(datetime.now(UTC).timestamp()))
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def renewal_client(*, roles: tuple[str, ...] = ("admin",)):
+    clock = _Clock()
+    tokens = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default", clock=clock
+    )
+    current_roles = list(roles)
+
+    async def list_roles(ai_user_id: str, *, tenant_id: str) -> tuple[str, ...]:
+        assert (ai_user_id, tenant_id) == ("usr_v1_renewal", "default")
+        return tuple(current_roles)
+
+    store = MemorySessionRevocations()
+    client = TestClient(
+        create_app(
+            authentication=SuccessfulAuthentication(_principal("renewal", roles=roles)),
+            session_tokens=tokens,
+            session_revocations=store,
+            user_profile=StubUserProfile(),
+            session_cookie_ttl_seconds=3600,
+            session_role_lister=list_roles,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
+    )
+    return client, tokens, store, clock, current_roles
+
+
+def login(client):
+    return client.post(
+        "/api/v1/auth/login",
+        headers=TEST_CSRF_HEADERS,
+        json={"loginid": "1" * 17 + "X", "userpassword": "synthetic-" + "password"},
+    )
+
+
+def test_renew_requires_csrf_before_authentication() -> None:
+    client, tokens, _store, clock, _roles = renewal_client()
+    assert login(client).status_code == 200
+    ticket = client.cookies["eternalai_session"]
+    clock.now += 600
+
+    for headers in ({}, {"Origin": "https://evil.example", "X-EternalAI-CSRF": "1"}):
+        response = client.post("/api/v1/auth/renew", headers=headers)
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "csrf_validation_failed"
+        assert response.headers["cache-control"] == "no-store"
+        assert "set-cookie" not in response.headers
+    assert client.cookies["eternalai_session"] == ticket
+    assert tokens.renew(ticket) != "throttled"
+    client.cookies.clear()
+    assert client.post("/api/v1/auth/renew").status_code == 403
+
+
+def test_renew_extends_one_instance_across_its_first_idle_deadline() -> None:
+    client, tokens, _store, clock, _roles = renewal_client()
+    assert login(client).status_code == 200
+    first = tokens.inspect(client.cookies["eternalai_session"])
+
+    assert client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS).json()["reason"] == (
+        "throttled"
+    )
+    clock.now += 3000
+    response = client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "renewed"
+    assert body["session"]["absolute_expires_at"] is None
+    assert response.headers["cache-control"] == "no-store"
+    renewed = tokens.inspect(client.cookies["eternalai_session"])
+    assert renewed.fingerprint == first.fingerprint
+    assert renewed.expires_at > first.expires_at
+
+    clock.now += 1000  # past the first ticket's idle deadline
+    assert client.get("/api/v1/me").status_code == 200
+    status = client.get("/api/v1/auth/session")
+    assert status.status_code == 200
+    assert "set-cookie" not in status.headers
+    assert datetime.fromisoformat(status.json()["idle_expires_at"]) == renewed.expires_at
+
+
+def test_idle_expired_v3_is_rejected_by_authentication_and_renew() -> None:
+    client, _tokens, _store, clock, _roles = renewal_client()
+    assert login(client).status_code == 200
+    clock.now += 3600
+
+    assert_auth_denied(client.get("/api/v1/me"))
+    assert_auth_denied(client.get("/api/v1/auth/session"))
+    renew = client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS)
+    assert_auth_denied(renew)
+    assert "set-cookie" not in renew.headers
+
+
+@pytest.mark.parametrize("route", ["login", "logout"])
+def test_expired_v3_instance_is_revoked_by_login_and_logout(route: str) -> None:
+    client, tokens, store, clock, _roles = renewal_client()
+    assert login(client).status_code == 200
+    expired_copy = client.cookies["eternalai_session"]
+    clock.now += 600
+    renewed = client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS)
+    assert renewed.json()["status"] == "renewed"
+    live_copy = client.cookies["eternalai_session"]
+    clock.now = tokens.inspect(expired_copy).expires_at.timestamp() + 1
+    set_ticket(client, expired_copy)
+
+    response = login(client) if route == "login" else client.post(
+        "/api/v1/auth/logout", headers=TEST_CSRF_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert tokens.inspect(live_copy).fingerprint in store.revoked
+    for ticket in (expired_copy, live_copy):
+        set_ticket(client, ticket)
+        assert_auth_denied(client.get("/api/v1/me"))
+        assert_auth_denied(client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS))
+
+
+def test_login_revokes_prior_instance_before_issuing_a_new_one() -> None:
+    client, tokens, store, _clock, _roles = renewal_client()
+    assert login(client).status_code == 200
+    prior = client.cookies["eternalai_session"]
+
+    assert login(client).status_code == 200
+
+    current = client.cookies["eternalai_session"]
+    assert store.revoked == {tokens.inspect(prior).fingerprint}
+    assert tokens.inspect(current).fingerprint not in store.revoked
+    assert client.get("/api/v1/me").status_code == 200
+    set_ticket(client, prior)
+    assert_auth_denied(client.get("/api/v1/me"))
+
+
+def test_role_change_ends_the_whole_instance_on_next_renew() -> None:
+    client, tokens, store, clock, roles = renewal_client()
+    assert login(client).status_code == 200
+    ticket = client.cookies["eternalai_session"]
+    roles.append("auditor")
+    clock.now += 600
+
+    response = client.post("/api/v1/auth/renew", headers=TEST_CSRF_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ended", "reason": "principal_changed", "session": None}
+    assert "eternalai_session=" in response.headers["set-cookie"]
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert store.revoked == {tokens.inspect(ticket).fingerprint}
+    set_ticket(client, ticket)
+    assert_auth_denied(client.get("/api/v1/me"))

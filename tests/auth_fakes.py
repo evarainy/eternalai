@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.ports.auth import (
@@ -49,6 +50,13 @@ class StaticSessionTokens:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
             version=2,
         )
+
+    def inspect_for_revocation(self, token: str) -> VerifiedSessionToken | None:
+        return self.inspect(token)
+
+    def renew(self, token: str) -> Literal["legacy"]:
+        self.verify(token)
+        return "legacy"
 
 
 class MemorySessionRevocations:

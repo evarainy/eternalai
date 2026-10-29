@@ -275,7 +275,8 @@ class AgentScopeRuntime:
             session_id=session_id,
         )
         # Busy check before any task or event exists.
-        state = self._sessions.acquire(key, expires_at=context.expires_at)
+        # Cache bound to the login instance; each turn is still gated by _verified_session.
+        state = self._sessions.acquire(key, expires_at=context.instance_expires_at)
         turn_id, turn_token = bind_turn_id()
         try:
             turn = _Turn(

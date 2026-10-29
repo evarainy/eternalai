@@ -48,6 +48,8 @@ export const MeResponseOrgStatus = {
   unparsable: 'unparsable',
 } as const;
 
+export type MeResponseRestoreScope = string | null;
+
 /**
  * A 200 always means authenticated; ``org`` may still be absent.
  */
@@ -59,4 +61,5 @@ export interface MeResponse {
   display_name: string;
   org?: MeResponseOrg;
   org_status: MeResponseOrgStatus;
+  restore_scope?: MeResponseRestoreScope;
 }

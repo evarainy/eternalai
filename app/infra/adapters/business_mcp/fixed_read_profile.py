@@ -797,7 +797,8 @@ class FixedReadLocalOwner:
     tenant_id: str
     user_id: str
     fingerprint: bytes = dataclass_field(repr=False)
-    expires_at: datetime
+    # Held across requests, so the login-instance deadline; None means none.
+    expires_at: datetime | None
 
     @classmethod
     def from_session(cls, session: AuthenticatedSessionContext) -> FixedReadLocalOwner:
@@ -807,7 +808,7 @@ class FixedReadLocalOwner:
             tenant_id=session.principal.org_ctx.tenant_id,
             user_id=session.principal.ai_user_id,
             fingerprint=session.fingerprint,
-            expires_at=session.expires_at,
+            expires_at=session.instance_expires_at,
         )
 
 
@@ -1131,7 +1132,7 @@ class FixedReadProfile(IdentityAssertionPort):
             and owner.user_id == user_id == session.principal.ai_user_id
             and session.principal.org_ctx.tenant_id == tenant_id
             and owner.fingerprint == session.fingerprint
-            and owner.expires_at > now
+            and (owner.expires_at is None or owner.expires_at > now)
             and session.expires_at > now
         )
 
@@ -1183,7 +1184,7 @@ class FixedReadProfile(IdentityAssertionPort):
                 reason = "mcp_candidate_owner_scope_mismatch"
             elif owner.fingerprint != session.fingerprint:
                 reason = "mcp_candidate_session_mismatch"
-            elif owner.expires_at <= now:
+            elif owner.expires_at is not None and owner.expires_at <= now:
                 reason = "mcp_candidate_owner_expired"
             elif session.expires_at <= now:
                 reason = "mcp_candidate_session_expired"

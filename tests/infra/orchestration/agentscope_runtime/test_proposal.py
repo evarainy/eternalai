@@ -610,3 +610,32 @@ def test_next_turn_drops_activated_write_groups_and_keeps_read_groups() -> None:
     assert WRITE_GROUP_INSTRUCTIONS not in messages
     _, entry = harness.state()
     assert entry.state.tool_context.activated_groups == [READ_GROUP]
+
+
+@pytest.mark.parametrize("renewable", [True, False])
+def test_agent_state_follows_login_instance_across_first_ticket_deadline(renewable: bool) -> None:
+    async def exercise() -> tuple[bool, int]:
+        harness = Harness([_text("第一轮"), _text("第二轮")])
+        first_deadline = datetime.now(UTC) + timedelta(seconds=3600)
+        harness.login()
+        authenticated_session.set(
+            replace(authenticated_session.get(), expires_at=first_deadline, renewable=renewable)
+        )
+        await harness.send("你好")
+        _, first = harness.state()
+        turns = len(first.state.context)
+        # A renewed copy of the same instance arrives after the first copy's deadline.
+        harness.sessions._utc_clock = lambda: first_deadline + timedelta(seconds=1)
+        authenticated_session.set(
+            replace(
+                authenticated_session.get(),
+                expires_at=first_deadline + timedelta(seconds=3600),
+            )
+        )
+        await harness.send("接着说")
+        _, second = harness.state()
+        return second.state is first.state, turns
+
+    same, turns = asyncio.run(exercise())
+    assert turns > 0
+    assert same is renewable

@@ -456,6 +456,8 @@ class AgentOrchestrationAdapter:
                     if execution.error_code in {"identity_expired", "identity_revoked"}
                     else "需要连接业务账号，请到 Apps 完成授权"
                 )
+            elif target_system == "oa" and execution.error_code == "identity_expired":
+                identity_message = _OA_IDENTITY_EXPIRED_MESSAGE
             return self._response_builder.build_operator_handback_bind_required(
                 context.response_id,
                 context.task_id,
@@ -466,12 +468,17 @@ class AgentOrchestrationAdapter:
                 target_system,
                 reason_code=execution.error_code or "identity_unbound",
             )
+        oa_unreachable = (
+            _OA_UNREACHABLE_MESSAGES.get(execution.error_code or "")
+            if target_system == "oa"
+            else None
+        )
         if execution.status == "timeout":
             return self._response_builder.build_failed(
                 context.response_id,
                 context.task_id,
                 context.session_id,
-                "操作超时，请重试",
+                oa_unreachable or "操作超时，请重试",
                 "Gateway timeout.",
                 execution.trace_id or context.trace_id,
             )
@@ -480,7 +487,7 @@ class AgentOrchestrationAdapter:
                 context.response_id,
                 context.task_id,
                 context.session_id,
-                "操作失败",
+                oa_unreachable or "操作失败",
                 "Operation failed.",
                 execution.trace_id or context.trace_id,
             )
@@ -613,6 +620,17 @@ def _mcp_recovery_reference(
     ):
         return None
     return {"operation_id": operation_id, "state": state}
+
+
+# O1 / N1. Golden GT-015 / GT-021 freeze "过期", "重新绑定" and "超时" in this copy.
+_OA_IDENTITY_EXPIRED_MESSAGE = (
+    "OA 登录已过期，自动重新登录未成功。"
+    "请到“账号绑定”重新认证 OA 密码或重新绑定，或退出本系统后重新登录。"
+)
+_OA_UNREACHABLE_MESSAGES = {
+    "adapter_timeout": "连接 OA 超时，请稍后再试；您的登录状态没有变化。",
+    "adapter_http_500": "暂时无法连接 OA，请稍后再试；您的登录状态没有变化。",
+}
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:

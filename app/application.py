@@ -12,6 +12,7 @@ from app.admin.leader_roster import AdminLeaderRosterService
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
 from app.api.v1.auth import (
+    PrincipalRoleLister,
     make_require_principal,
 )
 from app.api.v1.auth import (
@@ -86,6 +87,8 @@ def create_app(
     session_binder: Callable[[Principal, str], str] | None = None,
     session_cookie_ttl_seconds: int | None = None,
     session_cookie_secure: bool = True,
+    session_role_lister: PrincipalRoleLister | None = None,
+    session_restore_scope: Callable[[Principal], str] | None = None,
     csrf_allowed_origins: frozenset[str] = _EMPTY_CSRF_ALLOWED_ORIGINS,
     health_checks: dict[str, HealthCheck] | None = None,
     health_timeout_seconds: float = 5.0,
@@ -212,6 +215,7 @@ def create_app(
             session_revocations=session_revocations,
             session_cookie_ttl_seconds=session_cookie_ttl_seconds,
             session_cookie_secure=session_cookie_secure,
+            role_lister=session_role_lister,
         ),
         prefix="/api/v1/auth",
     )
@@ -258,6 +262,7 @@ def create_app(
             user_profile,
             csrf_protected_principal,
             browser_chat=browser_chat,
+            restore_scope=session_restore_scope,
         ),
         prefix="/api/v1/me",
     )
@@ -313,6 +318,13 @@ def create_production_app(
         raise RuntimeError("browser_vertical_enablement_required")
     if browser_vertical is not None and browser_installation is not None:
         raise RuntimeError("browser_vertical_installation_ambiguous")
+    absolute_ttl = resolved_settings.session_absolute_ttl_seconds
+    logging.getLogger("uvicorn.error.auth_session").info(
+        "auth_session_config idle_ttl_s=%s absolute_ttl_s=%s renew_min_interval_s=%s",
+        resolved_settings.session_cookie_ttl_seconds,
+        "off" if absolute_ttl is None else absolute_ttl,
+        resolved_settings.session_renew_min_interval_seconds,
+    )
     if not resolved_settings.session_cookie_secure:
         logging.getLogger(__name__).warning(
             "session_cookie_secure_disabled key=%s",
@@ -452,6 +464,8 @@ def create_production_app(
         session_binder=components.session_binder.bind,
         session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
         session_cookie_secure=resolved_settings.session_cookie_secure,
+        session_role_lister=components.principal_role_reader.list_roles,
+        session_restore_scope=components.session_binder.restore_scope,
         csrf_allowed_origins=resolved_settings.csrf_allowed_origins,
         health_checks=dict(components.health_checks),
         health_timeout_seconds=components.health_timeout_seconds,

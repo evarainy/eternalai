@@ -12,10 +12,23 @@ export type AIDockMode = 'closed' | 'drawer' | 'pinned';
 type OpenAIDockMode = Exclude<AIDockMode, 'closed'>;
 type AIDockSessionContextMode = 'general' | 'page';
 
+/** A conversation brought back by a same-account re-login (see app/reauthRestore.ts). */
+export interface RestoredDockSession {
+  draft: string;
+  sessionId: string | null;
+  sessionContextMode: AIDockSessionContextMode;
+  transcript: TranscriptEntry[];
+  confirmationResults: Record<string, UserActionOutcome>;
+  /** The page context the conversation was bound to when it was captured. */
+  pageContext: PageContextDeclaration | null;
+}
+
 export type TranscriptEntry =
   | {
       role: 'user';
       text: string;
+      /** Local-only submission id, so a 401 can withdraw exactly this echo. */
+      requestId?: string;
     }
   | ProjectedResponse;
 
@@ -25,6 +38,8 @@ interface AIDockState {
   lastOpenMode: OpenAIDockMode;
   mode: AIDockMode;
   pageContextDeclaration: PageContextDeclaration | null;
+  /** Context of a restored conversation, held until the page declares its own context again. */
+  restoredPageContext: PageContextDeclaration | null;
   sessionContextMode: AIDockSessionContextMode;
   sessionId: string | null;
   transcript: TranscriptEntry[];
@@ -38,6 +53,7 @@ interface AIDockState {
   ensureSession: () => string;
   openDock: () => void;
   registerPageContext: (candidate: unknown) => void;
+  restoreSession: (restored: RestoredDockSession) => void;
   setDraft: (draft: string) => void;
   setMode: (mode: AIDockMode) => void;
   startNewSession: () => void;
@@ -83,6 +99,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   lastOpenMode: 'drawer',
   mode: 'closed',
   pageContextDeclaration: null,
+  restoredPageContext: null,
   sessionContextMode: 'page',
   sessionId: null,
   transcript: [],
@@ -111,6 +128,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       mode: 'closed',
       contextNotice: null,
       pageContextDeclaration: null,
+      restoredPageContext: null,
       sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
@@ -119,6 +137,11 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   clearPageContext: (expectedSurfaceId) =>
     set((state) => {
       const current = state.pageContextDeclaration;
+      if (current === null && state.restoredPageContext !== null && (expectedSurfaceId === undefined
+          || state.restoredPageContext.surface_id === expectedSurfaceId)) {
+        // Left before the page declared again: the restored binding no longer applies.
+        return { restoredPageContext: null };
+      }
       if (current === null) {
         return expectedSurfaceId === undefined && state.sessionContextMode === 'general'
           ? { sessionContextMode: 'page' }
@@ -167,7 +190,9 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         state.sessionContextMode === 'general'
           ? createGeneralPageContext(parsed)
           : parsed;
-      const previous = state.pageContextDeclaration;
+      // A restored conversation is checked against the context it was captured under, with the
+      // same isolation rules as a live one; only an unchanged context keeps it.
+      const previous = state.pageContextDeclaration ?? state.restoredPageContext;
       if (previous === null) {
         if (
           state.sessionId !== null ||
@@ -190,6 +215,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           contextNotice: '权限或数据范围已切换；已默认开始新的临时对话。',
           draft: '',
           pageContextDeclaration: next,
+          restoredPageContext: null,
           sessionId: null,
           transcript: [],
           confirmationResults: {},
@@ -200,14 +226,35 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           contextNotice: '页面对象或筛选已切换；已默认开始新的临时对话。',
           draft: '',
           pageContextDeclaration: next,
+          restoredPageContext: null,
           sessionId: null,
           transcript: [],
           confirmationResults: {},
         };
       }
-      return { pageContextDeclaration: next };
+      return { pageContextDeclaration: next, restoredPageContext: null };
     });
   },
+  restoreSession: (restored) =>
+    set((state) => {
+      const draft = state.draft.length === 0 ? { draft: restored.draft } : {};
+      if (state.sessionId !== null) return draft;
+      const current = state.pageContextDeclaration;
+      if (current !== null && (restored.pageContext === null
+          || authorityScopeChanged(restored.pageContext, current)
+          || pageBindingChanged(restored.pageContext, current))) {
+        // The page already declared a different context: same outcome as a live context switch.
+        return { contextNotice: '页面上下文已重新建立；已默认开始新的临时对话。' };
+      }
+      return {
+        ...draft,
+        sessionId: restored.sessionId,
+        sessionContextMode: restored.sessionContextMode,
+        transcript: restored.transcript,
+        confirmationResults: restored.confirmationResults,
+        restoredPageContext: current === null ? restored.pageContext : null,
+      };
+    }),
   setDraft: (draft) => set({ draft }),
   setMode: (mode) =>
     set((state) => ({
@@ -222,6 +269,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         state.pageContextDeclaration === null
           ? null
           : createGeneralPageContext(state.pageContextDeclaration),
+      restoredPageContext: null,
       sessionContextMode: 'general',
       sessionId: newSessionId(),
       transcript: [],

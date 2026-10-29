@@ -3,6 +3,8 @@ import { Alert, Button, Form, Input } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/mutator';
+import { peekReauthPath, reauthLoginNotice } from '../app/reauthRestore';
+import { withAuthCookieLock } from '../app/sessionKeepalive';
 import { loginApiV1AuthLoginPost } from '../generated/auth/auth';
 import type { LoginApiV1AuthLoginPostBody } from '../generated/auth/auth.schemas';
 import { Icon } from '../shared/ui/Icon';
@@ -17,6 +19,7 @@ export default function LoginPage() {
   const [form] = Form.useForm<LoginApiV1AuthLoginPostBody>();
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
+  const [sessionNotice] = useState(reauthLoginNotice);
   const markAuthenticated = useAuthStore((state) => state.markAuthenticated);
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -27,14 +30,16 @@ export default function LoginPage() {
     setSubmitting(true);
     setErrorMessage(undefined);
     try {
-      const response = await loginApiV1AuthLoginPost(credential);
+      const response = await withAuthCookieLock(() => loginApiV1AuthLoginPost(credential));
       if (response.authenticated !== true) {
         setErrorMessage(LOGIN_FAILED_MESSAGE);
         return;
       }
+      // History state survives a reload of this page; the sealed copy's route is the fallback.
+      const returnPath = getReturnPath(location.state ?? { from: peekReauthPath() });
       queryClient.clear();
       markAuthenticated();
-      navigate(getReturnPath(location.state), { replace: true });
+      navigate(returnPath, { replace: true });
     } catch (error) {
       setErrorMessage(
         error instanceof ApiError && error.status === 401
@@ -62,6 +67,9 @@ export default function LoginPage() {
         <h1 className={styles.welcome}>欢迎回来</h1>
         <p className={styles.subtitle}>OA 里要你办的事，都在这儿。</p>
 
+        {sessionNotice !== null && !errorMessage ? (
+          <Alert className={styles.alert} title={sessionNotice} type="warning" showIcon />
+        ) : null}
         {errorMessage ? (
           <Alert className={styles.alert} title={errorMessage} type="error" showIcon />
         ) : null}

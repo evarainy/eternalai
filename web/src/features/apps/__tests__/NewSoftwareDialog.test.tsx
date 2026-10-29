@@ -6,6 +6,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { identityQueryKey } from '../../../app/identity';
+import { REAUTH_STORAGE_KEY, discardReauthSnapshot, useReauthRestore } from '../../../app/reauthRestore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewSoftwareDialog } from '../NewSoftwareDialog';
 import {
@@ -396,4 +399,36 @@ it('refuses_to_save_a_nameless_draft_and_preserves_the_prior_snapshot', () => {
   typeInto(screen.getByLabelText('叫什么名字'), 'valid');
   fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
   expect(loadNewSoftwareDraft(token()).name).toBe('valid');
+});
+
+it('bfcache_return_hands_back_the_unsaved_form_of_the_same_verified_session', () => {
+  const generation = useAuthStore.getState().generation;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  client.setQueryData(identityQueryKey(generation), {
+    authenticated: true, display_name: 'Synthetic form owner', org: null,
+    org_status: 'unavailable', avatar_path: null, restore_scope: 'scope-form',
+  });
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(() => {}));
+  function Restore() {
+    useReauthRestore();
+    return null;
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <Restore />
+      <NewSoftwareDialog open onClose={() => {}} />
+    </QueryClientProvider>,
+  );
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'unsaved-A' } });
+
+  // Back/forward cache: pagehide resets the form, pageshow returns the same live session.
+  act(() => { window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })); });
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('');
+  act(() => { window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); });
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('unsaved-A');
+  expect(window.sessionStorage.getItem(REAUTH_STORAGE_KEY)).toBeNull();
+  // Nothing was saved to the slot on the way.
+  expect(loadNewSoftwareDraft(token()).name).toBe('');
+  discardReauthSnapshot('logged_out');
+  client.clear();
 });

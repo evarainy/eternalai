@@ -104,6 +104,8 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
     settings = SimpleNamespace(
         browser=SimpleNamespace(enabled=True), session_cookie_secure=True,
         csrf_allowed_origins=frozenset(), runtime_engine="legacy",
+        session_cookie_ttl_seconds=60, session_absolute_ttl_seconds=None,
+        session_renew_min_interval_seconds=30,
     )
     values = {
         "runtime": None, "admin_registry_service": None, "work_object_service": None,
@@ -111,7 +113,10 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
         "work_object_series_service": None, "work_object_series_scheduler": None,
         "credential_binding_service": None, "user_profile": None, "authentication": None,
         "session_tokens": None, "session_revocations": None,
-        "session_binder": SimpleNamespace(bind=lambda _principal, session: session),
+        "session_binder": SimpleNamespace(
+            bind=lambda _principal, session: session, restore_scope=lambda _principal: "scope"
+        ),
+        "principal_role_reader": SimpleNamespace(list_roles=lambda *_args, **_kwargs: None),
         "session_cookie_ttl_seconds": 60, "health_checks": {}, "health_timeout_seconds": 5,
         "credential_polling_scheduler": None, "organization_directory_scheduler": None,
         "diagnostic_checks": {}, "validate_workflows": None, "mcp_service": None,

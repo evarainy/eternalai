@@ -100,6 +100,16 @@ def legacy_ticket(principal: Principal, now: int) -> str:
     )
 
 
+def v2_claims(principal: Principal, now: int) -> dict:
+    return {
+        "v": 2,
+        "principal": principal.model_dump(mode="json"),
+        "iat": now,
+        "exp": now + 60,
+        "nonce": encode(bytes(range(32))),
+    }
+
+
 def encoding_alias(token: str) -> str:
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
     alias = token[:-1] + alphabet[alphabet.index(token[-1]) ^ 1]
@@ -119,15 +129,21 @@ def test_new_sessions_are_unique_with_same_principal_and_clock() -> None:
     a, b = port.issue(_principal()), port.issue(_principal())
     different = a != b and port.inspect(a).fingerprint != port.inspect(b).fingerprint
     assert different
-    assert port.inspect(a).version == port.inspect(b).version == 2
+    assert port.inspect(a).version == port.inspect(b).version == 3
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_signature_encoding_alias_cannot_change_revocation_identity(version: int) -> None:
     port = HMACSessionToken(
         signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000, tenant_id="default"
     )
-    token = legacy_ticket(_principal(), 1000) if version == 1 else port.issue(_principal())
+    token = (
+        legacy_ticket(_principal(), 1000)
+        if version == 1
+        else signed_claims("v2", v2_claims(_principal(), 1000))
+        if version == 2
+        else port.issue(_principal())
+    )
     alias = encoding_alias(token)
     same = port.inspect(token).fingerprint == port.inspect(alias).fingerprint
     assert same
@@ -153,10 +169,8 @@ def test_inspect_accepts_legacy_and_rejects_invalid_version_nonce_and_time(case:
         signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000, tenant_id="default"
     )
     assert port.inspect(legacy_ticket(_principal(), 1000)).version == 1
-    token = port.issue(_principal())
-    claims = json.loads(
-        base64.urlsafe_b64decode(token.split(".")[1] + "=" * (-len(token.split(".")[1]) % 4))
-    )
+    assert port.inspect(signed_claims("v2", v2_claims(_principal(), 1000))).version == 2
+    claims = v2_claims(_principal(), 1000)
     if case == "missing_nonce":
         del claims["nonce"]
     elif case == "short_nonce":
@@ -223,3 +237,51 @@ def test_principal_session_binding_is_continuous_and_cross_user_fail_closed() ->
         binder.bind(_principal("a"), bound_b)
     with pytest.raises(SessionBindingError):
         binder.bind(_principal("a"), "sid_v1.invalid")
+
+
+def test_v3_renewal_keeps_instance_and_only_revocation_reads_expired_copies() -> None:
+    now = [1000.0]
+    port = HMACSessionToken(
+        signing_key=bytes(range(32)),
+        ttl_seconds=600,
+        absolute_ttl_seconds=1500,
+        renew_min_interval_seconds=60,
+        clock=lambda: now[0],
+        tenant_id="default",
+    )
+    first = port.issue(_principal())
+    assert port.renew(first) == "throttled"
+    now[0] = 1100
+    renewed = port.renew(first)
+    assert not isinstance(renewed, str)
+    second, metadata = renewed
+    assert metadata.fingerprint == port.inspect(first).fingerprint
+    assert (metadata.version, metadata.expires_at.timestamp()) == (3, 1700)
+    assert metadata.absolute_expires_at is not None
+    assert metadata.instance_expires_at == metadata.absolute_expires_at
+    assert metadata.absolute_expires_at.timestamp() == 2500
+
+    now[0] = 1650  # first copy is past its idle deadline, second is not
+    with pytest.raises(SessionTokenError):
+        port.inspect(first)
+    with pytest.raises(SessionTokenError):
+        port.renew(first)
+    expired = port.inspect_for_revocation(first)
+    assert expired is not None
+    assert expired.fingerprint == metadata.fingerprint
+    third = port.renew(second)
+    assert not isinstance(third, str)
+    now[0] = 2200
+    final = port.renew(third[0])
+    assert not isinstance(final, str)
+    assert final[1].expires_at.timestamp() == 2500
+    now[0] = 2300
+    assert port.renew(final[0]) == "capped"
+
+    legacy = signed_claims("v2", v2_claims(_principal(), 2300))
+    assert port.renew(legacy) == "legacy"
+    assert port.inspect_for_revocation(legacy) is not None
+    now[0] = 2400
+    assert port.inspect_for_revocation(legacy) is None
+    with pytest.raises(SessionTokenError):
+        port.inspect_for_revocation(encoding_alias(first)[:-2] + "AA")

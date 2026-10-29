@@ -67,6 +67,8 @@ const PROJECTS = [
         operationId: 'login_api_v1_auth_login_post',
       },
       { path: '/api/v1/auth/logout', method: 'post', operationId: 'logout_api_v1_auth_logout_post' },
+      { path: '/api/v1/auth/renew', method: 'post', operationId: 'renew_api_v1_auth_renew_post' },
+      { path: '/api/v1/auth/session', method: 'get', operationId: 'session_api_v1_auth_session_get' },
     ],
   },
   {
