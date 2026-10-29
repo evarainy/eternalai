@@ -419,9 +419,10 @@ def create_production_app(
             registered,
             BrowserCapabilityAdapter(registered, browser_vertical.submission),
         )
-        components.runtime.install_browser_handoff(
+        components.install_browser_handoff(
             PostgreSQLBrowserIntentHandoff(components.browser_session_factory),
             browser_vertical.submission,
+            registration=registered,
             configured_d_form_model=(
                 resolved_settings.llm_model if registered.effect == "fill_stop" else None
             ),

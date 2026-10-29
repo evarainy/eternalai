@@ -83,6 +83,8 @@ from app.infra.orchestration.agentscope_runtime.toolkit import (
     build_turn_toolkit,
 )
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
+from app.ports.browser_chat import BrowserOrdinarySubmissionPort
+from app.ports.browser_gateway import BrowserGatewayRegistration, BrowserIntentHandoffPort
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.error_codes import ErrorCode
@@ -244,6 +246,29 @@ class AgentScopeRuntime:
         self._sessions = sessions or SessionCoordinator(
             idle_ttl_seconds=deps.session_idle_ttl_seconds
         )
+        self._browser_handoff: BrowserIntentHandoffPort | None = None
+        self._browser_submission: BrowserOrdinarySubmissionPort | None = None
+        self._browser_registration: BrowserGatewayRegistration | None = None
+
+    def install_browser(
+        self,
+        handoff: BrowserIntentHandoffPort,
+        submission: BrowserOrdinarySubmissionPort,
+        *,
+        registration: BrowserGatewayRegistration,
+        configured_d_form_model: str | None = None,
+    ) -> None:
+        """Install the browser handoff once; requests use it from M2 S3 on."""
+
+        if self._browser_handoff is not None:
+            raise ValueError("browser_handoff_already_installed")
+        # Same startup check as the legacy IntentRouter.install_browser_checks.
+        expected = "glm-4.7" if configured_d_form_model is None else configured_d_form_model.strip()
+        if not expected or self._deps.model_name != expected:
+            raise ValueError("browser_intent_model_invalid")
+        self._browser_handoff = handoff
+        self._browser_submission = submission
+        self._browser_registration = registration
 
     async def handle_user_message(
         self,

@@ -80,6 +80,7 @@ from app.ports.response_projection_contract import (
 )
 from app.ports.runtime import ConfirmationCoordinatorPort
 from app.ports.task_store import (
+    DFormCollectionStorePort,
     SessionStorePort,
     TaskEventRecord,
     TaskRecord,
@@ -87,6 +88,7 @@ from app.ports.task_store import (
     TaskStorePort,
 )
 from app.ports.trace import TracePort
+from app.runtime.document_qa import DocumentQAService
 
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
@@ -128,6 +130,11 @@ class AgentScopeRuntimeDependencies:
     session_idle_ttl_seconds: int
     # Deterministic confirmation entry points shared with the legacy runtime.
     confirmations: ConfirmationCoordinatorPort
+    # M2: D admission only, through an orchestration without the confirmation
+    # barrier; never given to the read or write-proposal executors.
+    browser_orchestration: AgentOrchestrationPort | None = None
+    d_form_collection_store: DFormCollectionStorePort | None = None
+    document_qa: DocumentQAService | None = None
 
 
 @dataclass(frozen=True, slots=True)
