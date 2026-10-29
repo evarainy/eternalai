@@ -14,7 +14,7 @@ busy until every close, interrupt and abandon of the turn has ended.
 A trusted browser request (M2) runs inside the browser request shell: replay
 lookup and route ownership come before the busy check, the registered
 browser tool appears only for that request, and a D collection reply runs a
-continuation turn on the record's task. Once a browser persistent operation
+JSON-extraction continuation on the record's task. Once a browser persistent operation
 has started the shell alone closes the chat intent, and the session is
 released after that close.
 """
@@ -26,7 +26,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, get_args
@@ -67,7 +67,7 @@ from app.infra.orchestration.agentscope_runtime.browser_handoff import (
     BrowserTurnOwnership,
     allowed_browser_keys,
     browser_instructions,
-    continuation_instructions,
+    extract_reply_fields,
 )
 from app.infra.orchestration.agentscope_runtime.catalog import (
     TOOL_GROUP_PROTOCOL_VERSION,
@@ -143,6 +143,7 @@ from app.ports.task_store import (
 from app.ports.trace import TraceEventStatus
 from app.runtime.browser_request import BrowserRequestHelpers
 from app.runtime.d_form_collection import CAPABILITY_ID as D_FORM_ID
+from app.runtime.d_form_collection import CategoryEvidence
 
 if TYPE_CHECKING:
     from agentscope.agent import Agent
@@ -308,10 +309,12 @@ class AgentScopeRuntime:
             idle_ttl_seconds=deps.session_idle_ttl_seconds
         )
         self._browser_registration: BrowserGatewayRegistration | None = None
+        self._d_form_category_options: tuple[str, ...] | None = None
         self._browser = BrowserRequestHelpers(
             trace_port=deps.trace_port,
             utc_clock=lambda: datetime.now(UTC),
             d_form_collection_store=deps.d_form_collection_store,
+            d_form_category_source=self._d_form_category_evidence,
         )
         self._browser_shell: BrowserRequestShell | None = None
         self._knowledge_digest = _knowledge_items_digest(deps.knowledge)
@@ -323,8 +326,13 @@ class AgentScopeRuntime:
         *,
         registration: BrowserGatewayRegistration,
         configured_d_form_model: str | None = None,
+        d_form_category_options: tuple[str, ...] | None = None,
     ) -> None:
-        """Install the browser handoff once; trusted browser requests use it."""
+        """Install the browser handoff once; trusted browser requests use it.
+
+        ``d_form_category_options`` are the D installation's configured category
+        candidates: the model chooses among them and the user is never asked.
+        """
 
         if self._browser_shell is not None:
             raise ValueError("browser_handoff_already_installed")
@@ -334,7 +342,25 @@ class AgentScopeRuntime:
             raise ValueError("browser_intent_model_invalid")
         self._browser.install(handoff, submission)
         self._browser_registration = registration
+        self._d_form_category_options = d_form_category_options
         self._browser_shell = BrowserRequestShell(self._browser, handoff)
+
+    async def _d_form_category_evidence(
+        self, owner: SessionMemoryKey, capability: CapabilitySpec
+    ) -> CategoryEvidence | None:
+        """Category evidence from the trusted installation configuration, if any."""
+
+        options, registration = self._d_form_category_options, self._browser_registration
+        if options is None or registration is None:
+            return None
+        return CategoryEvidence(
+            owner=owner,
+            capability_fingerprint=capability_fingerprint(capability),
+            target_form_ref=registration.skill_id,
+            source_version=registration.skill_version,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            options=options,
+        )
 
     async def handle_user_message(
         self,
@@ -721,13 +747,14 @@ class AgentScopeRuntime:
         ledger: TurnLedger,
         progress: _Progress,
     ) -> _Outcome:
-        """A D collection reply: the browser tool alone, on the record's task.
+        """A D collection reply: one JSON extraction on the record's task, no agent.
 
-        Never opens a task. A reply the model does not turn into an accepted
-        browser call keeps the collected fields (collection_reply_unparsed);
+        Never opens a task and never touches AgentState. A reply whose JSON
+        output is unusable keeps the collected fields (collection_reply_unparsed);
         a consumed record replays its arguments without any model call.
         """
 
+        del state, progress
         deps, scope = self._deps, turn.scope
         browser = turn.browser
         assert browser is not None and browser.collection is not None
@@ -765,39 +792,21 @@ class AgentScopeRuntime:
                 ledger.turn_task_claimed = True
                 await coordinator.run({})
             else:
-                model = deps.model_factory()
-                kit = await build_turn_toolkit(
-                    catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
-                    model=model, prompt_version=M1_PROMPT_VERSION,
-                    continuation_instructions=continuation_instructions(
-                        dict(record.arguments), category_options
-                    ),
+                fields = await extract_reply_fields(
+                    deps.model_factory(), message, dict(record.arguments),
+                    explicit_category=category_options is None,
                 )
-                agent = create_bounded_agent(
-                    name=AGENT_NAME, system_prompt=M1_SYSTEM_PROMPT, model=model,
-                    toolkit=kit.toolkit, state=state, limits=self._limits,
-                    extra_middlewares=[kit.middleware],
-                    classify_tool_error=kit.middleware.classify_tool_error,
-                )
-                progress.agent = agent
-                interrupt = start_parked_interrupt(agent, state)
-                if interrupt is not None:
-                    ledger.interrupt = interrupt
-                    await asyncio.shield(interrupt)
-                progress.snapshot = await prepare_turn_state(state, read_groups=set(), model=model)
-        if not record.consumed:
-            proposals = ProposalCoordinator.from_catalog(
-                catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
-                owner=turn.owner, browser=coordinator,
-            )
-            await self._drive(turn, agent, proposals, message, ledger, progress)
+                if fields is not None:
+                    ledger.turn_task_claimed = True
+                    await coordinator.run(fields)
         terminal = ledger.terminal
         if isinstance(terminal, BrowserSettled):
             return _Outcome("browser_settled", terminal.envelope, terminal.close)
         if record.consumed:
             raise RuntimeError("browser_replay_unsettled")
+        # The card never lists configured candidates: categories are not asked.
         envelope = await self._browser.retain_unparsed(
-            browser.scope, owner_key, scope.channel, browser.collection, category_options,
+            browser.scope, owner_key, scope.channel, browser.collection, None,
         )
         return _Outcome("collection_unparsed", envelope, None)
 

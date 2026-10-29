@@ -410,12 +410,15 @@ class BrowserRequestHelpers:
         model_arguments: dict[str, Any],
         collection: DFormCollectionSnapshot | None,
         category_options: tuple[str, ...] | None,
+        model_category: bool = False,
     ) -> ResponseEnvelope | dict[str, Any]:
         """Merge model arguments into the D record.
 
         Returns the collection card while fields are missing, otherwise the
         arguments ready for admission. Continuations pass ``category_options``
-        already resolved for the recorded capability.
+        already resolved for the recorded capability. With ``model_category``
+        the category is the model's choice from the options, and the card
+        never lists them: the user is not asked for a category.
         """
         assert self.d_form_collection_store is not None
         assert scope.attempt.message is not None
@@ -444,6 +447,7 @@ class BrowserRequestHelpers:
             message,
             previous,
             category_options,
+            model_category=model_category,
         )
         if "category" not in arguments and category_options is not None:
             matches = tuple(item for item in category_options if item in message)
@@ -498,7 +502,9 @@ class BrowserRequestHelpers:
                 ",".join(missing_fields(arguments)),
             )
             if not collected.consumed:
-                return self.collection_response(snapshot, owner.session_id, category_options)
+                return self.collection_response(
+                    snapshot, owner.session_id, None if model_category else category_options
+                )
         return arguments
 
     async def retain_unparsed(

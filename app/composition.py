@@ -810,8 +810,11 @@ def _install_legacy_browser_handoff(
     *,
     registration: BrowserGatewayRegistration,
     configured_d_form_model: str | None = None,
+    d_form_category_options: tuple[str, ...] | None = None,
 ) -> None:
-    del registration  # The legacy Runtime's checks predate the registration argument.
+    # The legacy Runtime's checks predate the registration argument, and it
+    # keeps its explicit-category collection: configured candidates are unused.
+    del registration, d_form_category_options
     runtime.install_browser_handoff(
         handoff, submission, configured_d_form_model=configured_d_form_model
     )

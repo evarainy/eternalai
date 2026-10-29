@@ -128,6 +128,8 @@ class ScriptedModel(OpenAIChatModel):
         self.calls = 0
         # (messages, tools) as received by each call, serialized.
         self.seen: list[tuple[str, str]] = []
+        # The response_format of each call (None for agent calls).
+        self.formats: list[Any] = []
 
     async def _call_api(self, model_name: str, messages: Any, tools: Any = None,
                         tool_choice: Any = None, **kwargs: Any) -> ChatResponse:
@@ -136,6 +138,7 @@ class ScriptedModel(OpenAIChatModel):
             (json.dumps(messages, ensure_ascii=False, default=str),
              json.dumps(tools, ensure_ascii=False, default=str))
         )
+        self.formats.append(kwargs.get("response_format"))
         step = self.steps.pop(0)
         return step if isinstance(step, ChatResponse) else await step()
 

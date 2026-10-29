@@ -348,6 +348,8 @@ def create_production_app(
         browser_vertical is not None and browser_vertical._seed.source_kind == "registered_site"
     ):
         raise RuntimeError("browser_production_installation_required")
+    # Trusted D category candidates; only the AgentScope runtime consumes them.
+    d_form_category_options: tuple[str, ...] | None = None
     if browser_installation is not None:
         supplied = browser_installation(components)
         if (d_form_execution_without_sync
@@ -365,6 +367,7 @@ def create_production_app(
             ):
                 raise RuntimeError("browser_production_authority_mismatch")
             browser_vertical = build_d_form_installation(supplied)
+            d_form_category_options = supplied.category_options
             if browser_management is not None:
                 browser_management.install_vertical(browser_vertical)
             if browser_gateway_registration is None:
@@ -425,6 +428,9 @@ def create_production_app(
             registration=registered,
             configured_d_form_model=(
                 resolved_settings.llm_model if registered.effect == "fill_stop" else None
+            ),
+            d_form_category_options=(
+                d_form_category_options if registered.effect == "fill_stop" else None
             ),
         )
     browser_supervisor = None

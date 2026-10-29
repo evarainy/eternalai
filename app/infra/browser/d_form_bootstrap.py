@@ -959,6 +959,7 @@ async def open_installation(
             input_digest_key=decode_key(environment, keys.input_digest),
             result_digest_key=decode_key(environment, keys.result_digest),
             fixed_owner=fixed_owner,
+            category_options=config.category_options,
         ),
     )
     management.business, management.cleanup_actor = business, cleanup_actor

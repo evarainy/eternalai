@@ -92,6 +92,8 @@ _CHAT_STAGE_REASONS = frozenset(
         "continuation_category_missing",
         "category_options_available",
         "category_options_unavailable",
+        "category_selected",
+        "category_rejected",
     }
 )
 _CHAT_STAGE_CAPABILITIES = frozenset(

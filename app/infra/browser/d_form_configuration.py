@@ -21,6 +21,8 @@ from scripts.smoke.errors import ENV_PARSE_REASONS, EnvParseReason, SmokeError
 Reference = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")]
 Identity = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+# One real OA repair category, as the form shows it (single non-blank line, see below).
+CategoryOption = Annotated[str, Field(min_length=1, max_length=100)]
 ConfigurationCode = Literal[
     "d_form_config_missing",
     "d_form_config_invalid",
@@ -213,6 +215,24 @@ class DFormTaskConfiguration(LocalConfiguration):
     handoff_actor: ActorReference | None = None
     keys: KeyReferences | None = None
     pool: PoolReference | None = None
+    # Trusted category candidates the AgentScope path lets the model choose from
+    # (user decision 2026-10-29); absent keeps the explicit-category collection.
+    category_options: tuple[CategoryOption, ...] | None = Field(
+        default=None, min_length=1, max_length=64
+    )
+
+    @field_validator("category_options")
+    @classmethod
+    def unique_categories(cls, options: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if options is not None and (
+            len(set(options)) != len(options)
+            or any(
+                not item.strip() or "\x00" in item or len(item.splitlines()) != 1
+                for item in options
+            )
+        ):
+            raise ValueError("d_form_config_invalid")
+        return options
 
     @field_validator("environment_files")
     @classmethod

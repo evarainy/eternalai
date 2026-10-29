@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -140,9 +141,11 @@ class ToolBindings(Orchestration):
     ) -> ExecutionResult:
         self.executions += 1
         self.executed_ids.append(kwargs["capability"].capability_id)
+        self.executed_arguments.append(dict(kwargs["arguments"]))
         return await self._execute()
 
     executed_ids: list[str]
+    executed_arguments: list[dict[str, Any]]
 
 
 class Handoff:
@@ -172,6 +175,7 @@ def _orchestration(
 ) -> ToolBindings:
     orchestration = ToolBindings(harness.registry, execute)
     orchestration.executed_ids = []
+    orchestration.executed_arguments = []
     return orchestration
 
 
@@ -190,6 +194,7 @@ class BrowserHarness:
         user_id: str = "ai-user-1",
         browser_execute: Callable[[], Awaitable[ExecutionResult]] | None = None,
         fill_stop: bool = False,
+        category_options: tuple[str, ...] | None = None,
     ) -> None:
         self.base = Harness(steps)
         base = self.base
@@ -219,6 +224,7 @@ class BrowserHarness:
                 effect="fill_stop" if fill_stop else "read_only",
             ),
             configured_d_form_model="scripted",
+            d_form_category_options=category_options,
         )
 
     async def _admitted(self) -> ExecutionResult:
@@ -514,9 +520,169 @@ def test_collection_reply_never_opens_or_closes_a_task() -> None:
     assert harness.statuses() == [] and harness.handoff.fail_calls == 0
     assert harness.store.snapshots[card.task_id].record.version == 2
     assert harness.browser.executions == 0
-    # The reply exposed the browser tool alone: no groups, no control tools.
-    reply_tools = harness.base.model.seen[-1][1]
-    assert D_FORM_TOOL in reply_tools and "reset_tools" not in reply_tools
-    assert "ask_user" not in reply_tools
+    # The reply is one JSON-schema extraction: no tools, as on the legacy path.
+    assert harness.base.model.seen[-1][1] == "null"
+    assert harness.base.model.formats[-1]["type"] == "json_schema"
     _, entry = harness.base.state()
     assert not entry.busy
+
+
+# User decision 2026-10-29: with configured category candidates the model picks
+# the category (JSON schema enum, server-side enum check); the user is only
+# asked for a missing position or description.
+CATEGORIES = ("监控系统", "门禁系统", "广播对讲", "基础网络", "其他类别")
+
+
+def _d_steps(arguments: dict[str, Any], *json_outputs: str) -> list[Any]:
+    return [
+        _calls(("reset_tools", {BROWSER_GROUP: True})),
+        _calls((D_FORM_TOOL, arguments)),
+        *(_text(output) for output in json_outputs),
+    ]
+
+
+async def _reply(harness: BrowserHarness, card: ResponseEnvelope, text: str) -> ResponseEnvelope:
+    assert card.data is not None and card.data["d_form_collection"] is not None
+    d_form_collection_reference.set(DFormCollectionReference(**card.data["d_form_collection"]))
+    harness.open_scope()
+    envelope = await harness.base.send(text)
+    await _settle()
+    return envelope
+
+
+def test_complete_report_gets_a_model_chosen_category_and_one_admission() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(
+            _d_steps(
+                {"position": "三楼会议室", "description": "投影仪坏了，没有画面"},
+                '{"category":"其他类别"}',
+            ),
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        envelope = await harness.base.send("三楼会议室投影仪坏了，没有画面")
+        await _settle()
+        return harness, envelope
+
+    harness, envelope = asyncio.run(exercise())
+    assert envelope.status == "running" and envelope.data is not None
+    assert envelope.data["kind"] == "accepted"
+    assert harness.browser.executions == 1 and harness.handoff.commits == 1
+    assert harness.browser.executed_arguments == [
+        {"position": "三楼会议室", "description": "投影仪坏了，没有画面", "category": "其他类别"}
+    ]
+    # No collection card: nothing was saved for a reply.
+    assert harness.store.snapshots == {}
+    # The category came from one enum-constrained JSON call over the candidates.
+    selection = harness.base.model.formats[-1]
+    schema = selection["json_schema"]["schema"]
+    assert schema["properties"]["category"]["enum"] == list(CATEGORIES)
+    assert harness.base.model.seen[-1][1] == "null"
+
+
+@pytest.mark.parametrize(
+    ("first", "message", "reply", "extracted", "category", "question"),
+    [
+        (
+            {"position": "三楼会议室"},
+            "三楼会议室的设备",
+            "投影仪没有画面",
+            '{"description":"投影仪没有画面"}',
+            "其他类别",
+            "请补充发生了什么故障",
+        ),
+        (
+            {"description": "门禁刷卡没反应"},
+            "门禁刷卡没反应",
+            "一楼东门",
+            '{"position":"一楼东门"}',
+            "门禁系统",
+            "请补充故障位置",
+        ),
+    ],
+)
+def test_only_the_missing_field_is_asked_and_the_reply_is_admitted(
+    first: dict[str, str],
+    message: str,
+    reply: str,
+    extracted: str,
+    category: str,
+    question: str,
+) -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [*_d_steps(first), _text(extracted), _text(f'{{"category":"{category}"}}')],
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send(message)
+        await _settle()
+        return harness, card, await _reply(harness, card, reply)
+
+    harness, card, admitted = asyncio.run(exercise())
+    assert card.status == "waiting_user" and card.data is not None
+    assert question in card.message and "类别" not in card.message
+    # The card never lists candidates for the user to choose from.
+    assert card.data["category_options"] == []
+    assert admitted.status == "running" and admitted.data is not None
+    assert admitted.data["kind"] == "accepted"
+    assert harness.browser.executions == 1
+    assert harness.browser.executed_arguments == [
+        {**first, **json.loads(extracted), "category": category}
+    ]
+
+
+def test_a_category_outside_the_candidates_is_rejected_without_admission() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(
+            _d_steps(
+                {"position": "三楼会议室", "description": "投影仪坏了", "category": "多媒体"},
+                '{"category":"多媒体"}',
+            ),
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        envelope = await harness.base.send("三楼会议室投影仪坏了，类别：多媒体")
+        await _settle()
+        return harness, envelope
+
+    harness, envelope = asyncio.run(exercise())
+    assert envelope.status == "failed" and "未能从报修类别候选中确定类别" in envelope.message
+    assert harness.browser.executions == 0 and harness.handoff.commits == 0
+    assert harness.store.snapshots == {}
+    # The turn owned the task and closed it as failed, once.
+    assert harness.statuses() == ["status:failed"] and harness.handoff.fail_calls == 0
+
+
+def test_without_candidates_an_explicit_category_reply_is_extracted_as_on_the_legacy_path() -> None:
+    # R7: the reply 类别：多媒体 used to end as collection_reply_unparsed when
+    # glm answered with text instead of a tool call; it is now a JSON extraction.
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [
+                *_d_steps({"position": "三楼会议室", "description": "投影仪坏了"}),
+                _text('{"category":"多媒体"}'),
+            ],
+            fill_stop=True,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("三楼会议室投影仪坏了")
+        await _settle()
+        return harness, card, await _reply(harness, card, "类别：多媒体")
+
+    harness, card, admitted = asyncio.run(exercise())
+    assert card.data is not None and card.data["missing_fields"] == ["category"]
+    assert admitted.status == "running" and admitted.data is not None
+    assert admitted.data["kind"] == "accepted"
+    assert harness.browser.executed_arguments == [
+        {"position": "三楼会议室", "description": "投影仪坏了", "category": "多媒体"}
+    ]
+    schema = harness.base.model.formats[-1]["json_schema"]["schema"]
+    assert set(schema["properties"]) == {"position", "description", "category"}

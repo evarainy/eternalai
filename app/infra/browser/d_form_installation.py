@@ -87,6 +87,8 @@ class DFormInstallationDependencies:
     worker_id: str
     credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     fixed_owner: bool = False
+    # Configured category candidates for the AgentScope chat path only.
+    category_options: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -113,6 +115,7 @@ class DFormProductionInputs:
     input_digest_key: bytes = field(repr=False)
     result_digest_key: bytes = field(repr=False)
     fixed_owner: bool = False
+    category_options: tuple[str, ...] | None = None
 
 
 def build_d_form_production_installation(
@@ -157,6 +160,7 @@ def build_d_form_production_installation(
         worker_id="browser_" + manifest.digest[:32],
         credential_store=components.browser_credential_store,
         fixed_owner=inputs.fixed_owner,
+        category_options=inputs.category_options,
     )
 
 

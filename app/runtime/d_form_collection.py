@@ -25,6 +25,8 @@ class CategoryEvidence:
 
     The reader must match its installed binding and target form before returning
     this value. Client fields and a model-generated list cannot implement it.
+    The AgentScope path builds it from the installation's configured category
+    list (user decision 2026-10-29); the legacy Runtime has no source.
     """
 
     owner: SessionMemoryKey
@@ -77,16 +79,24 @@ def request_digest(message: str, channel: str) -> str:
 
 def collect_arguments(
     supplied: Mapping[str, Any], message: str, previous: DFormCollectionRecord | None = None,
-    category_options: tuple[str, ...] | None = None,
+    category_options: tuple[str, ...] | None = None, *, model_category: bool = False,
 ) -> dict[str, str]:
+    """``model_category`` (AgentScope path, user decision 2026-10-29): the category is
+    the model's choice and need not occur in the message, but must be exactly one of
+    ``category_options``; position and description keep the original-text rule."""
     result: dict[str, str] = dict(previous.arguments) if previous is not None else {}
     for name in FIELDS:
         value = supplied.get(name)
+        chosen = model_category and name == "category"
         if (name in result or type(value) is not str or not value.strip()
                 or len(value) > (100 if name == "category" else 500) or "\x00" in value
-                or value not in message or (name == "category" and len(value.splitlines()) != 1)):
+                or (value not in message and not chosen)
+                or (name == "category" and len(value.splitlines()) != 1)):
             continue
-        if name == "category":
+        if chosen:
+            if category_options is None or category_options.count(value) != 1:
+                continue
+        elif name == "category":
             explicit = (message.strip() == value or re.search(
                 r"(?:^|[\s，,。；;])(?:报修)?(?:类别|分类|category|选择|选)"
                 r"\s*[:：=]?\s*(?:是|为)?\s*" + re.escape(value) + r"(?=$|[\s，,。；;！？!?])",
