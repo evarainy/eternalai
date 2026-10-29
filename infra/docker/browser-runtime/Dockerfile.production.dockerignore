@@ -361,6 +361,8 @@ services/decision/*
 !app/ports/work_object.py
 !app/ports/workflow_engine.py
 !app/ports/workflow_store.py
+!app/runtime/browser_request.py
+!app/runtime/chat_stage.py
 !app/runtime/intent_router.py
 !app/runtime/d_form_collection.py
 !app/runtime/document_qa.py

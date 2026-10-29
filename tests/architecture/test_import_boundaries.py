@@ -105,6 +105,13 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.infra.orchestration",
             forbidden_imports=("app.runtime.runtime",),
         ),
+        # M2 §3.1: the AgentScope path must not import the legacy intent
+        # selector. Direct imports only; dependency chains are reviewed statically.
+        BoundaryRule(
+            name="agentscope_runtime_no_intent_router",
+            source="app.infra.orchestration",
+            forbidden_imports=("app.runtime.intent_router",),
+        ),
         BoundaryRule(
             name="ports_no_runtime_imports",
             source="app.ports",
