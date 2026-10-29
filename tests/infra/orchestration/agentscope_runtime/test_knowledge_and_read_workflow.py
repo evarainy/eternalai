@@ -58,8 +58,14 @@ class _CapturingModel(Model):
         super().__init__(group, [])
         self.prompts = prompts
 
-    async def _call_api(self, model_name: str, messages: list[Msg], tools: Any = None,
-                        tool_choice: Any = None, **kwargs: Any) -> ChatResponse:
+    async def _call_api(
+        self,
+        model_name: str,
+        messages: list[Msg],
+        tools: Any = None,
+        tool_choice: Any = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
         self.prompts.append(messages[0].get_text_content() or "")
         if len(self.prompts) == 1:
             return _call("reset_tools", {self._group: True})
@@ -72,11 +78,17 @@ def test_knowledge_enters_the_system_prompt_once_and_stays_equal_within_a_turn()
     group = build_tool_catalog(list(registry.items.values())).group_of(PENDING)
     assert group is not None
     runtime = build_agentscope_runtime_stack(
-        task_store=TaskStore(), session_store=SessionStore(), capability_registry=registry,
-        gateway=Gateway(), trace_port=RecordingTrace(), llm_provider=MockLLMProvider(),
-        structured_output=MockStructuredOutputProvider(), intent_model="c-suite",
+        task_store=TaskStore(),
+        session_store=SessionStore(),
+        capability_registry=registry,
+        gateway=Gateway(),
+        trace_port=RecordingTrace(),
+        llm_provider=MockLLMProvider(),
+        structured_output=MockStructuredOutputProvider(),
+        intent_model="c-suite",
         model_factory=lambda: _CapturingModel(group, prompts),
-        semantic_knowledge=BasicKnowledge(), human_gate_port=InMemoryHumanGate(),
+        semantic_knowledge=BasicKnowledge(),
+        human_gate_port=InMemoryHumanGate(),
     )
 
     async def run(message: str) -> None:
