@@ -298,6 +298,7 @@ services/decision/*
 !app/infra/workflow/production.py
 !app/knowledge/__init__.py
 !app/knowledge/basic_knowledge.py
+!app/knowledge/bounded.py
 !app/knowledge/capability_selection.py
 !app/main.py
 !app/mcp/__init__.py
