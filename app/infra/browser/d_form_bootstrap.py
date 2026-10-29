@@ -38,7 +38,7 @@ from app.infra.browser.d_form_installation import (
     DFormProductionInputs,
     build_d_form_production_installation,
 )
-from app.infra.browser.d_form_manifest import build_fill_stop_manifest, source_digest
+from app.infra.browser.d_form_manifest import build_fill_stop_manifest
 from app.infra.browser.d_form_owned_browser import (
     _D_FORM_LOG_CODES,
     OwnedOALoginContract,
@@ -146,7 +146,7 @@ def _log_cleanup_failure(step: str, error: Exception, began: float) -> None:
 
 def pool_manifest_digest(origin: str, chromium_sha256: str) -> bytes:
     manifest = build_fill_stop_manifest(origin=origin)
-    return owned_provider_digest(manifest.digest, source_digest(), chromium_sha256)
+    return owned_provider_digest(manifest.digest, chromium_sha256)
 
 
 def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadinessCode, ...]:

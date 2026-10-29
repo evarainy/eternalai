@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -65,32 +64,16 @@ def _signed(cls: type[T], domain: str, **values: Any) -> T:
     return cls.model_validate_json(canonical_json(body))
 
 
-def source_digest() -> str:
-    root = Path(__file__).parent
-    hashes = {
-        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-        for name in (
-            "d_form_flow.py",
-            "d_form_cli.py",
-            "d_form_owned_browser.py",
-            "oa_browser_login.py",
-            "d_portal_flow.py",
-            "d_form_execution.py",
-            "d_form_authority.py",
-            "d_windows_query.py",
-            "d_form_manifest.py",
-            "d_form_bootstrap.py",
-            "d_form_installation.py",
-            "d_form_configuration.py",
-        )
-    }
-    return hashlib.sha256(canonical_json(hashes).encode()).hexdigest()
+def registration_digest() -> str:
+    """Stable D registration identity; deliberately independent of source file bytes."""
+    registration = {"source_id": SKILL_ID, "mode": MODE, "fields": list(FIELDS)}
+    return hashlib.sha256(canonical_json(registration).encode()).hexdigest()
 
 
 def build_fill_stop_manifest(*, origin: str) -> BrowserPublicationManifest:
     """The approved origin is supplied locally; no personal directory or values."""
     canonical_origin(origin)
-    digest = source_digest()
+    digest = registration_digest()
     input_schema = {
         "type": "object",
         "additionalProperties": False,

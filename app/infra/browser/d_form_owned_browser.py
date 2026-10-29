@@ -385,7 +385,7 @@ class OwnedOALoginContract:
         object.__setattr__(self, "stops", MappingProxyType(dict(self.stops)))
 
 
-def owned_provider_digest(publication: str, source: str, chromium_sha256: str) -> bytes:
+def owned_provider_digest(publication: str, chromium_sha256: str) -> bytes:
     from app.browser_skill.publication_contracts import canonical_json
 
     return hashlib.sha256(
@@ -393,7 +393,6 @@ def owned_provider_digest(publication: str, source: str, chromium_sha256: str) -
             {
                 "mode": "FILL_STOP",
                 "publication_digest": publication,
-                "source_digest": source,
                 "wall_seconds": 1800,
                 "model_requests": 0,
                 "browser_lifecycle": "owned_job_fill_stop_retained_v1",

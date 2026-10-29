@@ -33,7 +33,7 @@ from app.infra.browser.d_form_cli import (
     system_console_executable,
     validate,
 )
-from app.infra.browser.d_form_manifest import FIELDS, MODE, build_fill_stop_manifest, source_digest
+from app.infra.browser.d_form_manifest import FIELDS, MODE, build_fill_stop_manifest
 from app.infra.browser.d_form_owned_browser import (
     OwnedDFormBrowser,
     OwnedOALoginContract,
@@ -162,7 +162,6 @@ class DFormRuntime:
         )
         self.manifest_digest = owned_provider_digest(
             manifest.digest,
-            source_digest(),
             options.chromium_sha256,
         )
         self._states: dict[str, _State] = {}
@@ -391,8 +390,6 @@ class DFormRuntime:
             trace("control_fence_lock", "started")
             async with state.fence_lock:
                 trace("control_fence_lock", "success")
-                if source_digest() != self.manifest.site.source.fixture_digest:
-                    raise BrowserReadExecutionError("stale")
                 trace("control_fence_refresh", "started")
                 state.run = await checkpoint.refresh()
                 trace("control_fence_refresh", "success")
@@ -572,7 +569,6 @@ class DFormRuntime:
             or run.admission.publication_digest.hex() != self.manifest.digest
             or run.run_id in self._states
             or len(self._states) >= 128
-            or source_digest() != self.manifest.site.source.fixture_digest
         ):
             log_d_form_stage(current_stage, "failed", "denied", began)
             raise BrowserReadExecutionError("denied")
