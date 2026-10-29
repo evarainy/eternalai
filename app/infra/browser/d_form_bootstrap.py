@@ -59,6 +59,7 @@ from app.ports.browser_fill_stop import (
     DFormHandoffView,
     DFormManagementCommand,
     DFormManagementError,
+    DFormManagementErrorCode,
     DFormManagementOperation,
     DFormManagementState,
     DFormReadinessCode,
@@ -560,6 +561,16 @@ class DFormManagement:
         except DFormManagementError as error:
             log_d_form_stage(stage, "failed", _management_error_code(error), began)
             raise
+        except BrowserPublicationError as error:
+            code = _management_error_code(error)
+            log_d_form_stage(stage, "failed", code, began)
+            if code in {
+                "browser_publication_version_conflict", "browser_publication_not_found",
+                "browser_publication_already_prepared", "browser_publication_head_changed",
+                "browser_publication_revision_conflict",
+            }:
+                raise DFormManagementError(cast(DFormManagementErrorCode, code)) from None
+            raise DFormManagementError("d_form_authorization_denied") from None
         except BrowserLeaseError as error:
             log_d_form_stage(stage, "failed", _management_error_code(error), began)
             if error.code in {

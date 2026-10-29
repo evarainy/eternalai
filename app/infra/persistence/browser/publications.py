@@ -441,7 +441,7 @@ class PostgreSQLBrowserPublicationStore:
     async def activate_fixed_initial(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
     ) -> BrowserPublicationRecord:
-        """Activate only the installed D FILL_STOP seed with its explicit grant."""
+        """Activate the installed D seed, replacing its prior head under the same grant."""
         checked = _manifest(manifest)
         authorize = getattr(self._authority, "authorize_fixed_initial", None)
         if not callable(authorize) or await authorize(_owner(owner), checked) is not True:
@@ -537,7 +537,7 @@ class PostgreSQLBrowserPublicationStore:
                         != expected_active_digest
                     ):
                         raise BrowserPublicationError("browser_publication_head_changed")
-                    if (initial is not None or fixed_initial is not None) and prior is not None:
+                    if initial is not None and prior is not None:
                         raise BrowserPublicationError("browser_publication_head_changed")
                     if prior is not None:
                         previous = _record(prior)

@@ -235,7 +235,7 @@ class SingleSeedManifestAuthority:
         owner: BrowserOwner,
         manifest: BrowserPublicationManifest,
     ) -> bool:
-        """The D-only initial activation grant; reviewed publication stays separate."""
+        """The installed D activation grant; reviewed publication stays separate."""
         from app.infra.browser.d_form_authority import FixedDFormPublicationGrants
         from app.infra.browser.d_form_manifest import CAPABILITY_ID, SKILL_ID
 

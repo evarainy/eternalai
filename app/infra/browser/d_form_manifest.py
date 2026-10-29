@@ -225,7 +225,7 @@ def build_fill_stop_manifest(*, origin: str) -> BrowserPublicationManifest:
         output_schema_json=canonical_json(output_schema),
         maximum_bytes=2048,
     )
-    return _signed(
+    manifest = _signed(
         BrowserPublicationManifest,
         "browser_publication.durable.v1",
         skill=skill,
@@ -238,3 +238,11 @@ def build_fill_stop_manifest(*, origin: str) -> BrowserPublicationManifest:
         effect="controlled_write",
         execution_mode=MODE,
     )
+    # Derive the immutable Skill version from the complete provisional contract,
+    # not source bytes or database history. The fixed provisional version avoids
+    # a circular hash while keeping all publication content in the identity.
+    body = manifest.model_dump(mode="json")
+    body["skill"]["version"] = f"v_{manifest.digest}"
+    body["skill"]["digest"] = publication_digest("browser_skill.v1", body["skill"])
+    body["digest"] = publication_digest("browser_publication.durable.v1", body)
+    return BrowserPublicationManifest.model_validate_json(canonical_json(body))

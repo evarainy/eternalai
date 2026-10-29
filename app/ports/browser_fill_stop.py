@@ -63,8 +63,15 @@ class DFormManagementCommand(Contract):
     handoff_confirmation: DFormHandoffView | None = Field(default=None, repr=False)
 
 
+DFormManagementErrorCode = DFormReadinessCode | Literal[
+    "browser_publication_version_conflict", "browser_publication_not_found",
+    "browser_publication_already_prepared", "browser_publication_head_changed",
+    "browser_publication_revision_conflict",
+]
+
+
 class DFormManagementError(RuntimeError):
-    def __init__(self, code: DFormReadinessCode) -> None:
+    def __init__(self, code: DFormManagementErrorCode) -> None:
         super().__init__("D form management unavailable")
         self.code = code
 

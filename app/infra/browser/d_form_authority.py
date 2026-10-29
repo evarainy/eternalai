@@ -194,7 +194,8 @@ class FixedDFormPublicationGrants:
     current, exact authenticated Run, not merely an owner string.
     """
 
-    _operations = frozenset({"prepare", "activate", "read", "execute"})
+    # Replacing the active D publication retires its previous head atomically.
+    _operations = frozenset({"prepare", "activate", "deactivate", "read", "execute"})
 
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession],

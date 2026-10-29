@@ -288,8 +288,17 @@ def make_router(
         try:
             return await management.perform(principal, body)
         except DFormManagementError as error:
+            message = {
+                "browser_publication_version_conflict": (
+                    "发布版本冲突：已有同版本或另一待激活版本。"
+                ),
+                "browser_publication_not_found": "当前版本尚未准备，请先准备当前版本。",
+                "browser_publication_already_prepared": "当前版本已发布或停用，不能重复准备。",
+                "browser_publication_head_changed": "当前激活版本已变化，请刷新准备状态。",
+                "browser_publication_revision_conflict": "发布状态已变化，请刷新准备状态。",
+            }.get(error.code, "D form action was refused.")
             raise HTTPException(
-                409, {"code": error.code, "message": "D form action was refused."},
+                409, {"code": error.code, "message": message},
                                 headers={"Cache-Control": "no-store"}) from None
 
     @router.get("/leader-roster", response_model=LeaderRosterListResponse)

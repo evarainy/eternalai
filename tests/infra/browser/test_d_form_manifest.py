@@ -28,7 +28,9 @@ def test_digests_are_computed_without_reading_source_files(monkeypatch):
 
 def test_publication_digest_still_binds_origin():
     other = build_fill_stop_manifest(origin="https://other.invalid")
-    assert other.digest != build_fill_stop_manifest(origin=ORIGIN).digest
+    current = build_fill_stop_manifest(origin=ORIGIN)
+    assert other.digest != current.digest
+    assert other.skill.version != current.skill.version
     assert pool_manifest_digest(ORIGIN, "a" * 64) != pool_manifest_digest(
         "https://other.invalid", "a" * 64
     )
