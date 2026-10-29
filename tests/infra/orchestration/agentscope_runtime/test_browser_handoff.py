@@ -361,6 +361,45 @@ def test_failure_after_admission_started_is_closed_once_by_the_shell() -> None:
     assert not entry.busy
 
 
+def test_cancellation_during_the_turn_close_of_a_browser_result_closes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> tuple[BrowserHarness, bool, bool]:
+        harness = BrowserHarness(_browser_steps({"keyword": "报修"}), browser_execute=_completed())
+        tasks = harness.base.tasks
+        original = tasks.update_status
+        closing, gate = asyncio.Event(), asyncio.Event()
+
+        async def stalled(task_id: str, status: str, error_code: str | None = None) -> Any:
+            closing.set()
+            await gate.wait()
+            return await original(task_id, status, error_code)
+
+        monkeypatch.setattr(tasks, "update_status", stalled)
+        harness.base.login()
+        harness.open_scope()
+        request = asyncio.ensure_future(harness.base.send("帮我读一下报修单"))
+        await closing.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        await _settle()
+        _, entry = harness.base.state()
+        busy_while_closing = entry.busy
+        gate.set()
+        await _settle()
+        return harness, busy_while_closing, entry.busy
+
+    harness, busy_while_closing, busy_after = asyncio.run(exercise())
+    assert harness.browser.executed_ids == [BROWSER_ID]
+    # The turn's close of the settled result is the only close: no fail_if_open.
+    assert harness.handoff.fail_calls == 0 and harness.handoff.commits == 0
+    assert harness.statuses() == ["status:completed"]
+    assert harness.base.timeline.entries.count("finalize") == 1
+    # The session stays busy until that close ends, then it is free.
+    assert busy_while_closing and not busy_after
+
+
 def test_failure_before_any_browser_operation_is_closed_once_by_the_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

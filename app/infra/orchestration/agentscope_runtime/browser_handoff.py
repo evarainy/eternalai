@@ -4,8 +4,9 @@
 budget, cross-process route ownership, replay lookup before the busy check,
 and recovery. ``BrowserTurnOwnership`` records whether the turn entered a
 browser persistent operation; from then on the shell alone closes the chat
-intent, once, with ``fail_if_open``, and the session is released only after
-that close. ``BrowserHandoffCoordinator`` runs one accepted browser tool call:
+intent, once, with ``fail_if_open``, unless the turn already started its own
+close of a settled browser result; the session is released only after every
+close. ``BrowserHandoffCoordinator`` runs one accepted browser tool call:
 server-side recheck, D collection, binding freeze, admission through the
 barrier-free orchestration and the handoff. It is the only holder of that
 orchestration and only runs the registered capability.
@@ -141,22 +142,24 @@ def d_browser_binding(
 class BrowserTurnOwnership:
     """Who closes the chat intent of one browser request, and when the session is free."""
 
-    __slots__ = ("_release", "browser_owned")
+    __slots__ = ("_release", "browser_owned", "turn_close")
 
     def __init__(self) -> None:
         # Set synchronously before the first browser persistent write is awaited.
         self.browser_owned = False
+        # The turn's own close of a settled browser result; the shell then never closes.
+        self.turn_close: asyncio.Future[Any] | None = None
         self._release: Callable[[Collection[asyncio.Future[Any]]], None] | None = None
 
     def defer_release(self, release: Callable[[Collection[asyncio.Future[Any]]], None]) -> None:
         self._release = release
 
     def finish(self, close: asyncio.Future[Any] | None) -> None:
-        """Release a deferred session once, after ``close`` as well when one was started."""
+        """Release a deferred session once, after every close that was started."""
 
         release, self._release = self._release, None
         if release is not None:
-            release(() if close is None else (close,))
+            release(tuple(item for item in (close, self.turn_close) if item is not None))
 
 
 class BrowserRequestShell:
@@ -238,7 +241,7 @@ class BrowserRequestShell:
                 return recovered
             return helpers.browser_unconfirmed_response(scope, timeout=False)
         finally:
-            if not settled and ownership.browser_owned:
+            if not settled and ownership.browser_owned and ownership.turn_close is None:
                 closing = helpers.start_close_intent(scope)
             # The session stays busy until this close has ended too.
             ownership.finish(closing)

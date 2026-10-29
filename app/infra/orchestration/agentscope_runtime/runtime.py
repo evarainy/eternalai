@@ -353,6 +353,11 @@ class AgentScopeRuntime:
         if reference is not None and (browser_scope is None or shell is None):
             # A reply needs a trusted browser request; never handed to the legacy path.
             raise DFormCollectionError("collection_not_found")
+        if browser_scope is not None and shell is not None and not browser_scope.matches(
+            principal, session_id
+        ):
+            # Same order as the legacy path: before confirmations and the document route.
+            raise ValueError("browser_request_context_mismatch")
         owner = _owner(principal, session_id)
         if reference is None:
             # Deterministic confirmations before the busy check: no turn, no AgentState.
@@ -373,8 +378,6 @@ class AgentScopeRuntime:
             return await self._accept(scope, context, owner, message, None, question)
         if browser_scope is None or shell is None:
             return await self._accept(scope, context, owner, message, None)
-        if not browser_scope.matches(principal, session_id):
-            raise ValueError("browser_request_context_mismatch")
         # Model calls of a browser request must be answered by the configured model.
         expected = expect_model(self._deps.model_name)
         try:
@@ -498,6 +501,9 @@ class AgentScopeRuntime:
             if outcome.close is None:
                 return envelope
             closing = close_once(ledger, deps, scope, outcome.close)
+            if turn.browser is not None:
+                # Cancelled or timed out while this close runs: the shell must not close again.
+                turn.browser.ownership.turn_close = closing.future
             remaining = max(0.0, turn.deadline - asyncio.get_running_loop().time())
             if not await await_close(closing, remaining):
                 # A failed terminal write is reported as a failure, never success.
