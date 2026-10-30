@@ -651,17 +651,6 @@ class Flow:
             return False
         return frame.page is not self.page or frame is not self.page.main_frame
 
-    def demo_resource_allowed(self, request: Request, address: Origin) -> bool:
-        # Resource services on the configured host may use another port.
-        # Documents, other hosts/protocols and write methods keep their scope.
-        return (
-            not request.is_navigation_request()
-            and request.method in {"GET", "HEAD"}
-            and address[0] == self.binding.scheme
-            and address[1] == self.binding.host
-            and 0 < address[2] <= 65535
-        )
-
     def page_changed(
         self, code: str, frame: Frame | None = None, page: Page | None = None
     ) -> None:
@@ -804,7 +793,8 @@ class Flow:
             try:
                 request = request_route.request
                 address = origin(request.url)
-                if address in self.allowed or self.demo_resource_allowed(request, address):
+                # Only the configured OA host restricts requests; its own pass unchanged.
+                if address[1] == self.binding.host:
                     await request_route.continue_()
                 else:
                     if not self.demo_background_request(request):
@@ -824,12 +814,7 @@ class Flow:
 
         async def websocket(item: WebSocketRoute) -> None:
             try:
-                allowed = {
-                    ("wss" if scheme == "https" else "ws", host, port)
-                    for scheme, host, port in self.allowed
-                }
-                address = origin(item.url)
-                if address in allowed:
+                if origin(item.url)[1] == self.binding.host:
                     item.connect_to_server()
                 else:
                     await item.close()

@@ -13,6 +13,7 @@ from playwright.async_api import (
     Frame,
     Page,
 )
+from playwright.async_api import Error as PWError
 
 from .d_form_flow import (
     FIELDS,
@@ -282,11 +283,37 @@ class PortalFlow(Flow):
     async def prepare_page(self) -> None:
         await self.prepare()
 
+    async def wait_ready(self) -> None:
+        """The portal renders its menu or the form after the document loads.
+
+        Bounded wait only; a page that never shows either is judged by the steps below.
+        """
+        page = cast(Page, self.page)
+        for _ in range(60):
+            need(self.violation is None, self.violation or "PAGE_CHANGED")
+            need(not self.cancel.is_set(), "CANCELLED")
+            for frame in page.frames:
+                if not self.scan_frame(frame, page):
+                    continue
+                try:
+                    if await frame.get_by_text("运维管理", exact=True).count():
+                        return
+                    array = await frame.evaluate_handle(FIND, FIELDS[1])
+                    try:
+                        if await array.evaluate("a=>a.length"):
+                            return
+                    finally:
+                        await array.dispose()
+                except PWError:
+                    continue  # A frame replaced while the page is still loading.
+            await asyncio.sleep(0.25)
+
     async def prepare(self) -> None:
         self.phase = "PORTAL_PREP"
         for page in cast(BrowserContext, self.context).pages:
             self.watch(page)
         await self.maximize()
+        await self.wait_ready()
         await self.close_information()
         try:
             await self.fields()

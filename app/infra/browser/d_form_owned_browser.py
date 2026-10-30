@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from app.browser_skill.site_rules import canonical_origin, navigation_allowed
+from app.browser_skill.site_rules import canonical_origin
 from app.infra.browser.d_form_cli import CODES
 from app.infra.browser.oa_browser_login import RunBoundOACredentialVault
 from app.ports.browser_read_execution import BrowserReadExecutionError
@@ -45,7 +45,6 @@ _D_FORM_LOG_STAGES = frozenset(
         "browser_start",
         "credential",
         "login_response",
-        "login_aux_post",
         "credential_login_id",
         "credential_password",
         "control_login_id_wait",
@@ -154,12 +153,7 @@ _D_FORM_LOG_CODES = frozenset(CODES) | frozenset(
         "browser_publication_version_conflict",
         # Fixed reasons of the kept owned-browser refusals; one code per refusal point.
         "ROUTE_ORIGIN_DENIED",
-        "ROUTE_METHOD_OR_FRAME_DENIED",
-        "ROUTE_LOGIN_NOT_ARMED",
-        "ROUTE_LOGIN_DUPLICATE",
-        "LOGIN_AUX_POST_ALLOWED",
-        "LOGIN_AUX_POST_BLOCKED",
-        "VIOLATION_ROUTE_EXCEPTION",
+        "VIOLATION_FOREIGN_NAVIGATION",
         "VIOLATION_UNCLASSIFIED",
         "LOGIN_STOP_VISIBLE",
         "CONTROL_PASSWORD_TYPE",
@@ -377,8 +371,6 @@ class OwnedDFormBrowser:
         self.violation = False
         self._violation_seen = asyncio.Event()
         self._first_violation_code: str | None = None
-        self.login_armed = False
-        self.login_request: Any = None
         self.port = 0
         self.context_id: str | None = None
         self.target_id: str | None = None
@@ -582,54 +574,22 @@ class OwnedDFormBrowser:
         await startup.close()
         protected = await self.protect_context(self.browser, self.context)
         await protected.detach()
-        anonymous_initialization = False
-        initialization_lock = asyncio.Lock()
+        host = urlsplit(self.origin).hostname
 
         async def route(item: Any) -> None:
-            # Only the configured OA origin; one armed credential POST; other
-            # writes are aborted. No per-request run fence.
-            route_reason = "ROUTE_ORIGIN_DENIED"
-            try:
-                request = item.request
-                parsed = urlsplit(request.url)
-                if (
-                    not navigation_allowed(request.url, (self.origin,))
-                    or parsed.username is not None
-                    or parsed.password is not None
-                ):
-                    raise BrowserReadExecutionError("denied")
-                if request.method not in {"GET", "HEAD", "OPTIONS"}:
-                    route_reason = "ROUTE_METHOD_OR_FRAME_DENIED"
-                    if request.method != "POST" or request.frame is not self.page.main_frame:
-                        raise BrowserReadExecutionError("denied")
-                    if parsed.path != _LOGIN_POST_PATH:
-                        async with initialization_lock:
-                            if anonymous_initialization:
-                                await item.continue_()
-                                log_d_form_stage(
-                                    "login_aux_post",
-                                    "success",
-                                    "LOGIN_AUX_POST_ALLOWED",
-                                    self.began,
-                                )
-                                return
-                        await item.abort()
-                        log_d_form_stage(
-                            "login_aux_post", "unavailable", "LOGIN_AUX_POST_BLOCKED", self.began
-                        )
-                        return
-                    route_reason = (
-                        "ROUTE_LOGIN_NOT_ARMED" if not self.login_armed else "ROUTE_LOGIN_DUPLICATE"
-                    )
-                    if not self.login_armed or self.login_request is not None:
-                        raise BrowserReadExecutionError("denied")
-                    self.login_request = request
+            # Only the configured OA host (baseline 4); its own requests pass unchanged.
+            request = item.request
+            if urlsplit(request.url).hostname == host:
                 await item.continue_()
-            except Exception:
+                return
+            if request.is_navigation_request() and request.frame is self.page.main_frame:
+                # Leaving the OA site, not a blocked resource of an OA page.
                 if not self.violation:
-                    log_d_form_stage(self.current_stage, "failed", route_reason, self.began)
-                self._mark_violation("VIOLATION_ROUTE_EXCEPTION")
-                await item.abort()
+                    log_d_form_stage(
+                        self.current_stage, "failed", "ROUTE_ORIGIN_DENIED", self.began
+                    )
+                self._mark_violation("VIOLATION_FOREIGN_NAVIGATION")
+            await item.abort()
 
         async def websocket(item: Any) -> None:
             await item.close()  # Context routes do not cover WebSockets; none is opened.
@@ -638,76 +598,70 @@ class OwnedDFormBrowser:
         await self.context.route_web_socket("**/*", websocket)
         self._stage("browser_start", "success")
         self._stage("page")
-        anonymous_initialization = True
         try:
-            try:
-                await self._unless_violation(
-                    self.page.goto(
-                        self.origin + self.contract.login_path,
-                        wait_until="domcontentloaded",
-                        timeout=30000,
-                    )
+            await self._unless_violation(
+                self.page.goto(
+                    self.origin + self.contract.login_path,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
                 )
-            except (TimeoutError, PlaywrightTimeoutError):
-                await self._log_login_snapshot()
-                self._stage("page", "failed", "timeout")
-                raise
-            except BrowserReadExecutionError:
-                if self.violation:
-                    self._violation_stop("page")
-                raise
-            self._stage("page", "success")
-            self._stage("control")
-            controls = [
-                self.page.locator(s)
-                for s in (
-                    self.contract.login_id,
-                    self.contract.password,
-                    self.contract.submit,
+            )
+        except (TimeoutError, PlaywrightTimeoutError):
+            await self._log_login_snapshot()
+            self._stage("page", "failed", "timeout")
+            raise
+        except BrowserReadExecutionError:
+            if self.violation:
+                self._violation_stop("page")
+            raise
+        self._stage("page", "success")
+        self._stage("control")
+        controls = [
+            self.page.locator(s)
+            for s in (
+                self.contract.login_id,
+                self.contract.password,
+                self.contract.submit,
+            )
+        ]
+        current_step = "control_login_id_wait"
+
+        async def wait_for_controls() -> None:
+            nonlocal current_step
+            stages = ("control_login_id_wait", "control_password_wait", "control_submit_wait")
+            for stage, control in zip(stages, controls):
+                current_step = stage
+                self._stage(stage)
+                await self._unless_violation(control.wait_for(state="visible", timeout=30000))
+                self._stage(stage, "success")
+
+        try:
+            await asyncio.wait_for(wait_for_controls(), 30)
+        except (TimeoutError, PlaywrightTimeoutError):
+            await self._log_login_snapshot()
+            self._stage(current_step, "failed", "OBSERVE_TIMEOUT")
+            self._stage("control", "failed", "OBSERVE_TIMEOUT")
+            raise
+        except BrowserReadExecutionError:
+            if self.violation:
+                self._violation_stop(current_step, "control")
+            raise
+        # Credentials go only into one visible, enabled control of each kind.
+        for control in controls:
+            count = await control.count()
+            if count != 1:
+                self._stage(
+                    "control",
+                    "failed",
+                    "CONTROL_MISSING" if count == 0 else "CONTROL_AMBIGUOUS",
                 )
-            ]
-            current_step = "control_login_id_wait"
-
-            async def wait_for_controls() -> None:
-                nonlocal current_step
-                stages = ("control_login_id_wait", "control_password_wait", "control_submit_wait")
-                for stage, control in zip(stages, controls):
-                    current_step = stage
-                    self._stage(stage)
-                    await self._unless_violation(control.wait_for(state="visible", timeout=30000))
-                    self._stage(stage, "success")
-
-            try:
-                await asyncio.wait_for(wait_for_controls(), 30)
-            except (TimeoutError, PlaywrightTimeoutError):
-                await self._log_login_snapshot()
-                self._stage(current_step, "failed", "OBSERVE_TIMEOUT")
-                self._stage("control", "failed", "OBSERVE_TIMEOUT")
-                raise
-            except BrowserReadExecutionError:
-                if self.violation:
-                    self._violation_stop(current_step, "control")
-                raise
-            # Credentials go only into one visible, enabled control of each kind.
-            for control in controls:
-                count = await control.count()
-                if count != 1:
-                    self._stage(
-                        "control",
-                        "failed",
-                        "CONTROL_MISSING" if count == 0 else "CONTROL_AMBIGUOUS",
-                    )
-                    raise BrowserReadExecutionError("denied")
-                if not await control.is_visible() or not await control.is_enabled():
-                    self._stage("control", "failed", "CONTROL_CHANGED")
-                    raise BrowserReadExecutionError("denied")
-            if await controls[1].get_attribute("type") != "password":
-                self._stage("control", "failed", "CONTROL_PASSWORD_TYPE")
                 raise BrowserReadExecutionError("denied")
-        finally:
-            # End anonymous loading before consuming credentials; keep the route active.
-            async with initialization_lock:
-                anonymous_initialization = False
+            if not await control.is_visible() or not await control.is_enabled():
+                self._stage("control", "failed", "CONTROL_CHANGED")
+                raise BrowserReadExecutionError("denied")
+        if await controls[1].get_attribute("type") != "password":
+            self._stage("control", "failed", "CONTROL_PASSWORD_TYPE")
+            raise BrowserReadExecutionError("denied")
         self._stage("control", "success")
 
         async def consume(credential: PasswordBindingCredential) -> None:
@@ -721,26 +675,22 @@ class OwnedDFormBrowser:
             self._stage("credential_password", "success")
             await fence()  # One run fence before the only credential POST.
             self._stage("submit")
-            self.login_armed = True
-            try:
-                async with self.page.expect_response(
-                    lambda response: (
-                        self.login_request is not None and response.request is self.login_request
-                    ),
-                    timeout=15000,
-                ) as pending:
-                    await controls[2].click(timeout=5000, no_wait_after=True)
-                    self._stage("submit", "success")
-                    self._stage("login_response")
-                response = await pending.value
-                self._stage("login_response", "received")
-                self._stage("identity")
-                await vault.verify_login_response(response=response)
-                self.identity_verified = True
-                self._stage("identity", "success")
-            finally:
-                self.login_armed = False
-                self.login_request = None
+            async with self.page.expect_response(
+                lambda response: (
+                    response.request.method == "POST"
+                    and urlsplit(response.url).path == _LOGIN_POST_PATH
+                ),
+                timeout=15000,
+            ) as pending:
+                await controls[2].click(timeout=5000, no_wait_after=True)
+                self._stage("submit", "success")
+                self._stage("login_response")
+            response = await pending.value
+            self._stage("login_response", "received")
+            self._stage("identity")
+            await vault.verify_login_response(response=response)
+            self.identity_verified = True
+            self._stage("identity", "success")
 
         self._stage("credential")
         await asyncio.wait_for(vault.consume_login(consume), 45)
@@ -800,7 +750,7 @@ class OwnedDFormBrowser:
             protection = await self.protect_context(self.browser, self.context)
             self.portal.sessions.append(protection)
             await asyncio.wait_for(self.enter_portal_once(), 45)
-            await asyncio.wait_for(self.portal.prepare_page(), 30)
+            await asyncio.wait_for(self.portal.prepare_page(), 60)
             await fence()
             self.native = {**self.native, "target_id": self.portal.binding.target_id}
             self.target_id = self.portal.binding.target_id
@@ -858,9 +808,11 @@ class OwnedDFormBrowser:
 
     async def stop_automation(self) -> None:
         """Disconnect the private Playwright driver, preserving this Job/window."""
-        self.login_armed = False
         if self.playwright is not None:
             try:
+                if self.context is not None:
+                    # Route callbacks still in flight must not touch a closing target.
+                    await self.context.unroute_all(behavior="ignoreErrors")
                 await asyncio.wait_for(self.playwright.stop(), 10)
             except Exception:
                 return  # Attachment state unknown: the caller quarantines the lease.
