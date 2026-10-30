@@ -36,7 +36,11 @@ from app.infra.orchestration.agentscope_read_tools import (
     ReadToolScope,
     TaskClose,
 )
-from app.infra.orchestration.agentscope_runtime.catalog import CatalogTool
+from app.infra.orchestration.agentscope_runtime.catalog import (
+    CatalogTool,
+    ToolCatalog,
+    with_browser_tool,
+)
 from app.infra.orchestration.agentscope_runtime.ledger import BrowserSettled, TurnLedger
 from app.knowledge.capability_selection import canonical_json, capability_fingerprint
 from app.memory import SessionMemoryKey
@@ -90,6 +94,20 @@ FILL_STOP_INSTRUCTIONS = (
     "本工具要单独调用，不要与其他工具放在同一次回复里；调用后本轮结束，"
     "不要声称已经保存或提交。"
 )
+# Group description opening and tool description lead of a D tool (user
+# decision 2026-10-30: every "something is broken" report goes to D; the card
+# asks for what is missing, never the model, and the category is never asked).
+FILL_STOP_PURPOSE = (
+    "OA 报修：设备或设施坏了、出故障、需要维修时用这一组，即使用户只说了哪样东西坏了"
+    "（例如监控、投影仪、电脑、门禁坏了）；由浏览器在 OA 报修表单中填写后停止，不会保存或提交。"
+    "不用于查询待办或消息。"
+)
+FILL_STOP_USAGE = (
+    "OA 报修工具：用户说设备或设施坏了、出故障或要报修时调用，即使只说了哪样东西坏了。"
+    "按用户原话填写故障位置 position 和故障描述 description，没说的省略；"
+    "缺少的信息由系统追问，不要用文字或 ask_user 追问；"
+    "不要询问报修类别、姓名、电话或紧急程度。"
+)
 # A collection reply is a fixed-format extraction: JSON output, as on the legacy
 # path, never a tool call the model may skip (user decision 2026-10-29).
 REPLY_FIELDS_PROMPT = (
@@ -124,6 +142,23 @@ _LOGGER = logging.getLogger("uvicorn.error.agentscope_runtime")
 
 def browser_instructions(registration: BrowserGatewayRegistration) -> str:
     return FILL_STOP_INSTRUCTIONS if registration.effect == "fill_stop" else READ_ONLY_INSTRUCTIONS
+
+
+def expose_browser_tool(
+    catalog: ToolCatalog, spec: CapabilitySpec, registration: BrowserGatewayRegistration
+) -> tuple[ToolCatalog, CatalogTool | None]:
+    """Add the registered browser tool; a D tool is described as the OA repair tool.
+
+    The registered D text only says "fill an opened form" and its required
+    hint sends missing fields to ask_user; the model picks the group by its
+    description, so D says it takes repair reports and leaves gaps to the card.
+    """
+
+    if registration.effect != "fill_stop":
+        return with_browser_tool(catalog, spec, READ_ONLY_INSTRUCTIONS)
+    return with_browser_tool(
+        catalog, spec, FILL_STOP_INSTRUCTIONS, FILL_STOP_PURPOSE, FILL_STOP_USAGE
+    )
 
 
 async def _json_call(
@@ -812,6 +847,8 @@ def _failed(error_code: Any, trace_id: str) -> ExecutionResult:
 __all__ = (
     "BROWSER_BINDING_RESOURCE_ID",
     "FILL_STOP_INSTRUCTIONS",
+    "FILL_STOP_PURPOSE",
+    "FILL_STOP_USAGE",
     "M2_BROWSER_PROMPT_VERSION",
     "READ_ONLY_INSTRUCTIONS",
     "BrowserHandoffCoordinator",
@@ -820,6 +857,7 @@ __all__ = (
     "allowed_browser_keys",
     "browser_instructions",
     "d_browser_binding",
+    "expose_browser_tool",
     "extract_reply_fields",
     "select_category",
 )

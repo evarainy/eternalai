@@ -715,3 +715,86 @@ def test_without_candidates_an_explicit_category_reply_is_extracted_as_on_the_le
     ]
     schema = harness.base.model.formats[-1]["json_schema"]["schema"]
     assert set(schema["properties"]) == {"position", "description", "category"}
+
+
+def _registered_d_form_text(harness: BrowserHarness) -> None:
+    # The registered manifest's own wording and required list (d_form_manifest.py).
+    harness.base.registry.items[D_FORM_ID] = _d_form_capability().model_copy(
+        update={
+            "name": "填写表单后停止",
+            "short_description": (
+                "仅在已打开且获准的表单填写类别、故障位置和故障描述，随后停止；不保存或提交。"
+            ),
+            "input_schema": {
+                **_d_form_capability().input_schema,
+                "required": ["category", "position", "description"],
+            },
+        }
+    )
+
+
+def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object() -> None:
+    # 2026-10-30 acceptance: glm answered 监控坏了 in free text, asking for the
+    # category, location and urgency, and then picked the OA pending list.
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [
+                *_d_steps({"description": "监控坏了"}),
+                _text('{"position":"1楼走廊东侧"}'),
+                _text('{"category":"监控系统"}'),
+            ],
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        _registered_d_form_text(harness)
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("监控坏了")
+        await _settle()
+        return harness, card, await _reply(harness, card, "黑屏无法查看，在1楼走廊东侧")
+
+    harness, card, admitted = asyncio.run(exercise())
+    messages, tools = harness.base.model.seen[0]
+    # Before any group is active the model sees the repair rule and a D group
+    # that takes repair reports; the activated D tool no longer sends missing
+    # fields to ask_user.
+    assert "OA 报修：用户说设备或设施坏了" in messages and "不要询问类别" in messages
+    assert "OA 报修：设备或设施坏了、出故障、需要维修时用这一组" in tools
+    _, d_tools = harness.base.model.seen[1]
+    assert "OA 报修工具：用户说设备或设施坏了" in d_tools
+    assert "缺少时调用 ask_user" not in d_tools
+    assert card.status == "waiting_user" and card.data is not None
+    assert "请补充故障位置" in card.message and "类别" not in card.message
+    assert admitted.status == "running" and admitted.data is not None
+    assert admitted.data["kind"] == "accepted"
+    assert harness.browser.executed_arguments == [
+        {"position": "1楼走廊东侧", "description": "监控坏了", "category": "监控系统"}
+    ]
+
+
+def test_a_pending_query_still_reads_while_the_repair_tool_is_exposed() -> None:
+    async def exercise(*, scoped: bool) -> BrowserHarness:
+        harness = BrowserHarness(
+            [
+                _calls(("reset_tools", {"oa_query": True})),
+                _calls((READ_TOOL, {"days": 1})),
+                _text("查到了"),
+            ],
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        harness.base.login()
+        if scoped:
+            harness.open_scope()
+        envelope = await harness.base.send("我有哪些待办")
+        await _settle()
+        assert envelope.status == "completed"
+        return harness
+
+    read = asyncio.run(exercise(scoped=True))
+    assert read.base.orchestration.executed_ids == ["oa.leave_balance"]  # type: ignore[attr-defined]
+    assert read.browser.executions == 0 and read.store.snapshots == {}
+    # The repair rule is part of the prompt only while the D tool is exposed.
+    assert "OA 报修：用户说设备或设施坏了" in read.base.model.seen[0][0]
+    unscoped = asyncio.run(exercise(scoped=False))
+    assert "OA 报修" not in unscoped.base.model.seen[0][0]

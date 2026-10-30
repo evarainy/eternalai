@@ -75,6 +75,7 @@ SCOPE_EXCLUDED_PREFIX = "browser."
 # Group of the registered browser tool; only that one tool, never activated
 # together with a write proposal (each must be called alone).
 BROWSER_GROUP = "oa_browser"
+BROWSER_GROUP_PURPOSE = "在 OA 网页中由浏览器代为处理已登记的事项，不会保存或提交。"
 ToolKind = Literal["read", "write", "browser"]
 # Second-level split inside one primary group, applied only when the primary
 # group does not fit in one chunk: {group: ((subgroup, (capability suffix,
@@ -354,9 +355,17 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
 
 
 def with_browser_tool(
-    catalog: ToolCatalog, spec: CapabilitySpec, instructions: str
+    catalog: ToolCatalog,
+    spec: CapabilitySpec,
+    instructions: str,
+    purpose: str = BROWSER_GROUP_PURPOSE,
+    usage: str | None = None,
 ) -> tuple[ToolCatalog, CatalogTool | None]:
     """Add the registered browser capability as the only tool of BROWSER_GROUP.
+
+    ``purpose`` opens the group description the model selects groups by. A
+    ``usage`` text replaces the required-argument hint of the tool
+    description: the runtime, not ask_user, collects missing arguments.
 
     A definition that cannot be projected is not registered and marks the
     catalog incomplete, like any other rejected definition.
@@ -383,7 +392,11 @@ def with_browser_tool(
         name=name,
         capability_id=spec.capability_id,
         group=BROWSER_GROUP,
-        description=_description(spec, schema),
+        description=(
+            _description(spec, schema)
+            if usage is None
+            else f"{usage}{spec.name}：{spec.short_description}"
+        ),
         input_schema=schema,
         schema_digest=hashlib.sha256(canonical_json(schema).encode("utf-8")).hexdigest(),
         binding=CandidateBinding(
@@ -399,8 +412,7 @@ def with_browser_tool(
     group = CatalogGroup(
         name=BROWSER_GROUP,
         description=(
-            "在 OA 网页中由浏览器代为处理已登记的事项，不会保存或提交。包含："
-            + (spec.name if summary is None else f"{spec.name}：{summary}")
+            purpose + "包含：" + (spec.name if summary is None else f"{spec.name}：{summary}")
         ),
         instructions=instructions,
         tool_names=(name,),
@@ -576,6 +588,7 @@ __all__ = (
     "TOOL_GROUP_PROTOCOL_VERSION",
     "VISIBLE_TYPES",
     "BROWSER_GROUP",
+    "BROWSER_GROUP_PURPOSE",
     "WRITE_GROUP_BY_TARGET",
     "WRITE_GROUP_INSTRUCTIONS",
     "CatalogGroup",

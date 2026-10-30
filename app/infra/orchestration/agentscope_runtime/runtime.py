@@ -66,17 +66,17 @@ from app.infra.orchestration.agentscope_runtime.browser_handoff import (
     BrowserRequestShell,
     BrowserTurnOwnership,
     allowed_browser_keys,
-    browser_instructions,
+    expose_browser_tool,
     extract_reply_fields,
 )
 from app.infra.orchestration.agentscope_runtime.catalog import (
+    BROWSER_GROUP,
     TOOL_GROUP_PROTOCOL_VERSION,
     CatalogTool,
     ToolCatalog,
     VisibleCatalog,
     build_tool_catalog,
     visible_capabilities,
-    with_browser_tool,
 )
 from app.infra.orchestration.agentscope_runtime.document_route import (
     answer_document,
@@ -148,7 +148,8 @@ from app.runtime.d_form_collection import CategoryEvidence
 if TYPE_CHECKING:
     from agentscope.agent import Agent
 
-M1_PROMPT_VERSION = "m2-1"
+# m2-2: the repair rule while the D tool is exposed (user decision 2026-10-30).
+M1_PROMPT_VERSION = "m2-2"
 M1_SYSTEM_PROMPT = (
     # General rules carried over from the M0 prompt.
     "你是企业内部业务助手。查询用只读工具；写入类工具只会生成确认卡片，由用户确认后才执行，"
@@ -199,6 +200,16 @@ M1_SYSTEM_PROMPT = (
     "激活工具组后发现没有能处理该请求的工具、也没有别的组可换时，同样调用 report_unsupported。"
     "已经调用过业务工具后不要再调用 report_unsupported；结果为空就如实告诉用户没有查到数据。"
     "闲聊或解释能做什么时直接用文字回答，不要调用 report_unsupported 或 ask_user。"
+)
+# Appended only while this turn exposes the registered D tool.
+M1_REPAIR_PROMPT = (
+    "OA 报修：用户说设备或设施坏了、出故障、不能用或要报修、维修时（例如“监控坏了”"
+    "“投影仪没有画面”），这就是报修请求：用 reset_tools 激活 "
+    f"{BROWSER_GROUP} 组并调用其中的报修工具，即使用户只说了哪样东西坏了也要调用。"
+    "报修请求不适用上面的第三条：缺少的故障位置或故障情况由系统追问，"
+    "不要用文字或 ask_user 追问；报修类别由系统从候选中选择，不要询问类别，"
+    "也不要询问姓名、电话、紧急程度等报修表单之外的信息。"
+    "报修请求不要调用查询待办、消息等查询工具，也不要调用 report_unsupported。"
 )
 AGENT_NAME = "eternalai_m1"
 
@@ -776,9 +787,7 @@ class AgentScopeRuntime:
             ):
                 raise DFormCollectionError("collection_version_conflict")
             category_options = await self._browser.category_options(owner_key, spec)
-            catalog, tool = with_browser_tool(
-                build_tool_catalog(()), spec, browser_instructions(self._registration())
-            )
+            catalog, tool = expose_browser_tool(build_tool_catalog(()), spec, self._registration())
             if tool is None:
                 raise DFormCollectionError("collection_version_conflict")
             ledger.business_tools = {tool.name: tool.capability_id}
@@ -922,9 +931,7 @@ class AgentScopeRuntime:
         if spec is not None:
             # Only for this trusted browser request; never carried to another turn.
             assert browser is not None
-            catalog, tool = with_browser_tool(
-                catalog, spec, browser_instructions(self._registration())
-            )
+            catalog, tool = expose_browser_tool(catalog, spec, self._registration())
             browser.spec = spec if tool is not None else None
         if not catalog.tools:
             return await self._catalog_invalid(turn, catalog)
@@ -957,7 +964,13 @@ class AgentScopeRuntime:
         )
         agent = create_bounded_agent(
             name=AGENT_NAME,
-            system_prompt=M1_SYSTEM_PROMPT,
+            system_prompt=M1_SYSTEM_PROMPT + (
+                M1_REPAIR_PROMPT
+                if browser is not None
+                and browser.spec is not None
+                and self._registration().effect == "fill_stop"
+                else ""
+            ),
             model=model,
             toolkit=kit.toolkit,
             state=state,
@@ -1581,4 +1594,10 @@ def _model_text(final: Msg | None) -> str | None:
     return text or None
 
 
-__all__ = ("AGENT_NAME", "M1_PROMPT_VERSION", "M1_SYSTEM_PROMPT", "AgentScopeRuntime")
+__all__ = (
+    "AGENT_NAME",
+    "M1_PROMPT_VERSION",
+    "M1_REPAIR_PROMPT",
+    "M1_SYSTEM_PROMPT",
+    "AgentScopeRuntime",
+)
