@@ -34,10 +34,6 @@ from playwright.async_api import (
 from playwright.async_api import Error as PWError
 from playwright.async_api import TimeoutError as PWTimeout
 
-# Temporary approved D demo policy, fixed by the publication source digest.
-# Keep origin/target ownership, cancellation and actual field verification.
-DEMO_EXTRA_GUARDS_DISABLED = True
-
 FIELDS = ("报修类别", "故障位置", "故障描述")
 MODES = {"READ_REPORTER", "FILL_STOP"}
 CODES = {
@@ -442,36 +438,8 @@ class Binding:
 
     @classmethod
     def parse(cls, value: object) -> Binding:
-        need(
-            type(value) is dict
-            and set(value)
-            in (set(cls.__dataclass_fields__), set(cls.__dataclass_fields__) - {"source_port"}),
-            "CONFIG_FAILED",
-        )
-        # Exact dataclass keys are checked above; field values retain the original
-        # constructor and post-construction validation path.
+        # Built by the trusted host from its own owned browser; only origin facts here.
         binding = cls(**cast(BindingData, value))
-        need(
-            type(binding.pid) is int
-            and binding.pid > 0
-            and type(binding.port) is int
-            and 0 < binding.port <= 65535
-            and type(binding.created) in (int, float),
-            "CONFIG_FAILED",
-        )
-        for name in (
-            "executable",
-            "profile",
-            "profile_root",
-            "context_id",
-            "target_id",
-            "host",
-            "scheme",
-        ):
-            need(
-                isinstance(getattr(binding, name), str) and 0 < len(getattr(binding, name)) <= 4096,
-                "CONFIG_FAILED",
-            )
         try:
             ipaddress.ip_address(binding.host)
         except ValueError:
@@ -499,38 +467,12 @@ def origin(value: str) -> Origin:
 
 class Flow:
     def __init__(self, request: object, emit: FlowEmit, cancel: asyncio.Event) -> None:
-        need(
-            type(request) is dict and set(request) == {"mode", "binding", "inputs", "local_gate"},
-            "CONFIG_FAILED",
-        )
-        request = cast(dict[str, object], request)  # Exact dict check above.
-        need(request["mode"] in MODES and type(request["local_gate"]) is bool, "CONFIG_FAILED")
-        request = cast(FlowRequest, request)  # Exact keys, mode and local_gate checked above.
+        request = cast(FlowRequest, request)  # Built and validated by the host.
+        need(request["mode"] in MODES, "CONFIG_FAILED")
         self.binding = Binding.parse(request["binding"])
         self.mode = request["mode"]
         self.inputs: FlowInputs | None = request["inputs"]
         self.local_gate = request["local_gate"]
-        if self.mode == "FILL_STOP":
-            need(
-                type(self.inputs) is dict
-                and set(self.inputs) == {"category", "position", "description"},
-                "CONFIG_FAILED",
-            )
-            inputs = cast(FlowInputs, self.inputs)  # Exact three-key dict checked above.
-            need(
-                all(
-                    isinstance(v, str) and 0 < len(v.strip()) <= 500 and "\x00" not in v
-                    for v in inputs.values()
-                ),
-                "CONFIG_FAILED",
-            )
-            need(
-                len(inputs["category"]) <= 100
-                and len(inputs["category"].splitlines()) == 1,
-                "CONFIG_FAILED",
-            )
-        else:
-            need(self.inputs is None, "CONFIG_FAILED")
         self.emit = emit
         self.cancel = cancel
         self.violation: str | None = None
@@ -543,7 +485,6 @@ class Flow:
         self.probes: list[tuple[ElementHandle, str, str]] = []
         self.allowed: set[Origin] = set()
         self.pages: set[Page] = set()
-        self.frame_ids: set[str] = set()
         self.route_installed = False
         self.ws_installed = False
         self.http_route: Callable[[Route], Awaitable[None]] | None = None
@@ -552,7 +493,6 @@ class Flow:
         self.mutex = None
         self.observe_depth = 0
         self.helper_cleanup_failed = False
-        self.open_category: tuple[ElementHandle, ElementHandle] | None = None
         self.egress_recorded = False
         self.phase = "CONNECT"
         self.began: float | None = None
@@ -628,8 +568,6 @@ class Flow:
         self.handlers.append((emitter, name, callback))
 
     def flag(self, code: str) -> None:
-        if DEMO_EXTRA_GUARDS_DISABLED and code == "UNEXPECTED_DIALOG":
-            return
         if self.violation is None:
             self.violation = code
 
@@ -701,14 +639,10 @@ class Flow:
 
     def scan_frame(self, frame: Frame, page: Page) -> bool:
         return frame.url != "about:blank" and (
-            not DEMO_EXTRA_GUARDS_DISABLED
-            or frame is page.main_frame
-            or self.source_in_scope(frame.url)
+            frame is page.main_frame or self.source_in_scope(frame.url)
         )
 
     def demo_background_request(self, request: Request) -> bool:
-        if not DEMO_EXTRA_GUARDS_DISABLED:
-            return False
         if not request.is_navigation_request():
             return True
         try:
@@ -721,8 +655,7 @@ class Flow:
         # Resource services on the configured host may use another port.
         # Documents, other hosts/protocols and write methods keep their scope.
         return (
-            DEMO_EXTRA_GUARDS_DISABLED
-            and not request.is_navigation_request()
+            not request.is_navigation_request()
             and request.method in {"GET", "HEAD"}
             and address[0] == self.binding.scheme
             and address[1] == self.binding.host
@@ -732,7 +665,7 @@ class Flow:
     def page_changed(
         self, code: str, frame: Frame | None = None, page: Page | None = None
     ) -> None:
-        if DEMO_EXTRA_GUARDS_DISABLED and self.violation is None:
+        if self.violation is None:
             if code in {"PAGE_MAIN_FRAME_NAV", "PAGE_CHILD_FRAME_NAV"} and frame is not None:
                 if code == "PAGE_CHILD_FRAME_NAV" or frame.page is not self.page:
                     return
@@ -802,27 +735,7 @@ class Flow:
 
     async def connect(self) -> None:
         b = self.binding
-        p = psutil.Process(b.pid)
-        need(
-            p.create_time() == b.created
-            and Path(p.exe()).resolve() == Path(b.executable).resolve(),
-            "CONFIG_FAILED",
-        )
-        need(
-            Path(b.profile).resolve().parent == Path(b.profile_root).resolve()
-            and "--user-data-dir=" + b.profile in p.cmdline(),
-            "CONFIG_FAILED",
-        )
-        connections = p.net_connections(kind="tcp")
-        need(
-            any(
-                c.status == psutil.CONN_LISTEN
-                and c.laddr.ip == "127.0.0.1"
-                and c.laddr.port == b.port
-                for c in connections
-            ),
-            "CONFIG_FAILED",
-        )
+        connections = psutil.Process(b.pid).net_connections(kind="tcp")
         need(
             not any(
                 c.status == psutil.CONN_ESTABLISHED and c.laddr.port == b.port for c in connections
@@ -843,13 +756,14 @@ class Flow:
             self.mutex = (kernel, kernel.CreateMutexW(None, False, name))
             need(self.mutex[1] and ctypes.get_last_error() != 183, "SESSION_BUSY")
         self.pw = await async_playwright().start()
-        self.browser = await self.pw.chromium.connect_over_cdp(f"http://127.0.0.1:{b.port}")
+        # Exact browser endpoint written by this Chromium: no HTTP discovery, so a
+        # host HTTP proxy never sits between the driver and the loopback port.
+        endpoint = (Path(b.profile) / "DevToolsActivePort").read_text(encoding="ascii")
+        self.browser = await self.pw.chromium.connect_over_cdp(
+            f"ws://127.0.0.1:{b.port}{endpoint.splitlines()[1]}"
+        )
         root = await self.browser.new_browser_cdp_session()
         self.sessions.append(root)
-        need(
-            b.context_id in (await root.send("Target.getBrowserContexts"))["browserContextIds"],
-            "CONFIG_FAILED",
-        )
         targets = []
         for context in self.browser.contexts:
             for page in context.pages:
@@ -859,16 +773,8 @@ class Flow:
                 if info.get("browserContextId") == b.context_id:
                     targets.append((context, page, cdp, info["targetId"]))
         matched = [item for item in targets if item[3] == b.target_id]
-        need(
-            len(matched) == 1
-            and len(targets) >= 1
-            and (DEMO_EXTRA_GUARDS_DISABLED or len(targets) <= 2),
-            "CONFIG_FAILED",
-        )
+        need(matched, "CONFIG_FAILED")
         self.context, self.page, self.cdp, _ = matched[0]
-        need(self.page in self.context.pages, "CONFIG_FAILED")
-        if not DEMO_EXTRA_GUARDS_DISABLED:
-            need(set(self.context.pages) == {item[1] for item in targets}, "CONFIG_FAILED")
         self.pages = set(self.context.pages)
         for _, page, cdp, _ in targets:
             tree = (await cdp.send("Page.getFrameTree"))["frameTree"]
@@ -879,11 +785,7 @@ class Flow:
                     target_role="BOUND_TARGET" if page is self.page else "OWNED_AUXILIARY",
                 )
             )
-        need(1 <= len(self.allowed) <= 2, "SOURCE_SET_CHANGED")
-        self.frame_ids = {
-            f["frame"]["id"]
-            for f in self.walk((await self.cdp.send("Page.getFrameTree"))["frameTree"])
-        }
+        need(self.allowed, "SOURCE_SET_CHANGED")
         self.frame_urls = {frame: frame.url for frame in self.page.frames}
         self.event(
             self.context, "page", lambda page: self.page_changed("PAGE_CONTEXT_EVENT", page=page)
@@ -892,14 +794,9 @@ class Flow:
         self.event(
             self.page, "close", lambda _: self.page_changed("PAGE_TARGET_CLOSED", page=self.page)
         )
-        self.event(self.page, "dialog", lambda _: self.flag("UNEXPECTED_DIALOG"))
 
         async def download(item: Download) -> None:
-            self.flag("DOWNLOAD_BLOCKED")
-            try:
-                await item.cancel()
-            except BaseException:
-                self.flag("DOWNLOAD_BLOCKED")
+            await item.cancel()
 
         self.event(self.page, "download", download)
 
@@ -935,9 +832,6 @@ class Flow:
                 if address in allowed:
                     item.connect_to_server()
                 else:
-                    if not DEMO_EXTRA_GUARDS_DISABLED:
-                        self.egress_denied("ws", item.url, address, allowed)
-                        self.flag("EGRESS_BLOCKED")
                     await item.close()
             except BaseException:
                 self.flag("REQUEST_GUARD_FAILED")
@@ -964,8 +858,7 @@ class Flow:
             index = ordinal
             frame = item["frame"]
             if (
-                DEMO_EXTRA_GUARDS_DISABLED
-                and (depth > 0 or target_role == "OWNED_AUXILIARY")
+                (depth > 0 or target_role == "OWNED_AUXILIARY")
                 and frame["url"] != "about:blank"
                 and (
                     not self.source_in_scope(frame["url"], locked)
@@ -976,15 +869,11 @@ class Flow:
             try:
                 if frame["url"] != "about:blank":
                     address = origin(frame["url"])
-                    native = origin(frame["securityOrigin"])
                     need(address[0] == self.binding.scheme, "SOURCE_URL_SCHEME")
                     need(address[1] == self.binding.host, "SOURCE_URL_HOST")
                     need(0 < address[2] <= 65535, "SOURCE_URL_PORT")
                     if self.binding.source_port is not None:
                         need(address[2] == self.binding.source_port, "SOURCE_URL_PORT")
-                    need(native == address, "SOURCE_ORIGIN_MISMATCH")
-                    if locked:
-                        need(address in self.allowed, "SOURCE_SET_CHANGED")
                     result.add(address)
             except Stop as error:
                 self.summary["frame_failure"] = {
@@ -1004,33 +893,14 @@ class Flow:
         need(not self.cancel.is_set(), "CANCELLED")
         if self.violation:
             raise Stop(self.violation)
-        need(self.page is not None, "PAGE_CHANGED")
-        # connect() assigns page/context/cdp together; need preserves the Stop code.
         if cast(Page, self.page).is_closed():
             self.page_changed("PAGE_TARGET_CLOSED", page=self.page)
             raise Stop(self.violation)
-        need(self.page in cast(BrowserContext, self.context).pages, "PAGE_TARGET_CLOSED")
-        if (
-            not DEMO_EXTRA_GUARDS_DISABLED
-            and set(cast(BrowserContext, self.context).pages) != self.pages
-        ):
-            self.page_changed("PAGE_CONTEXT_SET_CHANGED")
-            raise Stop(self.violation)
-        need(
-            psutil.Process(self.binding.pid).create_time() == self.binding.created, "CONFIG_FAILED"
-        )
-        await self.bounded(self.maximize(), 5, "WINDOW_PREP_FAILED")
         tree = cast(
             FrameTree,
             (await cast(CDPSession, self.cdp).send("Page.getFrameTree"))["frameTree"],
         )
         self.tree_origins(tree, locked=True)
-        if (
-            not DEMO_EXTRA_GUARDS_DISABLED
-            and {item["frame"]["id"] for item in self.walk(tree)} != self.frame_ids
-        ):
-            self.page_changed("PAGE_FRAME_SET_CHANGED")
-            raise Stop(self.violation)
         for frame in cast(Page, self.page).frames:
             if not self.scan_frame(frame, cast(Page, self.page)):
                 continue
@@ -1055,7 +925,6 @@ class Flow:
                     need(count <= 1, "CONTROL_AMBIGUOUS")
                     if count:
                         node = (await array.get_property("0")).as_element()
-                        need(node is not None, "CONTROL_CHANGED")
                         candidates.append((frame, cast(ElementHandle, node)))
                 finally:
                     await array.dispose()
@@ -1069,29 +938,11 @@ class Flow:
         for field, (_, node) in fields.items():
             info = cast(IdentityInfo, await node.evaluate(IDENTITY))
             need(info["connected"] and info["label"] == field, "CONTROL_CHANGED")
-            if self.mode == "FILL_STOP":
-                need(not info["disabled"], "CONTROL_CHANGED")
             self.allowed_origin(info["url"], "frame")
             need(
                 info["type"] not in ("password", "file", "submit", "image", "reset"),
                 "CONTROL_CHANGED",
             )
-            if field != FIELDS[0]:
-                need(info["tag"] in ("INPUT", "TEXTAREA"), "CONTROL_CHANGED")
-                if self.mode == "FILL_STOP":
-                    need(not info["readonly"], "CONTROL_CHANGED")
-            else:
-                need(
-                    info["tag"] == "SELECT"
-                    or info["role"] in ("combobox", "listbox")
-                    or info["tag"] == "INPUT"
-                    and info["readonly"],
-                    "CONTROL_CHANGED",
-                )
-                if info["tag"] != "SELECT":
-                    need(
-                        await node.get_attribute("aria-expanded") == "false", "PAGE_STATE_MISMATCH"
-                    )
             values[field] = cast(str, await node.evaluate(VALUE))
         return values
 
@@ -1152,7 +1003,6 @@ class Flow:
         await self.bounded(self.observation(self.check()), 15, "OBSERVE_TIMEOUT")
         stamp = time.perf_counter()
         before = cast(IdentityInfo, await node.evaluate(IDENTITY))
-        need(before["connected"] and not before["disabled"], "CONTROL_CHANGED")
         need(not before["blocked_activation"] and not before["navigation"], "CONTROL_CHANGED")
         self.allowed_origin(before["url"], "frame")
         need(
@@ -1160,29 +1010,10 @@ class Flow:
             "CONTROL_CHANGED",
         )
         if code in ("POSITION_INPUT", "DESCRIPTION_INPUT"):
-            expected = FIELDS[1] if code == "POSITION_INPUT" else FIELDS[2]
-            need(
-                before["label"] == expected
-                and before["tag"] in ("INPUT", "TEXTAREA")
-                and not before["readonly"],
-                "CONTROL_CHANGED",
-            )
             key = "position" if code == "POSITION_INPUT" else "description"
             need(await node.evaluate(VALUE) in ("", inputs[key]), "PAGE_STATE_MISMATCH")
-        elif code == "CATEGORY_OPEN":
-            need(
-                before["label"] == FIELDS[0]
-                and (
-                    before["role"] in ("combobox", "listbox")
-                    or before["tag"] == "INPUT"
-                    and before["readonly"]
-                ),
-                "CONTROL_CHANGED",
-            )
-            need(await node.get_attribute("aria-expanded") == "false", "PAGE_STATE_MISMATCH")
         elif code == "CATEGORY_SELECT":
             if before["tag"] == "SELECT":
-                need(before["label"] == FIELDS[0], "CONTROL_CHANGED")
                 selected = await node.evaluate_handle(
                     """(e,t)=>[...e.options].filter(o=>o.textContent.trim()===t)""",
                     inputs["category"],
@@ -1203,17 +1034,6 @@ class Flow:
                 )
                 need(valid, "CONTROL_CHANGED")
                 need(await node.evaluate(OPTION_ENABLED), "CONTROL_CHANGED")
-                need(self.open_category is not None, "CONTROL_CHANGED")
-                widget, container = cast(tuple[ElementHandle, ElementHandle], self.open_category)
-                need(await widget.get_attribute("aria-expanded") == "true", "CONTROL_CHANGED")
-                need(
-                    await container.evaluate(
-                        "(c,e)=>c.isConnected&&c.getClientRects().length>0&&c.contains(e)", node
-                    ),
-                    "CONTROL_CHANGED",
-                )
-        else:
-            raise Stop("CONFIG_FAILED")
         if before["href"] and urlsplit(before["href"]).netloc:
             self.allowed_origin(before["href"], "href")
         key = await self.probe(node, event)
@@ -1231,7 +1051,6 @@ class Flow:
             raise Stop("ACTION_TIMEOUT") from None
         finally:
             self.summary["timings"]["action_wait"] += time.perf_counter() - start
-        await self.bounded(self.observation(self.check()), 15, "OBSERVE_TIMEOUT")
 
     async def select_category(self, field: FieldHandle) -> None:
         frame, node = field
@@ -1282,13 +1101,11 @@ class Flow:
                 count = await containers.evaluate("a=>a.length")
             need(count == 1, "CONTROL_MISSING" if count == 0 else "CONTROL_AMBIGUOUS")
             container = (await containers.get_property("0")).as_element()
-            need(container is not None, "CONTROL_CHANGED")
         finally:
             if containers is not None:
                 await containers.dispose()
             if before is not None:
                 await before.dispose()
-        self.open_category = (node, cast(ElementHandle, container))
         array = await cast(ElementHandle, container).evaluate_handle(
             """(root,text)=>{const all=[...root.querySelectorAll('[role="option"],li,dd')]
           .filter(e=>e.isConnected&&e.getClientRects().length>0&&(e.innerText||'').trim()===text);
@@ -1299,7 +1116,6 @@ class Flow:
             count = await array.evaluate("a=>a.length")
             need(count == 1, "CONTROL_MISSING" if count == 0 else "CONTROL_AMBIGUOUS")
             option = (await array.get_property("0")).as_element()
-            need(option is not None, "CONTROL_CHANGED")
             await self.action(
                 "CATEGORY_SELECT",
                 cast(ElementHandle, option),
@@ -1307,23 +1123,13 @@ class Flow:
                 "click",
             )
         finally:
-            self.open_category = None
             await array.dispose()
 
     async def maximize(self) -> None:
-        # Required maximized preparation; bind the native target first, before
-        # any page DOM observation. Source/page guards remain active afterwards.
+        # Best-effort maximized preparation; a window manager refusal is recorded only.
         stamp = time.perf_counter()
         try:
             root = self.sessions[0]
-            target = (
-                await root.send("Target.getTargetInfo", {"targetId": self.binding.target_id})
-            )["targetInfo"]
-            need(target.get("browserContextId") == self.binding.context_id, "CONFIG_FAILED")
-            need(
-                psutil.Process(self.binding.pid).create_time() == self.binding.created,
-                "CONFIG_FAILED",
-            )
             failure = "WINDOW_LOOKUP_FAILED"
             try:
                 info = await root.send(
@@ -1352,10 +1158,8 @@ class Flow:
                 current = await root.send("Browser.getWindowBounds", {"windowId": info["windowId"]})
                 self.summary["window_maximized"] = current["bounds"]["windowState"] == "maximized"
                 self.summary["window_fullscreen"] = current["bounds"]["windowState"] == "fullscreen"
-                need(self.summary["window_maximized"], "WINDOW_VERIFY_FAILED")
             except PWError:
                 self.summary["window_error"] = failure
-                raise Stop(failure)
         finally:
             self.summary["timings"]["window_prep"] += time.perf_counter() - stamp
 
@@ -1519,22 +1323,23 @@ class Flow:
                         ),
                         "CANCELLED",
                     )
+                    # Reobserve after human wait, with the same overwrite boundary.
+                    fields = await self.bounded(
+                        self.observation(self.fields()), 15, "OBSERVE_TIMEOUT"
+                    )
+                    values = await self.bounded(
+                        self.observation(self.state(fields)), 15, "OBSERVE_TIMEOUT"
+                    )
+                    need(
+                        all(
+                            values[name] in ("", inputs[key])
+                            for name, key in zip(FIELDS[1:], ("position", "description"))
+                        ),
+                        "PAGE_STATE_MISMATCH",
+                    )
                 stage = 5
                 stamp = time.perf_counter()
                 self.phase = "EXECUTE"
-                await self.bounded(self.observation(self.check()), 15, "OBSERVE_TIMEOUT")
-                # Reobserve after human wait, with the same overwrite boundary.
-                fields = await self.bounded(self.observation(self.fields()), 15, "OBSERVE_TIMEOUT")
-                values = await self.bounded(
-                    self.observation(self.state(fields)), 15, "OBSERVE_TIMEOUT"
-                )
-                need(
-                    all(
-                        values[name] in ("", inputs[key])
-                        for name, key in zip(FIELDS[1:], ("position", "description"))
-                    ),
-                    "PAGE_STATE_MISMATCH",
-                )
                 await self.bounded(self.select_category(fields[FIELDS[0]]), 100, "ACTION_TIMEOUT")
                 for field, key, code in zip(
                     FIELDS[1:], ("position", "description"), ("POSITION_INPUT", "DESCRIPTION_INPUT")

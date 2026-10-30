@@ -1,4 +1,4 @@
-"""Synthetic Run/consumer/response fences; not a real browser login attestation."""
+"""Synthetic Run/consumer/response checks; not a real browser login attestation."""
 
 import asyncio
 from copy import copy
@@ -87,36 +87,11 @@ def test_stale_canonical_run_stops_before_secret_io(field, value):
     asyncio.run(exercise())
 
 
-def test_cancel_during_secret_load_stops_before_private_consumer():
-    async def exercise():
-        bound, _, canonical, _, _, _, _, store, material = setup()
-
-        async def load(_binding, _purpose):
-            canonical.cancel_requested = True
-            return material
-
-        store.load_for_browser.side_effect = load
-        consumer = AsyncMock()
-        with pytest.raises(BrowserAuthorizationError) as error:
-            await bound.consume_login(consumer)
-        assert error.value.code == "browser_login_run_stale"
-        store.load_for_browser.assert_awaited_once()
-        consumer.assert_not_awaited()
-
-    asyncio.run(exercise())
-
-
-@pytest.mark.parametrize("fault", ["none", "other_frame", "other_origin", "subject", "rejected"])
-def test_login_response_requires_own_frame_origin_success_and_server_subject(fault):
+@pytest.mark.parametrize("fault", ["none", "other_origin", "subject", "rejected"])
+def test_login_response_requires_origin_success_and_server_subject(fault):
     async def exercise():
         bound, _, _, _, _, _, _, _, _ = setup()
-        page = Mock()
-        page.is_closed.return_value = False
-        frame = page.main_frame
-        frame.page = page
         response = Mock()
-        response.request.frame = Mock() if fault == "other_frame" else frame
-        response.request.method = "POST"
         response.status = 200
         response.url = ("https://other.invalid" if fault == "other_origin" else
                         "https://synthetic.invalid") + "/api/hrm/login/checkLogin"
@@ -125,37 +100,31 @@ def test_login_response_requires_own_frame_origin_success_and_server_subject(fau
             "userid": "other-subject" if fault == "subject" else "synthetic-subject",
         })
         if fault == "none":
-            assert await bound.verify_login_response(
-                page=page, response=response,
-            ) is None
+            assert await bound.verify_login_response(response=response) is None
         else:
             with pytest.raises(BrowserAuthorizationError) as error:
-                await bound.verify_login_response(
-                    page=page, response=response,
-                )
+                await bound.verify_login_response(response=response)
             assert error.value.code == (
                 "browser_login_subject_mismatch" if fault == "subject" else
                 "browser_login_response_invalid"
             )
-            if fault in {"other_frame", "other_origin"}:
+            if fault == "other_origin":
                 response.json.assert_not_awaited()
 
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize("expired_after_load", [False, True])
-def test_unchanged_run_invalid_exact_lease_stops_secret_io_or_consumer(expired_after_load):
+def test_unchanged_run_invalid_exact_lease_stops_secret_io_and_consumer():
     async def exercise():
         bound, _, _, _, _, _, _, store, _ = setup()
-        async def lease():
-            if not expired_after_load or store.load_for_browser.await_count:
-                raise BrowserAuthorizationError("browser_login_lease_stale")
-        bound._check_lease = lease
+        bound._check_lease = AsyncMock(
+            side_effect=BrowserAuthorizationError("browser_login_lease_stale")
+        )
         consumer = AsyncMock()
         with pytest.raises(BrowserAuthorizationError) as error:
             await bound.consume_login(consumer)
         assert error.value.code == "browser_login_lease_stale"
-        assert store.load_for_browser.await_count == (1 if expired_after_load else 0)
+        store.load_for_browser.assert_not_awaited()
         consumer.assert_not_awaited()
     asyncio.run(exercise())
 

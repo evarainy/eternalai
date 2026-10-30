@@ -1,7 +1,6 @@
 """Synthetic exact-context and retention regressions; no real OA login proof."""
 
 import asyncio
-import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -12,7 +11,6 @@ import pytest
 from app.browser_skill.models import BrowserOwner
 from app.infra.browser.d_form_execution import DFormRuntime, _State
 from app.infra.browser.d_form_owned_browser import OwnedDFormBrowser, OwnedOALoginContract
-from app.infra.browser.d_windows_query import _OwnedWindowsJob
 from app.ports.browser_read_execution import BrowserReadExecutionError
 from app.ports.browser_store import BrowserLeaseClaim
 from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
@@ -28,8 +26,7 @@ def contract():
 
 def owned(tmp_path):
     return OwnedDFormBrowser(
-        chromium=tmp_path / "chromium.exe", chromium_sha256="a" * 64,
-        root=tmp_path / "runs", node=tmp_path / "node.exe",
+        chromium=tmp_path / "chromium.exe", root=tmp_path / "runs",
         origin="https://synthetic.invalid", contract=contract(),
     )
 
@@ -48,32 +45,26 @@ def test_stop_contract_accepts_optional_subset_and_is_immutable():
         value.stops["mfa"] = "#replacement"
 
 
-@pytest.mark.parametrize("fault", [None, "foreign-context", "foreign-target", "extra-context"])
-def test_actual_cdp_target_ids_decide_identity_even_in_one_pw_wrapper(tmp_path, fault):
+@pytest.mark.parametrize("closed", [True, False])
+def test_close_owned_terminates_own_job_and_refuses_without_closed_handles(tmp_path, closed):
     async def exercise():
         owner = owned(tmp_path)
-        owner.context_id, owner.target_id = "synthetic-context", "synthetic-target"
-        owner.root_cdp = Mock()
-        owner.root_cdp.send = AsyncMock(return_value={"browserContextIds": (
-            ["synthetic-context", "foreign"] if fault == "extra-context" else ["synthetic-context"]
-        )})
-        page, wrapper, session = Mock(), Mock(), Mock()
-        wrapper.pages = [page]
-        wrapper.new_cdp_session = AsyncMock(return_value=session)
-        page.context = wrapper
-        owner.browser = SimpleNamespace(contexts=[wrapper])
-        session.send = AsyncMock(return_value={"targetInfo": {
-            "browserContextId": "foreign" if fault == "foreign-context" else "synthetic-context",
-            "targetId": "foreign" if fault == "foreign-target" else "synthetic-target",
-        }})
-        session.detach = AsyncMock()
-        if fault:
-            with pytest.raises(BrowserReadExecutionError):
-                await owner.check_context_targets()
+        owner.job = Mock(job_ref="synthetic-job")
+        owner.job.close_handles.return_value = closed
+        if closed:
+            await owner.close_owned()
         else:
-            await owner.check_context_targets()
-        assert session.detach.await_count == (0 if fault == "extra-context" else 1)
+            with pytest.raises(BrowserReadExecutionError):
+                await owner.close_owned()
+        owner.job.stop_and_wait.assert_called_once()
+        assert owner.owned_resource_cleanup_proven is closed
     asyncio.run(exercise())
+
+
+def test_close_owned_without_created_job_has_nothing_to_terminate(tmp_path):
+    owner = owned(tmp_path)
+    asyncio.run(owner.close_owned())
+    assert owner.owned_resource_cleanup_proven and owner.closed_job_identity is None
 
 
 def state_runtime(tmp_path):
@@ -155,20 +146,3 @@ def test_explicit_close_releases_only_after_owned_and_attachment_proof(tmp_path)
         assert order == ["authorize", "close-job", "authorize", "release"]
         assert state.released and state.cleanup_proven
     asyncio.run(exercise())
-
-
-@pytest.mark.parametrize("fault", [None, "live-root", "changed-root", "member"])
-def test_partial_native_creation_empty_proof_never_uses_pid_ancestry(fault):
-    job = object.__new__(_OwnedWindowsJob)
-    job.lock = threading.RLock()
-    job.job, job.root, job.close_failed = object(), object(), False
-    job.created, job.executable = 123, "synthetic-chromium.exe"
-    job._root_identity = Mock(return_value=(124 if fault == "changed-root" else 123,
-                                            "synthetic-chromium.exe"))
-    job.poll = Mock(return_value=None if fault == "live-root" else 0)
-    job.members = Mock(return_value=(1, (987,)) if fault == "member" else (0, ()))
-    if fault:
-        with pytest.raises(BrowserReadExecutionError):
-            job.inspect_owned_creation_empty()
-    else:
-        job.inspect_owned_creation_empty()

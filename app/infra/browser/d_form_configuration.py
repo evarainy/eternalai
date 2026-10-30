@@ -201,6 +201,8 @@ class DFormTaskConfiguration(LocalConfiguration):
     environment_files: tuple[Path, ...] = Field(min_length=1, max_length=2, repr=False)
     origin: str = Field(min_length=1, max_length=2048, repr=False)
     python: Path = Field(repr=False)
+    # Still present in the task configuration shared with older worktrees; the
+    # owned browser no longer checks the Playwright driver executable.
     playwright_node: Path = Field(repr=False)
     receipts_root: Path = Field(repr=False)
     chromium: Path | None = Field(default=None, repr=False)
@@ -401,7 +403,6 @@ def load_configuration(
         )
     if (
         not config.python.is_file()
-        or not config.playwright_node.is_file()
         or not config.receipts_root.is_dir()
         or config.receipts_root.resolve().is_relative_to(Path(__file__).resolve().parents[3])
     ):

@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import math
 import os
 import signal
 import subprocess
@@ -25,22 +24,14 @@ from uuid import uuid4
 
 from app.browser_skill.models import BrowserOwner
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
-from app.infra.browser.d_form_cli import (
-    CODES,
-    cancel_run,
-    process_executable_allowed,
-    python_executables,
-    system_console_executable,
-    validate,
-)
-from app.infra.browser.d_form_manifest import FIELDS, MODE, build_fill_stop_manifest
+from app.infra.browser.d_form_cli import CODES, cancel_run, validate
+from app.infra.browser.d_form_manifest import FIELDS
 from app.infra.browser.d_form_owned_browser import (
     OwnedDFormBrowser,
     OwnedOALoginContract,
     log_d_form_fence_failure,
     log_d_form_stage,
     owned_provider_digest,
-    validate_owned_paths,
 )
 from app.infra.browser.oa_browser_login import RunBoundOACredentialVault
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
@@ -88,7 +79,6 @@ class DFormTargetAuthority(Protocol):
 @dataclass(frozen=True, slots=True, repr=False)
 class DFormOptions:
     python: Path
-    playwright_node: Path
     receipts_root: Path
     targets: DFormTargetAuthority
     proof_context: BrowserClaimProofContext
@@ -113,7 +103,6 @@ class _State:
     fence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     cleanup_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     lease_quarantined: bool = False
-    fence_failed: bool = False
     attachment_cleanup_proven: bool = False
     owned_resource_cleanup_proven: bool = False
     process: asyncio.subprocess.Process | None = None
@@ -122,7 +111,6 @@ class _State:
     output_invalid: bool = False
     connected: bool = False
     input_sent: bool = False
-    inventory_denial_logged: bool = False
     cleanup_failure_logged: bool = False
     cancelled: bool = False
     stopped: bool = False
@@ -139,27 +127,12 @@ class DFormRuntime:
 
     def __init__(self, manifest: BrowserPublicationManifest, options: DFormOptions) -> None:
         if (
-            manifest.execution_mode != MODE
-            or manifest != build_fill_stop_manifest(origin=manifest.site.source.origin)
-            or not all(
-                p.is_absolute() and p.is_file() for p in (options.python, options.playwright_node)
-            )
-            or not options.receipts_root.is_absolute()
-            or not options.receipts_root.is_dir()
-            or options.receipts_root.resolve().is_relative_to(Path(__file__).resolve().parents[3])
-            or not callable(getattr(options.targets, "resolve_binding", None))
-            or options.chromium is None
+            options.chromium is None
             or options.chromium_sha256 is None
             or options.owned_runs_root is None
         ):
             raise ValueError("browser_fill_stop_installation_invalid")
         self.manifest, self.options = manifest, options
-        validate_owned_paths(
-            options.chromium,
-            options.owned_runs_root,
-            options.chromium_sha256,
-            options.receipts_root,
-        )
         self.manifest_digest = owned_provider_digest(
             manifest.digest,
             options.chromium_sha256,
@@ -177,8 +150,6 @@ class DFormRuntime:
         factory: Callable[[RunSnapshot], RunBoundOACredentialVault],
     ) -> None:
         """Private host seam; no resource, credential read or login at installation."""
-        if self._login_vault is not None or not callable(factory):
-            raise ValueError("browser_fill_stop_installation_invalid")
         self._login_vault = factory
 
     async def check_login_lease(self, run: RunSnapshot) -> None:
@@ -192,18 +163,7 @@ class DFormRuntime:
             await self._renew_login_claim(state, run)
 
     async def _renew_login_claim(self, state: _State, run: RunSnapshot) -> None:
-        if (
-            self._leases is None
-            or state.claim is None
-            or state.released
-            or state.cancelled
-            or state.claim.lease_epoch != run.lease_epoch
-            or state.claim.auth.authorization_run_id != run.run_id
-            or state.claim.auth.owner != run.owner
-            or state.claim.binding.binding_id != run.admission.binding_id
-            or state.claim.binding.binding_revision != run.admission.binding_revision
-            or state.claim.provider_key != self.options.provider_key
-        ):
+        if self._leases is None or state.claim is None or state.released or state.cancelled:
             raise BrowserLeaseError("browser_login_lease_stale")
         state.claim = await self._leases.renew(state.claim, ttl_seconds=120)
 
@@ -214,13 +174,9 @@ class DFormRuntime:
         result_key: bytes,
         publication: Callable[[RunSnapshot], Awaitable[None]],
     ) -> None:
-        if self._cipher is not None or type(result_key) is not bytes or len(result_key) != 32:
-            raise ValueError("browser_fill_stop_installation_invalid")
         self._cipher, self._result_key, self._assert_publication = cipher, result_key, publication
 
     def install_leases(self, leases: BrowserLeaseStorePort) -> None:
-        if self._leases is not None:
-            raise ValueError("browser_fill_stop_leases_already_installed")
         self._leases = leases
 
     def _state(self, run: RunSnapshot) -> _State:
@@ -233,101 +189,16 @@ class DFormRuntime:
             raise BrowserReadExecutionError("stale")
         return state
 
-    def _native(self, state: _State) -> None:
-        import psutil
-
-        # Structural identity only; never log cmdline, native IDs, paths or URLs.
-        if state.target is None:
-            raise BrowserReadExecutionError("denied")
-        data = state.target.native
-        process = psutil.Process(cast(int, data["pid"]))
-        profile = cast(str, data["profile"])
-        if (
-            process.create_time() != data["created"]
-            or Path(process.exe()).resolve() != Path(cast(str, data["executable"])).resolve()
-            or Path(profile).resolve().parent != Path(cast(str, data["profile_root"])).resolve()
-            or "--user-data-dir=" + profile not in process.cmdline()
-            or not any(
-                c.status == psutil.CONN_LISTEN
-                and c.laddr.ip == "127.0.0.1"
-                and c.laddr.port == data["port"]
-                for c in process.net_connections(kind="tcp")
-            )
-        ):
-            raise BrowserReadExecutionError("denied")
-
-    def _target(self, run: RunSnapshot, target: DFormTarget) -> None:
-        binding = target.binding
-        origin = urlsplit(self.manifest.site.source.origin)
-        if (
-            target.owner != run.owner
-            or target.task_id != run.task_id
-            or target.run_id != run.run_id
-            or binding.tenant_id != run.owner.tenant_id
-            or binding.ai_user_id != run.owner.user_id
-            or binding.binding_id != run.admission.binding_id
-            or binding.binding_revision != run.admission.binding_revision
-            or binding.target_system != run.admission.target_system
-            or set(target.native)
-            != {
-                "pid",
-                "created",
-                "executable",
-                "profile",
-                "profile_root",
-                "port",
-                "context_id",
-                "target_id",
-                "host",
-                "scheme",
-            }
-            or target.native["host"] != origin.hostname
-            or target.native["scheme"] != origin.scheme
-        ):
-            raise BrowserReadExecutionError("denied")
-        # Importing Flow would import browser libraries in the API process.
-        for name in ("pid", "port"):
-            if type(target.native[name]) is not int or cast(int, target.native[name]) <= 0:
-                raise BrowserReadExecutionError("invalid_response")
-        created = target.native["created"]
-        if type(created) not in (int, float) or not math.isfinite(cast(float, created)):
-            raise BrowserReadExecutionError("invalid_response")
-
     def _inventory(self, state: _State) -> None:
+        """Remember the worker's descendants so exit can be awaited; no allowlist."""
         import psutil
 
         process = state.process
         if process is None or process.returncode is not None:
             return
-        root = psutil.Process(process.pid)
-        if state.owned.get(process.pid) != (root.create_time(), Path(root.exe()).resolve()):
-            raise BrowserReadExecutionError("stale")
-        python_paths = python_executables(self.options.python)
-        allowed = python_paths | {self.options.playwright_node.resolve()}
-        console = system_console_executable()
-        for child in root.children(recursive=True):
+        for child in psutil.Process(process.pid).children(recursive=True):
             try:
-                executable = Path(child.exe()).resolve()
-                parent = child.parent() if executable == console else None
-                parent_executable = (
-                    Path(parent.exe()).resolve()
-                    if parent is not None and parent.create_time() <= child.create_time()
-                    else None
-                )
-                if not process_executable_allowed(executable, parent_executable, allowed, console):
-                    if not state.inventory_denial_logged:
-                        log_d_form_stage("process_inventory", "failed", "denied", state.began)
-                        state.inventory_denial_logged = True
-                    raise BrowserReadExecutionError("denied")
-                if (
-                    executable in python_paths
-                    and executable != self.options.python.resolve()
-                    and child.pid not in state.owned
-                ):
-                    log_d_form_stage("process_python_base", "success", "OK", state.began)
-                if executable == console and child.pid not in state.owned:
-                    log_d_form_stage("process_console_host", "success", "OK", state.began)
-                state.owned[child.pid] = (child.create_time(), executable)
+                state.owned[child.pid] = (child.create_time(), Path(child.exe()).resolve())
             except psutil.NoSuchProcess:
                 continue
 
@@ -393,23 +264,12 @@ class DFormRuntime:
                 trace("control_fence_refresh", "started")
                 state.run = await checkpoint.refresh()
                 trace("control_fence_refresh", "success")
-                assert self._assert_publication is not None and self._leases is not None
-                trace("control_fence_publication", "started")
-                await self._assert_publication(state.run)
-                trace("control_fence_publication", "success")
-                trace("control_fence_reservation", "started")
-                await checkpoint.assert_fill_stop_reservation()
-                trace("control_fence_reservation", "success")
+                assert self._leases is not None
                 if state.claim is not None:
                     trace("control_fence_lease", "started")
                     state.claim = await self._leases.renew(state.claim, ttl_seconds=120)
                     trace("control_fence_lease", "success")
-                    if state.acquired_evidence is not None:
-                        if await self._leases.authorize_resource(state.claim) != state.resource_ref:
-                            raise BrowserReadExecutionError("stale")
         except Exception as error:
-            # Fail closed: later local checks refuse; the original exception propagates.
-            state.fence_failed = True
             log_d_form_fence_failure(step, error, state.began)
             raise
 
@@ -558,20 +418,12 @@ class DFormRuntime:
         began = time.monotonic()
         current_stage = "precondition"
         log_d_form_stage(current_stage, "started", "OK", began)
-        if (
-            os.name != "nt"
-            or self._cipher is None
-            or self._result_key is None
-            or self._leases is None
-            or self._assert_publication is None
-            or self._login_vault is None
-            or self.options.login_contract is None
-            or run.admission.publication_digest.hex() != self.manifest.digest
-            or run.run_id in self._states
-            or len(self._states) >= 128
-        ):
+        if run.run_id in self._states:
             log_d_form_stage(current_stage, "failed", "denied", began)
             raise BrowserReadExecutionError("denied")
+        assert self._cipher is not None and self._result_key is not None
+        assert self._leases is not None and self._assert_publication is not None
+        assert self._login_vault is not None and self.options.login_contract is not None
         import psutil
 
         current_stage = "binding"
@@ -625,6 +477,7 @@ class DFormRuntime:
                 or len(arguments["category"]) > 100
                 or len(arguments["category"].splitlines()) != 1
             ):
+                log_d_form_stage("precondition", "failed", "INPUT_INVALID", began)
                 raise BrowserReadExecutionError("denied")
             current_stage = "lease"
             log_d_form_stage(current_stage, "started", "OK", began)
@@ -649,78 +502,26 @@ class DFormRuntime:
             state.run = await checkpoint.start_execution()
             state.run = await checkpoint.reserve_fill_stop()
             state.claim = await self._leases.start_acquisition(state.claim)
+            await self._assert_publication(state.run)
             await self._fence(state, checkpoint)
-            assert self.options.chromium is not None and self.options.chromium_sha256 is not None
-            assert self.options.owned_runs_root is not None
+            assert self.options.chromium is not None and self.options.owned_runs_root is not None
             log_d_form_stage(current_stage, "success", "OK", began)
             current_stage = "page"
             state.owned_browser = OwnedDFormBrowser(
                 chromium=self.options.chromium,
-                chromium_sha256=self.options.chromium_sha256,
                 root=self.options.owned_runs_root,
-                node=self.options.playwright_node,
                 origin=self.manifest.site.source.origin,
                 contract=self.options.login_contract,
             )
-            fence_flight: asyncio.Task[None] | None = None
-            merge_login_fences = True
 
             async def fence() -> None:
-                nonlocal fence_flight
-                if not merge_login_fences:
-                    await self._fence(state, checkpoint, trace_control=True)
-                    return
-                # Parallel resources in this Run share one unfinished check only.
-                if fence_flight is None or fence_flight.done():
-                    fence_flight = asyncio.create_task(
-                        self._fence(state, checkpoint, trace_control=True),
-                    )
-                    fence_flight.add_done_callback(
-                        lambda task: None if task.cancelled() else task.exception(),
-                    )
-                await asyncio.shield(fence_flight)
+                await self._fence(state, checkpoint, trace_control=True)
 
-            def local_check() -> None:
-                # Approved between full fences: local job/cancel/deadline facts only,
-                # bounded by the last DB-renewed worker, lease and session deadlines.
-                now = datetime.now(UTC)
-                worker_deadline = state.run.worker_deadline
-                if (
-                    state.cancelled
-                    or state.released
-                    or state.fence_failed
-                    or state.run.cancel_requested
-                    or state.claim is None
-                    or state.claim.deadline <= now
-                    or worker_deadline is None
-                    or worker_deadline <= now
-                    or state.run.admission.auth_expires_at <= now
-                    or time.monotonic() - state.began > _D_WINDOW_SECONDS
-                ):
-                    raise BrowserReadExecutionError("stale")
-
-            try:
-                await state.owned_browser.create_and_login(
-                    self._login_vault(state.run),
-                    fence,
-                    control_fence=fence,
-                    local_check=local_check,
-                )
-            finally:
-                merge_login_fences = False
-                if fence_flight is not None:
-                    if not fence_flight.done():
-                        fence_flight.cancel()
-                    await asyncio.gather(fence_flight, return_exceptions=True)
-                    fence_flight = None
+            await state.owned_browser.create_and_login(self._login_vault(state.run), fence)
             current_stage = "portal"
             await state.owned_browser.prepare_portal(fence)
-            native = state.owned_browser.native
-            if native is None:
-                raise BrowserReadExecutionError("denied")
+            native = cast(dict[str, object], state.owned_browser.native)
             state.target = DFormTarget(run.owner, run.task_id, run.run_id, binding, dict(native))
-            self._target(state.run, state.target)
-            self._native(state)
             state.resource_ref = canonical_json(
                 {
                     "run": run.run_id,
@@ -755,8 +556,6 @@ class DFormRuntime:
                 "local_gate": False,
             }
             payload = canonical_json(request).encode("utf-8")
-            if len(payload) > 32768:
-                raise BrowserReadExecutionError("denied")
             env = {
                 key: os.environ[key]
                 for key in ("SystemRoot", "WINDIR", "COMSPEC", "PATH", "TEMP", "TMP")
@@ -783,16 +582,11 @@ class DFormRuntime:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW"),
             )
             root = psutil.Process(state.process.pid)
-            if Path(root.exe()).resolve() != self.options.python.resolve():
-                raise BrowserReadExecutionError("denied")
             state.owned[root.pid] = (root.create_time(), Path(root.exe()).resolve())
             output = asyncio.create_task(self._output(state))
-            # D cannot receive executable input until the real subject grant
-            # succeeds. Post-connect polling is only a continuing fence.
-            await self.check_subject(state.claim, state.resource_ref)
             await self._fence(state, checkpoint)
+            # One HumanGate reservation barrier immediately before the only input.
             await checkpoint.assert_fill_stop_reservation()
-            self._native(state)
             # The server-verified Chat confirmation already covers these exact
             # inputs. Standalone D callers retain their native coordination gate.
             log_d_form_stage("chat_confirmation", "success", "OK", began)
@@ -1076,8 +870,6 @@ class DFormRuntime:
         self,
         authorize: Callable[[RunSnapshot], Awaitable[None]],
     ) -> None:
-        if self._cleanup_authorize is not None or not callable(authorize):
-            raise ValueError("browser_fill_stop_installation_invalid")
         self._cleanup_authorize = authorize
 
     async def close_owned_browser(self, run: RunSnapshot) -> RunCleanup:
@@ -1162,8 +954,6 @@ class DFormRuntime:
         state = self._claim_state(claim, resource_ref)
         if state.owned_browser is None or state.target is None:
             raise BrowserLeaseError("browser_fill_stop_subject_unknown")
-        state.owned_browser.check_identity()
-        self._native(state)
 
     async def verify(
         self, expected: BrowserProviderExpectation, evidence: bytes

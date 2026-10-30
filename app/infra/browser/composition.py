@@ -236,21 +236,12 @@ class SingleSeedManifestAuthority:
         manifest: BrowserPublicationManifest,
     ) -> bool:
         """The installed D activation grant; reviewed publication stays separate."""
-        from app.infra.browser.d_form_authority import FixedDFormPublicationGrants
-        from app.infra.browser.d_form_manifest import CAPABILITY_ID, SKILL_ID
-
         return (
-            type(self._grants) is FixedDFormPublicationGrants
-            and owner.tenant_id == self._tenant_id == "default"
+            owner.tenant_id == self._tenant_id == "default"
             and manifest == self._seed
-            and manifest.skill.skill_id == SKILL_ID
-            and manifest.capability.capability_id == CAPABILITY_ID
-            and manifest.source_kind == "registered_site"
-            and manifest.effect == "controlled_write"
-            and manifest.rollback_source_digest is None
             and await self._grants.check(
                 owner,
-                SKILL_ID,
+                manifest.skill.skill_id,
                 "activate",
                 manifest.digest,
             )

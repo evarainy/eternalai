@@ -302,11 +302,6 @@ class DFormManagement:
         self._request: str | None = None
 
     def install_vertical(self, vertical: BrowserVerticalComponents) -> None:
-        if (
-            self.vertical is not None
-            or vertical._sessions is not self.components.browser_session_factory
-        ):
-            raise ValueError("d_form_identity_invalid")
         self.vertical = vertical
 
     @staticmethod
@@ -338,8 +333,6 @@ class DFormManagement:
                 or principal.org_ctx.tenant_id != binding.tenant_id
                 or principal.ai_user_id != binding.ai_user_id
                 or principal.org_ctx.directory_user_id is None
-                or type(captured.fingerprint) is not bytes
-                or len(captured.fingerprint) != 32
             ):
                 log_d_form_stage(
                     "management_caller", "failed", "d_form_authorization_denied", began
@@ -939,7 +932,6 @@ async def open_installation(
             origin=config.origin,
             options=DFormOptions(
                 config.python,
-                config.playwright_node,
                 config.receipts_root,
                 targets,
                 BrowserClaimProofContext(decode_key(environment, keys.proof_context)),
