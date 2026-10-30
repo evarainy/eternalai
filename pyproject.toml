@@ -28,6 +28,7 @@ agentscope = { url = "https://github.com/agentscope-ai/agentscope/archive/6c6085
 [dependency-groups]
 dev = [
     "pytest>=8,<9",
+    "psutil==7.2.2",
     "httpx>=0.24.0",
     "ruff>=0.8,<1",
     "mypy>=1.13,<2",

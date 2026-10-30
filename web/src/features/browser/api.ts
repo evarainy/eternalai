@@ -50,6 +50,7 @@ export interface FillStopReport {
   readonly execution_status: 'filled_stopped' | 'failed' | 'cancelled' | 'unknown';
   readonly verification: 'verified' | 'mismatch' | 'incomplete' | 'unknown';
   readonly field_checks: Record<'category' | 'position' | 'description', boolean | null>;
+  readonly submit_actions: number;
   readonly seconds: number;
   readonly error_code: string;
   readonly cleanup_confirmed: boolean;
@@ -65,7 +66,7 @@ const fillStopCodes = new Set([
   'REQUEST_GUARD_FAILED', 'PREP_FAILED', 'PAGE_CONTEXT_EVENT', 'PAGE_MAIN_FRAME_NAV',
   'PAGE_CHILD_FRAME_NAV', 'PAGE_TARGET_CLOSED', 'PAGE_CONTEXT_SET_CHANGED', 'PAGE_FRAME_SET_CHANGED',
   'WINDOW_PREP_FAILED', 'WINDOW_LOOKUP_FAILED', 'WINDOW_SET_FAILED', 'WINDOW_VERIFY_FAILED',
-  'AUTHORITY_LOST', 'RECEIPT_INVALID', 'EXECUTION_TIMEOUT',
+  'AUTHORITY_LOST', 'RECEIPT_INVALID', 'EXECUTION_TIMEOUT', 'FORM_SUBMIT_BLOCKED',
 ]);
 
 function parseFillStop(value: unknown): FillStopReport | null {
@@ -75,7 +76,8 @@ function parseFillStop(value: unknown): FillStopReport | null {
   if (item === null || item.mode !== 'FILL_STOP'
       || !['filled_stopped', 'failed', 'cancelled', 'unknown'].includes(String(item.execution_status))
       || !['verified', 'mismatch', 'incomplete', 'unknown'].includes(String(item.verification))
-      || item.submit_actions !== 0 || item.model_requests !== 0
+      || typeof item.submit_actions !== 'number' || !Number.isSafeInteger(item.submit_actions)
+      || item.submit_actions < 0 || item.model_requests !== 0
       || typeof item.seconds !== 'number' || !Number.isFinite(item.seconds)
       || item.seconds < 0 || item.seconds > 7200 || typeof item.error_code !== 'string'
       || !fillStopCodes.has(item.error_code) || typeof item.cleanup_confirmed !== 'boolean') return null;
@@ -85,12 +87,14 @@ function parseFillStop(value: unknown): FillStopReport | null {
       || item.actions_attempted < 0 || item.actions_attempted > 4
       || typeof item.actions_completed !== 'number' || !Number.isInteger(item.actions_completed)
       || item.actions_completed < 0 || item.actions_completed > item.actions_attempted) return null;
-  if (item.execution_status === 'filled_stopped' && (item.verification !== 'verified'
+  if (item.execution_status === 'filled_stopped' && (item.submit_actions !== 0
+      || item.verification !== 'verified'
       || item.error_code !== 'OK' || !item.cleanup_confirmed || item.actions_completed < 3
       || Object.values(checks).some((v) => v !== true))) return null;
   return { execution_status: item.execution_status as FillStopReport['execution_status'],
     verification: item.verification as FillStopReport['verification'],
     field_checks: checks as FillStopReport['field_checks'], seconds: item.seconds,
+    submit_actions: item.submit_actions,
     error_code: item.error_code, cleanup_confirmed: item.cleanup_confirmed };
 }
 

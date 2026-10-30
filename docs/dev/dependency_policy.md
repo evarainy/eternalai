@@ -100,7 +100,7 @@ explicitly names a future dedicated allowlist file.
 | python | mcp | ==2.2.0 | production | public_registry_development_only | P2-MCP-PLATFORM-001 approved SDK boundary |
 | python | httpx2 | >=2.5.0,<3 | production | public_registry_development_only | P2-MCP-PLATFORM-001 bounded MCP HTTP transport |
 | python | playwright | ==1.63.0 | production | public_registry_development_only | User 2026-10-02 v4.2 approved Python async Playwright; browser binaries and deployment verification remain separate |
-| python | psutil | ==7.2.2 | production (Windows only) | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 scoped dependency wiring for Windows process identity, profile and CDP listener checks; runtime verification remains separate |
+| python | psutil | ==7.2.2 | production (Windows only); backend-test | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 Windows process identity, profile and CDP listener checks; P2-RUNTIME-AGENTSCOPE-M2-001 2026-10-31 required-CI closure for the authorized real Chromium regression, reusing the same pinned package; runtime verification remains separate |
 | python | pyee | ==13.0.1 | production-transitive | public_registry_development_only | User 2026-10-02 v4.2 Playwright 1.63.0 required dependency, pinned by uv.lock |
 | python | openai | >=1.0.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements |
 | python | fastapi | >=0.115,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
