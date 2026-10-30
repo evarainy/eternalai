@@ -24,6 +24,7 @@ from app.infra.browser.d_form_manifest import build_fill_stop_manifest
 from app.infra.orchestration.agentscope_runtime.browser_handoff import (
     BROWSER_BINDING_RESOURCE_ID,
 )
+from app.infra.persistence.task_store.postgresql import d_form_continuation_conflict
 from app.ports.agent_orchestration import AgentTaskVersionBindings
 from app.ports.auth import authenticated_session
 from app.ports.browser_gateway import (
@@ -38,7 +39,11 @@ from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import VersionBinding
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import DFormCollectionReference, d_form_collection_reference
-from app.ports.task_store import DFormCollectionRecord, DFormCollectionSnapshot
+from app.ports.task_store import (
+    DFormCollectionError,
+    DFormCollectionRecord,
+    DFormCollectionSnapshot,
+)
 from app.runtime.d_form_collection import collect_arguments
 from app.version_binding import merge_version_bindings
 from tests.infra.orchestration.agentscope_runtime.test_proposal import (
@@ -95,29 +100,67 @@ def _d_form_capability() -> CapabilitySpec:
 
 
 class CollectionStore:
-    """In-memory D records; the task status follows the record as in PostgreSQL."""
+    """In-memory D records; the task status follows the record as in PostgreSQL.
+
+    Saves apply PostgreSQL's own continuation predicate, so a record that
+    rewrites collected words is rejected here as it is in production.
+    """
 
     def __init__(self) -> None:
         self.snapshots: dict[str, DFormCollectionSnapshot] = {}
+        self.requests: dict[str, tuple[str, str]] = {}
 
     async def get_d_form_collection(
         self, *, task_id: str, **kwargs: Any
     ) -> DFormCollectionSnapshot | None:
         return self.snapshots.get(task_id)
 
-    async def find_d_form_collection_request(self, **kwargs: Any) -> None:
-        return None
+    async def find_d_form_collection_request(
+        self, *, request_id: str, request_digest: str, **kwargs: Any
+    ) -> DFormCollectionSnapshot | None:
+        if request_id not in self.requests:
+            return None
+        task_id, digest = self.requests[request_id]
+        if digest != request_digest:
+            raise DFormCollectionError("collection_request_conflict")
+        return self.snapshots.get(task_id)
 
     async def save_d_form_collection(
         self, record: DFormCollectionRecord, *, expected_version: int | None, **kwargs: Any
     ) -> DFormCollectionSnapshot:
         current = self.snapshots.get(record.task_id)
-        assert (current.record.version if current else None) == expected_version
+        if current is None:
+            if expected_version is not None or record.version != 1 or record.consumed:
+                raise DFormCollectionError("collection_version_conflict")
+        elif current.record.consumed:
+            raise DFormCollectionError("collection_consumed")
+        elif d_form_continuation_conflict(
+            current.record, record, expected_version=expected_version,
+            task_status=current.task_status,
+        ):
+            raise DFormCollectionError("collection_version_conflict")
         snapshot = DFormCollectionSnapshot(
             record=record, task_status="running" if record.consumed else "waiting_user"
         )
         self.snapshots[record.task_id] = snapshot
+        self.requests[record.request_id] = (record.task_id, record.request_digest)
         return snapshot
+
+    def hand_off(self, task_id: str, admission: BrowserGatewayAdmission) -> None:
+        """As handoff.commit: the chat task completes and the handoff is linked."""
+        snapshot = self.snapshots.get(task_id)
+        if snapshot is None or not snapshot.record.consumed:
+            return
+        self.snapshots[task_id] = snapshot.model_copy(update={
+            "task_status": "completed",
+            "handoff": {
+                "admission_state": admission.kind,
+                "canonical_task_id": admission.task_id,
+                "canonical_trace_id": admission.trace_id,
+                "canonical_run_id": admission.run_id,
+                "state_revision": admission.state_revision,
+            },
+        })
 
 
 class ToolBindings(Orchestration):
@@ -150,9 +193,10 @@ class ToolBindings(Orchestration):
 
 
 class Handoff:
-    def __init__(self) -> None:
+    def __init__(self, store: CollectionStore | None = None) -> None:
         self.commits = 0
         self.fail_calls = 0
+        self.store = store
 
     @asynccontextmanager
     async def try_request_route(self, scope: BrowserRequestScope) -> AsyncIterator[bool]:
@@ -160,6 +204,8 @@ class Handoff:
 
     async def commit(self, invocation: Any, admission: Any) -> None:
         self.commits += 1
+        if self.store is not None:
+            self.store.hand_off(invocation.task_id, admission)
 
     async def fail_if_open(self, scope: BrowserRequestScope, error_code: str) -> str:
         self.fail_calls += 1
@@ -196,6 +242,7 @@ class BrowserHarness:
         browser_execute: Callable[[], Awaitable[ExecutionResult]] | None = None,
         fill_stop: bool = False,
         category_options: tuple[str, ...] | None = None,
+        store: CollectionStore | None = None,
     ) -> None:
         self.base = Harness(steps)
         base = self.base
@@ -206,11 +253,12 @@ class BrowserHarness:
         deps = base.runtime._deps
         object.__setattr__(deps, "orchestration", base.orchestration)
         object.__setattr__(deps, "browser_orchestration", self.browser)
-        self.store = CollectionStore()
+        # A shared store across harnesses is PostgreSQL surviving a restart.
+        self.store = store or CollectionStore()
         if fill_stop:
             object.__setattr__(deps, "d_form_collection_store", self.store)
             base.runtime._browser.d_form_collection_store = self.store  # type: ignore[assignment]
-        self.handoff = Handoff()
+        self.handoff = Handoff(self.store)
         base.runtime.install_browser(
             self.handoff,  # type: ignore[arg-type]
             Submission(),  # type: ignore[arg-type]
@@ -240,10 +288,12 @@ class BrowserHarness:
             ),
         )
 
-    def open_scope(self, *, session_id: str = SESSION_ID) -> BrowserRequestScope:
+    def open_scope(
+        self, *, session_id: str = SESSION_ID, request_id: str | None = None,
+    ) -> BrowserRequestScope:
         context = authenticated_session.get()
         assert context is not None
-        scope = BrowserRequestScope(context, session_id, str(uuid4()))
+        scope = BrowserRequestScope(context, session_id, request_id or str(uuid4()))
         browser_request_scope.set(scope)
         return scope
 
@@ -548,10 +598,12 @@ def _d_steps(
     ]
 
 
-async def _reply(harness: BrowserHarness, card: ResponseEnvelope, text: str) -> ResponseEnvelope:
+async def _reply(
+    harness: BrowserHarness, card: ResponseEnvelope, text: str, *, request_id: str | None = None,
+) -> ResponseEnvelope:
     assert card.data is not None and card.data["d_form_collection"] is not None
     d_form_collection_reference.set(DFormCollectionReference(**card.data["d_form_collection"]))
-    harness.open_scope()
+    harness.open_scope(request_id=request_id)
     envelope = await harness.base.send(text)
     await _settle()
     return envelope
@@ -783,6 +835,93 @@ def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object(detail
     assert f"监控坏了；{detail}" in harness.base.model.seen[3][0]
 
 
+_SUPPLEMENT = "黑屏无法查看，在1楼走廊东侧"
+_SUPPLEMENT_STEPS = [
+    _text(json.dumps({"position": "1楼走廊东侧", "description": "黑屏无法查看"})),
+    _text('{"category":"监控系统"}'),
+]
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_a_supplemented_description_is_admitted_once_and_its_retry_never_admits_again(
+    restart: bool,
+) -> None:
+    # 2026-10-30 acceptance: this reply got 409, as the store rejected the
+    # appended description. A restart is a new runtime over the same records.
+    async def exercise() -> tuple[BrowserHarness, list[ResponseEnvelope], int]:
+        first = BrowserHarness(
+            [*_d_steps({"description": "监控坏了"}), *([] if restart else _SUPPLEMENT_STEPS)],
+            fill_stop=True, category_options=CATEGORIES,
+        )
+        first.base.login()
+        first.open_scope()
+        card = await first.base.send("监控坏了")
+        await _settle()
+        harness = first
+        if restart:
+            harness = BrowserHarness(
+                _SUPPLEMENT_STEPS, fill_stop=True, category_options=CATEGORIES,
+                store=first.store,
+            )
+            harness.base.login()
+        request_id = str(uuid4())
+        admitted = await _reply(harness, card, _SUPPLEMENT, request_id=request_id)
+        calls = len(harness.base.model.seen)
+        retried = await _reply(harness, card, _SUPPLEMENT, request_id=request_id)
+        return harness, [card, admitted, retried], calls
+
+    harness, (card, admitted, retried), calls = asyncio.run(exercise())
+    assert card.status == "waiting_user"
+    record = harness.store.snapshots[card.task_id].record
+    assert record.version == 2 and record.consumed
+    assert record.arguments["description"] == "监控坏了；黑屏无法查看"
+    assert admitted.status == "running" and admitted.data is not None
+    assert admitted.data["kind"] == "accepted"
+    assert harness.browser.executed_arguments == [
+        {"position": "1楼走廊东侧", "description": "监控坏了；黑屏无法查看", "category": "监控系统"}
+    ]
+    # The browser retry button resends the same request: the original run, no model call.
+    assert retried.status == "running" and retried.data is not None
+    assert retried.task_id == admitted.task_id == "canonical-task"
+    assert retried.data["run_id"] == "run-1"
+    assert len(harness.base.model.seen) == calls
+    assert harness.browser.executions == 1 and harness.handoff.commits == 1
+
+
+def test_a_stale_card_after_a_supplement_is_a_version_conflict() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope, str]:
+        harness = BrowserHarness(
+            [
+                *_d_steps({"description": "监控坏了"}),
+                _text('{"description":"黑屏无法查看"}'),
+                _text('{"position":"1楼走廊东侧"}'),
+                _text('{"category":"监控系统"}'),
+            ],
+            fill_stop=True, category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("监控坏了")
+        await _settle()
+        supplemented = await _reply(harness, card, "黑屏无法查看")
+        with pytest.raises(DFormCollectionError) as stale:
+            await _reply(harness, card, "在1楼走廊东侧")
+        admitted = await _reply(harness, supplemented, "在1楼走廊东侧")
+        return harness, supplemented, admitted, stale.value.code
+
+    harness, supplemented, admitted, code = asyncio.run(exercise())
+    # Still missing the place, the supplement is a new version on the same card.
+    assert supplemented.status == "waiting_user" and supplemented.data is not None
+    assert supplemented.data["d_form_collection"]["version"] == 2
+    assert "请补充故障位置" in supplemented.message
+    assert code == "collection_version_conflict"
+    assert admitted.status == "running"
+    assert harness.browser.executed_arguments == [
+        {"position": "1楼走廊东侧", "description": "监控坏了；黑屏无法查看", "category": "监控系统"}
+    ]
+    assert harness.browser.executions == 1 and harness.handoff.commits == 1
+
+
 @pytest.mark.parametrize(
     ("arguments", "collected", "missing"),
     [
@@ -859,7 +998,9 @@ def test_collection_schema_still_rejects_invalid_arguments(
         (True, False, "监控坏了", "监控坏了", "监控坏了"),  # No duplicate.
         (True, False, "黑屏", "请快点处理", "监控坏了"),  # No invented detail.
         (True, False, "黑屏", "黑屏", "监控坏了；黑屏"),
-        (True, False, "黑" * 500, "黑" * 500, "黑" * 500),  # Latest detail at limit.
+        # Beyond the form limit the recorded words are kept, never replaced.
+        (True, False, "黑" * 495, "黑" * 495, "监控坏了；" + "黑" * 495),
+        (True, False, "黑" * 496, "黑" * 496, "监控坏了"),
     ],
 )
 def test_description_supplement_preserves_collection_boundaries(

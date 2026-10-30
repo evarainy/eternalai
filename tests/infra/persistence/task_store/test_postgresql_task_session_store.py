@@ -689,3 +689,68 @@ def test_same_session_two_tenants(dispatch_db):
             assert (await session.execute(text("SELECT count(*) FROM sessions"))).scalar_one() == 2
 
     run_synthetic_db(exercise())
+
+
+def test_d_form_collection_description_may_only_grow_by_appending(dispatch_db):
+    """A continuation supplement appends to the description; collected words stay."""
+    from datetime import UTC, timedelta
+
+    from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+    from app.ports.task_store import DFormCollectionError, DFormCollectionRecord, TaskRecord
+
+    owner = {"tenant_id": "synthetic-T", "ai_user_id": "synthetic-U",
+             "session_id": "synthetic-S"}
+    first = DFormCollectionRecord(
+        task_id="synthetic-d-task", trace_id="synthetic-d-trace",
+        capability_version="1.0.0", capability_fingerprint="a" * 64, version=1,
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        arguments={"description": "监控坏了"},
+        request_id=str(uuid.uuid4()), request_digest="b" * 64,
+    )
+
+    def following(previous, arguments, *, consumed=False):
+        return previous.model_copy(update={
+            "version": previous.version + 1, "arguments": arguments,
+            "request_id": str(uuid.uuid4()), "consumed": consumed,
+        })
+
+    async def exercise():
+        store = PostgreSQLTaskStore(dispatch_db.factory)
+        await store.create_task(TaskRecord(
+            task_id=first.task_id, status="running", trace_id=first.trace_id,
+            capability_id="browser.form.fill_stop", **owner,
+        ))
+        await store.save_d_form_collection(first, **owner, expected_version=None)
+        supplemented = following(first, {"description": "监控坏了；黑屏无法查看"})
+        saved = await store.save_d_form_collection(supplemented, **owner, expected_version=1)
+        assert saved.task_status == "waiting_user"
+        rejected = [
+            # Rewritten or replaced words, a changed place, a stale card.
+            (following(supplemented, {"description": "黑屏无法查看"}), 2),
+            (following(supplemented, {"description": "监控；黑屏无法查看"}), 2),
+            (following(supplemented, {"description": "监控坏了；黑屏无法查看"}), 1),
+        ]
+        for record, expected_version in rejected:
+            with pytest.raises(DFormCollectionError) as error:
+                await store.save_d_form_collection(
+                    record, **owner, expected_version=expected_version,
+                )
+            assert error.value.code == "collection_version_conflict"
+        complete = {"description": "监控坏了；黑屏无法查看；在1楼走廊东侧",
+                    "position": "1楼走廊东侧", "category": "监控系统"}
+        final = following(supplemented, complete, consumed=True)
+        saved = await store.save_d_form_collection(final, **owner, expected_version=2)
+        assert saved.task_status == "running"
+        snapshot = await store.get_d_form_collection(**owner, task_id=first.task_id)
+        assert snapshot is not None and snapshot.record == final
+        found = await store.find_d_form_collection_request(
+            **owner, request_id=final.request_id, request_digest=final.request_digest,
+        )
+        assert found is not None and found.record.version == 3
+        with pytest.raises(DFormCollectionError) as error:
+            await store.save_d_form_collection(
+                following(final, complete), **owner, expected_version=3,
+            )
+        assert error.value.code == "collection_consumed"
+
+    run_synthetic_db(exercise())

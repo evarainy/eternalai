@@ -119,10 +119,11 @@ def collect_arguments(
         if supplement and name in result:
             if value in result[name]:
                 continue
-            merged = f"{result[name]}；{value}"
-            # Preserve both when they fit; at the form's 500-character limit,
-            # prefer the user's latest detail rather than silently truncating it.
-            value = merged if len(merged) <= 500 else value
+            value = f"{result[name]}；{value}"
+            # The store accepts a description only by appending to it; beyond
+            # the form's 500-character limit the recorded one stays unchanged.
+            if len(value) > 500:
+                continue
         result[name] = value
     return result
 

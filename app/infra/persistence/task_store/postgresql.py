@@ -34,6 +34,27 @@ from app.ports.task_store import (
 _VALID_TASK_STATUSES: frozenset[str] = frozenset(get_args(TaskStatus))
 
 
+def d_form_continuation_conflict(
+    previous: DFormCollectionRecord, checked: DFormCollectionRecord, *,
+    expected_version: int | None, task_status: TaskStatus,
+) -> bool:
+    """Whether ``checked`` may not follow ``previous`` as the next D record version.
+
+    The version and status guard stale cards and concurrent replies; expiry and
+    capability stay fixed. Collected words are never rewritten or dropped: a
+    description may only grow by appending (AgentScope continuation supplement).
+    """
+    return (task_status != "waiting_user" or expected_version != previous.version
+            or checked.version != previous.version + 1
+            or checked.expires_at != previous.expires_at
+            or checked.capability_version != previous.capability_version
+            or checked.capability_fingerprint != previous.capability_fingerprint
+            or any(not (checked.arguments.get(key) == value or (
+                       key == "description"
+                       and checked.arguments.get(key, "").startswith(value)))
+                   for key, value in previous.arguments.items()))
+
+
 class PostgreSQLTaskStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -133,13 +154,9 @@ class PostgreSQLTaskStore:
                     raise DFormCollectionError("collection_expired")
                 if previous.version >= 32:
                     raise DFormCollectionError("collection_limit_reached")
-                if (task.status != "waiting_user" or expected_version != previous.version
-                        or checked.version != previous.version + 1
-                        or checked.expires_at != previous.expires_at
-                        or checked.capability_version != previous.capability_version
-                        or checked.capability_fingerprint != previous.capability_fingerprint
-                        or any(checked.arguments.get(key) != value
-                               for key, value in previous.arguments.items())):
+                if d_form_continuation_conflict(
+                    previous, checked, expected_version=expected_version, task_status=task.status,
+                ):
                     raise DFormCollectionError("collection_version_conflict")
             if checked.expires_at <= datetime.now(UTC):
                 raise DFormCollectionError("collection_expired")
