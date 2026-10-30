@@ -808,6 +808,12 @@ class OwnedDFormBrowser:
 
     async def stop_automation(self) -> None:
         """Disconnect the private Playwright driver, preserving this Job/window."""
+        if self.portal is not None and not self.attachment_cleanup_proven:
+            # The portal owns a separate driver. A missing login-driver reference
+            # cannot prove that a failed portal cleanup has finished.
+            self.attachment_cleanup_proven = await self.portal.cleanup()
+            if not self.attachment_cleanup_proven:
+                return
         if self.playwright is not None:
             try:
                 if self.context is not None:
@@ -817,7 +823,7 @@ class OwnedDFormBrowser:
             except Exception:
                 return  # Attachment state unknown: the caller quarantines the lease.
             self.playwright = None
-        self.attachment_cleanup_proven = True
+            self.attachment_cleanup_proven = True
 
     async def close_owned(self) -> None:
         """Caller must independently authorize this exact Run's cleanup first."""

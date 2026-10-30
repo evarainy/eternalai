@@ -99,6 +99,59 @@ def state_runtime(tmp_path):
     return runtime, state, run
 
 
+def test_portal_stop_timeout_keeps_cleanup_responsibility_and_quarantines(tmp_path, monkeypatch):
+    from app.infra.browser.d_portal_flow import PortalFlow
+
+    async def exercise():
+        owner = owned(tmp_path)
+        owner.native = {
+            "pid": 1, "created": 1.0, "executable": "synthetic-chromium",
+            "profile": "synthetic-profile", "profile_root": "synthetic-root",
+            "port": 1, "context_id": "synthetic-context", "target_id": "synthetic-target",
+            "host": "127.0.0.1", "scheme": "https",
+        }
+        driver = SimpleNamespace(stop=AsyncMock(side_effect=TimeoutError))
+
+        async def connect(portal):
+            portal.pw = driver
+
+        monkeypatch.setattr(PortalFlow, "connect", connect)
+        monkeypatch.setattr(PortalFlow, "prepare_page", AsyncMock())
+        monkeypatch.setattr(owner, "protect_context", AsyncMock(
+            return_value=SimpleNamespace(detach=AsyncMock()),
+        ))
+        monkeypatch.setattr(owner, "enter_portal_once", AsyncMock())
+        with pytest.raises(BrowserReadExecutionError):
+            await owner.prepare_portal(AsyncMock())
+        assert owner.preparation_error == "CLEANUP_FAILED"
+        assert owner.playwright is None and owner.portal.pw is driver
+        assert not owner.attachment_cleanup_proven
+        driver.stop.assert_awaited_once()
+
+        runtime, state, run = state_runtime(tmp_path)
+        state.owned_browser = owner
+        await runtime._stop(state)
+        assert driver.stop.await_count == 2
+        assert not owner.attachment_cleanup_proven
+        owner.job = Mock(job_ref="synthetic-job")
+        owner.job.close_handles.return_value = True
+        assert await runtime.cleanup(run) == "quarantined"
+        assert owner.owned_resource_cleanup_proven and not state.cleanup_proven
+        assert driver.stop.await_count == 3
+        runtime._leases.cleanup.assert_not_awaited()
+        runtime._leases.quarantine.assert_awaited_once()
+
+        # Only an actual successful stop of that same driver restores the proof.
+        driver.stop.side_effect = None
+        await owner.stop_automation()
+        assert driver.stop.await_count == 4 and owner.attachment_cleanup_proven
+        assert await runtime.cleanup(run) == "released"
+        assert state.released and state.cleanup_proven
+        runtime._leases.cleanup.assert_awaited_once()
+
+    asyncio.run(exercise())
+
+
 def test_attachment_exit_attempts_owned_close_but_quarantines_without_proof(tmp_path):
     async def exercise():
         runtime, state, run = state_runtime(tmp_path)

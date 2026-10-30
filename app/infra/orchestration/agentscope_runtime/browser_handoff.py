@@ -76,7 +76,7 @@ from app.runtime.d_form_collection import collect_arguments, request_message
 from app.version_binding import prompt_version_binding
 
 # m2-2: D replies and the category choice are JSON outputs (user decision 2026-10-29).
-M2_BROWSER_PROMPT_VERSION = "m2-4"
+M2_BROWSER_PROMPT_VERSION = "m2-5"
 BROWSER_BINDING_RESOURCE_ID = "runtime.agentscope.browser_tool"
 REQUEST_BUDGET_SECONDS = 130
 # Chinese equivalent of app/runtime/d_form_collection.py::COLLECTION_PROMPT,
@@ -121,6 +121,16 @@ REPLY_FIELDS_PROMPT = (
 )
 # Without configured category candidates a reply may still carry an explicit category.
 REPLY_CATEGORY_CLAUSE = "只有用户明确说出报修类别时才填写 category，否则省略。"
+POSITION_PROMPT = (
+    "只从用户这次 OA 报修原话提取故障地点 position（楼层、房间、区域等），原样抄写。"
+    "坏掉的物品不是地点；例如“监控坏了”没有地点，输出空对象；"
+    "“三楼会议室投影仪没有画面”的地点是“三楼会议室”。描述包含地点不影响地点成立。"
+    "没有地点就省略 position，不要编造。只输出一个 JSON 对象。"
+)
+_POSITION_FAILURE = (
+    "未能识别报修地点，本次未填写。请补充故障位置后重新发起报修。",
+    "The repair location could not be extracted; nothing was filled.",
+)
 CATEGORY_PROMPT = (
     "根据这次 OA 报修的故障位置和故障描述，从 categories 中选出最贴切的一项作为报修类别"
     " category。用户自己说的类别只作参考；category 必须原样取自 categories。"
@@ -166,7 +176,7 @@ def expose_browser_tool(
 
 async def _json_call(
     model: ChatModelBase,
-    purpose: Literal["reply_fields", "category"],
+    purpose: Literal["reply_fields", "position", "category"],
     prompt: str,
     data: dict[str, Any],
     schema: dict[str, Any],
@@ -206,6 +216,22 @@ async def _json_call(
         outcome,
         round((monotonic() - started) * 1000),
     )
+    return result
+
+
+async def extract_position(model: ChatModelBase, message: str) -> dict[str, str] | None:
+    """Separate a place from a faulty object before initial D-field collection."""
+    result = await _json_call(
+        model, "position", POSITION_PROMPT, {"message": message},
+        {
+            "type": "object",
+            "properties": {"position": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    )
+    if (result is None or not set(result) <= {"position"}
+            or any(type(value) is not str or value not in message for value in result.values())):
+        return None
     return result
 
 
@@ -501,6 +527,18 @@ class BrowserHandoffCoordinator:
             self._settle_failed(binding.capability_id, "capability_candidate_stale", _STALE_FAILURE)
             return
         if self._registration.effect == "fill_stop":
+            if self._collection is None and arguments.get("position"):
+                # Tool arguments can mistake the faulty object for a location.
+                # Replies already pass through the semantic JSON field extractor.
+                position = await extract_position(self._deps.model_factory(), self._message)
+                if position is None:
+                    self._settle_failed(
+                        capability.capability_id,
+                        "adapter_missing_required_field", _POSITION_FAILURE,
+                    )
+                    return
+                arguments = {key: value for key, value in arguments.items() if key != "position"}
+                arguments.update(position)
             options = (
                 self._category_options
                 if self._collection is not None

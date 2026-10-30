@@ -494,6 +494,7 @@ def test_collection_reply_never_opens_or_closes_a_task() -> None:
             [
                 _calls(("reset_tools", {BROWSER_GROUP: True})),
                 _calls((D_FORM_TOOL, {"position": "三楼东侧", "description": "监控坏了"})),
+                _text('{"position":"三楼东侧"}'),
                 _text("好的"),
             ],
             fill_stop=True,
@@ -534,10 +535,15 @@ def test_collection_reply_never_opens_or_closes_a_task() -> None:
 CATEGORIES = ("监控系统", "门禁系统", "广播对讲", "基础网络", "其他类别")
 
 
-def _d_steps(arguments: dict[str, Any], *json_outputs: str) -> list[Any]:
+def _d_steps(
+    arguments: dict[str, Any], *json_outputs: str, position_output: str | None = None,
+) -> list[Any]:
     return [
         _calls(("reset_tools", {BROWSER_GROUP: True})),
         _calls((D_FORM_TOOL, arguments)),
+        *([_text(position_output if position_output is not None else json.dumps(
+            {"position": arguments["position"]}, ensure_ascii=False,
+        ))] if arguments.get("position") else []),
         *(_text(output) for output in json_outputs),
     ]
 
@@ -551,11 +557,12 @@ async def _reply(harness: BrowserHarness, card: ResponseEnvelope, text: str) -> 
     return envelope
 
 
-def test_complete_report_gets_a_model_chosen_category_and_one_admission() -> None:
+@pytest.mark.parametrize("description", ["投影仪没有画面", "三楼会议室投影仪没有画面"])
+def test_complete_report_gets_a_model_chosen_category_and_one_admission(description: str) -> None:
     async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
         harness = BrowserHarness(
             _d_steps(
-                {"position": "三楼会议室", "description": "投影仪坏了，没有画面"},
+                {"position": "三楼会议室", "description": description},
                 '{"category":"其他类别"}',
             ),
             fill_stop=True,
@@ -563,7 +570,7 @@ def test_complete_report_gets_a_model_chosen_category_and_one_admission() -> Non
         )
         harness.base.login()
         harness.open_scope()
-        envelope = await harness.base.send("三楼会议室投影仪坏了，没有画面")
+        envelope = await harness.base.send("三楼会议室投影仪没有画面")
         await _settle()
         return harness, envelope
 
@@ -572,7 +579,7 @@ def test_complete_report_gets_a_model_chosen_category_and_one_admission() -> Non
     assert envelope.data["kind"] == "accepted"
     assert harness.browser.executions == 1 and harness.handoff.commits == 1
     assert harness.browser.executed_arguments == [
-        {"position": "三楼会议室", "description": "投影仪坏了，没有画面", "category": "其他类别"}
+        {"position": "三楼会议室", "description": description, "category": "其他类别"}
     ]
     # No collection card: nothing was saved for a reply.
     assert harness.store.snapshots == {}
@@ -641,7 +648,7 @@ def test_an_object_offered_as_the_place_is_not_a_place_and_only_the_place_is_ask
     async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, int, ResponseEnvelope]:
         harness = BrowserHarness(
             [
-                *_d_steps({"position": "监控", "description": "监控坏了"}),
+                *_d_steps({"position": "监控", "description": "监控坏了"}, position_output="{}"),
                 _text('{"position":"三楼东侧"}'),
                 _text('{"category":"其他类别"}'),
             ],
