@@ -129,7 +129,9 @@ def collect_arguments(
         # description (监控 in 监控坏了) is not a place the user named.
         known = previous.arguments if previous is not None else {}
         position, description = result["position"], result["description"]
-        if position in description and "position" not in known:
+        # A reply may quote its location inside the new fault detail. Compare
+        # against the recorded description, not the supplement just merged in.
+        if position in known.get("description", description) and "position" not in known:
             del result["position"]
         elif description in position and "description" not in known:
             del result["description"]

@@ -734,14 +734,15 @@ def _registered_d_form_text(harness: BrowserHarness) -> None:
     )
 
 
-def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object() -> None:
+@pytest.mark.parametrize("detail", ["黑屏无法查看", "黑屏无法查看，在1楼走廊东侧"])
+def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object(detail: str) -> None:
     # 2026-10-30 acceptance: glm answered 监控坏了 in free text, asking for the
     # category, location and urgency, and then picked the OA pending list.
     async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, ResponseEnvelope]:
         harness = BrowserHarness(
             [
                 *_d_steps({"description": "监控坏了"}),
-                _text('{"position":"1楼走廊东侧","description":"黑屏无法查看"}'),
+                _text(json.dumps({"position": "1楼走廊东侧", "description": detail})),
                 _text('{"category":"监控系统"}'),
             ],
             fill_stop=True,
@@ -769,10 +770,10 @@ def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object() -> N
     assert admitted.status == "running" and admitted.data is not None
     assert admitted.data["kind"] == "accepted"
     assert harness.browser.executed_arguments == [
-        {"position": "1楼走廊东侧", "description": "监控坏了；黑屏无法查看", "category": "监控系统"}
+        {"position": "1楼走廊东侧", "description": f"监控坏了；{detail}", "category": "监控系统"}
     ]
     assert "已有 description 时也提取" in harness.base.model.seen[2][0]
-    assert "监控坏了；黑屏无法查看" in harness.base.model.seen[3][0]
+    assert f"监控坏了；{detail}" in harness.base.model.seen[3][0]
 
 
 @pytest.mark.parametrize(
