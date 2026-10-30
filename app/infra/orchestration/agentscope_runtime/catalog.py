@@ -360,6 +360,8 @@ def with_browser_tool(
     instructions: str,
     purpose: str = BROWSER_GROUP_PURPOSE,
     usage: str | None = None,
+    *,
+    collect_missing: bool = False,
 ) -> tuple[ToolCatalog, CatalogTool | None]:
     """Add the registered browser capability as the only tool of BROWSER_GROUP.
 
@@ -387,6 +389,12 @@ def with_browser_tool(
             catalog, visible_count=catalog.visible_count + 1,
             excluded=tuple(sorted(excluded.items())),
         ), None
+    if collect_missing:
+        # Empty string placeholders are missing collection fields, not completed
+        # form values. required is already omitted by the common projection.
+        # Keep types, upper bounds and the original published schema unchanged.
+        for field in schema["properties"].values():
+            field.pop("minLength", None)
     summary = discovery_summary(spec)
     tool = CatalogTool(
         name=name,

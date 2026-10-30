@@ -326,14 +326,27 @@ class ProposalCoordinator:
         if [item for item in response if item != RESET_TOOLS] != [name]:
             return _Discovery("write_proposal_conflict")
         # Strict parse: the framework's repaired input is never accepted.
+        invalid_stage = "invalid_json"
         try:
             arguments = json.loads(call.input)
+            invalid_stage = "not_object"
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
             jsonschema.validate(arguments, self._schemas[name])
+            invalid_stage = "browser_keys_or_types"
             if browser and not self._browser.accepts(arguments):  # type: ignore[union-attr]
                 raise ValueError("browser arguments outside the allowlist")
-        except (ValueError, jsonschema.ValidationError):
+        except jsonschema.ValidationError as rejected:
+            # Only code-owned labels: never log instance, message or schema paths.
+            keyword = rejected.validator
+            reason = keyword if keyword in {
+                "type", "minLength", "maxLength", "required", "enum", "additionalProperties"
+            } else "other"
+            _log_write_rejected("schema_invalid", reason)
+            self._reject(call, "tool_input_rejected", "schema_invalid")
+            return None
+        except ValueError:
+            _log_write_rejected("schema_invalid", invalid_stage)
             self._reject(call, "tool_input_rejected", "schema_invalid")
             return None
         if not reserve_tool_execution(state, self._limits):

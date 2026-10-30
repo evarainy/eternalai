@@ -411,6 +411,7 @@ class BrowserRequestHelpers:
         collection: DFormCollectionSnapshot | None,
         category_options: tuple[str, ...] | None,
         model_category: bool = False,
+        append_description: bool = False,
     ) -> ResponseEnvelope | dict[str, Any]:
         """Merge model arguments into the D record.
 
@@ -448,6 +449,7 @@ class BrowserRequestHelpers:
             previous,
             category_options,
             model_category=model_category,
+            append_description=append_description,
         )
         if "category" not in arguments and category_options is not None:
             matches = tuple(item for item in category_options if item in message)
@@ -502,9 +504,13 @@ class BrowserRequestHelpers:
                 ",".join(missing_fields(arguments)),
             )
             if not collected.consumed:
-                return self.collection_response(
+                response = self.collection_response(
                     snapshot, owner.session_id, None if model_category else category_options
                 )
+                if model_category and not {"position", "description"} & arguments.keys():
+                    text = "请补充故障位置和发生了什么故障；简短说明即可。"
+                    return response.model_copy(update={"message": text, "fallback_text": text})
+                return response
         return arguments
 
     async def retain_unparsed(

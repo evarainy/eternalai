@@ -80,6 +80,7 @@ def request_digest(message: str, channel: str) -> str:
 def collect_arguments(
     supplied: Mapping[str, Any], message: str, previous: DFormCollectionRecord | None = None,
     category_options: tuple[str, ...] | None = None, *, model_category: bool = False,
+    append_description: bool = False,
 ) -> dict[str, str]:
     """``model_category`` (AgentScope path, user decision 2026-10-29): the category is
     the model's choice and need not occur in the message, but must be exactly one of
@@ -88,7 +89,11 @@ def collect_arguments(
     for name in FIELDS:
         value = supplied.get(name)
         chosen = model_category and name == "category"
-        if (name in result or type(value) is not str or not value.strip()
+        supplement = (
+            append_description and name == "description" and previous is not None
+            and not previous.consumed
+        )
+        if ((name in result and not supplement) or type(value) is not str or not value.strip()
                 or len(value) > (100 if name == "category" else 500) or "\x00" in value
                 or (value not in message and not chosen)
                 or (name == "category" and len(value.splitlines()) != 1)):
@@ -111,6 +116,13 @@ def collect_arguments(
             elif not explicit:
                 # E.g. 监控 is only part of 监控坏了, not a supplied category.
                 continue
+        if supplement and name in result:
+            if value in result[name]:
+                continue
+            merged = f"{result[name]}；{value}"
+            # Preserve both when they fit; at the form's 500-character limit,
+            # prefer the user's latest detail rather than silently truncating it.
+            value = merged if len(merged) <= 500 else value
         result[name] = value
     if model_category and "position" in result and "description" in result:
         # The place is never the faulty object: a newly supplied position inside the

@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 
 from app.browser_skill.models import BrowserOwner
+from app.infra.browser.d_form_manifest import build_fill_stop_manifest
 from app.infra.orchestration.agentscope_runtime.browser_handoff import (
     BROWSER_BINDING_RESOURCE_ID,
 )
@@ -38,6 +39,7 @@ from app.ports.human_gate import VersionBinding
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import DFormCollectionReference, d_form_collection_reference
 from app.ports.task_store import DFormCollectionRecord, DFormCollectionSnapshot
+from app.runtime.d_form_collection import collect_arguments
 from app.version_binding import merge_version_bindings
 from tests.infra.orchestration.agentscope_runtime.test_proposal import (
     SESSION_ID,
@@ -76,17 +78,16 @@ def _browser_capability() -> CapabilitySpec:
 
 
 def _d_form_capability() -> CapabilitySpec:
-    text = {"type": "string"}
+    # Use the real publication schema, including required and minLength. A
+    # type-only fake missed the empty-placeholder failure seen at this boundary.
+    manifest = build_fill_stop_manifest(origin="https://oa.test")
+    schema = json.loads(manifest.capability_snapshot_json)["input_schema"]
     return _browser_capability().model_copy(
         update={
             "capability_id": D_FORM_ID,
             "name": "报修填写",
             "type": "action",
-            "input_schema": {
-                "type": "object",
-                "properties": {"category": text, "position": text, "description": text},
-                "additionalProperties": False,
-            },
+            "input_schema": schema,
             "input_schema_digest": f"input-{D_FORM_ID}",
             "short_description": "填写 OA 报修表单后停止。",
         }
@@ -740,7 +741,7 @@ def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object() -> N
         harness = BrowserHarness(
             [
                 *_d_steps({"description": "监控坏了"}),
-                _text('{"position":"1楼走廊东侧"}'),
+                _text('{"position":"1楼走廊东侧","description":"黑屏无法查看"}'),
                 _text('{"category":"监控系统"}'),
             ],
             fill_stop=True,
@@ -768,8 +769,113 @@ def test_an_object_only_repair_report_is_routed_to_d_and_keeps_the_object() -> N
     assert admitted.status == "running" and admitted.data is not None
     assert admitted.data["kind"] == "accepted"
     assert harness.browser.executed_arguments == [
-        {"position": "1楼走廊东侧", "description": "监控坏了", "category": "监控系统"}
+        {"position": "1楼走廊东侧", "description": "监控坏了；黑屏无法查看", "category": "监控系统"}
     ]
+    assert "已有 description 时也提取" in harness.base.model.seen[2][0]
+    assert "监控坏了；黑屏无法查看" in harness.base.model.seen[3][0]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "collected", "missing"),
+    [
+        ({"description": "监控坏了"}, ["description"], ["category", "position"]),
+        ({"position": "一楼"}, ["position"], ["category", "description"]),
+        ({}, [], ["category", "position", "description"]),
+        ({"description": "监控坏了", "position": "", "category": ""},
+         ["description"], ["category", "position"]),
+        ({"position": "", "description": "", "category": ""},
+         [], ["category", "position", "description"]),
+    ],
+)
+def test_published_d_schema_accepts_partial_collection(
+    arguments: dict[str, str], collected: list[str], missing: list[str],
+) -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(
+            _d_steps(arguments), fill_stop=True, category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("一楼监控坏了")
+        await _settle()
+        return harness, card
+
+    harness, card = asyncio.run(exercise())
+    assert card.status == "waiting_user" and card.data is not None
+    assert card.data["collected_fields"] == collected
+    assert card.data["missing_fields"] == missing
+    assert card.data["category_options"] == [] and "类别" not in card.message
+    if not collected:
+        assert "故障位置和发生了什么故障" in card.message
+    assert harness.browser.executions == 0 and harness.handoff.commits == 0
+    # Projection is a collection contract; the publication itself is unchanged.
+    original = harness.base.registry.items[D_FORM_ID].input_schema
+    assert original["required"] == ["category", "position", "description"]
+    assert original["properties"]["position"]["minLength"] == 1
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reason"),
+    [({"position": None}, "framework_validation"), ({"position": 1}, "type"),
+     ({"position": "x" * 501}, "framework_validation"),
+     ({"tenant_id": "private-marker"}, "browser_keys_or_types")],
+)
+def test_collection_schema_still_rejects_invalid_arguments(
+    arguments: dict[str, Any], reason: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [*_d_steps(arguments), _text("不能处理")],
+            fill_stop=True, category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("监控坏了")
+        await _settle()
+        return harness, card
+
+    with caplog.at_level("INFO"):
+        harness, card = asyncio.run(exercise())
+    assert card.status == "failed"
+    assert harness.browser.executions == 0 and harness.store.snapshots == {}
+    assert f"code=schema_invalid stage={reason}" in caplog.text
+    assert "private-marker" not in caplog.text
+    assert "agentscope_d_input shape=" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("enabled", "consumed", "value", "message", "expected"),
+    [
+        (False, False, "黑屏", "黑屏", "监控坏了"),  # Legacy default.
+        (True, True, "黑屏", "黑屏", "监控坏了"),  # Consumed replay is immutable.
+        (True, False, "监控坏了", "监控坏了", "监控坏了"),  # No duplicate.
+        (True, False, "黑屏", "请快点处理", "监控坏了"),  # No invented detail.
+        (True, False, "黑屏", "黑屏", "监控坏了；黑屏"),
+        (True, False, "黑" * 500, "黑" * 500, "黑" * 500),  # Latest detail at limit.
+    ],
+)
+def test_description_supplement_preserves_collection_boundaries(
+    enabled: bool, consumed: bool, value: str, message: str, expected: str,
+) -> None:
+    async def first_record() -> DFormCollectionRecord:
+        harness = BrowserHarness(
+            _d_steps({"description": "监控坏了"}),
+            fill_stop=True, category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("监控坏了")
+        await _settle()
+        return harness.store.snapshots[card.task_id].record
+
+    previous = asyncio.run(first_record()).model_copy(update={"consumed": consumed})
+    supplied = {"description": value}
+    result = (
+        collect_arguments(supplied, message, previous, append_description=True)
+        if enabled else collect_arguments(supplied, message, previous)
+    )
+    assert result == {"description": expected}
+    assert previous.arguments == {"description": "监控坏了"}
 
 
 def test_a_pending_query_still_reads_while_the_repair_tool_is_exposed() -> None:

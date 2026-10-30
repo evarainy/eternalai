@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -40,7 +41,12 @@ from agentscope.tool import (
 )
 from jinja2 import Template
 
-from app.infra.llm.agentscope_chat import ToolErrorKind, TurnLimits, halt_tool_use
+from app.infra.llm.agentscope_chat import (
+    ToolErrorKind,
+    TurnLimits,
+    current_turn_id,
+    halt_tool_use,
+)
 from app.infra.orchestration.agentscope_read_tools import (
     AgentScopeRuntimeDependencies,
     ReadToolScope,
@@ -92,6 +98,34 @@ DISCOVERY_CODES = frozenset(
 )
 _RESET_COUNT_KEY = "eternalai_reset_count"
 _ALLOW = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="approved read")
+
+
+def _log_d_input_shape(call: ToolCallBlock) -> None:
+    """Fixed structural labels only, before SDK validation; no values or unknown keys."""
+    try:
+        arguments = json.loads(call.input)
+    except ValueError:
+        shape = "invalid_json"
+    else:
+        if not isinstance(arguments, dict):
+            shape = "not_object"
+        else:
+            parts = []
+            for field in ("category", "position", "description"):
+                value = arguments.get(field)
+                kind = (
+                    "missing" if field not in arguments else
+                    "non_string" if not isinstance(value, str) else
+                    "empty" if not value.strip() else
+                    "overlong" if len(value) > (100 if field == "category" else 500) else
+                    "string"
+                )
+                parts.append(f"{field}:{kind}")
+            parts.append(f"extra:{bool(set(arguments) - {'category', 'position', 'description'})}")
+            shape = ",".join(parts)
+    logging.getLogger("uvicorn.error.agentscope_runtime").info(
+        "agentscope_d_input shape=%s turn=%s", shape, current_turn_id()
+    )
 
 
 @dataclass(slots=True)
@@ -496,6 +530,11 @@ class M1Middleware(MiddlewareBase):
                 if isinstance(block, ToolCallBlock):
                     ledger.call_of[block.id] = index
                     names.append(block.name)
+                    if (
+                        block.name == "browser__form__fill_stop"
+                        and block.name in ledger.browser_tools
+                    ):
+                        _log_d_input_shape(block)
             ledger.response_tools[index] = tuple(names)
         return response
 
@@ -542,6 +581,10 @@ class M1Middleware(MiddlewareBase):
             ):
                 return "discovery"
         # An exposed tool whose arguments the SDK rejected.
+        logging.getLogger("uvicorn.error.agentscope_runtime").info(
+            "agentscope_write_rejected code=schema_invalid stage=framework_validation turn=%s",
+            current_turn_id(),
+        )
         ledger.record_pre_exec(tool_call_id, name, "tool_input_rejected", "schema_invalid")
         return "business"
 
