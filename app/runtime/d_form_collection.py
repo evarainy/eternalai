@@ -112,6 +112,15 @@ def collect_arguments(
                 # E.g. 监控 is only part of 监控坏了, not a supplied category.
                 continue
         result[name] = value
+    if model_category and "position" in result and "description" in result:
+        # The place is never the faulty object: a newly supplied position inside the
+        # description (监控 in 监控坏了) is not a place the user named.
+        known = previous.arguments if previous is not None else {}
+        position, description = result["position"], result["description"]
+        if position in description and "position" not in known:
+            del result["position"]
+        elif description in position and "description" not in known:
+            del result["description"]
     return result
 
 

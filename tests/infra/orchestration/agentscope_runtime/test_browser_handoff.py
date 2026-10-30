@@ -636,6 +636,35 @@ def test_only_the_missing_field_is_asked_and_the_reply_is_admitted(
     ]
 
 
+def test_an_object_offered_as_the_place_is_not_a_place_and_only_the_place_is_asked() -> None:
+    async def exercise() -> tuple[BrowserHarness, ResponseEnvelope, int, ResponseEnvelope]:
+        harness = BrowserHarness(
+            [
+                *_d_steps({"position": "监控", "description": "监控坏了"}),
+                _text('{"position":"三楼东侧"}'),
+                _text('{"category":"其他类别"}'),
+            ],
+            fill_stop=True,
+            category_options=CATEGORIES,
+        )
+        harness.base.login()
+        harness.open_scope()
+        card = await harness.base.send("监控坏了")
+        await _settle()
+        executions_before_reply = harness.browser.executions
+        return harness, card, executions_before_reply, await _reply(harness, card, "三楼东侧")
+
+    harness, card, executions_before_reply, admitted = asyncio.run(exercise())
+    assert card.status == "waiting_user" and card.data is not None
+    assert executions_before_reply == 0
+    assert "请补充故障位置" in card.message and "类别" not in card.message
+    assert admitted.status == "running" and admitted.data is not None
+    assert harness.browser.executions == 1
+    assert harness.browser.executed_arguments == [
+        {"position": "三楼东侧", "description": "监控坏了", "category": "其他类别"}
+    ]
+
+
 def test_a_category_outside_the_candidates_is_rejected_without_admission() -> None:
     async def exercise() -> tuple[BrowserHarness, ResponseEnvelope]:
         harness = BrowserHarness(
