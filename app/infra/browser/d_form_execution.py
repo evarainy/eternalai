@@ -283,8 +283,6 @@ class DFormRuntime:
             state.process.send_signal(signal.SIGINT)
 
     async def _stop(self, state: _State) -> None:
-        import psutil
-
         if state.process is not None and state.process.stdin is not None and not state.input_sent:
             state.process.stdin.close()
         await self._signal(state)
@@ -298,6 +296,8 @@ class DFormRuntime:
             and state.process.returncode is None
             and time.monotonic() < deadline
         ):
+            import psutil
+
             try:
                 self._inventory(state)
                 await self._signal(state)

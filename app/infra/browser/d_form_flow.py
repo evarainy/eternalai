@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 from urllib.parse import urlsplit
 
-import psutil
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -723,6 +722,8 @@ class Flow:
                 self.summary["timings"]["observe"] += time.perf_counter() - stamp
 
     async def connect(self) -> None:
+        import psutil
+
         b = self.binding
         connections = psutil.Process(b.pid).net_connections(kind="tcp")
         need(
@@ -1261,6 +1262,8 @@ class Flow:
         return clean
 
     async def run(self) -> FlowSummary:
+        import psutil
+
         began = time.perf_counter()
         stage = 3
         stamp = began
