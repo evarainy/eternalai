@@ -310,6 +310,7 @@ class DFormRuntime:
         """Project a closed receipt; never store or forward the original mapping."""
         checks = FillStopChecks()
         attempts = completed = 0
+        submit_actions = 0
         verification: Literal["verified", "mismatch", "incomplete", "unknown"] = "unknown"
         status: Literal["filled_stopped", "failed", "cancelled", "unknown"] = "unknown"
         error: FillStopCode = code or "RECEIPT_INVALID"
@@ -323,14 +324,15 @@ class DFormRuntime:
                 or raw.get("mode") != "FILL_STOP"
                 or raw.get("model_requests") != 0
                 or type(raw.get("model_requests")) is not int
-                or raw.get("submit_actions") != 0
                 or type(raw.get("submit_actions")) is not int
+                or raw["submit_actions"] < 0
                 or raw.get("recording_enabled") is not False
                 or raw.get("reporter_displayed") is not False
                 or raw.get("browser_left_open") is not True
                 or raw.get("error_code") not in CODES
             ):
                 raise ValueError
+            submit_actions = raw["submit_actions"]
             attempts, completed = raw["action_attempts"], raw["actions_completed"]
             if (
                 type(attempts) is not int
@@ -370,6 +372,7 @@ class DFormRuntime:
             status = "cancelled" if error == "CANCELLED" else "failed"
             if (
                 code is None
+                and submit_actions == 0
                 and raw["passed"] is True
                 and error == "OK"
                 and state.process is not None
@@ -399,12 +402,17 @@ class DFormRuntime:
             or 8 not in state.stages
         ):
             verification, status = "unknown", "unknown"
+        if submit_actions:
+            # A blocked save/submit is a failed fill-stop, never a successful receipt.
+            # Preserve the observed attempts even if another receipt check failed.
+            verification, status, error = "unknown", "unknown", "FORM_SUBMIT_BLOCKED"
         return FillStopReport(
             execution_status=status,
             verification=verification,
             field_checks=checks,
             actions_attempted=attempts,
             actions_completed=completed,
+            submit_actions=submit_actions,
             seconds=min(7200.0, max(0.0, time.monotonic() - state.began)),
             error_code=error,
             cleanup_confirmed=(

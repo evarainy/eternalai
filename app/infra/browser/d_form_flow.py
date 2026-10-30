@@ -59,6 +59,7 @@ CODES = {
     "OBSERVE_TIMEOUT",
     "CONNECT_TIMEOUT",
     "RESULT_MISMATCH",
+    "FORM_SUBMIT_BLOCKED",
     "REPORTER_MISSING",
     "REPORTER_AMBIGUOUS",
     "REPORTER_INVALID",
@@ -153,6 +154,46 @@ if(selects.length===1){
 return custom.length?custom:native;
 }"""
 )
+
+# Installed only after the existing D field finder identifies the actual nodes.
+# No URL/method guesses: unrelated homepage requests keep their normal route.
+SUBMIT_GUARD = r"""(nodes)=>{
+const forms=new Set(nodes.map(e=>e.form||e.closest('form')).filter(Boolean));
+let common=nodes[0].parentElement;
+while(common&&!nodes.every(e=>common.contains(e)))common=common.parentElement;
+const root=common.closest('form,[role="form"],.el-form,.ant-form,.layui-form')||common;
+const state={count:0};
+const belongs=e=>{
+  const form=e.form||e.closest('form');return form?forms.has(form):root.contains(e);
+};
+const block=e=>{state.count++;if(e){e.preventDefault();e.stopImmediatePropagation();}};
+const click=e=>{
+  const button=e.target instanceof Element
+    ?e.target.closest('button,input[type="submit"],input[type="image"],input[type="button"],a,[role="button"]')
+    :null;
+  if(!button||!belongs(button))return;
+  const type=(button.type||'').toLowerCase();
+  const labels=[button.getAttribute('aria-label'),button.value,button.textContent]
+    .map(text=>(text||'').replace(/\s/g,'').toLowerCase());
+  if(type==='submit'||type==='image'
+    ||labels.some(text=>['保存','提交','save','submit'].includes(text)))block(e);
+};
+const submit=e=>{if(forms.has(e.target))block(e);};
+// Native submit() bypasses the submit event; requestSubmit() emits that event.
+const nativeSubmit=HTMLFormElement.prototype.submit;
+function guardedSubmit(){if(forms.has(this))block();else return nativeSubmit.call(this);}
+HTMLFormElement.prototype.submit=guardedSubmit;
+window.addEventListener('click',click,true);
+window.addEventListener('submit',submit,true);
+state.stop=()=>{
+  window.removeEventListener('click',click,true);
+  window.removeEventListener('submit',submit,true);
+  if(HTMLFormElement.prototype.submit===guardedSubmit)
+    HTMLFormElement.prototype.submit=nativeSubmit;
+  return state.count;
+};
+return state;
+}"""
 
 IDENTITY = (
     "(e)=>{" + DOM + r"""
@@ -482,6 +523,7 @@ class Flow:
         self.cdp: CDPSession | None = None
         self.sessions: list[CDPSession] = []
         self.probes: list[tuple[ElementHandle, str, str]] = []
+        self.submit_guards: list[JSHandle] = []
         self.allowed: set[Origin] = set()
         self.pages: set[Page] = set()
         self.route_installed = False
@@ -876,6 +918,7 @@ class Flow:
         return result
 
     async def check(self) -> None:
+        await self.read_submit_actions()
         need(not self.cancel.is_set(), "CANCELLED")
         if self.violation:
             raise Stop(self.violation)
@@ -896,6 +939,23 @@ class Flow:
                 '[role="dialog"],[role="alertdialog"],.modal,.el-dialog,.ant-modal,.layui-layer,.k-window'
             ).evaluate_all("nodes=>nodes.some(e=>e.isConnected&&e.getClientRects().length>0)")
             need(not modal, "UNEXPECTED_DIALOG")
+
+    def record_submit_actions(self, count: int) -> None:
+        self.summary["submit_actions"] = count
+        if count:
+            self.flag("FORM_SUBMIT_BLOCKED")
+
+    async def read_submit_actions(self) -> None:
+        if self.submit_guards:
+            count = sum([await guard.evaluate("s=>s.count") for guard in self.submit_guards])
+            self.record_submit_actions(count)
+
+    async def guard_form_submission(self, fields: Mapping[str, FieldHandle]) -> None:
+        frames: dict[Frame, list[ElementHandle]] = {}
+        for frame, node in fields.values():
+            frames.setdefault(frame, []).append(node)
+        for frame, nodes in frames.items():
+            self.submit_guards.append(await frame.evaluate_handle(SUBMIT_GUARD, nodes))
 
     async def fields(self) -> dict[str, FieldHandle]:
         await self.check()
@@ -1246,6 +1306,15 @@ class Flow:
                 await asyncio.wait_for(session.detach(), 2)
             except BaseException:
                 clean = False
+        # Keep the form blocked through helper cleanup; remove only at hand-back.
+        submit_actions = 0
+        for guard in self.submit_guards:
+            try:
+                submit_actions += await asyncio.wait_for(guard.evaluate("s=>s.stop()"), 2)
+                await guard.dispose()
+            except BaseException:
+                clean = False
+        self.record_submit_actions(max(submit_actions, self.summary["submit_actions"]))
         if self.pw:
             try:
                 await asyncio.wait_for(self.pw.stop(), 10)
@@ -1281,6 +1350,7 @@ class Flow:
             fields = await self.bounded(self.observation(self.fields()), 15, "OBSERVE_TIMEOUT")
             values = await self.bounded(self.observation(self.state(fields)), 15, "OBSERVE_TIMEOUT")
             if self.mode == "FILL_STOP":
+                await self.bounded(self.guard_form_submission(fields), 15, "OBSERVE_TIMEOUT")
                 need(
                     all(
                         values[name] in ("", inputs[key])
