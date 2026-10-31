@@ -291,10 +291,12 @@ function BrowserRunMonitor({
         // A sealed run ends through the panel's "结束协助" (same endpoint), not the card button.
         onCancel={handoff === null ? onCancel : undefined}
       />
-      {handoff !== null ? (
+      {fillStopMode && !fillStopHistory ? (
+        // Sealed or pre-seal D card (§9.1); the panel decides what a null handoff shows.
         <BrowserHandoffPanel run={read.run} handoff={handoff}
           onEndAssist={() => onCancel(target.accepted.task_id, target.accepted.run_id)} />
-      ) : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (
+      ) : null}
+      {handoff !== null ? null : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (
         <Alert showIcon type={read.run.status === 'completed' && read.run.result?.verification === 'verified'
           && read.fillStop.verification === 'verified' ? 'success' : 'warning'}
           title={read.run.status === 'completed' && read.run.result?.verification === 'verified' && read.fillStop.verification === 'verified'

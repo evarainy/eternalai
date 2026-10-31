@@ -11,7 +11,12 @@ import type { BrowserHandoff } from './api';
 export interface BrowserHandoffPanelProps {
   /** The owner-checked run the handoff belongs to; `result`/`cleanup` drive the §9.1 rows. */
   readonly run: ParsedBrowserRunView;
-  readonly handoff: BrowserHandoff;
+  /**
+   * null: the D run is not (yet) sealed. Rendered for every fill_stop card except an M2 historical
+   * `completed` card without handoff, so S6b can show the §9.1 pre-seal rows here. The run card
+   * keeps its own cancel button while this is null.
+   */
+  readonly handoff: BrowserHandoff | null;
   /**
    * "结束协助": the same cancel endpoint as the run card. Resolving means only that the request
    * was handed off; a rejection means it was not delivered. Acknowledgement comes from a later read.
@@ -19,9 +24,13 @@ export interface BrowserHandoffPanelProps {
   readonly onEndAssist: () => Promise<void>;
 }
 
-/** Replaces the technical fill notice and the run card's own cancel button for a sealed run. */
-export function BrowserHandoffPanel({ run, onEndAssist }: BrowserHandoffPanelProps) {
+/**
+ * Sealed run: replaces the technical fill notice and the run card's own cancel button.
+ * Pre-seal (handoff null): S6a placeholder renders nothing; the existing card presentation stays.
+ */
+export function BrowserHandoffPanel({ run, handoff, onEndAssist }: BrowserHandoffPanelProps) {
   const [ending, setEnding] = useState(false);
+  if (handoff === null) return null;
   const canEnd = run.result === null && !run.cancel.requested;
   return (
     <section aria-label="报修协助">
