@@ -31,6 +31,7 @@ from app.ports.browser_run_store import (
     BrowserRunStoreError,
     BrowserRunStorePort,
     HandoffRecord,
+    HandoffSeal,
     RunSnapshot,
     checked_run_id,
 )
@@ -42,6 +43,9 @@ HANDOFF_POLL_SECONDS = 3
 HANDOFF_CHECK_TIMEOUT_SECONDS = 30
 # Concurrent cancel/check requests are monotonic and finite; re-decide on fresh facts.
 _HANDOFF_REDECIDE = frozenset({"browser_run_cancel_requested", "browser_run_stale"})
+# Before the seal the only concurrent writer is the owner's one-time cancel
+# request; a few fresh re-reads settle it, anything beyond is a real conflict.
+_SEAL_REDECIDE_ATTEMPTS = 3
 
 
 def _handoff_candidate(run: RunSnapshot) -> bool:
@@ -375,26 +379,10 @@ class BrowserReadWorker:
                     return checkpoint.run
                 if outcome.handoff is not None:
                     mark("handoff")
-                    checkpoint.run = await checkpoint.refresh(allow_cancel=True)
-                    if checkpoint.run.cancel_requested:
-                        if checkpoint.run.phase is None:
-                            raise BrowserReadExecutionError("stale")
-                        checkpoint.run = await self._store.advance(
-                            checkpoint.run,
-                            phase=checkpoint.run.phase,
-                            effect="acknowledged",
-                        )
+                    record = await self._seal_handoff(checkpoint, outcome.handoff)
+                    if record is None:
                         mark("cancel")
                         return await self._cancel(checkpoint)
-                    checkpoint.run = await self._store.advance(
-                        checkpoint.run,
-                        phase="verifying",
-                        effect="acknowledged",
-                    )
-                    checkpoint.run, record = await self._store.enter_handoff(
-                        checkpoint.run,
-                        outcome.handoff,
-                    )
                     return await self._hold_handoff(checkpoint, record)
                 mark(
                     "result_settlement",
@@ -577,6 +565,42 @@ class BrowserReadWorker:
         checkpoint.run = await self._store.finalize_handoff(run, reason="interrupted")
         return True
 
+    async def _seal_handoff(
+        self,
+        checkpoint: _Checkpoint,
+        seal: HandoffSeal,
+    ) -> HandoffRecord | None:
+        """Seal the filled form, re-deciding on fresh facts after a concurrent cancel.
+
+        None: a cancel request won before the seal. The effect is recorded as
+        the known acknowledged fill and the caller cancels inside this claim,
+        whose in-process state can still stop and clean up. Never re-executes.
+        """
+        attempts = 0
+        while True:
+            checkpoint.run = await checkpoint.refresh(allow_cancel=True)
+            try:
+                if checkpoint.run.cancel_requested:
+                    if checkpoint.run.phase is None:
+                        raise BrowserReadExecutionError("stale")
+                    checkpoint.run = await self._store.advance(
+                        checkpoint.run,
+                        phase=checkpoint.run.phase,
+                        effect="acknowledged",
+                    )
+                    return None
+                checkpoint.run = await self._store.advance(
+                    checkpoint.run,
+                    phase="verifying",
+                    effect="acknowledged",
+                )
+                checkpoint.run, record = await self._store.enter_handoff(checkpoint.run, seal)
+                return record
+            except BrowserRunStoreError as error:
+                attempts += 1
+                if error.code != "browser_run_stale" or attempts >= _SEAL_REDECIDE_ATTEMPTS:
+                    raise
+
     async def _hold_handoff(self, checkpoint: _Checkpoint, record: HandoffRecord) -> RunSnapshot:
         """Hold one sealed handoff in this claim until a single terminal winner.
 
@@ -586,6 +610,14 @@ class BrowserReadWorker:
         while True:
             try:
                 checkpoint.run = await checkpoint.refresh(allow_cancel=True)
+                if checkpoint.run.verification == "verified":
+                    # A durable verified result already won; a later cancel
+                    # request cannot change it. Only the terminal write remains.
+                    checkpoint.run = await self._store.finalize(
+                        checkpoint.run,
+                        status="completed",
+                    )
+                    return checkpoint.run
                 if checkpoint.run.cancel_requested:
                     return await self._cancel(checkpoint)
                 if await self._execution.hold_handoff(checkpoint.run, checkpoint) == "closed":
