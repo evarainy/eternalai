@@ -54,9 +54,12 @@ RunCleanup = Literal["pending", "released", "terminated", "quarantined", "failed
 RunAction = Literal[
     "read", "claim", "renew", "advance", "verify", "capture_prepare", "capture", "capture_settle",
     "effect_settle", "finalize", "cancel", "cleanup", "handoff_check",
+    # Service-only bounded handoff closure; never a business or cleanup grant.
+    "handoff_expire", "handoff_quarantine",
 ]
 HandoffSettleOutcome = Literal["not_found", "unavailable", "unsupported"]
 HandoffCloseReason = Literal["deadline", "window_closed", "interrupted"]
+HandoffExpiryReason = Literal["authority_lost", "deadline"]
 DispatchFailureCode = Literal[
     "unavailable",
     "overloaded",
@@ -330,6 +333,28 @@ class BrowserRunAuthorityPort(Protocol):
         outcome. Expired/revoked business grants do not grant or prevent this
         independently authorized recovery access.
         """
+        ...
+
+    async def authorize_handoff_history(self, transaction: object, run: RunSnapshot) -> None:
+        """Recheck the installed historical grant for this exact sealed Run after locks.
+
+        Same tenant/user/binding/publication with a revision not newer than the
+        installation. It only permits handoff_expire/handoff_quarantine, never
+        business actions, generic cleanup or resource release.
+        """
+        ...
+
+    async def check_handoff_expiry(
+        self, transaction: object, run: RunSnapshot, deadline: datetime,
+    ) -> HandoffExpiryReason:
+        """Prove a lost worker plus a negative fact or the passed seal deadline.
+
+        Reads the locked row and database clock only; no input decryption.
+        """
+        ...
+
+    async def check_handoff_quarantine(self, transaction: object, run: RunSnapshot) -> None:
+        """Allow only a terminal, not finally cleaned Run to record quarantined."""
         ...
 
 

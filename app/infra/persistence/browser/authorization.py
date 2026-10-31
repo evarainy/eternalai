@@ -24,6 +24,7 @@ from app.ports.auth import Principal, authenticated_session
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
     CanonicalRequest,
+    HandoffExpiryReason,
     ProtectedRunEnvelope,
     RunAction,
     RunAdmission,
@@ -52,6 +53,8 @@ TeachingPlanLookup = Callable[
 RunProofCheck = Callable[[RunSnapshot], Awaitable[None]]
 CleanupAuthorize = Callable[[AsyncSession, RunSnapshot], Awaitable[None]]
 CleanupCheck = Callable[[AsyncSession, RunSnapshot, RunCleanup], Awaitable[None]]
+# Bounded handoff closure has its own installed historical grant; see before_run_lock.
+_HANDOFF_HISTORY: frozenset[RunAction] = frozenset({"handoff_expire", "handoff_quarantine"})
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -385,11 +388,13 @@ class PostgreSQLBrowserRunAuthority:
         cancel_check_in_session: CleanupAuthorize | None = None,
         cleanup_authorize: CleanupAuthorize | None = None,
         cleanup_check: CleanupCheck | None = None,
+        handoff_history_authorize: CleanupAuthorize | None = None,
     ) -> None:
         self._auth, self._cleanup = current_auth, cleanup_check
         self._verify, self._cancel = verification_check, cancel_check
         self._cancel_in_session = cancel_check_in_session
         self._cleanup_authorize = cleanup_authorize
+        self._handoff_history = handoff_history_authorize
 
     @staticmethod
     def _session(transaction: object) -> AsyncSession:
@@ -479,6 +484,9 @@ class PostgreSQLBrowserRunAuthority:
             if self._cleanup_authorize is None:
                 raise BrowserRunStoreError("browser_cleanup_authority_unavailable")
             await self._cleanup_authorize(session, run)
+        elif action in _HANDOFF_HISTORY:
+            # Never business authority and never the generic cleanup grant.
+            await self.authorize_handoff_history(session, run)
         else:
             # Validate the actual candidate before locks. The later check_run
             # repeats current authorization against the locked persisted row.
@@ -541,6 +549,8 @@ class PostgreSQLBrowserRunAuthority:
         session = self._session(transaction)
         if action == "cleanup":
             raise BrowserRunStoreError("browser_cleanup_proof_required")
+        if action in _HANDOFF_HISTORY:
+            raise BrowserRunStoreError("browser_handoff_history_required")
         await self._check_run_authorization(session, run, action)
         if action == "verify":
             if self._verify is None:
@@ -620,3 +630,61 @@ class PostgreSQLBrowserRunAuthority:
             raise BrowserRunStoreError("browser_cleanup_authority_unavailable")
         # No earlier-row locks here: the store already took them before Task/Run.
         await self._cleanup_authorize(session, run)
+
+    async def authorize_handoff_history(self, transaction: object, run: RunSnapshot) -> None:
+        session = self._session(transaction)
+        if self._handoff_history is None:
+            raise BrowserRunStoreError("browser_cleanup_authority_unavailable")
+        # No earlier-row locks here; before_run_lock calls this before taking them.
+        await self._handoff_history(session, run)
+
+    async def check_handoff_expiry(
+        self, transaction: object, run: RunSnapshot, deadline: datetime,
+    ) -> HandoffExpiryReason:
+        """Locked-row and SQL facts only: no validate(), no input decryption."""
+        session = self._session(transaction)
+        admission = run.admission
+        now = cast(datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one())
+        # A late renewal is not a dead worker; a live claim keeps the handoff.
+        if run.worker_deadline is not None and run.worker_deadline > now:
+            raise BrowserRunStoreError("browser_handoff_authority_current")
+        facts = (
+            await session.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM auth_session_revocations"
+                    " WHERE token_fingerprint=:fingerprint) AS revoked,"
+                    " NOT EXISTS (SELECT 1 FROM sessions WHERE tenant_id=:tenant"
+                    " AND session_id=:session) AS session_missing,"
+                    " NOT EXISTS (SELECT 1 FROM oa_session_credentials WHERE tenant_id=:tenant"
+                    " AND ai_user_id=:user AND target_system=:target AND binding_id=:binding"
+                    " AND binding_state='active' AND revoked_at IS NULL"
+                    " AND binding_revision=:revision) AS binding_lost"
+                ),
+                {
+                    "fingerprint": admission.auth_fingerprint,
+                    "tenant": run.owner.tenant_id,
+                    "user": run.owner.user_id,
+                    "session": run.owner.session_id,
+                    "target": admission.target_system,
+                    "binding": admission.binding_id,
+                    "revision": admission.binding_revision,
+                },
+            )
+        ).mappings().one()
+        if (
+            admission.auth_expires_at <= now
+            or facts["revoked"]
+            or facts["session_missing"]
+            or facts["binding_lost"]
+        ):
+            return "authority_lost"
+        if deadline <= now:
+            return "deadline"
+        raise BrowserRunStoreError("browser_handoff_authority_current")
+
+    async def check_handoff_quarantine(self, transaction: object, run: RunSnapshot) -> None:
+        self._session(transaction)
+        if run.status not in {"completed", "failed", "cancelled"}:
+            raise BrowserRunStoreError("browser_handoff_state_invalid")
+        if run.cleanup in {"released", "terminated"}:
+            raise BrowserRunStoreError("browser_run_cleanup_final")

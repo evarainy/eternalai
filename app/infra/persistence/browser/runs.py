@@ -1027,6 +1027,10 @@ class PostgreSQLBrowserRunStore:
             # remain possible after the original user's business grant expires.
             assert cleanup_outcome is not None
             await self._authority.check_cleanup(session, current, cleanup_outcome)
+        elif action in {"handoff_expire", "handoff_quarantine"}:
+            # Recheck the bounded historical grant on the locked row; the caller
+            # then proves the action-specific facts before any write.
+            await self._authority.authorize_handoff_history(session, current)
         else:
             await self._authority.check_run(session, current, action)
         return current
@@ -3886,3 +3890,80 @@ class PostgreSQLBrowserRunStore:
                 if await self._handoff_in_session(session, current) is not None:
                     found.append((current.task_id, current.run_id))
         return tuple(found)
+
+    async def expire_lost_handoff(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> RunSnapshot:
+        """Service-only bounded closure of a sealed handoff whose holder is gone.
+
+        Writes only the fixed failed/incomplete terminal and its close event. No
+        provider IO, input decryption or business authority happens here.
+        """
+        async with self._transaction() as session:
+            initial = await self._read_run(session, owner, task_id, run_id)
+            current = await self._locked(session, initial, "handoff_expire", worker=False)
+            record = (
+                await self._handoff_in_session(session, current)
+                if await self._fill_stop_publication(session, current)
+                else None
+            )
+            if (
+                record is None
+                or current.status not in _ACTIVE
+                or current.phase not in {"waiting_user", "verifying"}
+                or current.effect != "acknowledged"
+                or current.verification is not None
+            ):
+                raise BrowserRunStoreError("browser_handoff_not_sealed")
+            reason = await self._authority.check_handoff_expiry(session, current, record.deadline)
+            result = await self._finalize_locked(
+                session,
+                current,
+                "failed",
+                "browser_verification_failed",
+                "incomplete",
+                None,
+            )
+            await self._append_write_event(
+                session,
+                result,
+                kind=_HANDOFF_CLOSED,
+                event_id=self._write_event_id("handoff-closed", result.run_id),
+                revision_delta=0,
+                data={"reason": reason},
+            )
+        return result
+
+    async def record_historical_handoff_quarantine(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> RunSnapshot:
+        """Mark an older-revision closed handoff quarantined; never touches its lease."""
+        async with self._transaction() as session:
+            initial = await self._read_run(session, owner, task_id, run_id)
+            current = await self._locked(
+                session,
+                initial,
+                "handoff_quarantine",
+                worker=False,
+                terminal_ok=True,
+            )
+            sealed = await self._handoff_in_session(session, current)
+            closed = await self._write_event(
+                session,
+                current,
+                _HANDOFF_CLOSED,
+                self._write_event_id("handoff-closed", current.run_id),
+            )
+            if sealed is None or closed is None:
+                raise BrowserRunStoreError("browser_handoff_not_sealed")
+            await self._authority.check_handoff_quarantine(session, current)
+            if current.cleanup == "quarantined":
+                return current
+            result = await self._update(session, current, {"cleanup": "quarantined"})
+        return result

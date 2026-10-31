@@ -292,13 +292,14 @@ class FixedDFormCleanupGrant:
     async def _exact_run(
         self, session: AsyncSession, *, owner: BrowserOwner, run_id: str,
         fingerprint: bytes, expires_at: datetime, revision: int,
-        task_id: str | None = None,
+        task_id: str | None = None, historical: bool = False,
     ) -> None:
         binding = self.binding
         if (
             owner.tenant_id != binding.tenant_id
             or owner.user_id != binding.ai_user_id
-            or revision != binding.binding_revision
+            or (revision > binding.binding_revision if historical
+                else revision != binding.binding_revision)
         ):
             raise BrowserLeaseError("d_form_resource_scope_denied")
         found = (await session.execute(text(
@@ -337,6 +338,20 @@ class FixedDFormCleanupGrant:
             fingerprint=run.admission.auth_fingerprint,
             expires_at=run.admission.auth_expires_at,
             revision=run.admission.binding_revision, task_id=run.task_id,
+        )
+
+    async def authorize_historical_run(self, session: AsyncSession, run: RunSnapshot) -> None:
+        """Exact persisted Run at this or an older binding revision, nothing more.
+
+        Only the bounded handoff closure uses it. It grants no business action,
+        generic cleanup, lease release or decryption of input/resource references.
+        """
+        await self._exact_run(
+            session, owner=run.owner, run_id=run.run_id,
+            fingerprint=run.admission.auth_fingerprint,
+            expires_at=run.admission.auth_expires_at,
+            revision=run.admission.binding_revision, task_id=run.task_id,
+            historical=True,
         )
 
 
