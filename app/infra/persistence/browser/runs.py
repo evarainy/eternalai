@@ -23,6 +23,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.models import (
@@ -3876,29 +3878,37 @@ class PostgreSQLBrowserRunStore:
         owner: BrowserOwner,
     ) -> tuple[tuple[str, str], ...]:
         found: list[tuple[str, str]] = []
-        async with self._transaction() as session:
-            # Exactly this bound session; an expired capture can no longer be acted on.
-            rows = (
-                (
-                    await session.execute(
-                        text(
-                            f"SELECT task_id,run_id FROM browser_runs WHERE {_OWNER}"
-                            " AND status IN ('running','waiting_user')"
-                            " AND phase IN ('waiting_user','verifying')"
-                            " AND auth_expires_at>clock_timestamp()"
-                            " ORDER BY created_at,run_id"
-                        ),
-                        _owner(owner),
+        try:
+            async with self._transaction() as session:
+                # Exactly this bound session; an expired capture can no longer be acted on.
+                rows = (
+                    (
+                        await session.execute(
+                            text(
+                                f"SELECT task_id,run_id FROM browser_runs WHERE {_OWNER}"
+                                " AND status IN ('running','waiting_user')"
+                                " AND phase IN ('waiting_user','verifying')"
+                                " AND auth_expires_at>clock_timestamp()"
+                                " ORDER BY created_at,run_id"
+                            ),
+                            _owner(owner),
+                        )
                     )
+                    .mappings()
+                    .all()
                 )
-                .mappings()
-                .all()
-            )
-            for row in rows:
-                current = await self._read_run(session, owner, row["task_id"], row["run_id"])
-                await self._authority.check_run(session, current, "read")
-                if await self._handoff_in_session(session, current) is not None:
-                    found.append((current.task_id, current.run_id))
+                for row in rows:
+                    current = await self._read_run(
+                        session, owner, row["task_id"], row["run_id"]
+                    )
+                    await self._authority.check_run(session, current, "read")
+                    if await self._handoff_in_session(session, current) is not None:
+                        found.append((current.task_id, current.run_id))
+        except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError):
+            # Connection loss, pool timeout, statement/lock timeout: a known
+            # availability failure, never "no handoff". Authorization and any
+            # other (programming) error keep propagating unchanged.
+            raise BrowserRunStoreError("browser_run_store_unavailable") from None
         return tuple(found)
 
     async def expire_lost_handoff(

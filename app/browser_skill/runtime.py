@@ -575,11 +575,16 @@ class BrowserReadWorker:
         None: a cancel request won before the seal. The effect is recorded as
         the known acknowledged fill and the caller cancels inside this claim,
         whose in-process state can still stop and clean up. Never re-executes.
+
+        Every revision-fenced write from the D outcome to the seal or the cancel
+        win (the claim refresh, either advance, enter_handoff) is inside one
+        bounded re-decision; only the store's revision conflict is re-read. A
+        lost claim, expired grant or any other error still propagates.
         """
         attempts = 0
         while True:
-            checkpoint.run = await checkpoint.refresh(allow_cancel=True)
             try:
+                checkpoint.run = await checkpoint.refresh(allow_cancel=True)
                 if checkpoint.run.cancel_requested:
                     if checkpoint.run.phase is None:
                         raise BrowserReadExecutionError("stale")

@@ -1447,6 +1447,9 @@ class BrowserSubmissionService:
         try:
             found = await self._store.find_active_handoffs(invocation.owner)
         except BrowserRunStoreError as error:
+            if error.code == "browser_run_store_unavailable":
+                # Known DB availability failure: callers fail closed, never "none".
+                raise BrowserChatError("browser_chat_unavailable") from None
             raise self._store_error(error) from None
         except BrowserAuthorizationError as error:
             raise BrowserChatError(error.code, http_status=403) from None
