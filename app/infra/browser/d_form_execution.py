@@ -120,6 +120,11 @@ class _State:
     acquired_evidence: bytes | None = None
     release_evidence: bytes | None = None
     report: FillStopReport | None = None
+    # Decided once from the Run's persisted MAC plan, never from request facts.
+    initial_validation: bool = False
+    # Trusted initial validation only: its fill proves itself (M2 semantics).
+    initial_outcome: BrowserReadOutcome | None = None
+    # Ordinary handoff only: a verified read-only business readback.
     readback: BrowserHandoffCheck | None = None
 
 
@@ -142,7 +147,7 @@ class DFormRuntime:
         self._leases: BrowserLeaseStorePort | None = None
         self._cipher: BrowserPayloadCipher | None = None
         self._result_key: bytes | None = None
-        self._assert_publication: Callable[[RunSnapshot], Awaitable[None]] | None = None
+        self._assert_publication: Callable[[RunSnapshot], Awaitable[bool]] | None = None
         self._cleanup_authorize: Callable[[RunSnapshot], Awaitable[None]] | None = None
         self._login_vault: Callable[[RunSnapshot], RunBoundOACredentialVault] | None = None
 
@@ -173,8 +178,9 @@ class DFormRuntime:
         *,
         cipher: BrowserPayloadCipher,
         result_key: bytes,
-        publication: Callable[[RunSnapshot], Awaitable[None]],
+        publication: Callable[[RunSnapshot], Awaitable[bool]],
     ) -> None:
+        """publication raises unless current; True only for trusted initial validation."""
         self._cipher, self._result_key, self._assert_publication = cipher, result_key, publication
 
     def install_leases(self, leases: BrowserLeaseStorePort) -> None:
@@ -511,7 +517,7 @@ class DFormRuntime:
             state.run = await checkpoint.start_execution()
             state.run = await checkpoint.reserve_fill_stop()
             state.claim = await self._leases.start_acquisition(state.claim)
-            await self._assert_publication(state.run)
+            state.initial_validation = await self._assert_publication(state.run) is True
             await self._fence(state, checkpoint)
             assert self.options.chromium is not None and self.options.owned_runs_root is not None
             log_d_form_stage(current_stage, "success", "OK", began)
@@ -686,18 +692,7 @@ class DFormRuntime:
                 + canonical_json(value).encode(),
                 hashlib.sha256,
             )
-            # Filling is not the business result: the open window is handed to
-            # the user, who alone may submit. Values are never re-encrypted here.
-            return BrowserReadOutcome(
-                "acknowledged",
-                None,
-                handoff=HandoffSeal(
-                    automation_evidence_digest=evidence,
-                    automation_result_digest=digest,
-                    actions_completed=state.report.actions_completed,
-                    field_checks=state.report.field_checks,
-                ),
-            )
+            return self._filled_outcome(state, value, evidence, digest)
         except asyncio.CancelledError:
             log_d_form_stage("cancel", "cancelled", "CANCELLED", began)
             await self._stop(state)
@@ -782,12 +777,52 @@ class DFormRuntime:
                 output.cancel()
                 await asyncio.gather(output, return_exceptions=True)
 
+    def _filled_outcome(
+        self,
+        state: _State,
+        value: Mapping[str, object],
+        evidence: bytes,
+        digest: bytes,
+    ) -> BrowserReadOutcome:
+        """Outcome of a verified fill; the split is the Run's trusted plan purpose."""
+        assert self._cipher is not None and state.report is not None
+        if state.initial_validation:
+            # A trusted initial validation keeps M2 semantics: the verified fill
+            # is its own result ("filled and stopped", never a business
+            # submission) and terminal cleanup closes the window. No seal.
+            envelope = self._cipher.encrypt_result(
+                state.run.admission, value, evidence_digest=evidence, result_digest=digest
+            )
+            state.initial_outcome = BrowserReadOutcome(
+                "acknowledged", "verified", envelope, digest, evidence
+            )
+            return state.initial_outcome
+        # Filling is not the business result: the open window is handed to the
+        # user, who alone may submit. Values are never re-encrypted here.
+        return BrowserReadOutcome(
+            "acknowledged",
+            None,
+            handoff=HandoffSeal(
+                automation_evidence_digest=evidence,
+                automation_result_digest=digest,
+                actions_completed=state.report.actions_completed,
+                field_checks=state.report.field_checks,
+            ),
+        )
+
     async def check_verified_candidate(self, candidate: RunSnapshot) -> None:
         state = self._state(candidate)
-        outcome = state.readback
+        # Exactly one proof source per Run: the trusted initial-validation fill,
+        # or an ordinary handoff's verified readback. Neither stands in for the other.
+        outcome: BrowserReadOutcome | BrowserHandoffCheck | None
+        if state.initial_validation:
+            outcome = state.initial_outcome
+        elif state.readback is not None and state.readback.outcome == "verified":
+            outcome = state.readback
+        else:
+            outcome = None
         if (
             outcome is None
-            or outcome.outcome != "verified"
             or candidate.verification != "verified"
             or state.report is None
             or state.report.verification != "verified"
@@ -803,7 +838,9 @@ class DFormRuntime:
             raise BrowserReadExecutionError("denied")
 
     def verified_persisted(self, run: RunSnapshot) -> None:
-        self._state(run).readback = None
+        state = self._state(run)
+        state.initial_outcome = None
+        state.readback = None
 
     async def hold_handoff(
         self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint

@@ -1498,13 +1498,23 @@ def build_browser_vertical(
     if deps.fill_stop_runtime is not None:
         execution = deps.fill_stop_runtime
 
-        async def fill_stop_publication(run: RunSnapshot) -> None:
+        async def fill_stop_publication(run: RunSnapshot) -> bool:
+            """True only for this Run's trusted initial-validation plan.
+
+            The purpose comes from the Run's persisted MAC plan after the exact
+            admission and current teaching authorization (prepared, no active)
+            pass; a bad plan raises and never falls back. Ordinary Chat still
+            requires the active publication and is never an initial validation.
+            """
             if run.admission.publication_digest.hex() != seed.digest:
                 raise BrowserRunStoreError("browser_fill_stop_publication_stale")
-            # The existing prepared initial-validation path can verify this
-            # exact seed before activation; ordinary Chat still requires active.
-            if not await current_teaching_publication(run, seed):
+            plan = await current_teaching_plan(run, seed)
+            if plan is None:
                 await publications.assert_current(run.owner, seed)
+                return False
+            if plan.purpose != "initial_validation":
+                raise BrowserPublicationError("browser_teaching_candidate_denied")
+            return True
 
         execution.install(
             cipher=cipher, result_key=deps.result_digest_key, publication=fill_stop_publication
@@ -1774,24 +1784,30 @@ def build_browser_vertical(
                 raise BrowserPublicationError("browser_teaching_candidate_unavailable")
             return record
 
-    async def current_teaching_publication(
+    async def current_teaching_plan(
         run: RunSnapshot,
         manifest: BrowserPublicationManifest,
-    ) -> bool:
+    ) -> TeachingPlan | None:
         if (
             seed.source_kind != "registered_site"
             or seed.effect not in {"read_only", "controlled_write"}
             or run.admission.publication_digest.hex() != seed.digest
         ):
-            return False
+            return None
         async with deps.session_factory() as session, session.begin():
             plan = await runs.load_teaching_plan_in_session(session, run.admission)
             if plan is None:
-                return False
+                return None
             if manifest != seed:
                 raise BrowserPublicationError("browser_teaching_candidate_unavailable")
             await current_auth.validate(session, run.admission, teaching_plan=plan)
-            return True
+            return plan
+
+    async def current_teaching_publication(
+        run: RunSnapshot,
+        manifest: BrowserPublicationManifest,
+    ) -> bool:
+        return await current_teaching_plan(run, manifest) is not None
 
     if isinstance(execution, VerifiedBrowserReadExecution):
         execution.install_teaching_publication(
