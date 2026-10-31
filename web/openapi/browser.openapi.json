@@ -1663,7 +1663,7 @@
                 }
               }
             },
-            "description": "browser_chat_unavailable"
+            "description": "browser_chat_unavailable (browser business unavailable) | authentication_unavailable (authentication dependency failure; shared by endpoints reusing require_session/require_principal, inherited here)"
           }
         },
         "summary": "Verify Result"

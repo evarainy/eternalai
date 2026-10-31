@@ -91,7 +91,14 @@ _VERIFY_RESULT_ERRORS: dict[int | str, dict[str, Any]] = {
         "description": "browser_handoff_not_waiting | browser_handoff_expired",
     },
     422: {"model": BrowserError, "description": "browser_request_input_invalid"},
-    503: {"model": BrowserError, "description": "browser_chat_unavailable"},
+    503: {
+        "model": BrowserError,
+        "description": (
+            "browser_chat_unavailable (browser business unavailable) | "
+            "authentication_unavailable (authentication dependency failure; shared by "
+            "endpoints reusing require_session/require_principal, inherited here)"
+        ),
+    },
 }
 
 
@@ -209,8 +216,8 @@ def make_router(
         try:
             return await bound_service.check_handoff(principal, session, task_id, run_id)
         except BrowserChatError as error:
-            # The approved contract has one unavailable code; store, lane and
-            # projection failures keep 503 without exposing their internal codes.
+            # Business-layer 503 only: the approved contract has one unavailable code;
+            # store, lane and projection failures keep 503 without exposing their internal codes.
             code = "browser_chat_unavailable" if error.http_status == 503 else error.code
             raise HTTPException(
                 error.http_status,
