@@ -28,7 +28,7 @@ from app.browser_skill.repair import (
     RepairFailureReason,
 )
 from app.browser_skill.run_contracts import CommitFact
-from app.ports.browser_fill_stop import FillStopReport
+from app.ports.browser_fill_stop import FillStopChecks, FillStopReport
 
 if TYPE_CHECKING:
     from app.browser_skill.site_rules import SiteStepRule
@@ -53,8 +53,10 @@ RunVerification = Literal["verified", "mismatch", "incomplete", "unsupported"]
 RunCleanup = Literal["pending", "released", "terminated", "quarantined", "failed"]
 RunAction = Literal[
     "read", "claim", "renew", "advance", "verify", "capture_prepare", "capture", "capture_settle",
-    "effect_settle", "finalize", "cancel", "cleanup",
+    "effect_settle", "finalize", "cancel", "cleanup", "handoff_check",
 ]
+HandoffSettleOutcome = Literal["not_found", "unavailable", "unsupported"]
+HandoffCloseReason = Literal["deadline", "window_closed", "interrupted"]
 DispatchFailureCode = Literal[
     "unavailable",
     "overloaded",
@@ -201,6 +203,39 @@ class RunSnapshot:
     @property
     def run_id(self) -> str:
         return self.admission.run_id
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class HandoffSeal:
+    """Value-free D fill facts handed to the user; the store cross-checks its receipt."""
+
+    automation_evidence_digest: bytes
+    automation_result_digest: bytes
+    actions_completed: int
+    field_checks: FillStopChecks
+    submit_actions: Literal[0] = 0
+
+    def __post_init__(self) -> None:
+        checked_run_digest(self.automation_evidence_digest)
+        checked_run_digest(self.automation_result_digest)
+        if (
+            type(self.actions_completed) is not int
+            or not 3 <= self.actions_completed <= 4
+            or not isinstance(self.field_checks, FillStopChecks)
+            or any(value is not True for value in self.field_checks.model_dump().values())
+            or self.submit_actions != 0
+        ):
+            raise BrowserRunStoreError("browser_handoff_seal_invalid")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class HandoffRecord:
+    """MAC-checked seal of one Run; sealed_revision is the sealing write's revision."""
+
+    run_id: str
+    sealed_revision: int
+    sealed_at: datetime
+    deadline: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,7 +557,46 @@ class BrowserRunStorePort(Protocol):
         result: ProtectedRunEnvelope,
         result_digest: bytes,
         evidence_digest: bytes,
-    ) -> RunSnapshot: ...
+        reject_cancel: bool = False,
+    ) -> RunSnapshot:
+        """reject_cancel lets a locked cancel request win over a late readback."""
+        ...
+
+    async def enter_handoff(
+        self, claim: RunSnapshot, seal: HandoffSeal,
+    ) -> tuple[RunSnapshot, HandoffRecord]:
+        """Seal a verified D fill against its persisted receipt and wait for the user."""
+        ...
+
+    async def request_handoff_check(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> RunSnapshot:
+        """Owner + current authority request a read-only check; idempotent while verifying."""
+        ...
+
+    async def settle_handoff_check(
+        self, claim: RunSnapshot, outcome: HandoffSettleOutcome,
+    ) -> RunSnapshot:
+        """Return an unconfirmed check to waiting_user unless cancellation won."""
+        ...
+
+    async def finalize_handoff(
+        self, claim: RunSnapshot, *, reason: HandoffCloseReason,
+    ) -> RunSnapshot:
+        """Close a sealed, unverified Run as failed/incomplete under the worker fence."""
+        ...
+
+    async def load_handoff(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> HandoffRecord | None:
+        """Read the MAC-checked seal under current read authority."""
+        ...
+
+    async def find_active_handoffs(
+        self, owner: BrowserOwner,
+    ) -> tuple[tuple[str, str], ...]:
+        """(task_id, run_id) of sealed active Runs in exactly this bound session."""
+        ...
 
     async def prepare_capture(self, claim: RunSnapshot) -> RunSnapshot: ...
 

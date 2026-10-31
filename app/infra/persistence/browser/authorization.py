@@ -556,9 +556,10 @@ class PostgreSQLBrowserRunAuthority:
         # Durable verification and current business authority allow historical
         # projection/recovery; a released browser lease cannot invalidate the
         # already proven value. New browser IO remains fenced separately.
+        # handoff_check is the owner's request, authorized exactly like cancel.
         if action in {
             "read", "claim", "renew", "finalize", "cancel", "capture_settle", "capture_prepare",
-            "effect_settle",
+            "effect_settle", "handoff_check",
         }:
             return
         if run.lease_epoch is None:
