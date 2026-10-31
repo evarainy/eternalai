@@ -18,6 +18,8 @@ interface BrowserRunCardProps {
   requestGeneration: number;
   currentGeneration: number;
   resultValue?: Record<string, unknown> | null;
+  /** Caller-owned label override (M3 §9.4 historical D card); other cards keep the default. */
+  statusLabel?: string;
   onCancel?: (taskId: string, runId: string, stateRevision: number) => void | Promise<void>;
   onArtifact?: (artifactId: string) => void | Promise<void>;
 }
@@ -70,6 +72,7 @@ export function BrowserRunCard({
   requestGeneration,
   currentGeneration,
   resultValue,
+  statusLabel: statusLabelOverride,
   onCancel,
   onArtifact,
 }: BrowserRunCardProps) {
@@ -130,10 +133,10 @@ export function BrowserRunCard({
     }
   };
 
-  const statusLabel = view.status === 'completed' ? '业务已完成'
+  const statusLabel = statusLabelOverride ?? (view.status === 'completed' ? '业务已完成'
     : view.status === 'failed' ? '执行未完成'
       : view.status === 'cancelled' ? '已取消'
-        : view.status === 'waiting_user' ? '等待人工处理' : '正在处理';
+        : view.status === 'waiting_user' ? '等待人工处理' : '正在处理');
   const statusColor = view.status === 'completed' ? 'green'
     : view.status === 'failed' ? 'red'
       : view.status === 'cancelled' ? 'default' : 'blue';
