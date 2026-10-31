@@ -3312,3 +3312,17 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
    - **R-MCP**：等外部 E1 交付后再独立排期，不在上述顺序内。
 
 **承接与保留项**：task_id 与欠债见 [PLAN 收口新增](PHASE2_PLAN.md#runtime-替换-m1-收口新增欠债与已批需求2026-10-28)，状态见 [STATUS](STATUS.md)。M1 收口时登记的聊天页模型下拉框与步骤小字显示均定为 M6 完成时做；模型下拉框新增接口属公共契约，开工前须出短方案。H4 合同与后继排序见第 6、7 条；R-MCP 待 E1 完成后开工。
+
+## 2026-10-31 — 裁决：M2 D 报修收集口径、D 护栏取消与提交拦截
+
+**来源与范围**：雨爷 2026-10-29～2026-10-31 已决事项，依据仓库外 `runtime-agentscope-20261021/` 下的 `M1_CONTROLLER_STATE.md` 同期记录、`M2_DESIGN.md` v1.1、`controller-dispatch/d_fence_inventory.md`、`controller-dispatch/P2-RUNTIME-AGENTSCOPE-M2-001_监理结论_r3.md`、`POST_M6_BACKLOG.md`，以及 PR #242 的“与设计偏差”“评审记录”“本棒新增欠债”。本条登记 M2 已合并实现所承接的裁决；真实复测结论来自上述记录，不表示本治理棒重新执行了业务验收，也不新增凭据、数据库、保存/提交或部署授权。
+
+1. **取消 D 源码指纹锁与源码哈希绑定（2026-10-29）**：删除 `APPROVED_FIXED_SOURCE_DIGEST` 及执行器两处源码比对，D 池与发布摘要不再包含源码哈希，改用 `app/infra/browser/d_form_manifest.py::registration_digest` 表达稳定注册身份。D 代码变更由 PR 评审与 CI 把关，消除按源码字节计算摘要导致的跨平台 CRLF 不一致；不把源码哈希等同发布合同或用户授权。其他取消与保留范围见第 4 条。
+2. **类别由模型从可信候选自选，新路径续填用 JSON 提取（2026-10-29）**：类别候选来自 D 任务配置，仅供 AgentScope 新路径；模型按报修内容从候选中选择，通过 JSON Schema 枚举与服务端校验，候选外拒绝、不准入。不向用户索要类别，用户自报类别只作参考，不要求类别出现在原文。新路径续填改为 JSON 字段提取，不依赖模型自愿调用工具。精确替代 `M2_DESIGN.md` v1.1 §1.2 第 6 条、§2.1 的“不制造类别来源”，§3.4 的“续填由工具调用完成”，以及 §8.4 的“模型给出不在原文中的类别即丢弃”；旧路径不变。配置在 D 安装阶段经同一个 `install_browser_handoff` 接缝注入，而非构造期加载；代码锚点为 `app/infra/orchestration/agentscope_runtime/runtime.py::AgentScopeRuntime.install_browser`、`app/infra/orchestration/agentscope_runtime/browser_handoff.py::extract_reply_fields`、`app/runtime/d_form_collection.py::collect_arguments`。
+3. **报修只收集地点、物品、故障情况（2026-10-30）**：缺哪项只追问哪项，不问姓名、电话、紧急程度或类别；故障描述可以简短但必须有内容。续填补充的故障情况并入 description；存储侧对已有字段只允许 description 以旧值为前缀追加，其他已有字段不可变（`app/infra/persistence/task_store/postgresql.py::d_form_continuation_conflict`）。旧路径收集语义不变；描述复述旧片段的非阻塞整理欠债仍保留，不据本条核销。
+4. **取消 D 浏览器多余护栏，保留五条底线（2026-10-30）**：雨爷将原拟 M6 后处理的取消工作提前到 M2，取消范围以 `controller-dispatch/d_fence_inventory.md` 为准。五条底线为：①填写后停止，不保存、不提交；②凭证与受保护数据不外泄；③身份及 tenant/user/session 隔离、HumanGate 绑定；④只访问配置的 OA 主机；⑤清理自启浏览器进程、临时 profile 与租约。主机限定不恢复按 HTTP 方法、frame 或精确 scheme/port 的全局拦截。清单中“拿不准而保留”的项仍保留，M6 后由雨爷逐条决定；共用接线与持久层检查不因“全部取消”被扩大删除，失败运行临时 profile 未删除的既有缺口也不视为已解决。
+5. **M3-1：只拦提交接口，按三轮上限定点收口（2026-10-31）**：Monitor r3 的唯一阻断 M3-1 是合成页面提交点击后仍报告成功。雨爷裁决“只拦提交接口”：仅在填写阶段拦 D 表单保存/提交，触发即以 `FORM_SUBMIT_BLOCKED`、effect `unknown` 报失败；不恢复按方法/frame 的全局拦截，同主机非提交 POST 放行。落点为 `app/infra/browser/d_form_flow.py::Flow.guard_form_submission`，按既有三字段定位 D 表单/容器，拦保存/提交点击、submit 事件与原生 form.submit，计数进入回执。三轮上限已到，不开第 4 轮 Monitor；采用该修复棒自证、Sol 静态审核与雨爷真实填写复测收口。PR #242 记录合成 Chrome 前红后绿、Sol 静态 PASS，雨爷 2026-10-31 两次真实填写复测通过、未保存未提交且清理释放；真实 OA 中未触发提交拦截，触发路径证据仍仅来自合成 Chrome。Monitor r3 本身仍为 FAIL，不改写为 PASS。
+6. **确认回执接受范围（M2 设计 §10-③）**：确认回执仅覆盖带 `client_request_id` 的请求；雨爷接受无标识非前端客户端（channel cli/api/mock）的旧语义，即裸“确认”仍可跨卡重放。不把该接受范围扩大到前端：前端路径已带标识，浏览器可用的普通聊天由新路径读取同一标识，D 引用回复不属确认，`browser_async_v1` 不经 Runtime。该裁决不改公共 API；回执表仍在进程内，多进程共享存储或确认单进程的部署义务继续由 M6 承接，见 [PLAN M1B 欠债](PHASE2_PLAN.md#runtime-替换-m1b-新增欠债2026-10-28)。
+7. **M6 后待办指针（2026-10-30 起统一承接）**：按雨爷指定的仓库外 `POST_M6_BACKLOG.md`，进入 M6 时逐条登记 PLAN，M6 后统一处理：执行确认卡片展示业务信息；刷新页面后收集卡失去绑定；MCP 未授权提示与 `/apps` 入口（PLAN 已有行）；D 护栏拿不准的保留项；既有失败运行临时 profile 不删与生产 browser 镜像白名单缺模块。本条只留指针，不新增 PLAN 行，也不擅自分配后继 task_id。
+
+**承接与保留项**：M2 已合并，当前结果与基线日期见 [STATUS](STATUS.md)；后继沿用 2026-10-28 第 7 条已批顺序，为 M3 `P2-RUNTIME-AGENTSCOPE-M3-001`。确认回执的接受范围按第 6 条完成登记；[PLAN M2 新增欠债](PHASE2_PLAN.md#runtime-替换-m2-新增欠债2026-10-29) 中门户子步骤日志、read_only 浏览器确认路由、task_failed 诊断属性、续填目录失效收尾、会话忙气泡、共享传输错误码与描述复述等未决归属不由本条分配，继续保留待 GOV-SYNC 裁决。五条底线不替代 M3 人工交接合同，也不豁免后续任务的专项授权。
