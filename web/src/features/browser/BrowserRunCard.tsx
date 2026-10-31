@@ -20,6 +20,11 @@ interface BrowserRunCardProps {
   resultValue?: Record<string, unknown> | null;
   /** Caller-owned label override (M3 §9.4 historical D card); other cards keep the default. */
   statusLabel?: string;
+  /**
+   * Caller-owned (M3 §9.1): a sealed D handoff that ended failed/cancelled. The handoff panel
+   * carries the business outcome, so the card shows a neutral label and no duplicate failure notice.
+   */
+  handoffEnded?: boolean;
   onCancel?: (taskId: string, runId: string, stateRevision: number) => void | Promise<void>;
   onArtifact?: (artifactId: string) => void | Promise<void>;
 }
@@ -73,6 +78,7 @@ export function BrowserRunCard({
   currentGeneration,
   resultValue,
   statusLabel: statusLabelOverride,
+  handoffEnded = false,
   onCancel,
   onArtifact,
 }: BrowserRunCardProps) {
@@ -133,11 +139,16 @@ export function BrowserRunCard({
     }
   };
 
-  const statusLabel = statusLabelOverride ?? (view.status === 'completed' ? '业务已完成'
+  // Only a terminal sealed failure/cancel is "ended"; any other view keeps the default card.
+  const ended = handoffEnded && terminal
+    && (view.status === 'failed' || view.status === 'cancelled');
+  const statusLabel = statusLabelOverride ?? (ended ? '协助已结束'
+    : view.status === 'completed' ? '业务已完成'
     : view.status === 'failed' ? '执行未完成'
       : view.status === 'cancelled' ? '已取消'
         : view.status === 'waiting_user' ? '等待人工处理' : '正在处理');
-  const statusColor = view.status === 'completed' ? 'green'
+  const statusColor = ended ? 'default'
+    : view.status === 'completed' ? 'green'
     : view.status === 'failed' ? 'red'
       : view.status === 'cancelled' ? 'default' : 'blue';
 
@@ -167,14 +178,15 @@ export function BrowserRunCard({
         </p>
       ) : null}
 
-      {view.cancel.requested && !view.cancel.acknowledged ? (
+      {/* Cancel progress and retry hints describe pending work: never on a terminal card. */}
+      {view.cancel.requested && !view.cancel.acknowledged && !terminal ? (
         <Alert type="info" showIcon title="取消已请求，等待确认" />
       ) : view.cancel.acknowledged && !terminal ? (
         <Alert type="info" showIcon title="取消请求已确认，等待最终结果" />
       ) : cancelPendingLocally && !terminal ? (
         <Alert type="info" showIcon title="取消请求已提交，等待状态更新" />
       ) : null}
-      {cancelError === cancelKey ? (
+      {cancelError === cancelKey && !terminal ? (
         <Alert type="warning" showIcon title="取消请求未送达，请稍后重试" />
       ) : null}
 
@@ -184,7 +196,7 @@ export function BrowserRunCard({
       {view.result?.business === 'completed' && view.result.cleanup === 'failed' ? (
         <Alert type="warning" showIcon title="业务已完成，但资源清理失败，需人工处理" />
       ) : null}
-      {view.result?.business === 'failed' && view.result.effect !== 'unknown' ? (
+      {view.result?.business === 'failed' && view.result.effect !== 'unknown' && !ended ? (
         <Alert type="error" showIcon title="任务未完成，请查看人工处理结果" />
       ) : null}
 

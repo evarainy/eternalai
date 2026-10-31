@@ -271,6 +271,10 @@ function BrowserRunMonitor({
   const panelShown = fillStopMode && !fillStopHistory && !awaitingStart;
   const panelCopy = panelShown && (handoff !== null || read.run.status === 'running'
     || read.run.status === 'cancelled');
+  // §9.1: a sealed handoff that ended failed/cancelled — the panel says "协助已结束"; the card only
+  // shows a neutral label. Unsealed failures keep the card's original notices.
+  const handoffEnded = handoff !== null && read.run.result !== null
+    && (read.run.status === 'failed' || read.run.status === 'cancelled');
   return (
     <div>
       {fillStopMode && read.run.progress?.phase === 'queued' && read.run.result === null
@@ -298,6 +302,7 @@ function BrowserRunMonitor({
         currentGeneration={target.requestGeneration}
         resultValue={read.fillStop == null ? read.value : null}
         statusLabel={fillStopHistory ? FILL_STOP_HISTORY_STATUS_LABEL : undefined}
+        handoffEnded={handoffEnded}
         // A sealed run ends through the panel's "结束协助" (same endpoint), not the card button.
         onCancel={handoff === null && !(panelShown && read.run.status === 'running') ? onCancel : undefined}
       />
