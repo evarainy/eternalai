@@ -11,6 +11,7 @@ import { RecordsList } from '../components/RecordsList';
 import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
 import {
+  incompatibleResponse,
   projectResponse,
   projectTextResponse,
   isRecord,
@@ -23,8 +24,15 @@ import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
 import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import {
+  BrowserFillStopHistoryNotice,
+  BrowserHandoffComposerNotice,
+  BrowserHandoffPanel,
+  FILL_STOP_HISTORY_STATUS_LABEL,
+} from '../features/browser/BrowserHandoffPanel';
+import {
   cancelBrowserRun,
   decideBrowserFillStop,
+  isActiveHandoff,
   isBrowserUnconfirmed,
   isRuntimeSessionBusy,
   parseBrowserAccepted,
@@ -88,10 +96,12 @@ interface ChatSubmission {
 }
 
 function BrowserRunMonitor({
-  target, onTerminal, fillStopMode = false, onRecoverOriginal, recovering, recoveryRevision,
+  target, onTerminal, onHandoff, fillStopMode = false, onRecoverOriginal, recovering, recoveryRevision,
 }: {
   target: BrowserTarget;
   onTerminal: (terminal: boolean) => void;
+  /** Sealed and not terminal (§8.4): the page may release ordinary chat, never D submission. */
+  onHandoff: (active: boolean) => void;
   fillStopMode?: boolean;
   onRecoverOriginal: (() => void) | null;
   recovering: boolean;
@@ -121,6 +131,7 @@ function BrowserRunMonitor({
       setRead(incoming);
       setPollError(false);
       setReadFailure({ status: null, code: 'browser_read_failed' });
+      onHandoff(isActiveHandoff(incoming));
       const terminal = incoming.run.result !== null;
       const cleanupPending = fillStopMode && incoming.run.result?.cleanup === 'pending';
       if (terminal && !cleanupPending) onTerminal(true);
@@ -131,7 +142,7 @@ function BrowserRunMonitor({
       return null;
     }
     return false;
-  }, [target, onTerminal, fillStopMode]);
+  }, [target, onTerminal, onHandoff, fillStopMode]);
 
   useEffect(() => {
     live.current = true;
@@ -140,12 +151,19 @@ function BrowserRunMonitor({
     let timer: ReturnType<typeof setTimeout> | null = null;
     const controller = new AbortController();
     // D: 15-minute confirmation window + 1800-second supervisor and cleanup.
-    const observationMs = fillStopMode ? 2_880_000 : 180_000;
-    const deadline = performance.now() + observationMs;
-    const deadlineTimer = setTimeout(() => { controller.abort(); setPollError(true); }, observationMs);
+    const startedAt = performance.now();
+    let deadline = startedAt + (fillStopMode ? 2_880_000 : 180_000);
+    let handoffDeadline: string | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const armDeadline = () => {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(() => { controller.abort(); setPollError(true); },
+        Math.max(0, deadline - performance.now()));
+    };
+    armDeadline();
     const poll = async () => {
       if (!live.current || controller.signal.aborted) return;
-      if (++attempts > Math.ceil(observationMs / 2000) || performance.now() >= deadline) {
+      if (++attempts > Math.ceil((deadline - startedAt) / 2000) || performance.now() >= deadline) {
         clearTimeout(deadlineTimer);
         controller.abort();
         setPollError(true);
@@ -160,6 +178,16 @@ function BrowserRunMonitor({
         if (applyRead(response) !== false) {
           clearTimeout(deadlineTimer);
           return;
+        }
+        if (currentRead.current === response && response.handoff != null
+            && response.handoff.deadline !== handoffDeadline) {
+          // §9.1: once sealed, observe for (deadline - sealed_at) + 180 s of monotonic time. Both
+          // instants are server clock, so a fast or slow client clock cannot shorten observation.
+          // Stopping observation is never a release.
+          handoffDeadline = response.handoff.deadline;
+          const sealedMs = Math.max(0, Date.parse(handoffDeadline) - Date.parse(response.handoff.sealed_at));
+          deadline = performance.now() + sealedMs + 180_000;
+          armDeadline();
         }
         timer = setTimeout(() => { void poll(); }, 2000);
       } catch (error) {
@@ -233,6 +261,20 @@ function BrowserRunMonitor({
         action={<Button onClick={() => setRefresh((value) => value + 1)}>重试读取</Button>} />
     ) : <p role="status">正在读取浏览器任务…</p>;
   }
+  const handoff = fillStopMode ? read.handoff ?? null : null;
+  // §9.4: an M2 D `completed` run means "filled and stopped", not a confirmed submission.
+  const fillStopHistory = fillStopMode && read.run.status === 'completed' && handoff === null;
+  // §9.1 pre-seal: "running" copy only once the window is really being filled (not while the write
+  // confirmation is pending or missing); other pre-seal failures keep the existing card.
+  const awaitingStart = handoff === null && read.run.status === 'running'
+    && (read.writePreview != null || read.run.progress?.phase === 'queued');
+  const panelShown = fillStopMode && !fillStopHistory && !awaitingStart;
+  const panelCopy = panelShown && (handoff !== null || read.run.status === 'running'
+    || read.run.status === 'cancelled');
+  // §9.1: a sealed handoff that ended failed/cancelled — the panel says "协助已结束"; the card only
+  // shows a neutral label. Unsealed failures keep the card's original notices.
+  const handoffEnded = handoff !== null && read.run.result !== null
+    && (read.run.status === 'failed' || read.run.status === 'cancelled');
   return (
     <div>
       {fillStopMode && read.run.progress?.phase === 'queued' && read.run.result === null
@@ -259,9 +301,17 @@ function BrowserRunMonitor({
         requestGeneration={target.requestGeneration}
         currentGeneration={target.requestGeneration}
         resultValue={read.fillStop == null ? read.value : null}
-        onCancel={onCancel}
+        statusLabel={fillStopHistory ? FILL_STOP_HISTORY_STATUS_LABEL : undefined}
+        handoffEnded={handoffEnded}
+        // A sealed run ends through the panel's "结束协助" (same endpoint), not the card button.
+        onCancel={handoff === null && !(panelShown && read.run.status === 'running') ? onCancel : undefined}
       />
-      {read.fillStop != null ? (
+      {panelShown ? (
+        // Sealed or pre-seal D card (§9.1); the panel decides what a null handoff shows.
+        <BrowserHandoffPanel run={read.run} handoff={handoff}
+          onEndAssist={() => onCancel(target.accepted.task_id, target.accepted.run_id)} />
+      ) : null}
+      {panelCopy ? null : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (
         <Alert showIcon type={read.run.status === 'completed' && read.run.result?.verification === 'verified'
           && read.fillStop.verification === 'verified' ? 'success' : 'warning'}
           title={read.run.status === 'completed' && read.run.result?.verification === 'verified' && read.fillStop.verification === 'verified'
@@ -459,6 +509,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserOptIn, setBrowserOptIn] = useState(false);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
+  // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
+  const [browserHandoff, setBrowserHandoff] = useState(false);
+  const browserHandoffRef = useRef(false);
+  browserHandoffRef.current = browserHandoff;
+  const browserTargetRef = useRef<BrowserTarget | null>(null);
+  browserTargetRef.current = browserTarget;
   const [browserRecoveryRevision, setBrowserRecoveryRevision] = useState(0);
   const [browserStorageError, setBrowserStorageError] = useState(false);
   const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
@@ -522,6 +578,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         browserSubmitContext.current?.controller.abort();
         setBrowserTarget(null);
         setBrowserTerminal(false);
+        setBrowserHandoff(false);
         setPendingSubmission(null);
         setRetrySubmission(null);
         setCollection(null);
@@ -583,6 +640,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       originalSubmission: null,
     });
     setBrowserTerminal(false);
+    setBrowserHandoff(false);
   }, [browserAvailable, browserOwner, authGeneration]);
 
   useEffect(() => {
@@ -595,6 +653,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       clearBrowserAccepted();
       setBrowserTarget(null);
       setBrowserTerminal(false);
+      setBrowserHandoff(false);
       setBrowserOptIn(false);
       setPendingSubmission(null);
       setRetrySubmission(null);
@@ -695,6 +754,18 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const accepted = parseBrowserAccepted(response);
           if (accepted !== null) {
             if (submissionIsCurrent(submission)) {
+              const current = browserTargetRef.current;
+              if (browserHandoffRef.current && current !== null
+                  && current.originalSubmission !== submission
+                  && (accepted.task_id !== current.accepted.task_id
+                    || accepted.run_id !== current.accepted.run_id)) {
+                // §8.4 guard-miss defense: keep the sealed run's card; show a generic failure.
+                setPendingSubmission(null);
+                setRetrySubmission(null);
+                const failure = incompatibleResponse();
+                useAIDockStore.getState().applyConfirmationResult(sessionId, reference, failure);
+                return failure;
+              }
               setCollection(null);
               if (browserTarget?.originalSubmission === submission) {
                 if (accepted.task_id !== browserTarget.accepted.task_id
@@ -711,6 +782,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                   originalSubmission: activeSkillId === 'd_form_fill_stop' ? submission : null,
                 });
                 setBrowserTerminal(false);
+                setBrowserHandoff(false);
                 setBrowserStorageError(!saveBrowserAccepted(
                   submission.owner, sessionId, accepted,
                 ));
@@ -805,9 +877,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (retry === undefined && browserOptIn && !browserAvailable) return;
     if (retry === undefined && browserOptIn && !browserIdentityReady) return;
     if (activeSkillId === 'd_form_fill_stop' && browserTarget !== null && !browserTerminal
+        && !browserHandoff
         && (retry === undefined || retry !== browserTarget.originalSubmission)) return;
     if (retry === undefined && (browserOptIn || activeSkillId === 'd_form_fill_stop')
-        && ((browserTarget !== null && !browserTerminal) || pendingSubmission !== null)) return;
+        && ((browserTarget !== null && !browserTerminal && !browserHandoff)
+          || pendingSubmission !== null)) return;
     const sessionId = retry?.sessionId ?? useAIDockStore.getState().ensureSession();
     const browser = retry?.browser ?? (currentCollection === null && browserOptIn && browserOwner !== null
       && activeSkillId !== null ? {
@@ -862,6 +936,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     clearBrowserAccepted();
     setBrowserTarget(null);
     setBrowserTerminal(false);
+    setBrowserHandoff(false);
     setPendingSubmission(null);
     setRetrySubmission(null);
     setBrowserStorageError(false);
@@ -876,7 +951,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     && browserTarget.owner.tenant_id === browserOwner.tenant_id
     && browserTarget.owner.user_id === browserOwner.user_id ? browserTarget : null;
   const browserSubmissionBlocked = (browserOptIn || activeSkillId === 'd_form_fill_stop')
-    && (!browserIdentityReady || (browserTarget !== null && !browserTerminal)
+    && (!browserIdentityReady || (browserTarget !== null && !browserTerminal && !browserHandoff)
       || pendingSubmission !== null);
 
   const canSend = Boolean(draft.trim()) && !mutation.isPending
@@ -1017,6 +1092,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}
                 target={visibleBrowserTarget}
                 onTerminal={setBrowserTerminal}
+                onHandoff={setBrowserHandoff}
                 fillStopMode={activeSkillId === 'd_form_fill_stop'}
                 onRecoverOriginal={visibleBrowserTarget.originalSubmission === null ? null : () => {
                   const original = visibleBrowserTarget.originalSubmission;
@@ -1077,6 +1153,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
                 action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
             ) : null}
+            {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
             <Sender
               autoSize={{ minRows: 1, maxRows: 4 }}
               className={styles.sender}

@@ -23,6 +23,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.models import (
@@ -71,6 +73,10 @@ from app.ports.browser_run_store import (
     CanonicalRequest,
     CaptureStatus,
     DispatchFailureCode,
+    HandoffCloseReason,
+    HandoffRecord,
+    HandoffSeal,
+    HandoffSettleOutcome,
     ProtectedRunEnvelope,
     RunAction,
     RunAdmission,
@@ -102,6 +108,14 @@ _WRITE_BARRIER_VERSION = "browser.write_final_barrier.v1"
 _REPLAY_PROOF_VERSION = "browser.teaching_replay_proof.v1"
 _TEACHING_PLAN_VERSION = "browser.teaching_plan_record.v1"
 _MAX_STEP_AUDITS = 126
+_FILL_STOP_RECEIPT = "browser.fill_stop.receipt.v1"
+_HANDOFF_SEALED = "browser_handoff_sealed"
+_HANDOFF_CHECKED = "browser_handoff_checked"
+_HANDOFF_CLOSED = "browser_handoff_closed"
+# Frozen M3 contract constants, not configuration: the user's window lasts at
+# most this long and always ends before the captured session can expire.
+HANDOFF_WAIT_SECONDS = 1800
+HANDOFF_AUTH_MARGIN_SECONDS = 120
 _ACTIVE = {"running", "waiting_user"}
 _CLAIM_BATCH = 16
 _CLAIM_SKIPPABLE = frozenset(
@@ -125,8 +139,8 @@ _PHASE_TRANSITIONS = {
     "acquiring": {"running", "waiting_user"},
     "running": {"verifying", "waiting_user"},
     "verifying": {"waiting_user"},
-    # Resuming waiting_user is a separately authorized feature, not replay here.
-    "waiting_user": set(),
+    # Only request_handoff_check leaves waiting_user; worker advance never does.
+    "waiting_user": {"verifying"},
 }
 Row = RowMapping
 
@@ -964,7 +978,14 @@ class PostgreSQLBrowserRunStore:
         terminal_ok: bool = False,
         cleanup_outcome: RunCleanup | None = None,
         read_candidate: RunSnapshot | None = None,
+        latest: bool = False,
     ) -> RunSnapshot:
+        """latest: decide on the locked row instead of the caller's pre-lock revision.
+
+        Only for owner requests that carry no client revision (cancel, handoff
+        check). The worker's claim renewal bumps the revision every few seconds;
+        such a request still re-decides every business fact on the locked row.
+        """
         if action == "cleanup":
             if cleanup_outcome is None:
                 raise BrowserRunStoreError("browser_run_cleanup_invalid")
@@ -996,7 +1017,7 @@ class PostgreSQLBrowserRunStore:
             lock=True,
         )
         if (
-            current.state_revision != expected.state_revision
+            (not latest and current.state_revision != expected.state_revision)
             or current.admission != expected.admission
             or (not terminal_ok and current.status not in _ACTIVE)
         ):
@@ -1015,6 +1036,10 @@ class PostgreSQLBrowserRunStore:
             # remain possible after the original user's business grant expires.
             assert cleanup_outcome is not None
             await self._authority.check_cleanup(session, current, cleanup_outcome)
+        elif action in {"handoff_expire", "handoff_quarantine"}:
+            # Recheck the bounded historical grant on the locked row; the caller
+            # then proves the action-specific facts before any write.
+            await self._authority.authorize_handoff_history(session, current)
         else:
             await self._authority.check_run(session, current, action)
         return current
@@ -1152,6 +1177,7 @@ class PostgreSQLBrowserRunStore:
                 # Cancellation stops new work, but late dispatch observations must
                 # still be persisted at the same phase before cancellation ack.
                 or (current.cancel_requested and phase != current.phase)
+                or (current.phase == "waiting_user" and phase != current.phase)
                 or (
                     phase != current.phase
                     and phase
@@ -3366,6 +3392,7 @@ class PostgreSQLBrowserRunStore:
         result: ProtectedRunEnvelope,
         result_digest: bytes,
         evidence_digest: bytes,
+        reject_cancel: bool = False,
     ) -> RunSnapshot:
         result.__post_init__()
         checked_run_digest(result_digest)
@@ -3374,6 +3401,9 @@ class PostgreSQLBrowserRunStore:
             raise BrowserRunStoreError("browser_run_result_purpose_invalid")
         async with self._transaction() as session:
             current = await self._locked(session, claim, "advance")
+            if reject_cancel and current.cancel_requested:
+                # The locked row decides the race: a recorded cancel request wins.
+                raise BrowserRunStoreError("browser_run_cancel_requested")
             if current.verification == "verified" or current.phase not in {"running", "verifying"}:
                 raise BrowserRunStoreError("browser_run_verification_stale")
             candidate = replace(
@@ -3453,7 +3483,9 @@ class PostgreSQLBrowserRunStore:
     ) -> RunSnapshot:
         async with self._transaction() as session:
             initial = await self._read_run(session, owner, task_id, run_id)
-            current = await self._locked(session, initial, "cancel", worker=False, terminal_ok=True)
+            current = await self._locked(
+                session, initial, "cancel", worker=False, terminal_ok=True, latest=True,
+            )
             if current.status not in _ACTIVE or current.cancel_requested:
                 return current
             result = await self._update(session, current, {"cancel_requested": True})
@@ -3502,67 +3534,87 @@ class PostgreSQLBrowserRunStore:
         _code(error_code)
         async with self._transaction() as session:
             current = await self._locked(session, claim, "finalize")
-            final_verification = current.verification if verification is None else verification
-            if (
-                status not in {"completed", "failed", "cancelled"}
-                or current.capture_status not in _CAPTURE_TERMINAL
-                or (status == "completed") != (final_verification == "verified")
-                or (current.verification == "verified" and final_verification != "verified")
-                or (
-                    status == "completed"
-                    and (
-                        error_code is not None
-                        or current.protected_result is None
-                        or current.result_digest is None
-                        or current.verification_evidence_digest is None
-                    )
-                )
-                or (status == "failed" and error_code is None)
-                or (
-                    status == "cancelled"
-                    and (error_code != "browser_cancelled" or not current.cancel_acknowledged)
-                )
-                or (
-                    current.effect == "unknown"
-                    and status != "completed"
-                    and (status != "failed" or error_code != "browser_effect_unknown")
-                )
-            ):
-                raise BrowserRunStoreError("browser_run_terminal_invalid")
-            event_id = uuid5(NAMESPACE_URL, f"browser-terminal-v1:{current.run_id}").hex
-            await append_owned_event(
-                session,
-                tenant_id=current.owner.tenant_id,
-                ai_user_id=current.owner.user_id,
-                session_id=current.owner.session_id,
-                task_id=current.task_id,
-                event=TaskEventRecord(
-                    event_id=event_id,
-                    task_id=current.task_id,
-                    event_type="browser_run_terminal",
-                    timestamp=await self._now(session),
-                    payload={
-                        "run_id": current.run_id,
-                        "status": status,
-                        "error_code": error_code,
-                        "state_revision": current.state_revision + 1,
-                    },
-                ),
-            )
-            result = await self._update(
+            result = await self._finalize_locked(
                 session,
                 current,
-                {
-                    "status": status,
-                    "phase": None,
-                    "verification": final_verification,
-                    "error_code": error_code,
-                    "dispatch_failure_code": dispatch_failure_code,
-                    "terminal_revision": current.state_revision + 1,
-                    "terminal_event_id": event_id,
-                },
+                status,
+                error_code,
+                verification,
+                dispatch_failure_code,
             )
-            await self._transition_task(session, result, status, error_code)
+        return result
+
+    async def _finalize_locked(
+        self,
+        session: AsyncSession,
+        current: RunSnapshot,
+        status: Literal["completed", "failed", "cancelled"],
+        error_code: str | None,
+        verification: RunVerification | None,
+        dispatch_failure_code: DispatchFailureCode | None,
+    ) -> RunSnapshot:
+        """Terminal transition body; the caller already holds locks and authority."""
+        final_verification = current.verification if verification is None else verification
+        if (
+            status not in {"completed", "failed", "cancelled"}
+            or current.capture_status not in _CAPTURE_TERMINAL
+            or (status == "completed") != (final_verification == "verified")
+            or (current.verification == "verified" and final_verification != "verified")
+            or (
+                status == "completed"
+                and (
+                    error_code is not None
+                    or current.protected_result is None
+                    or current.result_digest is None
+                    or current.verification_evidence_digest is None
+                )
+            )
+            or (status == "failed" and error_code is None)
+            or (
+                status == "cancelled"
+                and (error_code != "browser_cancelled" or not current.cancel_acknowledged)
+            )
+            or (
+                current.effect == "unknown"
+                and status != "completed"
+                and (status != "failed" or error_code != "browser_effect_unknown")
+            )
+        ):
+            raise BrowserRunStoreError("browser_run_terminal_invalid")
+        event_id = uuid5(NAMESPACE_URL, f"browser-terminal-v1:{current.run_id}").hex
+        await append_owned_event(
+            session,
+            tenant_id=current.owner.tenant_id,
+            ai_user_id=current.owner.user_id,
+            session_id=current.owner.session_id,
+            task_id=current.task_id,
+            event=TaskEventRecord(
+                event_id=event_id,
+                task_id=current.task_id,
+                event_type="browser_run_terminal",
+                timestamp=await self._now(session),
+                payload={
+                    "run_id": current.run_id,
+                    "status": status,
+                    "error_code": error_code,
+                    "state_revision": current.state_revision + 1,
+                },
+            ),
+        )
+        result = await self._update(
+            session,
+            current,
+            {
+                "status": status,
+                "phase": None,
+                "verification": final_verification,
+                "error_code": error_code,
+                "dispatch_failure_code": dispatch_failure_code,
+                "terminal_revision": current.state_revision + 1,
+                "terminal_event_id": event_id,
+            },
+        )
+        await self._transition_task(session, result, status, error_code)
         return result
 
     async def record_cleanup(self, claim: RunSnapshot, *, cleanup: RunCleanup) -> RunSnapshot:
@@ -3583,4 +3635,355 @@ class PostgreSQLBrowserRunStore:
                     return current
                 raise BrowserRunStoreError("browser_run_cleanup_final")
             result = await self._update(session, current, {"cleanup": cleanup})
+        return result
+
+    async def _handoff_in_session(
+        self,
+        session: AsyncSession,
+        current: RunSnapshot,
+    ) -> HandoffRecord | None:
+        """MAC/type/run-checked seal bound to the exact revision of its sealing write."""
+        payload = await self._write_event(
+            session,
+            current,
+            _HANDOFF_SEALED,
+            self._write_event_id("handoff-sealed", current.run_id),
+        )
+        if payload is None:
+            return None
+        revision = payload.get("run_revision")
+        try:
+            sealed_at = datetime.fromisoformat(cast(str, payload.get("sealed_at")))
+            deadline = datetime.fromisoformat(cast(str, payload.get("deadline")))
+        except (TypeError, ValueError):
+            raise BrowserRunStoreError("browser_write_audit_invalid") from None
+        if (
+            payload.get("schema_version") != _HANDOFF_SEALED
+            or type(revision) is not int
+            or payload.get("state_revision") != revision
+            or not 1 <= revision <= current.state_revision
+            or sealed_at.utcoffset() is None
+            or deadline.utcoffset() is None
+            or payload.get("submit_actions") != 0
+        ):
+            raise BrowserRunStoreError("browser_write_audit_invalid")
+        return HandoffRecord(current.run_id, revision, sealed_at, deadline)
+
+    async def _fill_stop_publication(self, session: AsyncSession, current: RunSnapshot) -> bool:
+        manifest = await self._frozen_publication(session, current)
+        return manifest.execution_mode == "d_form_fill_stop_v1"
+
+    async def enter_handoff(
+        self,
+        claim: RunSnapshot,
+        seal: HandoffSeal,
+    ) -> tuple[RunSnapshot, HandoffRecord]:
+        seal.__post_init__()
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                not await self._fill_stop_publication(session, current)
+                or current.status != "running"
+                or current.phase not in {"running", "verifying"}
+                or current.effect != "acknowledged"
+                or current.verification is not None
+                or current.cancel_requested
+                or current.lease_epoch is None
+            ):
+                raise BrowserRunStoreError("browser_handoff_state_invalid")
+            receipt_id = self._write_event_id("fill-stop-receipt", current.run_id)
+            receipt = await self._write_event(session, current, _FILL_STOP_RECEIPT, receipt_id)
+            report = (
+                None
+                if receipt is None
+                else FillStopReport.model_validate_json(json.dumps(receipt.get("report")))
+            )
+            # The seal may only restate the durable worker receipt, never replace it.
+            if (
+                report is None
+                or report.execution_status != "filled_stopped"
+                or report.verification != "verified"
+                or report.submit_actions != 0
+                or report.actions_completed != seal.actions_completed
+                or report.field_checks != seal.field_checks
+            ):
+                raise BrowserRunStoreError("browser_handoff_seal_mismatch")
+            sealed_id = self._write_event_id("handoff-sealed", current.run_id)
+            if await self._write_event(session, current, _HANDOFF_SEALED, sealed_id) is not None:
+                raise BrowserRunStoreError("browser_handoff_already_sealed")
+            now = await self._now(session)
+            deadline = min(
+                now + timedelta(seconds=HANDOFF_WAIT_SECONDS),
+                current.admission.auth_expires_at - timedelta(seconds=HANDOFF_AUTH_MARGIN_SECONDS),
+            )
+            updated = await self._update(
+                session,
+                current,
+                {"phase": "waiting_user", "status": "waiting_user"},
+            )
+            await self._transition_task(session, updated, "waiting_user", None)
+            await self._append_write_event(
+                session,
+                updated,
+                kind=_HANDOFF_SEALED,
+                event_id=sealed_id,
+                revision_delta=0,
+                data={
+                    "state_revision": updated.state_revision,
+                    "sealed_at": now.isoformat(),
+                    "deadline": deadline.isoformat(),
+                    "automation_evidence_digest": seal.automation_evidence_digest.hex(),
+                    "automation_result_digest": seal.automation_result_digest.hex(),
+                    "actions_completed": seal.actions_completed,
+                    "field_checks": seal.field_checks.model_dump(mode="json"),
+                    "submit_actions": 0,
+                    "fill_stop_receipt_event_id": receipt_id,
+                },
+            )
+        return updated, HandoffRecord(updated.run_id, updated.state_revision, now, deadline)
+
+    async def request_handoff_check(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> RunSnapshot:
+        async with self._transaction() as session:
+            initial = await self._read_run(session, owner, task_id, run_id)
+            current = await self._locked(
+                session,
+                initial,
+                "handoff_check",
+                worker=False,
+                terminal_ok=True,
+                latest=True,
+            )
+            # Every precondition precedes the idempotent verifying return.
+            record = (
+                await self._handoff_in_session(session, current)
+                if await self._fill_stop_publication(session, current)
+                else None
+            )
+            if (
+                record is None
+                or current.status not in _ACTIVE
+                or current.verification is not None
+                or current.cancel_requested
+            ):
+                raise BrowserRunStoreError("browser_handoff_not_waiting")
+            if await self._now(session) >= record.deadline:
+                raise BrowserRunStoreError("browser_handoff_expired")
+            if current.phase == "verifying":
+                return current
+            if (
+                current.phase != "waiting_user"
+                or "verifying" not in _PHASE_TRANSITIONS["waiting_user"]
+                or current.effect != "acknowledged"
+            ):
+                raise BrowserRunStoreError("browser_handoff_not_waiting")
+            updated = await self._update(
+                session,
+                current,
+                {"phase": "verifying", "status": "running"},
+            )
+            await self._transition_task(session, updated, "running", None)
+        return updated
+
+    async def settle_handoff_check(
+        self,
+        claim: RunSnapshot,
+        outcome: HandoffSettleOutcome,
+    ) -> RunSnapshot:
+        if outcome not in {"not_found", "unavailable", "unsupported"}:
+            raise BrowserRunStoreError("browser_handoff_state_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                not await self._fill_stop_publication(session, current)
+                or await self._handoff_in_session(session, current) is None
+                or current.status != "running"
+                or current.phase != "verifying"
+                or current.effect != "acknowledged"
+                or current.verification is not None
+            ):
+                raise BrowserRunStoreError("browser_handoff_state_invalid")
+            if current.cancel_requested:
+                raise BrowserRunStoreError("browser_run_cancel_requested")
+            updated = await self._update(
+                session,
+                current,
+                {"phase": "waiting_user", "status": "waiting_user"},
+            )
+            await self._transition_task(session, updated, "waiting_user", None)
+            await self._append_write_event(
+                session,
+                updated,
+                kind=_HANDOFF_CHECKED,
+                event_id=self._write_event_id(
+                    "handoff-checked",
+                    f"{updated.run_id}.{updated.state_revision}",
+                ),
+                revision_delta=0,
+                data={"outcome": outcome, "checked_at": (await self._now(session)).isoformat()},
+            )
+        return updated
+
+    async def finalize_handoff(
+        self,
+        claim: RunSnapshot,
+        *,
+        reason: HandoffCloseReason,
+    ) -> RunSnapshot:
+        if reason not in {"deadline", "window_closed", "interrupted"}:
+            raise BrowserRunStoreError("browser_handoff_state_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "finalize")
+            record = await self._handoff_in_session(session, current)
+            if record is None or current.verification is not None:
+                raise BrowserRunStoreError("browser_handoff_state_invalid")
+            if reason == "deadline" and await self._now(session) < record.deadline:
+                raise BrowserRunStoreError("browser_handoff_not_expired")
+            result = await self._finalize_locked(
+                session,
+                current,
+                "failed",
+                "browser_verification_failed",
+                "incomplete",
+                None,
+            )
+            await self._append_write_event(
+                session,
+                result,
+                kind=_HANDOFF_CLOSED,
+                event_id=self._write_event_id("handoff-closed", result.run_id),
+                revision_delta=0,
+                data={"reason": reason},
+            )
+        return result
+
+    async def load_handoff(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> HandoffRecord | None:
+        async with self._transaction() as session:
+            current = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, current, "read")
+            record = await self._handoff_in_session(session, current)
+        return record
+
+    async def find_active_handoffs(
+        self,
+        owner: BrowserOwner,
+    ) -> tuple[tuple[str, str], ...]:
+        found: list[tuple[str, str]] = []
+        try:
+            async with self._transaction() as session:
+                # Exactly this bound session; an expired capture can no longer be acted on.
+                rows = (
+                    (
+                        await session.execute(
+                            text(
+                                f"SELECT task_id,run_id FROM browser_runs WHERE {_OWNER}"
+                                " AND status IN ('running','waiting_user')"
+                                " AND phase IN ('waiting_user','verifying')"
+                                " AND auth_expires_at>clock_timestamp()"
+                                " ORDER BY created_at,run_id"
+                            ),
+                            _owner(owner),
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                for row in rows:
+                    current = await self._read_run(
+                        session, owner, row["task_id"], row["run_id"]
+                    )
+                    await self._authority.check_run(session, current, "read")
+                    if await self._handoff_in_session(session, current) is not None:
+                        found.append((current.task_id, current.run_id))
+        except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError):
+            # Connection loss, pool timeout, statement/lock timeout: a known
+            # availability failure, never "no handoff". Authorization and any
+            # other (programming) error keep propagating unchanged.
+            raise BrowserRunStoreError("browser_run_store_unavailable") from None
+        return tuple(found)
+
+    async def expire_lost_handoff(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> RunSnapshot:
+        """Service-only bounded closure of a sealed handoff whose holder is gone.
+
+        Writes only the fixed failed/incomplete terminal and its close event. No
+        provider IO, input decryption or business authority happens here.
+        """
+        async with self._transaction() as session:
+            initial = await self._read_run(session, owner, task_id, run_id)
+            current = await self._locked(session, initial, "handoff_expire", worker=False)
+            record = (
+                await self._handoff_in_session(session, current)
+                if await self._fill_stop_publication(session, current)
+                else None
+            )
+            if (
+                record is None
+                or current.status not in _ACTIVE
+                or current.phase not in {"waiting_user", "verifying"}
+                or current.effect != "acknowledged"
+                or current.verification is not None
+            ):
+                raise BrowserRunStoreError("browser_handoff_not_sealed")
+            reason = await self._authority.check_handoff_expiry(session, current, record.deadline)
+            result = await self._finalize_locked(
+                session,
+                current,
+                "failed",
+                "browser_verification_failed",
+                "incomplete",
+                None,
+            )
+            await self._append_write_event(
+                session,
+                result,
+                kind=_HANDOFF_CLOSED,
+                event_id=self._write_event_id("handoff-closed", result.run_id),
+                revision_delta=0,
+                data={"reason": reason},
+            )
+        return result
+
+    async def record_historical_handoff_quarantine(
+        self,
+        owner: BrowserOwner,
+        task_id: str,
+        run_id: str,
+    ) -> RunSnapshot:
+        """Mark an older-revision closed handoff quarantined; never touches its lease."""
+        async with self._transaction() as session:
+            initial = await self._read_run(session, owner, task_id, run_id)
+            current = await self._locked(
+                session,
+                initial,
+                "handoff_quarantine",
+                worker=False,
+                terminal_ok=True,
+            )
+            sealed = await self._handoff_in_session(session, current)
+            closed = await self._write_event(
+                session,
+                current,
+                _HANDOFF_CLOSED,
+                self._write_event_id("handoff-closed", current.run_id),
+            )
+            if sealed is None or closed is None:
+                raise BrowserRunStoreError("browser_handoff_not_sealed")
+            await self._authority.check_handoff_quarantine(session, current)
+            if current.cleanup == "quarantined":
+                return current
+            result = await self._update(session, current, {"cleanup": "quarantined"})
         return result

@@ -223,6 +223,12 @@ class BrowserVerticalCollection:
         lane = await self._run(principal, bound_session, task_id, run_id)
         return await lane.submission.cancel(principal, bound_session, task_id, run_id)
 
+    async def check_handoff(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> BrowserRunResponse:
+        lane = await self._run(principal, bound_session, task_id, run_id)
+        return await lane.submission.check_handoff(principal, bound_session, task_id, run_id)
+
     async def decide_write(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
         decision: Literal["confirmed", "rejected"],

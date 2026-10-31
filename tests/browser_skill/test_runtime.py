@@ -211,3 +211,63 @@ def test_recovered_verified_result_completes_without_business_io() -> None:
     assert store.transitions == [("finalize", "completed", None)]
     assert execution.calls == ["cleanup"]
     assert result.cleanup == "pending"
+
+
+def test_cancel_racing_the_seal_refresh_is_cancelled_inside_the_claim() -> None:
+    """The same pre-seal cancel race was missed twice (Sol M3 S1/S2 and S5 P1).
+
+    An owner cancel commits between the seal refresh's unlocked read and its
+    lock. Without the bounded re-decision the stale escapes, nothing is
+    sealed, the active claim is abandoned and a re-claim can no longer stop
+    the filled window.
+    """
+    class SealRaceStore(RecordingStore):
+        refreshes = 0
+
+        async def refresh_worker(
+            self, previous: RunSnapshot, *, ttl_seconds: int,
+        ) -> RunSnapshot:
+            candidate = self.run
+            self.refreshes += 1
+            if self.refreshes == 2:  # The first refresh after the D outcome.
+                self.run = replace(
+                    self.run, cancel_requested=True, state_revision=self.run.state_revision + 1,
+                )
+            if self.run.state_revision != candidate.state_revision:
+                raise BrowserRunStoreError("browser_run_stale")  # Locked-row revision CAS.
+            return await super().refresh_worker(previous, ttl_seconds=ttl_seconds)
+
+        async def acknowledge_cancel(self, claim: RunSnapshot) -> RunSnapshot:
+            assert claim == self.run and claim.cancel_requested
+            self.transitions.append(("acknowledge_cancel", claim.effect, None))
+            self.run = replace(
+                self.run, cancel_acknowledged=True, state_revision=claim.state_revision + 1,
+            )
+            return self.run
+
+    class FillThenStop(RejectBusinessIO):
+        async def execute(  # type: ignore[override]
+            self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
+        ) -> SimpleNamespace:
+            self.calls.append("execute")
+            return SimpleNamespace(handoff=object())
+
+        async def stop(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> None:
+            self.calls.append("stop")
+
+    store, execution = SealRaceStore(persisted_run(phase="acquiring")), FillThenStop()
+    worker = BrowserReadWorker(
+        cast(BrowserRunStorePort, store), cast(BrowserReadExecutionPort, execution),
+        cast(BrowserProfileStorePort, object()), worker_id="recovery", enabled=True,
+    )
+    result = asyncio.run(worker.run_next(store.run.owner))
+    assert result is not None
+    assert (result.status, result.effect, result.error_code) == (
+        "cancelled", "acknowledged", "browser_cancelled",
+    )
+    assert store.transitions == [
+        ("advance", "acquiring", "acknowledged"),
+        ("acknowledge_cancel", "acknowledged", None),
+        ("finalize", "cancelled", "browser_cancelled"),
+    ]
+    assert execution.calls == ["execute", "stop", "cleanup"]

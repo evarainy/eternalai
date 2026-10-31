@@ -216,6 +216,9 @@ class Submission:
     async def lookup_ordinary_request(self, **kwargs: Any) -> ResponseEnvelope | None:
         return None
 
+    async def find_active_handoffs(self, **kwargs: Any) -> tuple[tuple[str, str], ...]:
+        return ()  # No sealed D handoff in this bound session.
+
 
 def _orchestration(
     harness: Harness, execute: Callable[[], Awaitable[ExecutionResult]]

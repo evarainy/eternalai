@@ -58,6 +58,8 @@ from app.ports.browser_chat import (
     BrowserChatCipherPort,
     BrowserChatError,
     BrowserChatInputIdentity,
+    BrowserHandoffFields,
+    BrowserHandoffView,
     BrowserRunResponse,
     BrowserWritePreview,
 )
@@ -661,6 +663,22 @@ class BrowserSubmissionService:
                 semantic,
                 structured=entrypoint == "structured_internal",
             )
+        if self._fill_stop_reports:
+            # One D handoff per session: a new request (never a replay above)
+            # cannot admit a second Run while the user still holds the window.
+            try:
+                active = await self._store.find_active_handoffs(owner)
+            except Exception:
+                active = None
+            if active != ():
+                code = "browser_handoff_active" if active else "browser_handoff_check_unavailable"
+                try:
+                    await self._store.reject_request(request, code)
+                except BrowserRunStoreError as rejected:
+                    raise self._store_error(rejected) from None
+                except Exception:
+                    raise BrowserChatError("browser_request_rejection_unavailable") from None
+                raise BrowserChatError(code, http_status=409 if active else 503)
         admission_stage: Literal[
             "publication",
             "capability",
@@ -1360,12 +1378,14 @@ class BrowserSubmissionService:
                 if self._fill_stop_reports
                 else None
             )
+            handoff = await self._handoff_view(owner, run) if self._fill_stop_reports else None
             self._recheck(invocation)
             return BrowserRunResponse(
                 run=self._view(run, artifacts=artifacts),
                 value=value,
                 write_preview=preview,
                 fill_stop=fill_stop,
+                handoff=handoff,
             )
         except BrowserRunStoreError as error:
             raise self._store_error(error) from None
@@ -1385,6 +1405,56 @@ class BrowserSubmissionService:
             except Exception:
                 pass  # Diagnostic failure must preserve the original failure path.
             raise BrowserChatError("browser_run_projection_invalid") from None
+
+    async def _handoff_view(
+        self,
+        owner: BrowserOwner,
+        run: RunSnapshot,
+    ) -> BrowserHandoffView | None:
+        """Sealed D handoff for its owner; values decrypt only after store.get authority."""
+        record = await self._store.load_handoff(owner, run.task_id, run.run_id)
+        if record is None:
+            return None
+        publication = await self._publications.get_frozen(
+            owner,
+            run.admission.publication_digest.hex(),
+        )
+        if publication is None:
+            raise BrowserChatError("browser_publication_unavailable")
+        arguments = self._cipher.decrypt_input(run.admission).get("arguments")
+        if not isinstance(arguments, dict):
+            raise BrowserChatError("browser_run_projection_invalid")
+        _validate_schema(arguments, publication.manifest.capability.input_schema)
+        return BrowserHandoffView(
+            sealed_at=record.sealed_at,
+            deadline=record.deadline,
+            fields=BrowserHandoffFields(
+                category=arguments["category"],
+                position=arguments["position"],
+                description=arguments["description"],
+            ),
+        )
+
+    async def find_active_handoffs(
+        self,
+        *,
+        principal: Principal,
+        bound_session: str,
+    ) -> tuple[tuple[str, str], ...]:
+        invocation = self._invocation(principal, bound_session)
+        if not self._fill_stop_reports:
+            return ()
+        try:
+            found = await self._store.find_active_handoffs(invocation.owner)
+        except BrowserRunStoreError as error:
+            if error.code == "browser_run_store_unavailable":
+                # Known DB availability failure: callers fail closed, never "none".
+                raise BrowserChatError("browser_chat_unavailable") from None
+            raise self._store_error(error) from None
+        except BrowserAuthorizationError as error:
+            raise BrowserChatError(error.code, http_status=403) from None
+        self._recheck(invocation)
+        return found
 
     async def read_artifact(
         self,
@@ -1977,6 +2047,26 @@ class BrowserSubmissionService:
         except Exception:
             raise BrowserChatError("browser_run_projection_invalid") from None
 
+    async def check_handoff(
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
+    ) -> BrowserRunResponse:
+        invocation = self._invocation(principal, bound_session)
+        try:
+            run = await self._store.request_handoff_check(invocation.owner, task_id, run_id)
+            self._recheck(invocation)
+            # A requested check is not a result; the worker settles it.
+            return BrowserRunResponse(run=self._view(run), value=None)
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_run_projection_invalid") from None
+
     @staticmethod
     def _view(
         run: RunSnapshot,
@@ -2020,7 +2110,8 @@ class BrowserSubmissionService:
     def _store_error(error: BrowserRunStoreError) -> BrowserChatError:
         status = (
             409
-            if error.code == "request_key_conflict"
+            if error.code
+            in {"request_key_conflict", "browser_handoff_not_waiting", "browser_handoff_expired"}
             else (
                 404 if error.code in {"browser_run_not_found", "browser_request_not_found"} else 503
             )

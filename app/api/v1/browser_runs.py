@@ -71,6 +71,37 @@ class BrowserDecisionRequest(BrowserCancelRequest):
     decision: Literal["confirmed", "rejected"]
 
 
+class BrowserErrorDetail(BaseModel):
+    code: str
+    message: str | None = None
+
+
+class BrowserError(BaseModel):
+    """Error body shape: ``{"detail": {"code": ...}}`` (sanitised, never reflects input)."""
+
+    detail: BrowserErrorDetail
+
+
+_VERIFY_RESULT_ERRORS: dict[int | str, dict[str, Any]] = {
+    401: {"model": BrowserError, "description": "authentication_required"},
+    403: {"model": BrowserError, "description": "csrf_validation_failed"},
+    404: {"model": BrowserError, "description": "session_not_found | browser_run_not_found"},
+    409: {
+        "model": BrowserError,
+        "description": "browser_handoff_not_waiting | browser_handoff_expired",
+    },
+    422: {"model": BrowserError, "description": "browser_request_input_invalid"},
+    503: {
+        "model": BrowserError,
+        "description": (
+            "browser_chat_unavailable (browser business unavailable) | "
+            "authentication_unavailable (authentication dependency failure; shared by "
+            "endpoints reusing require_session/require_principal, inherited here)"
+        ),
+    },
+}
+
+
 class BrowserSubmitRequest(BrowserCancelRequest):
     skill_id: OpaqueId
     skill_version: OpaqueId
@@ -168,6 +199,29 @@ def make_router(
             raise HTTPException(
                 error.http_status,
                 {"code": error.code, "message": "Cancellation was not accepted."},
+                headers=_HEADERS,
+            ) from None
+
+    @router.post(
+        "/browser-runs/{task_id}/{run_id}/verify-result",
+        response_model=BrowserRunResponse, status_code=202,
+        responses=_VERIFY_RESULT_ERRORS,
+    )
+    async def verify_result(
+        task_id: RunIdentifier, run_id: RunIdentifier, body: BrowserCancelRequest,
+        response: Response, principal: Principal = Depends(require_principal),
+    ) -> BrowserRunResponse:
+        response.headers.update(_HEADERS)
+        bound_service, session = bind(principal, body.session_id)
+        try:
+            return await bound_service.check_handoff(principal, session, task_id, run_id)
+        except BrowserChatError as error:
+            # Business-layer 503 only: the approved contract has one unavailable code;
+            # store, lane and projection failures keep 503 without exposing their internal codes.
+            code = "browser_chat_unavailable" if error.http_status == 503 else error.code
+            raise HTTPException(
+                error.http_status,
+                {"code": code, "message": "Result check was not accepted."},
                 headers=_HEADERS,
             ) from None
 

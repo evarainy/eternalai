@@ -44,6 +44,25 @@ export interface BrowserRunRead {
   readonly value: Record<string, unknown> | null;
   readonly writePreview?: Record<string, unknown> | null;
   readonly fillStop?: FillStopReport | null;
+  /** Present only on D runs the worker has sealed for the user's own submission (§8.1). */
+  readonly handoff?: BrowserHandoff | null;
+}
+
+export interface BrowserHandoff {
+  readonly schema_version: 'browser.handoff.v1';
+  readonly sealed_at: string;
+  readonly deadline: string;
+  /** The owner's own three values; null when the server withholds them. */
+  readonly fields: {
+    readonly category: string;
+    readonly position: string;
+    readonly description: string;
+  } | null;
+}
+
+/** A sealed run that has not reached a terminal result yet. */
+export function isActiveHandoff(read: BrowserRunRead): boolean {
+  return read.handoff != null && read.run.result === null;
 }
 
 export interface FillStopReport {
@@ -96,6 +115,28 @@ function parseFillStop(value: unknown): FillStopReport | null {
     field_checks: checks as FillStopReport['field_checks'], seconds: item.seconds,
     submit_actions: item.submit_actions,
     error_code: item.error_code, cleanup_confirmed: item.cleanup_confirmed };
+}
+
+function boundedText(value: unknown, maxLength: number): value is string {
+  // Backend limits count Unicode code points, not UTF-16 code units (an emoji is length 2 in JS).
+  return typeof value === 'string' && Array.from(value).length <= maxLength;
+}
+
+function parseHandoff(value: unknown): BrowserHandoff | null {
+  const item = exactRecord(value, ['schema_version', 'sealed_at', 'deadline', 'fields']);
+  if (item === null || item.schema_version !== 'browser.handoff.v1'
+      || typeof item.sealed_at !== 'string' || !Number.isFinite(Date.parse(item.sealed_at))
+      || typeof item.deadline !== 'string' || !Number.isFinite(Date.parse(item.deadline))) return null;
+  if (item.fields === null) {
+    return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at,
+      deadline: item.deadline, fields: null };
+  }
+  const fields = exactRecord(item.fields, ['category', 'position', 'description']);
+  if (fields === null || !boundedText(fields.category, 100) || !boundedText(fields.position, 500)
+      || !boundedText(fields.description, 500)) return null;
+  return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at, deadline: item.deadline,
+    fields: { category: fields.category, position: fields.position,
+      description: fields.description } };
 }
 
 function parseWritePreview(value: unknown): Record<string, unknown> | null {
@@ -218,8 +259,11 @@ export function parseBrowserRunRead(value: unknown): BrowserRunRead | null {
   try {
     const wrapper = exactRecord(value, ['run', 'value'])
       ?? exactRecord(value, ['run', 'value', 'write_preview'])
-      ?? exactRecord(value, ['run', 'value', 'write_preview', 'fill_stop']);
+      ?? exactRecord(value, ['run', 'value', 'write_preview', 'fill_stop'])
+      ?? exactRecord(value, ['run', 'value', 'write_preview', 'fill_stop', 'handoff']);
     if (wrapper === null) return null;
+    const handoff = wrapper.handoff == null ? null : parseHandoff(wrapper.handoff);
+    if (wrapper.handoff != null && handoff === null) return null;
     const writePreview = wrapper.write_preview == null ? null : parseWritePreview(wrapper.write_preview);
     if (wrapper.write_preview != null && writePreview === null) return null;
     const fillStop = wrapper.fill_stop == null ? null : parseFillStop(wrapper.fill_stop);
@@ -227,7 +271,7 @@ export function parseBrowserRunRead(value: unknown): BrowserRunRead | null {
     const run = parseBrowserRunProjection(wrapper.run);
     if (run === null) return null;
     if (writePreview !== null && (run.progress?.phase !== 'queued' || run.result !== null || run.cancel.requested)) return null;
-    if (wrapper.value === null) return { run, value: null, writePreview, fillStop };
+    if (wrapper.value === null) return { run, value: null, writePreview, fillStop, handoff };
     if (run.status !== 'completed' || run.result?.verification !== 'verified') return null;
     const projected = jsonValue(wrapper.value);
     if (typeof projected !== 'object' || projected === null || Array.isArray(projected)) {
@@ -235,7 +279,7 @@ export function parseBrowserRunRead(value: unknown): BrowserRunRead | null {
     }
     const serialized = JSON.stringify(projected);
     if (new TextEncoder().encode(serialized).length > MAX_RESULT_BYTES) return null;
-    return { run, value: projected as Record<string, unknown>, writePreview, fillStop };
+    return { run, value: projected as Record<string, unknown>, writePreview, fillStop, handoff };
   } catch {
     return null;
   }

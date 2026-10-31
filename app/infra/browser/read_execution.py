@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, get_args
+from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from jsonschema import Draft202012Validator
 from referencing import Registry
@@ -74,6 +74,7 @@ from app.ports.browser import DecisionProvider, SiteAdapter
 from app.ports.browser_publication_store import BrowserPublicationStorePort
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
+    BrowserHandoffCheck,
     BrowserReadExecutionError,
     BrowserReadOutcome,
     BrowserWorkerCheckpoint,
@@ -774,6 +775,17 @@ class VerifiedBrowserReadExecution:
     def verified_persisted(self, run: RunSnapshot) -> None:
         self._check_emission(run)
         del self._emissions[run.run_id]
+
+    async def hold_handoff(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> Literal["open", "closed"]:
+        """READ_ONLY never emits a handoff seal, so there is nothing to hold."""
+        raise BrowserReadExecutionError("unsupported")
+
+    async def check_handoff(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> BrowserHandoffCheck:
+        raise BrowserReadExecutionError("unsupported")
 
     @staticmethod
     def _check_local_schema(value: object) -> None:

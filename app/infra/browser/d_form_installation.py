@@ -23,6 +23,7 @@ from app.infra.browser.composition import (
     BrowserVerticalDependencies,
     build_browser_vertical,
 )
+from app.infra.browser.d_form_authority import FixedDFormCleanupGrant
 from app.infra.browser.d_form_execution import DFormOptions, DFormRuntime
 from app.infra.browser.d_form_manifest import build_fill_stop_manifest
 from app.infra.browser.oa_browser_login import RunBoundOACredentialVault
@@ -254,7 +255,10 @@ class _OrdinaryChatOnly:
 
 
 def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVerticalComponents:
-    from app.infra.browser.local_installation import UnsupportedLocalProfiles
+    from app.infra.browser.local_installation import (
+        PostgreSQLLocalCleanupGrant,
+        UnsupportedLocalProfiles,
+    )
     from app.infra.browser.teaching_installation import (
         InstalledReplayProofLookup,
         PostgreSQLTeachingPublicationReview,
@@ -281,6 +285,29 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
     async def authorize(session: AsyncSession, run: RunSnapshot) -> None:
         scope(run)
         await deps.cleanup_authority.authorize_run(session, run)
+
+    # Both production modes (fixed owner and actors) carry an exact historical
+    # grant; the actors grant also keeps its independent service authorization.
+    historical_grant = (
+        deps.cleanup_authority
+        if isinstance(deps.cleanup_authority, FixedDFormCleanupGrant | PostgreSQLLocalCleanupGrant)
+        else None
+    )
+
+    async def authorize_history(session: AsyncSession, run: RunSnapshot) -> None:
+        # Bounded handoff closure only: same installed owner, binding and
+        # publication; the Run's revision may predate a later rebind.
+        if (
+            historical_grant is None
+            or run.owner.tenant_id != binding.tenant_id
+            or run.owner.user_id != binding.ai_user_id
+            or run.admission.binding_id != binding.binding_id
+            or run.admission.binding_revision > binding.binding_revision
+            or run.admission.target_system != binding.target_system
+            or run.admission.publication_digest.hex() != manifest.digest
+        ):
+            raise BrowserLeaseError("browser_fill_stop_scope_denied")
+        await historical_grant.authorize_historical_run(session, run)
 
     async def authorize_owned_close(run: RunSnapshot) -> None:
         async with deps.session_factory() as session:
@@ -449,6 +476,10 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
             cancel_check_in_session=cancel_in_session,
             cleanup_authorize=authorize,
             cleanup_check=cleanup_check,
+            handoff_history_authorize=authorize_history if historical_grant is not None else None,
+            installed_binding_revision=(
+                binding.binding_revision if historical_grant is not None else None
+            ),
             chat_parser=_OrdinaryChatOnly(),
             chat_bindings=deps.chat_bindings,
             trace=deps.trace,

@@ -217,6 +217,33 @@ class PostgreSQLLocalCleanupGrant:
             raise BrowserLeaseError("browser_local_cleanup_grant_denied")
         await self._current(session)
 
+    async def authorize_historical_run(self, session: AsyncSession, run: RunSnapshot) -> None:
+        """This service grant plus the exact persisted Run, nothing more.
+
+        Only the bounded handoff closure uses it; the installation caps the Run's
+        binding revision at its own. It grants no business action, generic
+        cleanup, lease release or decryption of input/resource references.
+        """
+        await self.authorize_run(session, run)
+        admission, owner = run.admission, run.owner
+        found = (await session.execute(text(
+            "SELECT 1 FROM browser_runs WHERE tenant_id=:tenant AND ai_user_id=:user"
+            " AND session_id=:session AND run_id=:run AND task_id=:task"
+            " AND publication_digest=:digest AND target_system=:target"
+            " AND binding_id=:binding AND binding_revision=:revision"
+            " AND auth_fingerprint=:fingerprint AND auth_expires_at=:expires"
+            " AND auth_evidence_version='verified-session-v1'"
+        ), {
+            "tenant": owner.tenant_id, "user": owner.user_id,
+            "session": owner.session_id, "run": run.run_id, "task": run.task_id,
+            "digest": self._publication, "target": admission.target_system,
+            "binding": admission.binding_id, "revision": admission.binding_revision,
+            "fingerprint": admission.auth_fingerprint,
+            "expires": admission.auth_expires_at,
+        })).scalar_one_or_none()
+        if found != 1:
+            raise BrowserLeaseError("browser_local_cleanup_grant_denied")
+
 
 class UnsupportedLocalProfiles:
     """An explicit refusal, never a claimed capture or cleanup success."""
