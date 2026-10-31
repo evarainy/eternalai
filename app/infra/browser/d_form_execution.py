@@ -39,11 +39,12 @@ from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.browser_fill_stop import FillStopChecks, FillStopCode, FillStopReport
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
+    BrowserHandoffCheck,
     BrowserReadExecutionError,
     BrowserReadOutcome,
     BrowserWorkerCheckpoint,
 )
-from app.ports.browser_run_store import RunCleanup, RunSnapshot
+from app.ports.browser_run_store import HandoffSeal, RunCleanup, RunSnapshot
 from app.ports.browser_store import (
     BrowserLeaseClaim,
     BrowserLeaseError,
@@ -119,7 +120,7 @@ class _State:
     acquired_evidence: bytes | None = None
     release_evidence: bytes | None = None
     report: FillStopReport | None = None
-    outcome: BrowserReadOutcome | None = None
+    readback: BrowserHandoffCheck | None = None
 
 
 class DFormRuntime:
@@ -685,13 +686,18 @@ class DFormRuntime:
                 + canonical_json(value).encode(),
                 hashlib.sha256,
             )
-            envelope = self._cipher.encrypt_result(
-                run.admission, value, evidence_digest=evidence, result_digest=digest
+            # Filling is not the business result: the open window is handed to
+            # the user, who alone may submit. Values are never re-encrypted here.
+            return BrowserReadOutcome(
+                "acknowledged",
+                None,
+                handoff=HandoffSeal(
+                    automation_evidence_digest=evidence,
+                    automation_result_digest=digest,
+                    actions_completed=state.report.actions_completed,
+                    field_checks=state.report.field_checks,
+                ),
             )
-            state.outcome = BrowserReadOutcome(
-                "acknowledged", "verified", envelope, digest, evidence
-            )
-            return state.outcome
         except asyncio.CancelledError:
             log_d_form_stage("cancel", "cancelled", "CANCELLED", began)
             await self._stop(state)
@@ -778,9 +784,10 @@ class DFormRuntime:
 
     async def check_verified_candidate(self, candidate: RunSnapshot) -> None:
         state = self._state(candidate)
-        outcome = state.outcome
+        outcome = state.readback
         if (
             outcome is None
+            or outcome.outcome != "verified"
             or candidate.verification != "verified"
             or state.report is None
             or state.report.verification != "verified"
@@ -796,7 +803,28 @@ class DFormRuntime:
             raise BrowserReadExecutionError("denied")
 
     def verified_persisted(self, run: RunSnapshot) -> None:
-        self._state(run).outcome = None
+        self._state(run).readback = None
+
+    async def hold_handoff(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> Literal["open", "closed"]:
+        """Keep the exact lease held; only an exited owned root process counts as closed.
+
+        A live root with no visible window is not distinguishable here, so the
+        handoff then continues to its deadline.
+        """
+        state = self._state(run)
+        async with state.fence_lock:
+            await self._renew_login_claim(state, run)
+        if state.owned_browser is None or state.owned_browser.job is None:
+            raise BrowserReadExecutionError("stale")
+        return "open" if state.owned_browser.job.poll() is None else "closed"
+
+    async def check_handoff(
+        self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint
+    ) -> BrowserHandoffCheck:
+        """No approved read-only result source exists; never touch the page."""
+        return BrowserHandoffCheck("unsupported")
 
     async def lookup_capture(
         self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from app.browser_skill.models import (
     ActionCommand,
@@ -22,15 +23,44 @@ from app.ports.browser_fill_stop import FillStopReport
 from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
+    BrowserHandoffCheck,
     BrowserReadExecutionError,
     BrowserReadExecutionPort,
 )
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
     BrowserRunStorePort,
+    HandoffRecord,
     RunSnapshot,
     checked_run_id,
 )
+from app.ports.browser_store import BrowserLeaseError
+from app.ports.credential_vault import BrowserAuthorizationError
+
+# Frozen M3 worker constants, not configuration.
+HANDOFF_POLL_SECONDS = 3
+HANDOFF_CHECK_TIMEOUT_SECONDS = 30
+# Concurrent cancel/check requests are monotonic and finite; re-decide on fresh facts.
+_HANDOFF_REDECIDE = frozenset({"browser_run_cancel_requested", "browser_run_stale"})
+
+
+def _handoff_candidate(run: RunSnapshot) -> bool:
+    return (
+        run.status in {"waiting_user", "running"}
+        and run.phase in {"waiting_user", "verifying"}
+        and run.effect == "acknowledged"
+        and run.verification is None
+    )
+
+
+def _handoff_recoverable(run: RunSnapshot, record: HandoffRecord | None) -> bool:
+    """Same decision for a re-claimed and an interrupted Run; never re-fill."""
+    return (
+        record is not None
+        and record.run_id == run.run_id
+        and record.sealed_revision <= run.state_revision
+        and _handoff_candidate(run)
+    )
 
 
 class _BrowserReadDeferred(BrowserReadExecutionError):
@@ -267,6 +297,9 @@ class BrowserReadWorker:
 
         try:
             await checkpoint.refresh(allow_cancel=True)
+            if await self._recover_handoff(checkpoint):
+                mark("handoff_recovery")
+                return checkpoint.run
             if checkpoint.run.verification != "verified":
                 if (
                     checkpoint.run.phase in {"running", "verifying", "waiting_user"}
@@ -340,6 +373,29 @@ class BrowserReadWorker:
                         dispatch_failure_code=error.code,
                     )
                     return checkpoint.run
+                if outcome.handoff is not None:
+                    mark("handoff")
+                    checkpoint.run = await checkpoint.refresh(allow_cancel=True)
+                    if checkpoint.run.cancel_requested:
+                        if checkpoint.run.phase is None:
+                            raise BrowserReadExecutionError("stale")
+                        checkpoint.run = await self._store.advance(
+                            checkpoint.run,
+                            phase=checkpoint.run.phase,
+                            effect="acknowledged",
+                        )
+                        mark("cancel")
+                        return await self._cancel(checkpoint)
+                    checkpoint.run = await self._store.advance(
+                        checkpoint.run,
+                        phase="verifying",
+                        effect="acknowledged",
+                    )
+                    checkpoint.run, record = await self._store.enter_handoff(
+                        checkpoint.run,
+                        outcome.handoff,
+                    )
+                    return await self._hold_handoff(checkpoint, record)
                 mark(
                     "result_settlement",
                     "verified" if outcome.verification == "verified" else "failed",
@@ -464,6 +520,8 @@ class BrowserReadWorker:
         run = checkpoint.run
         if run.status in {"completed", "failed", "cancelled"}:
             return
+        if await self._recover_handoff(checkpoint):
+            return
         if run.verification == "verified":
             if not self._capture_profiles:
                 checkpoint.run = await self._store.finalize(run, status="completed")
@@ -503,6 +561,94 @@ class BrowserReadWorker:
             else "browser_read_execution_failed",
             dispatch_failure_code="effect_unknown" if effect_unknown else "cancelled",
         )
+
+    async def _recover_handoff(self, checkpoint: _Checkpoint) -> bool:
+        """A sealed handoff without its holder ends as interrupted, never cancelled.
+
+        Without an in-process stop proof a pending cancel request stays an
+        unconfirmed fact; the window is never reopened or refilled.
+        """
+        run = checkpoint.run
+        if not _handoff_candidate(run):
+            return False
+        record = await self._store.load_handoff(run.owner, run.task_id, run.run_id)
+        if not _handoff_recoverable(run, record):
+            return False
+        checkpoint.run = await self._store.finalize_handoff(run, reason="interrupted")
+        return True
+
+    async def _hold_handoff(self, checkpoint: _Checkpoint, record: HandoffRecord) -> RunSnapshot:
+        """Hold one sealed handoff in this claim until a single terminal winner.
+
+        Only the worker finally block cleans up, and only after a terminal
+        result. Lost authority returns the still-active Run without holding it.
+        """
+        while True:
+            try:
+                checkpoint.run = await checkpoint.refresh(allow_cancel=True)
+                if checkpoint.run.cancel_requested:
+                    return await self._cancel(checkpoint)
+                if await self._execution.hold_handoff(checkpoint.run, checkpoint) == "closed":
+                    checkpoint.run = await self._store.finalize_handoff(
+                        checkpoint.run,
+                        reason="window_closed",
+                    )
+                    return checkpoint.run
+                if checkpoint.run.phase == "verifying":
+                    check = await self._run_check(checkpoint)
+                    checkpoint.run = await checkpoint.refresh(allow_cancel=True)
+                    if checkpoint.run.cancel_requested:
+                        return await self._cancel(checkpoint)
+                    if check.outcome == "verified":
+                        assert check.result is not None
+                        assert check.result_digest is not None
+                        assert check.evidence_digest is not None
+                        checkpoint.run = await self._store.persist_verified(
+                            checkpoint.run,
+                            result=check.result,
+                            result_digest=check.result_digest,
+                            evidence_digest=check.evidence_digest,
+                            reject_cancel=True,
+                        )
+                        self._execution.verified_persisted(checkpoint.run)
+                        checkpoint.run = await self._store.finalize(
+                            checkpoint.run,
+                            status="completed",
+                        )
+                        return checkpoint.run
+                    checkpoint.run = await self._store.settle_handoff_check(
+                        checkpoint.run,
+                        check.outcome,
+                    )
+                    continue
+                if datetime.now(UTC) >= record.deadline:
+                    checkpoint.run = await self._store.finalize_handoff(
+                        checkpoint.run,
+                        reason="deadline",
+                    )
+                    return checkpoint.run
+                await asyncio.sleep(HANDOFF_POLL_SECONDS)
+            except BrowserRunStoreError as error:
+                if error.code in _HANDOFF_REDECIDE:
+                    continue
+                if error.code == "browser_handoff_not_expired":
+                    # The local clock ran ahead of the database; wait one poll.
+                    await asyncio.sleep(HANDOFF_POLL_SECONDS)
+                    continue
+                raise
+            except (BrowserAuthorizationError, BrowserLeaseError):
+                return checkpoint.run
+
+    async def _run_check(self, checkpoint: _Checkpoint) -> BrowserHandoffCheck:
+        try:
+            async with asyncio.timeout(HANDOFF_CHECK_TIMEOUT_SECONDS):
+                return await self._execution.check_handoff(checkpoint.run, checkpoint)
+        except TimeoutError:
+            return BrowserHandoffCheck("unavailable")
+        except BrowserReadExecutionError as error:
+            if error.code in {"unavailable", "timeout"}:
+                return BrowserHandoffCheck("unavailable")
+            raise
 
     async def _cancel(self, checkpoint: _Checkpoint) -> RunSnapshot:
         stage = "refresh"
