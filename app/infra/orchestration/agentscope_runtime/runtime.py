@@ -116,7 +116,7 @@ from app.knowledge.bounded import bound_generated_knowledge
 from app.knowledge.capability_selection import canonical_json, capability_fingerprint
 from app.memory import SessionMemoryKey
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
-from app.ports.browser_chat import BrowserOrdinarySubmissionPort
+from app.ports.browser_chat import BrowserChatError, BrowserOrdinarySubmissionPort
 from app.ports.browser_gateway import (
     BrowserGatewayDiagnostic,
     BrowserGatewayRegistration,
@@ -254,6 +254,49 @@ _SHAPE_ERRORS = frozenset(
 _ERROR_CODES: frozenset[str] = frozenset(get_args(ErrorCode))
 _RUNTIME_LOGGER = logging.getLogger("uvicorn.error.agentscope_runtime")
 
+# M3 §8.3: whole-message phrases after trimming whitespace and sentence-final marks.
+_HANDOFF_PHRASES = frozenset(
+    {
+        "我已提交",
+        "已提交",
+        "提交了",
+        "我提交了",
+        "我已经提交了",
+        "已经提交了",
+        "查询结果",
+        "查结果",
+        "检查结果",
+        "核实结果",
+        "查一下结果",
+    }
+)
+_SENTENCE_END = "。．.！!？?～~…，,；;、"
+# M3 §9.2 fixed replies, verbatim; business wording only (no codes or internals).
+_HANDOFF_SUBMITTED = (
+    "目前不能自动确认提交结果。请到 OA 核对这张报修单：已提交的请勿重复提交；"
+    '确认未提交且仍需报修时再提交。处理完后可在报修协助卡片上点"结束协助"关闭窗口。'
+)
+_HANDOFF_MANY = "您有多张报修单的协助尚未结束，请在对应的报修协助卡片上操作。"
+_HANDOFF_ENDED = (
+    "这张报修单的协助已经结束。提交状态请到 OA 中核对：已提交的请勿重复提交；"
+    "确认未提交且仍需报修时再重新发起。"
+)
+_HANDOFF_CONTINUE_REJECTED = (
+    "您还有一张报修单的协助尚未结束。请先到 OA 核对那张单（已提交的请勿重复提交），"
+    '处理完后在卡片上点"结束协助"，再继续这次报修。'
+)
+# A check refused for these reasons means this handoff is over (deadline or terminal).
+_HANDOFF_OVER = frozenset(
+    {"browser_handoff_expired", "browser_handoff_not_waiting", "browser_run_not_found"}
+)
+
+
+def _handoff_phrase(message: str) -> bool:
+    text = message.strip()
+    while text and (text[-1] in _SENTENCE_END or text[-1].isspace()):
+        text = text[:-1]
+    return text in _HANDOFF_PHRASES
+
 
 def _error_code(code: str) -> ErrorCode:
     # Ledger codes outside the shared vocabulary close tasks as internal_error;
@@ -270,6 +313,8 @@ class _BrowserTurn:
     collection: DFormCollectionSnapshot | None = None
     # The registered capability exposed as this turn's browser tool, if any.
     spec: CapabilitySpec | None = None
+    # M3 §8.4: this bound session has an active D handoff; no D tool this turn.
+    handoff_active: bool = False
 
 
 @dataclass(slots=True)
@@ -403,6 +448,10 @@ class AgentScopeRuntime:
             )
             if confirmed is not None:
                 return confirmed
+            # M3 §8.3: before the document route and the busy check; no turn or task.
+            answered = await self._handoff_prelude(principal, session_id, message)
+            if answered is not None:
+                return answered
         scope = ReadToolScope.from_session(context, bound_session_id=session_id, channel=channel)
         question = (
             document_question(
@@ -438,6 +487,21 @@ class AgentScopeRuntime:
 
         browser_scope = browser_request_scope.get()
         assert browser_scope is not None
+        handoff_active = False
+        if self._registration().effect == "fill_stop":
+            # M3 §8.4, same trusted bound session; a failed lookup is never "none".
+            submission = self._browser.submission
+            assert submission is not None
+            handoff_active = bool(
+                await submission.find_active_handoffs(
+                    principal=context.principal, bound_session=scope.session_id
+                )
+            )
+            if handoff_active and reference is not None:
+                # Before admit_reference: no collection, no turn, no task.
+                return self._handoff_reply(
+                    str(uuid4()), scope.session_id, _HANDOFF_CONTINUE_REJECTED, status="failed"
+                )
         collection: DFormCollectionSnapshot | None = None
         if reference is not None:
             admitted = await self._browser.admit_reference(
@@ -447,7 +511,67 @@ class AgentScopeRuntime:
                 return admitted
             collection = admitted
         return await self._accept(
-            scope, context, owner, message, _BrowserTurn(browser_scope, ownership, collection)
+            scope,
+            context,
+            owner,
+            message,
+            _BrowserTurn(browser_scope, ownership, collection, handoff_active=handoff_active),
+        )
+
+    async def _handoff_prelude(
+        self, principal: Principal, session_id: str, message: str
+    ) -> ResponseEnvelope | None:
+        """M3 §8.3: fixed reply when this bound session has active D handoffs.
+
+        Only the trusted bound session is searched, never client task fields.
+        None (ordinary routing) for other messages, zero handoffs or a failed
+        lookup; the browser path rechecks before exposing D and submission
+        keeps its own guard.
+        """
+
+        submission, registration = self._browser.submission, self._browser_registration
+        if (
+            submission is None
+            or registration is None
+            or registration.effect != "fill_stop"
+            or not _handoff_phrase(message)
+        ):
+            return None
+        try:
+            found = await submission.find_active_handoffs(
+                principal=principal, bound_session=session_id
+            )
+        except BrowserChatError as error:
+            _RUNTIME_LOGGER.info(
+                "agentscope_handoff_prelude result=skipped reason=%s", _error_code(error.code)
+            )
+            return None
+        if not found:
+            return None
+        if len(found) > 1:
+            return self._handoff_reply(str(uuid4()), session_id, _HANDOFF_MANY)
+        task_id, run_id = found[0]
+        text = _HANDOFF_SUBMITTED
+        try:
+            # Production verification is unsupported this phase (Q4): the reply
+            # never claims a result; the worker settles the requested check.
+            await submission.check_handoff(principal, session_id, task_id, run_id)
+        except BrowserChatError as error:
+            if error.code in _HANDOFF_OVER:
+                text = _HANDOFF_ENDED
+        return self._handoff_reply(task_id, session_id, text)
+
+    def _handoff_reply(
+        self,
+        task_id: str,
+        session_id: str,
+        text: str,
+        *,
+        status: Literal["completed", "failed"] = "completed",
+    ) -> ResponseEnvelope:
+        _RUNTIME_LOGGER.info("agentscope_handoff_reply status=%s", status)
+        return self._deps.response_builder.build_message(
+            str(uuid4()), task_id, session_id, text, text, str(uuid4()), status=status
         )
 
     async def _accept(
@@ -828,7 +952,7 @@ class AgentScopeRuntime:
 
         browser, registration = turn.browser, self._browser_registration
         deps, scope = self._deps, turn.scope
-        if browser is None or registration is None or visible is None:
+        if browser is None or registration is None or visible is None or browser.handoff_active:
             return None
         spec = visible.browser
         if (
