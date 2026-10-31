@@ -97,11 +97,27 @@ class BrowserWritePreview(Contract):
     expires_at: datetime
 
 
+class BrowserHandoffFields(Contract):
+    """The owner's own three submitted values, returned only to that session."""
+
+    category: str = Field(max_length=100, repr=False)
+    position: str = Field(max_length=500, repr=False)
+    description: str = Field(max_length=500, repr=False)
+
+
+class BrowserHandoffView(Contract):
+    schema_version: Literal["browser.handoff.v1"] = "browser.handoff.v1"
+    sealed_at: datetime
+    deadline: datetime
+    fields: BrowserHandoffFields | None = None
+
+
 class BrowserRunResponse(Contract):
     run: BrowserRunView
     value: dict[str, Any] | None = Field(default=None, repr=False)
     write_preview: BrowserWritePreview | None = None
     fill_stop: FillStopReport | None = None
+    handoff: BrowserHandoffView | None = None
 
 
 class BrowserRunAccessPort(Protocol):
@@ -122,6 +138,16 @@ class BrowserRunAccessPort(Protocol):
         task_id: str,
         run_id: str,
     ) -> BrowserRunResponse: ...
+
+    async def check_handoff(
+        self,
+        principal: Principal,
+        bound_session: str,
+        task_id: str,
+        run_id: str,
+    ) -> BrowserRunResponse:
+        """Owner + current authority request a read-only check of a sealed handoff."""
+        ...
 
     async def decide_write(
         self,
@@ -198,6 +224,18 @@ class BrowserOrdinarySubmissionPort(BrowserSubmissionPort, Protocol):
         None alone permits new parsing. Errors and conflicts never mean absence.
         Settlement locks the same original claim; no claim reassignment, model,
         dispatch or new request key is allowed.
+        """
+        ...
+
+    async def find_active_handoffs(
+        self,
+        *,
+        principal: Principal,
+        bound_session: str,
+    ) -> tuple[tuple[str, str], ...]:
+        """(task_id, run_id) of sealed active handoffs in exactly this bound session.
+
+        Never searches by user or a client-supplied task; empty when no D lane.
         """
         ...
 

@@ -202,6 +202,35 @@ def test_fill_stop_submit_click_is_detected(tmp_path, monkeypatch, action):
     asyncio.run(exercise())
 
 
+def test_user_submit_after_handoff_reaches_server(tmp_path):
+    """M3: the guard ends with automation; the user's own submit must not be blocked."""
+
+    async def exercise():
+        async with synthetic_browser(tmp_path) as (binding, endpoint, posts):
+            summary, report, stages = await run_flow(tmp_path, binding)
+            assert summary["passed"] is True
+            assert report.execution_status == "filled_stopped"
+            assert report.verification == "verified"
+            assert stages[8] == {"status": "PASS", "code": "OK"}
+            # The handed-over window: a fresh CDP client acts as the user.
+            async with async_playwright() as pw:
+                browser = await pw.chromium.connect_over_cdp(endpoint)
+                page = browser.contexts[0].pages[0]
+                await page.locator("#submit").click()
+                for _ in range(50):
+                    if posts:
+                        break
+                    await asyncio.sleep(0.1)
+                counts = await page.evaluate(
+                    "({submit: window.submitCount, save: window.saveCount})"
+                )
+            assert posts == ["/submitted"]
+            assert counts == {"submit": 1, "save": 0}
+            assert summary["submit_actions"] == report.submit_actions == 0
+
+    asyncio.run(exercise())
+
+
 def test_same_host_non_submit_post_is_allowed(tmp_path, monkeypatch):
     original = Flow.verify
 

@@ -18,6 +18,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import TypeAdapter
 from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.chat import BrowserChatService
@@ -341,6 +342,9 @@ class BrowserVerticalDependencies:
     business_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None
     business_ready_in_session: Callable[[AsyncSession, RunSnapshot], Awaitable[bool]] | None = None
     cancel_check_in_session: CleanupAuthorize | None = None
+    # D only: bounded historical grant for closing lost handoffs (never cleanup).
+    handoff_history_authorize: CleanupAuthorize | None = None
+    installed_binding_revision: int | None = None
     publication_review: BrowserPublicationReviewPort | None = None
     teaching_base: BrowserPublicationManifest | None = None
     confirmed_key_digest: Callable[[bytes, str], str] | None = None
@@ -451,6 +455,8 @@ class BrowserVerticalComponents:
         compare=False,
         repr=False,
     )
+    # Present only when a D installation wires the bounded handoff closure.
+    installed_binding_revision: int | None = field(default=None, compare=False)
 
     async def start_resources(self) -> None:
         if self._start_resources is not None:
@@ -1103,6 +1109,37 @@ class BrowserVerticalComponents:
         if type(maximum_owners) is not int or not 1 <= maximum_owners <= 64:
             raise ValueError("browser_worker_batch_invalid")
         failed_owners = 0
+        installed = self.installed_binding_revision
+        # A sealed handoff whose holder is gone and whose deadline has passed is
+        # a hint only; expire_lost_handoff decides on locked rows. A closed
+        # older-revision handoff already quarantined has nothing left that this
+        # process could release, so it is not re-selected every pass.
+        handoff_clause = (
+            ""
+            if installed is None
+            else " OR (br.status IN ('running','waiting_user')"
+            " AND br.phase IN ('waiting_user','verifying')"
+            " AND (br.worker_deadline IS NULL OR br.worker_deadline<=clock_timestamp())"
+            " AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=br.task_id"
+            " AND e.event_type='browser_handoff_sealed'"
+            " AND e.payload->>'run_id'=br.run_id"
+            # CASE keeps the cast off other event types whatever the plan order.
+            " AND CASE WHEN e.event_type='browser_handoff_sealed'"
+            " THEN CAST(e.payload->>'deadline' AS TIMESTAMPTZ) END<=clock_timestamp()))"
+        )
+        settled_clause = (
+            ""
+            if installed is None
+            else " AND NOT (br.status IN ('completed','failed','cancelled')"
+            " AND br.cleanup='quarantined' AND br.binding_revision<:installed)"
+        )
+        params: dict[str, object] = {
+            "tenant": self._tenant_id,
+            "publication": bytes.fromhex(self._seed.digest),
+            "limit": maximum_owners,
+        }
+        if installed is not None:
+            params["installed"] = installed
         # Historical cleanup has independent service authority. A revoked or
         # expired business session must not prevent exact resource reconciliation.
         async with self._sessions() as session:
@@ -1110,11 +1147,13 @@ class BrowserVerticalComponents:
                 (
                     await session.execute(
                         text(
-                            "SELECT br.tenant_id,br.ai_user_id,br.session_id,br.task_id,br.run_id"
+                            "SELECT br.tenant_id,br.ai_user_id,br.session_id,br.task_id,br.run_id,"
+                            "br.binding_revision,br.status,br.phase"
                             " FROM browser_runs br WHERE br.tenant_id=:tenant"
                             " AND br.publication_digest=:publication"
                             " AND br.cleanup NOT IN ('released','terminated')"
-                            " AND (br.status IN ('completed','failed','cancelled') OR"
+                            + settled_clause
+                            + " AND (br.status IN ('completed','failed','cancelled') OR"
                             " ((br.worker_deadline IS NULL OR "
                             "br.worker_deadline<=clock_timestamp())"
                             " AND (br.auth_expires_at<=clock_timestamp() OR EXISTS"
@@ -1125,14 +1164,11 @@ class BrowserVerticalComponents:
                             " AND c.ai_user_id=br.ai_user_id AND c.target_system=br.target_system"
                             " AND c.binding_id=br.binding_id AND "
                             "c.binding_revision=br.binding_revision"
-                            " AND c.binding_state='active' AND c.revoked_at IS NULL))))"
-                            " ORDER BY br.updated_at,br.run_id LIMIT :limit"
+                            " AND c.binding_state='active' AND c.revoked_at IS NULL)))"
+                            + handoff_clause
+                            + ") ORDER BY br.updated_at,br.run_id LIMIT :limit"
                         ),
-                        {
-                            "tenant": self._tenant_id,
-                            "publication": bytes.fromhex(self._seed.digest),
-                            "limit": maximum_owners,
-                        },
+                        params,
                     )
                 )
                 .mappings()
@@ -1143,18 +1179,53 @@ class BrowserVerticalComponents:
                 tenant_id=row["tenant_id"], user_id=row["ai_user_id"], session_id=row["session_id"]
             )
             owner_key = (owner.tenant_id, owner.user_id, owner.session_id)
+            # Same-process exclusion: a worker holding this owner's handoff keeps
+            # it; the locked recheck in expire_lost_handoff covers other processes.
             if owner_key in self._active_owners or owner_key in self._cleanup_owners:
                 continue
             self._cleanup_owners.add(owner_key)
             try:
-                historical = await self.runs.get_for_cleanup(owner, row["task_id"], row["run_id"])
-                await self.worker.cleanup(historical)
+                await self._cleanup_row(owner, row, installed)
             except Exception:
                 failed_owners += 1
             finally:
                 self._cleanup_owners.discard(owner_key)
         if failed_owners:
             raise BrowserRunStoreError("browser_worker_pass_failed")
+
+    async def _cleanup_row(
+        self,
+        owner: BrowserOwner,
+        row: RowMapping,
+        installed: int | None,
+    ) -> None:
+        task_id, run_id = row["task_id"], row["run_id"]
+        expired = False
+        if (
+            installed is not None
+            and row["status"] in {"running", "waiting_user"}
+            and row["phase"] in {"waiting_user", "verifying"}
+        ):
+            try:
+                await self.runs.expire_lost_handoff(owner, task_id, run_id)
+            except BrowserRunStoreError as error:
+                if error.code == "browser_handoff_authority_current":
+                    return  # Holder alive or no closing fact yet; not a failure.
+                if error.code != "browser_handoff_not_sealed":
+                    raise
+            else:
+                expired = True
+        if (
+            installed is not None
+            and row["binding_revision"] < installed
+            and (expired or row["status"] in {"completed", "failed", "cancelled"})
+        ):
+            # This process cannot hold an older revision's resource: record the
+            # unproven close on the Run only, never touching its lease row.
+            await self.runs.record_historical_handoff_quarantine(owner, task_id, run_id)
+            return
+        historical = await self.runs.get_for_cleanup(owner, task_id, run_id)
+        await self.worker.cleanup(historical)
 
 
 def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
@@ -1206,6 +1277,16 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
         or deps.trace is None
     ):
         raise ValueError("browser_vertical_trusted_dependency_required")
+    if (deps.handoff_history_authorize is None) != (deps.installed_binding_revision is None) or (
+        deps.installed_binding_revision is not None
+        and (
+            deps.fill_stop_runtime is None
+            or not callable(deps.handoff_history_authorize)
+            or type(deps.installed_binding_revision) is not int
+            or deps.installed_binding_revision < 1
+        )
+    ):
+        raise ValueError("browser_fill_stop_installation_invalid")
     if deps.seed.source_kind == "registered_site" and not callable(
         getattr(deps.publication_review, "check_in_session", None)
     ):
@@ -1447,6 +1528,7 @@ def build_browser_vertical(
         cleanup_authorize=deps.cleanup_authorize,
         cancel_check_in_session=deps.cancel_check_in_session,
         cleanup_check=deps.cleanup_check,
+        handoff_history_authorize=deps.handoff_history_authorize,
     )
 
     async def claim_ready_in_session(session: AsyncSession, run: RunSnapshot) -> bool:
@@ -2163,4 +2245,5 @@ def build_browser_vertical(
             )
             for step_id, values in deps.locator_repair_hints.items()
         ),
+        installed_binding_revision=deps.installed_binding_revision,
     )

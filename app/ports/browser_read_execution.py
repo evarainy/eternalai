@@ -24,6 +24,7 @@ from app.ports.browser_fill_stop import FillStopReport
 from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
 from app.ports.browser_run_store import (
     DispatchFailureCode,
+    HandoffSeal,
     ProtectedRunEnvelope,
     RunCleanup,
     RunEffect,
@@ -130,9 +131,18 @@ class BrowserReadOutcome:
     result_digest: bytes | None = None
     evidence_digest: bytes | None = None
     dispatch_failure_code: DispatchFailureCode | None = None
+    handoff: HandoffSeal | None = None
 
     def __post_init__(self) -> None:
         values = (self.result, self.result_digest, self.evidence_digest)
+        if self.handoff is not None and (
+            not isinstance(self.handoff, HandoffSeal)
+            or self.effect != "acknowledged"
+            or self.verification is not None
+            or self.dispatch_failure_code is not None
+            or any(v is not None for v in values)
+        ):
+            raise ValueError("browser_read_handoff_invalid")
         if self.verification == "verified":
             if (
                 not isinstance(self.result, ProtectedRunEnvelope)
@@ -145,6 +155,33 @@ class BrowserReadOutcome:
                 raise ValueError("browser_read_result_invalid")
         elif any(v is not None for v in values):
             raise ValueError("browser_read_unverified_result")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserHandoffCheck:
+    """One read-only check of a sealed handoff; verified carries an encrypted projection."""
+
+    outcome: Literal["verified", "not_found", "unavailable", "unsupported"]
+    result: ProtectedRunEnvelope | None = None
+    result_digest: bytes | None = None
+    evidence_digest: bytes | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome not in {"verified", "not_found", "unavailable", "unsupported"}:
+            raise ValueError("browser_handoff_check_invalid")
+        values = (self.result, self.result_digest, self.evidence_digest)
+        if self.outcome == "verified":
+            if (
+                not isinstance(self.result, ProtectedRunEnvelope)
+                or self.result.cipher_version != "aes256gcm-browser-result-v1"
+                or any(
+                    type(v) is not bytes or len(v) != 32
+                    for v in (self.result_digest, self.evidence_digest)
+                )
+            ):
+                raise ValueError("browser_handoff_check_invalid")
+        elif any(v is not None for v in values):
+            raise ValueError("browser_handoff_check_invalid")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -195,6 +232,22 @@ class BrowserReadExecutionPort(Protocol):
 
     def verified_persisted(self, run: RunSnapshot) -> None:
         """Forget private verification emission only after its durable commit."""
+        ...
+
+    async def hold_handoff(
+        self,
+        run: RunSnapshot,
+        checkpoint: BrowserWorkerCheckpoint,
+    ) -> Literal["open", "closed"]:
+        """Renew the held lease; closed only when the owned window process has exited."""
+        ...
+
+    async def check_handoff(
+        self,
+        run: RunSnapshot,
+        checkpoint: BrowserWorkerCheckpoint,
+    ) -> BrowserHandoffCheck:
+        """Read-only result check: no click, no submit, configured host only."""
         ...
 
     async def lookup_capture(
