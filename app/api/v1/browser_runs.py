@@ -71,6 +71,30 @@ class BrowserDecisionRequest(BrowserCancelRequest):
     decision: Literal["confirmed", "rejected"]
 
 
+class BrowserErrorDetail(BaseModel):
+    code: str
+    message: str | None = None
+
+
+class BrowserError(BaseModel):
+    """Error body shape: ``{"detail": {"code": ...}}`` (sanitised, never reflects input)."""
+
+    detail: BrowserErrorDetail
+
+
+_VERIFY_RESULT_ERRORS: dict[int | str, dict[str, Any]] = {
+    401: {"model": BrowserError, "description": "authentication_required"},
+    403: {"model": BrowserError, "description": "csrf_validation_failed"},
+    404: {"model": BrowserError, "description": "session_not_found | browser_run_not_found"},
+    409: {
+        "model": BrowserError,
+        "description": "browser_handoff_not_waiting | browser_handoff_expired",
+    },
+    422: {"model": BrowserError, "description": "browser_request_input_invalid"},
+    503: {"model": BrowserError, "description": "browser_chat_unavailable"},
+}
+
+
 class BrowserSubmitRequest(BrowserCancelRequest):
     skill_id: OpaqueId
     skill_version: OpaqueId
@@ -174,6 +198,7 @@ def make_router(
     @router.post(
         "/browser-runs/{task_id}/{run_id}/verify-result",
         response_model=BrowserRunResponse, status_code=202,
+        responses=_VERIFY_RESULT_ERRORS,
     )
     async def verify_result(
         task_id: RunIdentifier, run_id: RunIdentifier, body: BrowserCancelRequest,

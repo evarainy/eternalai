@@ -207,6 +207,43 @@
         "title": "BrowserDraftView",
         "type": "object"
       },
+      "BrowserError": {
+        "description": "Error body shape: ``{\"detail\": {\"code\": ...}}`` (sanitised, never reflects input).",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/BrowserErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BrowserError",
+        "type": "object"
+      },
+      "BrowserErrorDetail": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "BrowserErrorDetail",
+        "type": "object"
+      },
       "BrowserHandoffFields": {
         "additionalProperties": false,
         "description": "The owner's own three submitted values, returned only to that session.",
@@ -1568,15 +1605,65 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserError"
+                }
+              }
+            },
+            "description": "authentication_required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserError"
+                }
+              }
+            },
+            "description": "csrf_validation_failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserError"
+                }
+              }
+            },
+            "description": "session_not_found | browser_run_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserError"
+                }
+              }
+            },
+            "description": "browser_handoff_not_waiting | browser_handoff_expired"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/BrowserError"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "browser_request_input_invalid"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserError"
+                }
+              }
+            },
+            "description": "browser_chat_unavailable"
           }
         },
         "summary": "Verify Result"
