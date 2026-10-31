@@ -255,7 +255,10 @@ class _OrdinaryChatOnly:
 
 
 def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVerticalComponents:
-    from app.infra.browser.local_installation import UnsupportedLocalProfiles
+    from app.infra.browser.local_installation import (
+        PostgreSQLLocalCleanupGrant,
+        UnsupportedLocalProfiles,
+    )
     from app.infra.browser.teaching_installation import (
         InstalledReplayProofLookup,
         PostgreSQLTeachingPublicationReview,
@@ -283,9 +286,11 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
         scope(run)
         await deps.cleanup_authority.authorize_run(session, run)
 
+    # Both production modes (fixed owner and actors) carry an exact historical
+    # grant; the actors grant also keeps its independent service authorization.
     historical_grant = (
         deps.cleanup_authority
-        if isinstance(deps.cleanup_authority, FixedDFormCleanupGrant)
+        if isinstance(deps.cleanup_authority, FixedDFormCleanupGrant | PostgreSQLLocalCleanupGrant)
         else None
     )
 

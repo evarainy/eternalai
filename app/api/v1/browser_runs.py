@@ -184,9 +184,12 @@ def make_router(
         try:
             return await bound_service.check_handoff(principal, session, task_id, run_id)
         except BrowserChatError as error:
+            # The approved contract has one unavailable code; store, lane and
+            # projection failures keep 503 without exposing their internal codes.
+            code = "browser_chat_unavailable" if error.http_status == 503 else error.code
             raise HTTPException(
                 error.http_status,
-                {"code": error.code, "message": "Result check was not accepted."},
+                {"code": code, "message": "Result check was not accepted."},
                 headers=_HEADERS,
             ) from None
 
