@@ -80,6 +80,7 @@ from app.ports.response_projection_contract import (
 )
 from app.ports.runtime import ConfirmationCoordinatorPort
 from app.ports.task_store import (
+    DFormCollectionStorePort,
     SessionStorePort,
     TaskEventRecord,
     TaskRecord,
@@ -87,6 +88,7 @@ from app.ports.task_store import (
     TaskStorePort,
 )
 from app.ports.trace import TracePort
+from app.runtime.document_qa import DocumentQAService
 
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
@@ -128,6 +130,11 @@ class AgentScopeRuntimeDependencies:
     session_idle_ttl_seconds: int
     # Deterministic confirmation entry points shared with the legacy runtime.
     confirmations: ConfirmationCoordinatorPort
+    # M2: D admission only, through an orchestration without the confirmation
+    # barrier; never given to the read or write-proposal executors.
+    browser_orchestration: AgentOrchestrationPort | None = None
+    d_form_collection_store: DFormCollectionStorePort | None = None
+    document_qa: DocumentQAService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +212,8 @@ class TaskClose:
     verification: BusinessVerification | None = None
     # Only the turn task records response_envelope_created, once, first.
     envelope_created: bool = False
+    # Value-free attributes of response_envelope_created; only the document turn sets them.
+    response_attributes: dict[str, Any] | None = None
 
 
 def close_once(
@@ -298,6 +307,7 @@ async def _write_close(
         await deps.trace_port.record_step(
             *ids, tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             event_type="response_envelope_created", status="ok",
+            attributes=close.response_attributes,
         )
     status = _task_status(execution.status)
     await deps.task_store.update_status(close.task_id, status, execution.error_code)
@@ -363,9 +373,6 @@ class ToolExecutor:
     its own task (own). Results go to the turn ledger; the runtime summarizes.
     """
 
-    # Capability type this executor runs; the write-proposal executor runs workflows.
-    capability_type: str = "query"
-
     def __init__(
         self,
         scope: ReadToolScope,
@@ -379,6 +386,8 @@ class ToolExecutor:
         self._deps = deps
         self._ledger = ledger
         self._binding = binding
+        # The type the registry must still report: query, or a read workflow.
+        self.capability_type = binding.capability_type
         self._name = name
         self._limits = limits
         self._allowed = frozenset(ledger.business_tools.values())

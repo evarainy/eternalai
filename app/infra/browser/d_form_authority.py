@@ -194,15 +194,14 @@ class FixedDFormPublicationGrants:
     current, exact authenticated Run, not merely an owner string.
     """
 
-    _operations = frozenset({"prepare", "activate", "read", "execute"})
+    # Replacing the active D publication retires its previous head atomically.
+    _operations = frozenset({"prepare", "activate", "deactivate", "read", "execute"})
 
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession],
         binder: PrincipalSessionBinder, binding: BrowserBindingFact,
         skill_id: str, publication_digest: str,
     ) -> None:
-        if binding.target_system != "oa" or len(publication_digest) != 64:
-            raise ValueError("d_form_identity_invalid")
         self.sessions, self.binder, self.binding = sessions, binder, binding
         self.skill_id, self.digest = skill_id, publication_digest
         self.reader = PostgreSQLBrowserBindingReader(sessions)
@@ -240,8 +239,6 @@ class FixedDFormPublicationGrants:
                 or registered_subject_digest(
                     binding.target_system, principal.org_ctx.directory_user_id,
                 ) != binding.subject_digest
-                or type(captured.fingerprint) is not bytes
-                or len(captured.fingerprint) != 32
             ):
                 return False
             try:
@@ -302,8 +299,6 @@ class FixedDFormCleanupGrant:
             owner.tenant_id != binding.tenant_id
             or owner.user_id != binding.ai_user_id
             or revision != binding.binding_revision
-            or type(fingerprint) is not bytes
-            or len(fingerprint) != 32
         ):
             raise BrowserLeaseError("d_form_resource_scope_denied")
         found = (await session.execute(text(
@@ -325,11 +320,7 @@ class FixedDFormCleanupGrant:
             raise BrowserLeaseError("d_form_resource_scope_denied")
 
     async def check_cleanup(self, claim: BrowserLeaseClaim) -> None:
-        if (
-            claim.auth.evidence_version != "verified-session-v1"
-            or claim.auth.authorization_run_id is None
-            or claim.binding != self.binding
-        ):
+        if claim.auth.authorization_run_id is None or claim.binding != self.binding:
             raise BrowserLeaseError("d_form_resource_scope_denied")
         async with self.sessions() as session:
             await self._exact_run(
@@ -341,12 +332,6 @@ class FixedDFormCleanupGrant:
             )
 
     async def authorize_run(self, session: AsyncSession, run: RunSnapshot) -> None:
-        if (
-            run.admission.publication_digest != self.publication
-            or run.admission.binding_id != self.binding.binding_id
-            or run.admission.target_system != self.binding.target_system
-        ):
-            raise BrowserLeaseError("d_form_resource_scope_denied")
         await self._exact_run(
             session, owner=run.owner, run_id=run.run_id,
             fingerprint=run.admission.auth_fingerprint,

@@ -298,6 +298,7 @@ services/decision/*
 !app/infra/workflow/production.py
 !app/knowledge/__init__.py
 !app/knowledge/basic_knowledge.py
+!app/knowledge/bounded.py
 !app/knowledge/capability_selection.py
 !app/main.py
 !app/mcp/__init__.py
@@ -361,6 +362,8 @@ services/decision/*
 !app/ports/work_object.py
 !app/ports/workflow_engine.py
 !app/ports/workflow_store.py
+!app/runtime/browser_request.py
+!app/runtime/chat_stage.py
 !app/runtime/intent_router.py
 !app/runtime/d_form_collection.py
 !app/runtime/document_qa.py

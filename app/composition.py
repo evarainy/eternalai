@@ -161,6 +161,8 @@ from app.ports.auth import (
     SessionRevocationStorePort,
     SessionTokenPort,
 )
+from app.ports.browser_chat import BrowserOrdinarySubmissionPort
+from app.ports.browser_gateway import BrowserGatewayRegistration, BrowserIntentHandoffPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.credential_binding import CredentialBindingVerifierPort, OASessionRenewalPort
@@ -227,6 +229,9 @@ class ProductionComponents:
     browser_llm_provider: LLMProviderPort
     browser_structured_output: StructuredOutputPort
     browser_intent_model: str
+    # Installs the browser handoff on the Runtime that serves chat for the
+    # selected engine: (handoff, submission, *, registration, configured_d_form_model).
+    install_browser_handoff: Callable[..., None]
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
     # M1 AgentScope runtime; built only when RUNTIME_ENGINE == "agentscope",
@@ -682,7 +687,7 @@ def build_agentscope_runtime_stack(
         document_qa=document_qa,
         approved_projections=approved_projections,
     )
-    return _build_agentscope_runtime(
+    runtime, _ = _build_agentscope_runtime(
         coordinator,
         task_store=task_store,
         session_store=session_store,
@@ -699,10 +704,13 @@ def build_agentscope_runtime_stack(
         capability_formatters=capability_formatters,
         mcp_result_profiles=mcp_result_profiles,
         approved_projections=approved_projections,
+        d_form_collection_store=d_form_collection_store,
+        document_qa=document_qa,
         model_factory=model_factory,
         model_name=intent_model,
         session_idle_ttl_seconds=session_idle_ttl_seconds,
     )
+    return runtime
 
 
 def _build_agentscope_runtime(
@@ -725,11 +733,16 @@ def _build_agentscope_runtime(
     approved_projections: Mapping[
         str, tuple[str, str | None, str, ApprovedResponseProjection]
     ] | None,
+    d_form_collection_store: DFormCollectionStorePort | None,
+    document_qa: DocumentQAService | None,
     model_factory: Callable[[], Any],
     model_name: str,
     session_idle_ttl_seconds: int,
-) -> RuntimePort:
-    """The single wiring of the AgentScope path; AgentScope is imported only here."""
+) -> tuple[RuntimePort, Callable[..., None]]:
+    """The single wiring of the AgentScope path; AgentScope is imported only here.
+
+    Returns the runtime and its browser handoff installer.
+    """
     from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
     from app.infra.orchestration.agentscope_runtime import build_agentscope_runtime
 
@@ -750,7 +763,22 @@ def _build_agentscope_runtime(
         approved_projections=approved_projections,
         confirmation_barrier=True,
     )
-    return build_agentscope_runtime(
+    # Barrier-free instance for D admission only (M2 §3.5): handed solely to the
+    # browser coordinator; the shared barrier above is not relaxed.
+    browser_orchestration = AgentOrchestrationAdapter(
+        capability_registry=capability_registry,
+        gateway=gateway,
+        workflow_engine=(
+            WorkflowEngineAdapter(workflow_engine) if workflow_engine is not None else None
+        ),
+        response_builder=ResponseEnvelopeBuilder(),
+        validate_workflow=validate_workflow,
+        capability_formatters=capability_formatters,
+        mcp_result_profiles=mcp_result_profiles,
+        approved_projections=approved_projections,
+        confirmation_barrier=False,
+    )
+    runtime = build_agentscope_runtime(
         AgentScopeRuntimeDependencies(
             capability_registry=capability_registry,
             candidate_policy=candidate_policy,
@@ -767,7 +795,28 @@ def _build_agentscope_runtime(
             model_name=model_name,
             session_idle_ttl_seconds=session_idle_ttl_seconds,
             confirmations=coordinator,
+            browser_orchestration=browser_orchestration,
+            d_form_collection_store=d_form_collection_store,
+            document_qa=document_qa,
         )
+    )
+    return runtime, runtime.install_browser
+
+
+def _install_legacy_browser_handoff(
+    runtime: RuntimeImpl,
+    handoff: BrowserIntentHandoffPort,
+    submission: BrowserOrdinarySubmissionPort,
+    *,
+    registration: BrowserGatewayRegistration,
+    configured_d_form_model: str | None = None,
+    d_form_category_options: tuple[str, ...] | None = None,
+) -> None:
+    # The legacy Runtime's checks predate the registration argument, and it
+    # keeps its explicit-category collection: configured candidates are unused.
+    del registration, d_form_category_options
+    runtime.install_browser_handoff(
+        handoff, submission, configured_d_form_model=configured_d_form_model
     )
 
 
@@ -1142,10 +1191,13 @@ def build_production_components(
     # The M1 AgentScope runtime reuses the same production instances and
     # result mappings; with the legacy engine AgentScope is never imported.
     agentscope_runtime: RuntimePort | None = None
+    install_browser_handoff: Callable[..., None] = partial(
+        _install_legacy_browser_handoff, runtime
+    )
     if settings.runtime_engine == "agentscope":
         from app.infra.llm.agentscope_chat import build_chat_model
 
-        agentscope_runtime = _build_agentscope_runtime(
+        agentscope_runtime, install_browser_handoff = _build_agentscope_runtime(
             runtime,
             task_store=task_store,
             session_store=session_store,
@@ -1162,6 +1214,8 @@ def build_production_components(
             capability_formatters=capability_formatters,
             mcp_result_profiles=mcp_result_profiles,
             approved_projections=approved_projections,
+            d_form_collection_store=task_store,
+            document_qa=document_qa,
             model_factory=partial(
                 build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
             ),
@@ -1332,6 +1386,7 @@ def build_production_components(
         browser_llm_provider=resolved_llm,
         browser_structured_output=resolved_structured_output,
         browser_intent_model=settings.llm_model,
+        install_browser_handoff=install_browser_handoff,
         browser_credential_store=credential_store,
         mcp_service=McpApiService(
             OAuthConnections(

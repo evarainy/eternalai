@@ -12,6 +12,7 @@ import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
 import {
   projectResponse,
+  projectTextResponse,
   isRecord,
   type PresentationKind,
   type ProjectedResponse,
@@ -25,9 +26,11 @@ import {
   cancelBrowserRun,
   decideBrowserFillStop,
   isBrowserUnconfirmed,
+  isRuntimeSessionBusy,
   parseBrowserAccepted,
   parseBrowserPending,
   readBrowserRun,
+  SESSION_BUSY_NOTICE,
   submitBrowserMessage,
   submitOrdinaryBrowserCapableMessage,
   type BrowserAccepted,
@@ -741,6 +744,19 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         return result;
       } catch (error) {
+        if (isRuntimeSessionBusy(error)) {
+          // Refused before any work: nothing was sent, so the input goes back to the box.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          const store = useAIDockStore.getState();
+          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
+          store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
         const projectedError = projectRequestError(error);
         if (projectedError === null && submission.owner === null) {
           // Plain runtime handling authenticates before any work, so this send never happened.

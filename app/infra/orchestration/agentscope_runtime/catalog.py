@@ -3,10 +3,13 @@
 Visibility copies the legacy Runtime rule (an unsafe id, a policy error or an
 unexpected verdict makes the whole catalog invalid). Query capabilities become
 read tools and workflow capabilities become write-proposal tools in their own
-write groups; action and mock capabilities are never visible, and browser
+write groups (except READ_WORKFLOW_IDS, which are read tools); action and mock
+capabilities are never visible, and browser
 capabilities are excluded silently (counted only). There is no lexical
 pre-selection. Grouping is a pure function of the visible definitions so
-offline evaluation can call it directly.
+offline evaluation can call it directly. The one registered browser
+capability of a trusted browser request is added by the runtime as an
+external tool in its own group (M2 §3.3).
 """
 
 from __future__ import annotations
@@ -14,12 +17,13 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.infra.workflow.catalog import OVERVIEW_ID
 from app.knowledge.capability_selection import (
     CandidateBinding,
     ToolDefinitionRejected,
@@ -64,9 +68,15 @@ WRITE_GROUP_BY_TARGET: dict[str | None, str] = {
     None: "general_action",
 }
 VISIBLE_TYPES = frozenset({"query", "workflow"})
+# Workflows whose leaves are all queries: a read tool in its read group.
+READ_WORKFLOW_IDS = frozenset({OVERVIEW_ID})
 # Out of this path's scope: excluded before grouping and only counted.
 SCOPE_EXCLUDED_PREFIX = "browser."
-ToolKind = Literal["read", "write"]
+# Group of the registered browser tool; only that one tool, never activated
+# together with a write proposal (each must be called alone).
+BROWSER_GROUP = "oa_browser"
+BROWSER_GROUP_PURPOSE = "在 OA 网页中由浏览器代为处理已登记的事项，不会保存或提交。"
+ToolKind = Literal["read", "write", "browser"]
 # Second-level split inside one primary group, applied only when the primary
 # group does not fit in one chunk: {group: ((subgroup, (capability suffix,
 # ...)), ...)}. Subgroup names must not contain "_other_".
@@ -193,6 +203,9 @@ class VisibleCatalog:
     active_count: int
     # Visible capabilities outside this path's scope (browser.*); counted only.
     scope_excluded: int = 0
+    # The requested browser capability when it is active and policy-visible,
+    # before the type and prefix filters; the runtime decides on exposure.
+    browser: CapabilitySpec | None = None
 
 
 async def visible_capabilities(
@@ -203,6 +216,7 @@ async def visible_capabilities(
     tenant_id: str,
     channel: RequestChannel,
     request_id: str | None = None,
+    browser_capability_id: str | None = None,
 ) -> VisibleCatalog | None:
     """This request's policy-previewed active query/workflow set, or None if invalid."""
 
@@ -236,10 +250,14 @@ async def visible_capabilities(
     in_scope = tuple(
         item for item in typed if not item.capability_id.startswith(SCOPE_EXCLUDED_PREFIX)
     )
+    browser = next(
+        (item for item in visible if item.capability_id == browser_capability_id), None
+    )
     return VisibleCatalog(
         capabilities=in_scope,
         active_count=len(active),
         scope_excluded=len(typed) - len(in_scope),
+        browser=browser,
     )
 
 
@@ -253,7 +271,11 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         if _TOOL_NAME.fullmatch(name) is None:
             _count(excluded, "tool_name_invalid")
             continue
-        kind: ToolKind = "write" if spec.type == "workflow" else "read"
+        kind: ToolKind = (
+            "write"
+            if spec.type == "workflow" and spec.capability_id not in READ_WORKFLOW_IDS
+            else "read"
+        )
         group = (WRITE_GROUP_BY_TARGET if kind == "write" else GROUP_BY_TARGET).get(
             spec.target_system
         )
@@ -330,6 +352,86 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
         excluded=tuple(sorted(excluded.items())),
         summary_omitted=sum(1 for tool in grouped if summaries[tool.capability_id] is None),
     )
+
+
+def with_browser_tool(
+    catalog: ToolCatalog,
+    spec: CapabilitySpec,
+    instructions: str,
+    purpose: str = BROWSER_GROUP_PURPOSE,
+    usage: str | None = None,
+    *,
+    collect_missing: bool = False,
+) -> tuple[ToolCatalog, CatalogTool | None]:
+    """Add the registered browser capability as the only tool of BROWSER_GROUP.
+
+    ``purpose`` opens the group description the model selects groups by. A
+    ``usage`` text replaces the required-argument hint of the tool
+    description: the runtime, not ask_user, collects missing arguments.
+
+    A definition that cannot be projected is not registered and marks the
+    catalog incomplete, like any other rejected definition.
+    """
+
+    name = spec.capability_id.replace(".", "__")
+    try:
+        if _TOOL_NAME.fullmatch(name) is None or name in {tool.name for tool in catalog.tools}:
+            raise ToolDefinitionRejected("tool_name_invalid")
+        validate_tool_text(spec.name, max_chars=CAPABILITY_NAME_MAX_LENGTH)
+        validate_tool_text(
+            spec.short_description, max_chars=CAPABILITY_SHORT_DESCRIPTION_MAX_LENGTH
+        )
+        schema = project_tool_input_schema(spec.input_schema)
+    except ToolDefinitionRejected as rejected:
+        excluded = dict(catalog.excluded)
+        _count(excluded, rejected.reason)
+        return replace(
+            catalog, visible_count=catalog.visible_count + 1,
+            excluded=tuple(sorted(excluded.items())),
+        ), None
+    if collect_missing:
+        # Empty string placeholders are missing collection fields, not completed
+        # form values. required is already omitted by the common projection.
+        # Keep types, upper bounds and the original published schema unchanged.
+        for field in schema["properties"].values():
+            field.pop("minLength", None)
+    summary = discovery_summary(spec)
+    tool = CatalogTool(
+        name=name,
+        capability_id=spec.capability_id,
+        group=BROWSER_GROUP,
+        description=(
+            _description(spec, schema)
+            if usage is None
+            else f"{usage}{spec.name}：{spec.short_description}"
+        ),
+        input_schema=schema,
+        schema_digest=hashlib.sha256(canonical_json(schema).encode("utf-8")).hexdigest(),
+        binding=CandidateBinding(
+            capability_id=spec.capability_id,
+            version=spec.version,
+            fingerprint=capability_fingerprint(spec),
+            capability_type=spec.type,
+            target_system=spec.target_system,
+            intent_tags=tuple(spec.intent_tags),
+        ),
+        kind="browser",
+    )
+    group = CatalogGroup(
+        name=BROWSER_GROUP,
+        description=(
+            purpose + "包含：" + (spec.name if summary is None else f"{spec.name}：{summary}")
+        ),
+        instructions=instructions,
+        tool_names=(name,),
+    )
+    return replace(
+        catalog,
+        tools=(*catalog.tools, tool),
+        groups=(*catalog.groups, group),
+        visible_count=catalog.visible_count + 1,
+        summary_omitted=catalog.summary_omitted + (summary is None),
+    ), tool
 
 
 def _split(
@@ -493,6 +595,8 @@ __all__ = (
     "SUBGROUPS",
     "TOOL_GROUP_PROTOCOL_VERSION",
     "VISIBLE_TYPES",
+    "BROWSER_GROUP",
+    "BROWSER_GROUP_PURPOSE",
     "WRITE_GROUP_BY_TARGET",
     "WRITE_GROUP_INSTRUCTIONS",
     "CatalogGroup",
@@ -503,4 +607,5 @@ __all__ = (
     "build_tool_catalog",
     "discovery_summary",
     "visible_capabilities",
+    "with_browser_tool",
 )

@@ -8,7 +8,9 @@ bounded turn scope: the workflow runs behind the confirmation barrier, a
 waiting result is staged with the shared confirmation coordinator and the
 waiting marks are written. Publication, the handoff of the turn task and the
 interrupt of the parked call belong to the runtime, right after the scope
-ends. Confirmations never read or write AgentState.
+ends. Confirmations never read or write AgentState. A call of the registered
+browser tool passes the same checks plus an explicit key allowlist and is
+handed to the browser coordinator, which settles the turn (M2 §3.3).
 """
 
 from __future__ import annotations
@@ -73,6 +75,9 @@ if TYPE_CHECKING:
     from agentscope.agent import Agent
 
     from app.infra.orchestration.agentscope_read_tools import _CallKey, _TaskOutcome
+    from app.infra.orchestration.agentscope_runtime.browser_handoff import (
+        BrowserHandoffCoordinator,
+    )
     from app.infra.orchestration.agentscope_runtime.ledger import ExecutionMode
 
 _DISCOVERY_TEXTS = {
@@ -99,8 +104,6 @@ class _Discovery:
 
 class WriteProposalExecutor(ToolExecutor):
     """Run one accepted write proposal on the turn task; stage a waiting result."""
-
-    capability_type = "workflow"
 
     def __init__(
         self,
@@ -205,6 +208,7 @@ class ProposalCoordinator:
         limits: TurnLimits,
         executors: Mapping[str, WriteProposalExecutor],
         schemas: Mapping[str, dict[str, Any]],
+        browser: BrowserHandoffCoordinator | None = None,
     ) -> None:
         self._scope = scope
         self._deps = deps
@@ -212,6 +216,7 @@ class ProposalCoordinator:
         self._limits = limits
         self._executors = executors
         self._schemas = schemas
+        self._browser = browser
 
     @classmethod
     def from_catalog(
@@ -223,8 +228,10 @@ class ProposalCoordinator:
         ledger: TurnLedger,
         limits: TurnLimits,
         owner: ConfirmationOwner,
+        browser: BrowserHandoffCoordinator | None = None,
     ) -> ProposalCoordinator:
         writes = [tool for tool in catalog.tools if tool.kind == "write"]
+        external = [*writes, *(tool for tool in catalog.tools if tool.kind == "browser")]
         return cls(
             scope=scope,
             deps=deps,
@@ -236,7 +243,8 @@ class ProposalCoordinator:
                 )
                 for tool in writes
             },
-            schemas={tool.name: tool.input_schema for tool in writes},
+            schemas={tool.name: tool.input_schema for tool in external},
+            browser=browser,
         )
 
     async def drive(self, agent: Agent, final: Msg) -> Msg | None:
@@ -270,6 +278,11 @@ class ProposalCoordinator:
                 return None
             # Claimed synchronously, with no await since the checks.
             ledger.turn_task_claimed = True
+            if call.name in ledger.browser_tools:
+                # The coordinator settles the turn; the parked call is interrupted.
+                assert self._browser is not None
+                await self._browser.run(verdict.arguments)
+                return None
             chunk = await self._executors[call.name].run_claimed(
                 state, call.id, verdict.snapshot, verdict.arguments
             )
@@ -292,7 +305,11 @@ class ProposalCoordinator:
         """Synchronous checks a-g of a parked call; None means interrupt the reply."""
 
         ledger, name = self._ledger, call.name
-        if name not in ledger.write_tools:
+        browser = name in ledger.browser_tools
+        if not browser and name not in ledger.write_tools:
+            self._reject(call, "internal_error")
+            return None
+        if browser and (self._browser is None or self._browser.tool_name != name):
             self._reject(call, "internal_error")
             return None
         snapshot = ledger.snapshot_for(call.id)
@@ -309,12 +326,27 @@ class ProposalCoordinator:
         if [item for item in response if item != RESET_TOOLS] != [name]:
             return _Discovery("write_proposal_conflict")
         # Strict parse: the framework's repaired input is never accepted.
+        invalid_stage = "invalid_json"
         try:
             arguments = json.loads(call.input)
+            invalid_stage = "not_object"
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
             jsonschema.validate(arguments, self._schemas[name])
-        except (ValueError, jsonschema.ValidationError):
+            invalid_stage = "browser_keys_or_types"
+            if browser and not self._browser.accepts(arguments):  # type: ignore[union-attr]
+                raise ValueError("browser arguments outside the allowlist")
+        except jsonschema.ValidationError as rejected:
+            # Only code-owned labels: never log instance, message or schema paths.
+            keyword = rejected.validator
+            reason = keyword if keyword in {
+                "type", "minLength", "maxLength", "required", "enum", "additionalProperties"
+            } else "other"
+            _log_write_rejected("schema_invalid", reason)
+            self._reject(call, "tool_input_rejected", "schema_invalid")
+            return None
+        except ValueError:
+            _log_write_rejected("schema_invalid", invalid_stage)
             self._reject(call, "tool_input_rejected", "schema_invalid")
             return None
         if not reserve_tool_execution(state, self._limits):

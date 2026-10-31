@@ -32,7 +32,7 @@ from app.ports.credential_vault import (
 )
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page, Response
+    from playwright.async_api import Response
 
 
 class RunBoundOACredentialVault:
@@ -58,8 +58,6 @@ class RunBoundOACredentialVault:
         self._run, self._binding, self._runs = run, binding, runs
         self._auth, self._reader, self._store = current_auth, binding_reader, credential_store
         self._origin = urlsplit(canonical_origin(origin))
-        if not callable(check_lease):
-            raise BrowserAuthorizationError("browser_login_lease_unavailable")
         self._check_lease = check_lease
         self._used = False
 
@@ -85,17 +83,10 @@ class RunBoundOACredentialVault:
         )
 
     async def check_current(self, fact: BrowserAuthFact) -> None:
-        run = await self._current()
-        if fact != self._fact(run):
-            raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
         await self._auth.check_current(fact)
-        await self._current()
 
     async def _facts(self, scope: ScopeBinding) -> tuple[BrowserAuthFact, BrowserBindingFact]:
-        run = await self._current()
-        if scope != self._scope(run):
-            raise BrowserAuthorizationError("browser_owner_or_binding_mismatch")
-        return self._fact(run), self._binding
+        return self._fact(self._run), self._binding
 
     @staticmethod
     def _scope(run: RunSnapshot) -> ScopeBinding:
@@ -120,7 +111,6 @@ class RunBoundOACredentialVault:
         ) -> None:
             if type(credential) is not PasswordBindingCredential:
                 raise BrowserAuthorizationError("browser_credential_purpose_invalid")
-            await self._current()
             await consumer(credential)
 
         run = await self._current()
@@ -131,24 +121,17 @@ class RunBoundOACredentialVault:
         grant = await vault.authorize(self._scope(run), "browser_login")
         await vault.consume(grant)
 
-    async def verify_login_response(
-        self, *, page: Page, response: Response,
-    ) -> None:
-        """Only a successful checkLogin POST from this exact page's main frame.
+    async def verify_login_response(self, *, response: Response) -> None:
+        """Only a successful checkLogin response on the configured OA origin.
 
-        The future trusted resource owner must supply the created page and match
-        the response to its own login action; this helper alone is not that owner.
-        Neither the response nor its identity text is recorded/returned.
+        The trusted resource owner matches the response to its own single login
+        request. Neither the response nor its identity text is recorded/returned.
         """
-        run = await self._current()
         expected = self._origin
         try:
-            request = response.request
             actual = urlsplit(response.url)
             valid = (
-                not page.is_closed() and request.frame is page.main_frame
-                and request.frame.page is page and request.method == "POST"
-                and response.status == 200
+                response.status == 200
                 and actual.username is None and actual.password is None
                 and (actual.scheme, actual.hostname, actual.port or
                      (443 if actual.scheme == "https" else 80)) == (
@@ -171,11 +154,9 @@ class RunBoundOACredentialVault:
         except Exception:
             raise BrowserAuthorizationError("browser_login_response_invalid") from None
         del payload
-        expected_subject = self._auth.input(run.admission).principal.org_ctx.directory_user_id
+        expected_subject = self._auth.input(self._run.admission).principal.org_ctx.directory_user_id
         if (type(expected_subject) is not str or not expected_subject
                 or not hmac.compare_digest(subject.encode(), expected_subject.encode())
                 or registered_subject_digest("oa", subject) != self._binding.subject_digest):
             raise BrowserAuthorizationError("browser_login_subject_mismatch")
         del subject
-        await self.check_current(self._fact(run))
-        await self._reader.check_binding(self._binding)

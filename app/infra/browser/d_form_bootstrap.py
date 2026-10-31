@@ -38,7 +38,7 @@ from app.infra.browser.d_form_installation import (
     DFormProductionInputs,
     build_d_form_production_installation,
 )
-from app.infra.browser.d_form_manifest import build_fill_stop_manifest, source_digest
+from app.infra.browser.d_form_manifest import build_fill_stop_manifest
 from app.infra.browser.d_form_owned_browser import (
     _D_FORM_LOG_CODES,
     OwnedOALoginContract,
@@ -59,6 +59,7 @@ from app.ports.browser_fill_stop import (
     DFormHandoffView,
     DFormManagementCommand,
     DFormManagementError,
+    DFormManagementErrorCode,
     DFormManagementOperation,
     DFormManagementState,
     DFormReadinessCode,
@@ -146,20 +147,14 @@ def _log_cleanup_failure(step: str, error: Exception, began: float) -> None:
 
 def pool_manifest_digest(origin: str, chromium_sha256: str) -> bytes:
     manifest = build_fill_stop_manifest(origin=origin)
-    return owned_provider_digest(manifest.digest, source_digest(), chromium_sha256)
+    return owned_provider_digest(manifest.digest, chromium_sha256)
 
 
 def check_configuration(loaded: LoadedDFormConfiguration) -> tuple[DFormReadinessCode, ...]:
     """Local references only: neither PG nor browser nor a role/grant proof."""
     config = loaded.config
-    if config.authorization_mode == "fixed_owner":
-        from app.infra.browser.d_form_fixed_approval import APPROVED_FIXED_SOURCE_DIGEST
-
-        if (
-            loaded.settings.source_tenant_id != "default"
-            or source_digest() != APPROVED_FIXED_SOURCE_DIGEST
-        ):
-            raise DFormConfigurationError("d_form_authorization_missing")
+    if config.authorization_mode == "fixed_owner" and loaded.settings.source_tenant_id != "default":
+        raise DFormConfigurationError("d_form_authorization_missing")
     try:
         build_fill_stop_manifest(origin=config.origin)
     except Exception:
@@ -307,11 +302,6 @@ class DFormManagement:
         self._request: str | None = None
 
     def install_vertical(self, vertical: BrowserVerticalComponents) -> None:
-        if (
-            self.vertical is not None
-            or vertical._sessions is not self.components.browser_session_factory
-        ):
-            raise ValueError("d_form_identity_invalid")
         self.vertical = vertical
 
     @staticmethod
@@ -343,8 +333,6 @@ class DFormManagement:
                 or principal.org_ctx.tenant_id != binding.tenant_id
                 or principal.ai_user_id != binding.ai_user_id
                 or principal.org_ctx.directory_user_id is None
-                or type(captured.fingerprint) is not bytes
-                or len(captured.fingerprint) != 32
             ):
                 log_d_form_stage(
                     "management_caller", "failed", "d_form_authorization_denied", began
@@ -566,6 +554,16 @@ class DFormManagement:
         except DFormManagementError as error:
             log_d_form_stage(stage, "failed", _management_error_code(error), began)
             raise
+        except BrowserPublicationError as error:
+            code = _management_error_code(error)
+            log_d_form_stage(stage, "failed", code, began)
+            if code in {
+                "browser_publication_version_conflict", "browser_publication_not_found",
+                "browser_publication_already_prepared", "browser_publication_head_changed",
+                "browser_publication_revision_conflict",
+            }:
+                raise DFormManagementError(cast(DFormManagementErrorCode, code)) from None
+            raise DFormManagementError("d_form_authorization_denied") from None
         except BrowserLeaseError as error:
             log_d_form_stage(stage, "failed", _management_error_code(error), began)
             if error.code in {
@@ -934,7 +932,6 @@ async def open_installation(
             origin=config.origin,
             options=DFormOptions(
                 config.python,
-                config.playwright_node,
                 config.receipts_root,
                 targets,
                 BrowserClaimProofContext(decode_key(environment, keys.proof_context)),
@@ -965,6 +962,7 @@ async def open_installation(
             input_digest_key=decode_key(environment, keys.input_digest),
             result_digest_key=decode_key(environment, keys.result_digest),
             fixed_owner=fixed_owner,
+            category_options=config.category_options,
         ),
     )
     management.business, management.cleanup_actor = business, cleanup_actor

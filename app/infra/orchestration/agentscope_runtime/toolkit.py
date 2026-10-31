@@ -1,8 +1,9 @@
 """Toolkit, control tools and middleware of one M1 turn.
 
 Business tools live in read and write groups the model activates with
-``reset_tools``; write tools are external proposals the runtime handles
-outside the framework, never executed here. The basic group holds only the
+``reset_tools``; write tools and the registered browser tool are external
+calls the runtime handles outside the framework, never executed here. A D
+collection reply uses no toolkit (one JSON extraction). The basic group holds only the
 control tools ``report_unsupported`` and ``ask_user``, each of which ends the
 turn when accepted. The middleware records what
 every model call actually exposed, ties each tool call to that call and ends
@@ -14,7 +15,9 @@ after construction and checked (uv.lock pins the version; re-check on upgrade).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+import json
+import logging
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -38,7 +41,12 @@ from agentscope.tool import (
 )
 from jinja2 import Template
 
-from app.infra.llm.agentscope_chat import ToolErrorKind, TurnLimits, halt_tool_use
+from app.infra.llm.agentscope_chat import (
+    ToolErrorKind,
+    TurnLimits,
+    current_turn_id,
+    halt_tool_use,
+)
 from app.infra.orchestration.agentscope_read_tools import (
     AgentScopeRuntimeDependencies,
     ReadToolScope,
@@ -52,6 +60,7 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     Unsupported,
     current_tool_call_id,
 )
+from app.knowledge.bounded import KNOWLEDGE_SYSTEM_PROMPT
 from app.knowledge.capability_selection import canonical_json
 from app.version_binding import prompt_version_binding
 
@@ -91,6 +100,34 @@ _RESET_COUNT_KEY = "eternalai_reset_count"
 _ALLOW = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="approved read")
 
 
+def _log_d_input_shape(call: ToolCallBlock) -> None:
+    """Fixed structural labels only, before SDK validation; no values or unknown keys."""
+    try:
+        arguments = json.loads(call.input)
+    except ValueError:
+        shape = "invalid_json"
+    else:
+        if not isinstance(arguments, dict):
+            shape = "not_object"
+        else:
+            parts = []
+            for field in ("category", "position", "description"):
+                value = arguments.get(field)
+                kind = (
+                    "missing" if field not in arguments else
+                    "non_string" if not isinstance(value, str) else
+                    "empty" if not value.strip() else
+                    "overlong" if len(value) > (100 if field == "category" else 500) else
+                    "string"
+                )
+                parts.append(f"{field}:{kind}")
+            parts.append(f"extra:{bool(set(arguments) - {'category', 'position', 'description'})}")
+            shape = ",".join(parts)
+    logging.getLogger("uvicorn.error.agentscope_runtime").info(
+        "agentscope_d_input shape=%s turn=%s", shape, current_turn_id()
+    )
+
+
 @dataclass(slots=True)
 class TurnToolkit:
     toolkit: Toolkit
@@ -108,6 +145,8 @@ async def build_turn_toolkit(
     limits: TurnLimits,
     model: ChatModelBase,
     prompt_version: str,
+    knowledge: Sequence[str] = (),
+    knowledge_digest: str | None = None,
 ) -> TurnToolkit:
     """Register this turn's catalog as tool groups plus the two control tools."""
 
@@ -119,6 +158,9 @@ async def build_turn_toolkit(
                 continue
             if tool.kind == "write":
                 tools.append(ProposeWrite(tool.name, tool.description, tool.input_schema))
+                continue
+            if tool.kind == "browser":
+                tools.append(BrowserTool(tool.name, tool.description, tool.input_schema))
                 continue
             executor = ToolExecutor(scope, deps, ledger, tool.binding, tool.name, limits)
             tools.append(
@@ -164,6 +206,8 @@ async def build_turn_toolkit(
         group_of=group_of,
         model_name=model.model,
         prompt_version=prompt_version,
+        knowledge=knowledge,
+        knowledge_digest=knowledge_digest,
     )
     return TurnToolkit(toolkit=toolkit, middleware=middleware, group_of=group_of)
 
@@ -271,6 +315,30 @@ class ProposeWrite(ToolBase):
         )
 
 
+class BrowserTool(ToolBase):
+    """External browser call: parked by the framework, checked and run by the runtime."""
+
+    is_external_tool: bool = True
+    is_read_only: bool = False
+    is_concurrency_safe: bool = False
+
+    def __init__(self, name: str, description: str, input_schema: dict[str, Any]) -> None:
+        super().__init__()
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision:
+        return PermissionDecision(
+            behavior=PermissionBehavior.ALLOW,
+            message="external browser call; admission enforced by the Gateway",
+        )
+
+
 class _ControlTool(ToolBase):
     """Code-owned control tool without side effects: no task, no budget."""
 
@@ -374,8 +442,13 @@ class M1Middleware(MiddlewareBase):
         group_of: Mapping[str, str],
         model_name: str,
         prompt_version: str,
+        knowledge: Sequence[str] = (),
+        knowledge_digest: str | None = None,
     ) -> None:
         self._catalog = catalog
+        # Bounded once per turn by the runtime; never part of AgentState.
+        self._knowledge = tuple(knowledge)
+        self._knowledge_digest = knowledge_digest
         self._ledger = ledger
         self._group_of = group_of
         self._model_name = model_name
@@ -390,10 +463,18 @@ class M1Middleware(MiddlewareBase):
             for group in self._catalog.groups
             if group.name in active and group.instructions
         ]
-        if not texts:
-            return current_prompt
-        block = "\n".join(texts)
-        return f"{current_prompt}\n<tool-instructions>\n{block}\n</tool-instructions>"
+        prompt = current_prompt
+        if texts:
+            block = "\n".join(texts)
+            prompt = f"{prompt}\n<tool-instructions>\n{block}\n</tool-instructions>"
+        if self._knowledge:
+            payload = json.dumps(
+                {"semantic_system_knowledge": list(self._knowledge)},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            prompt = f"{prompt}\n<knowledge>\n{KNOWLEDGE_SYSTEM_PROMPT}\n{payload}\n</knowledge>"
+        return prompt
 
     async def on_model_call(
         self,
@@ -431,6 +512,7 @@ class M1Middleware(MiddlewareBase):
             response_schema={
                 "tools": [[name, digest] for name, digest in digests.items()],
                 "group_rules": GROUP_RULES,
+                "knowledge_items_digest": self._knowledge_digest,
             },
         )
         ledger.calls[index] = CallSnapshot(
@@ -448,6 +530,11 @@ class M1Middleware(MiddlewareBase):
                 if isinstance(block, ToolCallBlock):
                     ledger.call_of[block.id] = index
                     names.append(block.name)
+                    if (
+                        block.name == "browser__form__fill_stop"
+                        and block.name in ledger.browser_tools
+                    ):
+                        _log_d_input_shape(block)
             ledger.response_tools[index] = tuple(names)
         return response
 
@@ -494,6 +581,10 @@ class M1Middleware(MiddlewareBase):
             ):
                 return "discovery"
         # An exposed tool whose arguments the SDK rejected.
+        logging.getLogger("uvicorn.error.agentscope_runtime").info(
+            "agentscope_write_rejected code=schema_invalid stage=framework_validation turn=%s",
+            current_turn_id(),
+        )
         ledger.record_pre_exec(tool_call_id, name, "tool_input_rejected", "schema_invalid")
         return "business"
 
@@ -509,6 +600,7 @@ __all__ = (
     "TERMINAL_TEXT",
     "M1Middleware",
     "AskUser",
+    "BrowserTool",
     "M1ResetTools",
     "ProposeWrite",
     "ReportUnsupported",

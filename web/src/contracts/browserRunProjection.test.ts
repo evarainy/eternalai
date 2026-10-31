@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { parseBrowserRunRead } from '../features/browser/api';
 import {
   compareBrowserRunUpdate,
   isParsedBrowserRunView,
@@ -93,6 +94,27 @@ const target = {
 };
 
 describe('unwired browser run projection', () => {
+  it('retains a blocked form submission receipt and rejects it as a successful fill-stop', () => {
+    const receipt = {
+      mode: 'FILL_STOP', execution_status: 'unknown', verification: 'unknown',
+      field_checks: { category: null, position: null, description: null },
+      actions_attempted: 3, actions_completed: 3, submit_actions: 1, model_requests: 0,
+      seconds: 1, error_code: 'FORM_SUBMIT_BLOCKED', cleanup_confirmed: true,
+    };
+    const result = parseBrowserRunRead({
+      run: failedUnknown(), value: null, write_preview: null, fill_stop: receipt,
+    });
+    expect(result?.fillStop?.submit_actions).toBe(1);
+    expect(result?.fillStop?.error_code).toBe('FORM_SUBMIT_BLOCKED');
+    expect(result?.fillStop?.execution_status).toBe('unknown');
+    expect(result?.fillStop?.verification).toBe('unknown');
+    expect(parseBrowserRunRead({
+      run: completed(), value: null, write_preview: null,
+      fill_stop: { ...receipt, execution_status: 'filled_stopped', verification: 'verified',
+        error_code: 'OK', field_checks: { category: true, position: true, description: true } },
+    })).toBeNull();
+  });
+
   it('accepts only a safe copy of a coherent snapshot', () => {
     const input = running();
     const view = parsed(input);

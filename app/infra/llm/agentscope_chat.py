@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from datetime import datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias
 
@@ -32,6 +33,7 @@ from pydantic import SecretStr
 
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
+    from openai.types.chat import ChatCompletion
 
 AgentScopeErrorCode: TypeAlias = Literal[
     "timeout",
@@ -115,6 +117,8 @@ _PENDING_INTERRUPTS: set[asyncio.Future[bool]] = set()
 # Absolute end of the current bounded turn (event-loop clock); tool-side waits
 # such as task closes must fit inside it.
 _TURN_DEADLINE: ContextVar[float | None] = ContextVar("eternalai_turn_deadline", default=None)
+# Configured model a browser-scoped turn must be answered by; None outside one.
+_EXPECTED_MODEL: ContextVar[str | None] = ContextVar("eternalai_expected_model", default=None)
 # One random id per turn, shared by every model, tool, stop and turn log line
 # so a single turn can be followed across loggers; carries no request data.
 _TURN_ID: ContextVar[str | None] = ContextVar("eternalai_turn_id", default=None)
@@ -132,6 +136,35 @@ class AgentScopeModelError(Exception):
         self.code: AgentScopeErrorCode = code
 
 
+class CheckedOpenAIChatModel(OpenAIChatModel):
+    """Non-streaming chat model that checks the answering model in browser-scoped turns.
+
+    Only the private ``_parse_completion_response`` hook sees the raw completion
+    and its model name (uv.lock pins the version; re-check on upgrade).
+    """
+
+    def _parse_completion_response(
+        self,
+        start_datetime: datetime,
+        response: ChatCompletion,
+        audio_format: str = "wav",
+    ) -> ChatResponse:
+        expected = _EXPECTED_MODEL.get()
+        if expected is not None and response.model != expected:
+            raise AgentScopeModelError("model_not_available")
+        return super()._parse_completion_response(start_datetime, response, audio_format)
+
+
+def expect_model(model: str | None) -> Token[str | None]:
+    """Require ``model`` to answer the calls of the current context; reset with the token."""
+
+    return _EXPECTED_MODEL.set(model)
+
+
+def reset_expected_model(token: Token[str | None]) -> None:
+    _EXPECTED_MODEL.reset(token)
+
+
 def build_chat_model(
     *,
     base_url: str,
@@ -147,7 +180,7 @@ def build_chat_model(
         raise ValueError("LLM model must be configured")
     if context_token_budget <= 0:
         raise ValueError("Context token budget must be positive")
-    return OpenAIChatModel(
+    return CheckedOpenAIChatModel(
         credential=OpenAICredential(
             api_key=SecretStr(_NO_AUTH_PLACEHOLDER),
             base_url=normalized_base_url,
@@ -449,6 +482,9 @@ class BoundedModelGuard(MiddlewareBase):
                 response = await next_handler(**input_kwargs)
         except TimeoutError:
             _reject("timeout", call_index, started)
+        except AgentScopeModelError as exc:
+            # A symbolic check of the model itself (model_not_available) stays as is.
+            _reject(exc.code, call_index, started)
         except Exception as exc:
             _reject(_provider_error_code(exc), call_index, started, type(exc).__name__)
         if not isinstance(response, ChatResponse):
@@ -558,6 +594,7 @@ __all__ = (
     "AgentScopeErrorCode",
     "AgentScopeModelError",
     "BoundedModelGuard",
+    "CheckedOpenAIChatModel",
     "ToolErrorClassifier",
     "ToolErrorKind",
     "TurnLimits",
@@ -565,12 +602,14 @@ __all__ = (
     "bounded_turn_scope",
     "build_chat_model",
     "current_turn_id",
+    "expect_model",
     "halt_tool_use",
     "log_turn_end",
     "create_bounded_agent",
     "model_call_count",
     "new_turn_deadline",
     "reserve_tool_execution",
+    "reset_expected_model",
     "reset_turn_id",
     "run_bounded_turn",
     "start_interrupt",

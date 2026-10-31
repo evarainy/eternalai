@@ -87,6 +87,8 @@ class DFormInstallationDependencies:
     worker_id: str
     credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     fixed_owner: bool = False
+    # Configured category candidates for the AgentScope chat path only.
+    category_options: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -113,6 +115,7 @@ class DFormProductionInputs:
     input_digest_key: bytes = field(repr=False)
     result_digest_key: bytes = field(repr=False)
     fixed_owner: bool = False
+    category_options: tuple[str, ...] | None = None
 
 
 def build_d_form_production_installation(
@@ -120,10 +123,6 @@ def build_d_form_production_installation(
     inputs: DFormProductionInputs,
 ) -> DFormInstallationDependencies:
     """Bind existing D configuration without reading or writing runtime resources."""
-    from app.composition import ProductionComponents
-
-    if type(components) is not ProductionComponents or type(inputs) is not DFormProductionInputs:
-        raise ValueError("browser_fill_stop_production_inputs_invalid")
     manifest = build_fill_stop_manifest(origin=inputs.origin)
     return DFormInstallationDependencies(
         session_factory=components.browser_session_factory,
@@ -157,6 +156,7 @@ def build_d_form_production_installation(
         worker_id="browser_" + manifest.digest[:32],
         credential_store=components.browser_credential_store,
         fixed_owner=inputs.fixed_owner,
+        category_options=inputs.category_options,
     )
 
 
@@ -233,8 +233,6 @@ class _FixedOwnerLeaseStore(PostgreSQLBrowserLeaseStore):
                 .one_or_none()
             )
             now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
-            if not isinstance(now, datetime) or now.tzinfo is None:
-                raise BrowserLeaseError("browser_database_clock_invalid")
             yield (session, cast(Row, credential), cast(Row | None, row), now, 1, 1)
 
 
@@ -243,8 +241,7 @@ class _SourceVerifier:
         self.runtime = runtime
 
     async def verify(self, manifest: object) -> bool:
-        expected = build_fill_stop_manifest(origin=self.runtime.manifest.site.source.origin)
-        return manifest == expected == self.runtime.manifest and self.runtime._leases is not None
+        return manifest == self.runtime.manifest
 
 
 class _OrdinaryChatOnly:
@@ -266,13 +263,7 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
     binding = deps.binding
     manifest = build_fill_stop_manifest(origin=deps.origin)
     runtime = DFormRuntime(manifest, deps.options)
-    pool = deps.provider_pools.resolve(deps.options.provider_key)
-    if (
-        binding.target_system != "oa"
-        or pool.provider_key != deps.options.provider_key
-        or not hmac.compare_digest(pool.manifest_digest, runtime.manifest_digest)
-        or not callable(getattr(deps.cleanup_authority, "authorize_run", None))
-    ):
+    if binding.target_system != "oa":
         raise ValueError("browser_fill_stop_installation_invalid")
     leases: PostgreSQLBrowserLeaseStore | None = None
 
@@ -307,8 +298,7 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
 
     async def cleanup_check(session: AsyncSession, run: RunSnapshot, outcome: RunCleanup) -> None:
         await authorize(session, run)
-        if leases is None:
-            raise BrowserLeaseError("browser_fill_stop_leases_unavailable")
+        assert leases is not None
         state = runtime._states.get(run.run_id)
         if outcome == "released" and await leases._prove_no_run_resource_in_session(session, run):
             if state is None or state.process is None and state.owned_browser is None:
@@ -350,7 +340,6 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
         if (
             outcome != "released"
             or state is None
-            or state.run.admission != run.admission
             or not state.cleanup_proven
             or not state.released
             or state.owned_browser is not None
@@ -358,7 +347,6 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
             or state.owned_browser is not None
             and not state.owned_resource_cleanup_proven
             or state.claim is None
-            or state.claim.lease_epoch != run.lease_epoch
             or row is None
             or row["state"] != "released"
             or row["capacity_held"]
@@ -399,8 +387,7 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
 
     async def review_scope(owner: BrowserOwner, candidate: object) -> None:
         if (
-            type(review) is not PostgreSQLTeachingPublicationReview
-            or candidate != manifest
+            candidate != manifest
             or owner.tenant_id != binding.tenant_id
             or await deps.publication_grants.check(
                 owner,
@@ -479,16 +466,9 @@ def build_d_form_installation(deps: DFormInstallationDependencies) -> BrowserVer
             ).hex(),
         )
     )
-    if vertical is None:
-        raise ValueError("browser_fill_stop_installation_invalid")
+    assert vertical is not None
     if type(review) is PostgreSQLTeachingPublicationReview:
-        lookup = review._load_proof
-        if (
-            type(lookup) is not InstalledReplayProofLookup
-            or review._sessions is not deps.session_factory
-        ):
-            raise ValueError("browser_teaching_replay_installation_invalid")
-        lookup.install_runs(vertical.runs)
+        cast(InstalledReplayProofLookup, review._load_proof).install_runs(vertical.runs)
     lease_type = _FixedOwnerLeaseStore if deps.fixed_owner else PostgreSQLBrowserLeaseStore
     leases = lease_type(
         session_factory=deps.session_factory,

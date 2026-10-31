@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.infra.orchestration.agentscope_read_tools import AgentScopeRuntimeDependencies
-    from app.ports.runtime import RuntimePort
+    from app.infra.orchestration.agentscope_runtime.runtime import AgentScopeRuntime
 
 
-def build_agentscope_runtime(deps: AgentScopeRuntimeDependencies) -> RuntimePort:
+def build_agentscope_runtime(deps: AgentScopeRuntimeDependencies) -> AgentScopeRuntime:
     """Build the M1 runtime; ``deps.model_factory`` is the model seam (Golden, eval)."""
 
     from app.infra.orchestration.agentscope_runtime.runtime import AgentScopeRuntime

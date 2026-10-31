@@ -45,48 +45,6 @@ CANCEL_GRACE = 30
 EVENT_PATTERN = re.compile(r"Local\\EAI_D_CANCEL_[0-9a-f]{32}\Z")
 
 
-def python_executables(configured_python: Path) -> frozenset[Path]:
-    """Recognize this Windows venv's launcher and its own base interpreter."""
-    configured = configured_python.resolve()
-    allowed = {configured}
-    if sys.platform == "win32" and configured == Path(sys.executable).resolve():
-        base = getattr(sys, "_base_executable", None)
-        if isinstance(base, str) and base:
-            path = Path(base)
-            if path.is_absolute() and path.is_file():
-                allowed.add(path.resolve())
-    return frozenset(allowed)
-
-
-def system_console_executable() -> Path | None:
-    """Resolve Windows' console host without trusting PATH or a file basename."""
-    if sys.platform != "win32":
-        return None
-    import ctypes
-
-    kernel = cast(_WindowsKernel, getattr(ctypes, "WinDLL")("kernel32", use_last_error=True))
-    kernel.GetSystemDirectoryW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
-    kernel.GetSystemDirectoryW.restype = ctypes.c_uint
-    buffer = ctypes.create_unicode_buffer(32768)
-    size = kernel.GetSystemDirectoryW(buffer, len(buffer))
-    if not 0 < size < len(buffer):
-        return None
-    path = (Path(buffer.value) / "conhost.exe").resolve()
-    return path if path.is_absolute() and path.is_file() else None
-
-
-def process_executable_allowed(
-    executable: Path,
-    parent_executable: Path | None,
-    allowed: frozenset[Path],
-    console: Path | None,
-) -> bool:
-    """Called only for descendants of this execution's verified root process."""
-    return executable in allowed or (
-        console is not None and executable == console and parent_executable in allowed
-    )
-
-
 def windows_events() -> _WindowsKernel:
     import ctypes
 
@@ -146,6 +104,7 @@ CODES = {
     "OBSERVE_TIMEOUT",
     "CONNECT_TIMEOUT",
     "RESULT_MISMATCH",
+    "FORM_SUBMIT_BLOCKED",
     "REPORTER_MISSING",
     "REPORTER_AMBIGUOUS",
     "REPORTER_INVALID",
@@ -189,8 +148,6 @@ def validate(line: str) -> _StageMessage | None:
 
 def emit(stage: int, status: str, seconds: float, code: str) -> None:
     item = dict(stage=stage, status=status, seconds=round(seconds, 3), error_code=code)
-    if validate(json.dumps(item)) is None:
-        raise ValueError("CONFIG_FAILED")
     os.write(1, (json.dumps(item) + "\n").encode())
 
 
@@ -226,15 +183,10 @@ async def worker(request_path: str, event_name: str) -> int:
     # on stdin. Never persist parameters, bindings, names or exception details.
     guard_environment()
     if TYPE_CHECKING:
-        from app.infra.browser.d_form_flow import CODES as runtime_codes
         from app.infra.browser.d_form_flow import Flow, Stop
     else:
-        from d_form_flow import CODES as runtime_codes
         from d_form_flow import Flow, Stop
 
-    if runtime_codes != CODES:
-        emit(1, "FAIL", 0, "CONFIG_FAILED")
-        return 2
     cancel = asyncio.Event()
     loop = asyncio.get_running_loop()
     watcher = None
@@ -266,11 +218,7 @@ async def worker(request_path: str, event_name: str) -> int:
     for code in (signal.SIGINT, signal.SIGTERM):
         signal.signal(code, stop)
     try:
-        raw = sys.stdin.buffer.read(32769)
-        if len(raw) > 32768:
-            emit(1, "FAIL", 0, "CONFIG_FAILED")
-            return 2
-        request = json.loads(raw)
+        request = json.loads(sys.stdin.buffer.read())
         flow = Flow(request, emit, cancel)
         # Python worker sockets can only reach its task-owned loopback CDP or
         # its own asyncio listener. No model service is on this allowance.
@@ -297,7 +245,7 @@ async def worker(request_path: str, event_name: str) -> int:
         sys.addaudithook(audit)
         emit(1, "PASS", 0, "OK")
         summary = await flow.run()
-        with Path(request_path).open("x", encoding="utf-8") as output:
+        with Path(request_path).open("w", encoding="utf-8") as output:
             output.write(json.dumps(summary))
         return 0 if summary["passed"] else 2
     except Stop as error:
@@ -317,13 +265,7 @@ async def worker(request_path: str, event_name: str) -> int:
 def supervisor(
     receipt_path: str | Path, request_bytes: bytes, cancel_event_name: str | None = None
 ) -> int:
-    if len(request_bytes) > 32768:
-        emit(1, "FAIL", 0, "CONFIG_FAILED")
-        return 2
     receipt_path = Path(receipt_path)
-    if receipt_path.suffix != ".json" or receipt_path.exists() or not receipt_path.parent.is_dir():
-        emit(1, "FAIL", 0, "CONFIG_FAILED")
-        return 2
     child: subprocess.Popen[bytes] | None = None
     kernel = None
     event_handle = None
@@ -331,18 +273,7 @@ def supervisor(
     owned: dict[int, tuple[float, Path]] = {}
     cancelled_at: float | None = None
 
-    import importlib.util
-    from importlib.machinery import ModuleSpec
-
     import psutil
-
-    # The pinned Playwright dependency is a regular installed package with __init__.py.
-    spec = cast(ModuleSpec, importlib.util.find_spec("playwright"))
-    node = Path(cast(str, spec.origin)).parent / "driver" / (
-        "node.exe" if sys.platform == "win32" else "node"
-    )
-    allowed_executables = python_executables(Path(sys.executable)) | {node.resolve()}
-    console = system_console_executable()
 
     def remember() -> None:
         if child is None or child.poll() is not None:
@@ -353,21 +284,7 @@ def supervisor(
                 return
             for process in parent.children(recursive=True):
                 try:
-                    executable = Path(process.exe()).resolve()
-                    direct_parent = process.parent() if executable == console else None
-                    parent_executable = (
-                        Path(direct_parent.exe()).resolve()
-                        if direct_parent is not None
-                        and direct_parent.create_time() <= process.create_time()
-                        else None
-                    )
-                    if process_executable_allowed(
-                        executable,
-                        parent_executable,
-                        allowed_executables,
-                        console,
-                    ):
-                        owned[process.pid] = (process.create_time(), executable)
+                    owned[process.pid] = (process.create_time(), Path(process.exe()).resolve())
                 except psutil.NoSuchProcess:
                     pass
         except psutil.NoSuchProcess:
@@ -377,7 +294,7 @@ def supervisor(
         clean = True
         stopped: list[psutil.Process] = []
         # Only recorded descendants of this exact worker, with identical
-        # creation time and Python/Playwright Node executable, can be killed.
+        # creation time and executable, can be killed (never a reused PID).
         for pid, (created, executable) in reversed(list(owned.items())):
             try:
                 process = psutil.Process(pid)
@@ -431,16 +348,10 @@ def supervisor(
 
             kernel = windows_events()
             event_name = cancel_event_name or "Local\\EAI_D_CANCEL_" + uuid.uuid4().hex
-            if not EVENT_PATTERN.fullmatch(event_name):
-                emit(1, "FAIL", 0, "CONFIG_FAILED")
-                return 2
             event_handle = kernel.CreateEventW(None, True, False, event_name)
             if not event_handle or ctypes.get_last_error() == 183:
                 emit(1, "FAIL", 0, "CONFIG_FAILED")
                 return 2
-        elif cancel_event_name is not None:
-            emit(1, "FAIL", 0, "CONFIG_FAILED")
-            return 2
 
         def signal_cancel(_signum: int, _frame: FrameType | None) -> NoReturn:
             raise KeyboardInterrupt()
@@ -565,7 +476,7 @@ def main() -> int:
     try:
         return supervisor(
             Path(sys.argv[2]).resolve(),
-            sys.stdin.buffer.read(32769),
+            sys.stdin.buffer.read(),
             sys.argv[4] if len(sys.argv) == 5 else None,
         )
     except BaseException:

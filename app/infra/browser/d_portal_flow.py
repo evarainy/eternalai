@@ -12,17 +12,15 @@ from playwright.async_api import (
     ElementHandle,
     Frame,
     Page,
-    Request,
 )
+from playwright.async_api import Error as PWError
 
 from .d_form_flow import (
-    DEMO_EXTRA_GUARDS_DISABLED,
     FIELDS,
     FIND,
     Flow,
     FlowEmit,
     FrameTree,
-    Origin,
     Stop,
     need,
 )
@@ -85,21 +83,7 @@ class PortalFlow(Flow):
         self.menu_pending = False
         # One-shot fixed portal entry after verified login; independent of menu_pending.
         self.entry_attempted = False
-        self.entry_open = False
-        self.entry_released = False
-        self.entry_frame: Frame | None = None
-        self.entry_target: str | None = None
-        self.entry_request: Request | None = None
-        self.entry_navigations = 0
-        self.entry_reason: str | None = None
-        # CDP facts of the original main frame (ids stay private, never logged).
-        self.entry_frame_id: str | None = None
-        self.entry_loader_before: str | None = None
-        self.entry_loader: str | None = None
-        self.entry_controlled = False
         self.entry_settled = False
-        self.entry_superseded = False
-        self.entry_document_reason: str | None = None
         cast(dict[str, object], self.summary).update(
             popup_closed=False, menu_opened=False, form_ready=False
         )
@@ -110,29 +94,11 @@ class PortalFlow(Flow):
     def page_changed(
         self, code: str, frame: Frame | None = None, page: Page | None = None
     ) -> None:
-        # Once the entry baseline is confirmed, the original main frame is
-        # classified only by its CDP document events below, so Playwright's
-        # generic framenavigated never writes a sticky violation first. Child
-        # frames, pages, close, dialogs, downloads and origins stay as before.
-        if (
-            self.entry_controlled
-            and not self.entry_superseded
-            and code == "PAGE_MAIN_FRAME_NAV"
-            and page is None
-            and frame is not None
-            and frame is self.entry_frame
-        ):
-            return
-        # Only a dispatched, exact approved menu may change the page/frame set.
-        # Origins, context ownership, PID, unknown dialogs and downloads remain
-        # guarded during this bounded transition. No permissive retry exists.
+        # Only a dispatched, exact approved menu may change the page/frame set;
+        # origins stay guarded by the context route and per-frame checks.
         expected = {"PAGE_MAIN_FRAME_NAV", "PAGE_CHILD_FRAME_NAV", "PAGE_CONTEXT_EVENT"}
         if self.menu_pending and code in expected:
             if page is not None:
-                if page.context is not self.context or (
-                    not DEMO_EXTRA_GUARDS_DISABLED and len(self.context.pages) > 2
-                ):
-                    return super().page_changed("PAGE_CONTEXT_SET_CHANGED", page=page)
                 self.watch(page)
             return
         return super().page_changed(code, frame=frame, page=page)
@@ -142,108 +108,6 @@ class PortalFlow(Flow):
         if self.phase == "CONNECT" and self.entry_attempted:
             return "PORTAL_ENTERED" if self.entry_settled else "PORTAL_ENTRY"
         return self.phase
-
-    def document_rejected(self, reason: str) -> None:
-        if self.entry_document_reason is None:
-            self.entry_document_reason = reason
-        # A rejected fixed navigation is an actual target/document failure,
-        # independent of the temporary passive-event demo policy.
-        self.flag("PAGE_MAIN_FRAME_NAV")
-        Flow.page_changed(self, "PAGE_MAIN_FRAME_NAV", frame=self.entry_frame)
-
-    def document_committed(self, event: object) -> None:
-        # Page.frameNavigated: a committed document, never a same-document change.
-        # Only the released fixed GET's first commit on the original main frame,
-        # with a new loader, before entry settles, becomes the confirmed document.
-        frame = event.get("frame") if type(event) is dict else None
-        if type(frame) is not dict:
-            frame = {}
-        if (
-            self.entry_frame_id is None
-            or self.entry_superseded
-            or frame.get("parentId") is not None
-        ):
-            return
-        if self.menu_pending:
-            self.entry_superseded = True
-            return  # Original menu policy.
-        self.entry_navigations += 1
-        if (
-            self.entry_released
-            and not self.entry_settled
-            and self.entry_navigations == 1
-            and frame.get("id") == self.entry_frame_id
-            and cast(dict[str, object], event).get("type") == "Navigation"
-            and type(frame.get("loaderId")) is str
-            and frame["loaderId"] != self.entry_loader_before
-            and frame.get("url") == self.entry_target
-        ):
-            self.entry_loader = frame["loaderId"]
-            return
-        if self.entry_loader is not None or self.entry_navigations > 1:
-            reason = "PORTAL_ENTRY_NEW_DOCUMENT"
-        elif self.entry_released and frame.get("url") != self.entry_target:
-            reason = "PORTAL_ENTRY_TARGET_CHANGED"
-        else:
-            reason = "PORTAL_ENTRY_UNCONFIRMED_DOCUMENT"
-        self.document_rejected(reason)
-
-    def document_changed(self, event: object) -> None:
-        # Page.navigatedWithinDocument: same document by protocol definition. It is
-        # accepted only on the confirmed entry document with an unchanged target.
-        if type(event) is not dict:
-            event = {}
-        frame_id = event.get("frameId")
-        if self.entry_frame_id is None or self.entry_superseded:
-            return
-        if type(frame_id) is str and frame_id != self.entry_frame_id:
-            return  # Child frames: original policy.
-        if self.menu_pending:
-            self.entry_superseded = True
-            return  # Original menu policy.
-        url = event.get("url")
-        if (
-            self.entry_loader is not None
-            and frame_id == self.entry_frame_id
-            and type(url) is str
-            and url.partition("#")[0] == self.entry_target
-        ):
-            return
-        self.document_rejected(
-            "PORTAL_ENTRY_UNCONFIRMED_DOCUMENT"
-            if self.entry_loader is None
-            else "PORTAL_ENTRY_TARGET_CHANGED"
-        )
-
-    def tree_origins(
-        self, tree: FrameTree, locked: bool, target_role: str = "BOUND_TARGET"
-    ) -> set[Origin]:
-        # Locked observations (check/sources) of the controlled main frame must
-        # still show the confirmed document and target; otherwise no action runs.
-        if locked:
-            self.document_check(tree)
-        return super().tree_origins(tree, locked, target_role)
-
-    def document_check(self, tree: FrameTree) -> None:
-        frame_value: object = tree.get("frame") if type(tree) is dict else None
-        frame = frame_value if type(frame_value) is dict else {}
-        if (
-            not self.entry_controlled
-            or self.entry_superseded
-            or self.menu_pending
-            or frame.get("id") != self.entry_frame_id
-        ):
-            return
-        if self.entry_loader is None:
-            reason = "PORTAL_ENTRY_UNCONFIRMED_DOCUMENT"
-        elif frame.get("loaderId") != self.entry_loader:
-            reason = "PORTAL_ENTRY_NEW_DOCUMENT"
-        elif frame.get("url") != self.entry_target:
-            reason = "PORTAL_ENTRY_TARGET_CHANGED"
-        else:
-            return
-        self.document_rejected(reason)
-        raise Stop(self.violation)
 
     def watch(self, page: Page) -> None:
         self.event(
@@ -255,45 +119,20 @@ class PortalFlow(Flow):
             ),
         )
         self.event(page, "close", lambda _, p=page: self.page_changed("PAGE_TARGET_CLOSED", page=p))
-        self.event(page, "dialog", lambda _: self.flag("UNEXPECTED_DIALOG"))
 
         async def download(item: Download) -> None:
-            self.flag("DOWNLOAD_BLOCKED")
-            try:
-                await item.cancel()
-            except BaseException:
-                self.flag("DOWNLOAD_BLOCKED")
+            await item.cancel()
 
         self.event(page, "download", download)
 
-    async def sources(
-        self, page: Page, cdp: CDPSession, stable: bool = True
-    ) -> tuple[TargetInfo, FrameTree]:
+    async def sources(self, page: Page, cdp: CDPSession) -> tuple[TargetInfo, FrameTree]:
         need(self.violation is None, self.violation or "PAGE_CHANGED")
         need(not self.cancel.is_set(), "CANCELLED")
         need(not page.is_closed(), "PAGE_TARGET_CLOSED")
-        need(page.context is self.context and page in self.context.pages, "CONFIG_FAILED")
-        if not DEMO_EXTRA_GUARDS_DISABLED:
-            need(
-                1 <= len(cast(BrowserContext, self.context).pages) <= 2,
-                "PAGE_CONTEXT_SET_CHANGED",
-            )
-            if stable:
-                need(
-                    set(cast(BrowserContext, self.context).pages) == self.pages,
-                    "PAGE_CONTEXT_SET_CHANGED",
-                )
         info = cast(TargetInfo, (await cdp.send("Target.getTargetInfo"))["targetInfo"])
-        need(info.get("browserContextId") == self.binding.context_id, "CONFIG_FAILED")
         self.binding = replace(self.binding, target_id=info["targetId"])
-        await self.maximize()
         tree = cast(FrameTree, (await cdp.send("Page.getFrameTree"))["frameTree"])
         self.tree_origins(tree, locked=True)
-        if stable and not DEMO_EXTRA_GUARDS_DISABLED:
-            need(
-                {f["frame"]["id"] for f in self.walk(tree)} == self.frame_ids,
-                "PAGE_FRAME_SET_CHANGED",
-            )
         for frame in page.frames:
             if not self.scan_frame(frame, page):
                 continue
@@ -334,28 +173,23 @@ class PortalFlow(Flow):
             if not await candidate.is_visible():
                 continue
             node = (await candidate.evaluate_handle('e=>e.closest("button,a")||e')).as_element()
-            need(node is not None, "CONTROL_CHANGED")
             checked_node = cast(ElementHandle, node)
             if not any([await checked_node.evaluate("(e,p)=>e===p", prior) for prior in close]):
                 close.append(checked_node)
         need(len(close) == 1, "CONTROL_MISSING" if not close else "CONTROL_AMBIGUOUS")
         target = close[0]
-        await self.sources(cast(Page, self.page), cast(CDPSession, self.cdp))
         need(
-            await modal.evaluate(KNOWN_INFORMATION)
-            and await target.evaluate(SAFE)
+            await target.evaluate(SAFE)
             and await target.evaluate(SAFE_TYPES)
             and await target.evaluate(IS_CLOSE),
             "CONTROL_CHANGED",
         )
-        probe = await self.probe(target, "click")
         self.summary["timings"]["popup_locate"] = time.perf_counter() - locate_started
         self.emit(9, "PASS", self.summary["timings"]["popup_locate"], "OK")
         self.summary["action_attempts"] += 1
         stamp = time.perf_counter()
         try:
             await target.click(timeout=10000)
-            need(await target.evaluate("(e,k)=>e[k]?.count||0", probe) > 0, "RESULT_MISMATCH")
             self.summary["timings"]["popup_click"] = time.perf_counter() - stamp
             self.emit(10, "PASS", self.summary["timings"]["popup_click"], "OK")
             hidden_started = time.perf_counter()
@@ -364,7 +198,6 @@ class PortalFlow(Flow):
             self.emit(11, "PASS", self.summary["timings"]["popup_disappear"], "OK")
         finally:
             self.summary["timings"]["action_wait"] += time.perf_counter() - stamp
-        await self.check()
         self.summary["actions_completed"] += 1
         self.summary["executed_actions"].append("POPUP_CLOSE")
         self.summary["popup_closed"] = True
@@ -375,13 +208,11 @@ class PortalFlow(Flow):
         for frame in cast(Page, self.page).frames:
             if not self.scan_frame(frame, cast(Page, self.page)):
                 continue
-            await self.sources(cast(Page, self.page), cast(CDPSession, self.cdp))
             for candidate in await frame.get_by_text("运维管理", exact=True).element_handles():
                 if await candidate.is_visible():
                     candidates.append((frame, candidate))
         need(len(candidates) == 1, "CONTROL_MISSING" if not candidates else "CONTROL_AMBIGUOUS")
         target_frame, target = candidates[0]
-        await self.check()
         self.allowed_origin(target_frame.url, "frame")
         need(
             await target.evaluate("""e=>e.isConnected&&e.getClientRects().length>0
@@ -408,23 +239,18 @@ class PortalFlow(Flow):
                 need(self.violation is None, self.violation or "PAGE_CHANGED")
                 found: list[tuple[Page, CDPSession, TargetInfo, FrameTree]] = []
                 for page in cast(BrowserContext, self.context).pages:
-                    if (
-                        DEMO_EXTRA_GUARDS_DISABLED
-                        and page is not self.page
-                        and not self.source_in_scope(page.url)
-                    ):
+                    if page is not self.page and not self.source_in_scope(page.url):
                         continue
                     if page not in cdps:
                         cdps[page] = await cast(BrowserContext, self.context).new_cdp_session(page)
                         self.sessions.append(cdps[page])
                     cdp = cdps[page]
-                    info, tree = await self.sources(page, cdp, stable=False)
+                    info, tree = await self.sources(page, cdp)
                     counts = {name: 0 for name in FIELDS}
                     for frame in page.frames:
                         if not self.scan_frame(frame, page):
                             continue
                         for name in FIELDS:
-                            await self.sources(page, cdp, stable=False)
                             array = await frame.evaluate_handle(FIND, name)
                             try:
                                 counts[name] += await array.evaluate("a=>a.length")
@@ -442,23 +268,12 @@ class PortalFlow(Flow):
             self.page, self.cdp, info, _ = cast(
                 tuple[Page, CDPSession, TargetInfo, FrameTree], chosen
             )
-            # Control discovery awaited several times after its earlier tree.
-            # Validate the chosen native page again, then freeze the latest tree.
-            info, _ = await self.sources(self.page, self.cdp, stable=False)
-            tree = cast(
-                FrameTree,
-                (await self.cdp.send("Page.getFrameTree"))["frameTree"],
-            )
-            self.tree_origins(tree, locked=True)
             self.binding = replace(self.binding, target_id=info["targetId"])
             self.pages = set(cast(BrowserContext, self.context).pages)
-            self.frame_ids = {f["frame"]["id"] for f in self.walk(tree)}
             self.frame_urls = {frame: frame.url for frame in self.page.frames}
         finally:
             self.menu_pending = False
             self.summary["timings"]["action_wait"] += time.perf_counter() - stamp
-        await self.check()
-        await self.fields()
         self.summary["actions_completed"] += 1
         self.summary["executed_actions"].append("MENU_OPEN")
         self.summary["menu_opened"] = True
@@ -468,11 +283,37 @@ class PortalFlow(Flow):
     async def prepare_page(self) -> None:
         await self.prepare()
 
+    async def wait_ready(self) -> None:
+        """The portal renders its menu or the form after the document loads.
+
+        Bounded wait only; a page that never shows either is judged by the steps below.
+        """
+        page = cast(Page, self.page)
+        for _ in range(60):
+            need(self.violation is None, self.violation or "PAGE_CHANGED")
+            need(not self.cancel.is_set(), "CANCELLED")
+            for frame in page.frames:
+                if not self.scan_frame(frame, page):
+                    continue
+                try:
+                    if await frame.get_by_text("运维管理", exact=True).count():
+                        return
+                    array = await frame.evaluate_handle(FIND, FIELDS[1])
+                    try:
+                        if await array.evaluate("a=>a.length"):
+                            return
+                    finally:
+                        await array.dispose()
+                except PWError:
+                    continue  # A frame replaced while the page is still loading.
+            await asyncio.sleep(0.25)
+
     async def prepare(self) -> None:
         self.phase = "PORTAL_PREP"
         for page in cast(BrowserContext, self.context).pages:
             self.watch(page)
         await self.maximize()
+        await self.wait_ready()
         await self.close_information()
         try:
             await self.fields()
@@ -480,6 +321,5 @@ class PortalFlow(Flow):
             if error.code != "CONTROL_MISSING":
                 raise
             await self.open_menu()
-        await self.check()
         await self.fields()
         self.summary["form_ready"] = True

@@ -128,6 +128,8 @@ class ScriptedModel(OpenAIChatModel):
         self.calls = 0
         # (messages, tools) as received by each call, serialized.
         self.seen: list[tuple[str, str]] = []
+        # The response_format of each call (None for agent calls).
+        self.formats: list[Any] = []
 
     async def _call_api(self, model_name: str, messages: Any, tools: Any = None,
                         tool_choice: Any = None, **kwargs: Any) -> ChatResponse:
@@ -136,6 +138,7 @@ class ScriptedModel(OpenAIChatModel):
             (json.dumps(messages, ensure_ascii=False, default=str),
              json.dumps(tools, ensure_ascii=False, default=str))
         )
+        self.formats.append(kwargs.get("response_format"))
         step = self.steps.pop(0)
         return step if isinstance(step, ChatResponse) else await step()
 
@@ -271,6 +274,7 @@ class Coordinator:
             response_builder=ResponseEnvelopeBuilder(),
         )
         self.reply: ResponseEnvelope | None = None
+        self.pending = False
 
     async def handle_confirmation_message(self, owner: ConfirmationOwner, message: str, *,
                                           client_request_id: str | None) -> ResponseEnvelope | None:
@@ -282,6 +286,9 @@ class Coordinator:
         self.actions.append(owner)
         assert self.reply is not None
         return self.reply
+
+    def has_pending(self, owner: ConfirmationOwner) -> bool:
+        return self.pending
 
     async def stage_waiting(self, proposal: WaitingProposal) -> StagedWaiting:
         self.staged.append(proposal)

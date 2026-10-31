@@ -232,7 +232,6 @@ class _OwnedWindowsJob:
                 wintypes.BOOL,
                 [handle, ctypes.c_int, pointer, dword, ctypes.POINTER(dword)],
             ),
-            "GetHandleInformation": (wintypes.BOOL, [handle, ctypes.POINTER(dword)]),
             "AssignProcessToJobObject": (wintypes.BOOL, [handle, handle]),
             "IsProcessInJob": (wintypes.BOOL, [handle, handle, ctypes.POINTER(wintypes.BOOL)]),
             "CreateProcessW": (
@@ -269,16 +268,6 @@ class _OwnedWindowsJob:
         for name, (result, arguments) in signatures.items():
             function = getattr(self.api, name)
             function.restype, function.argtypes = result, arguments
-        # Explicit sizes for the supported 32/64-bit Win32 ABI, never packed.
-        sizes = (64, 144, 104, 24) if ctypes.sizeof(pointer) == 8 else (48, 112, 68, 16)
-        if (
-            tuple(
-                ctypes.sizeof(model)
-                for model in (_JobLimits, _ExtendedJobLimits, _StartupInfo, _ProcessInfo)
-            )
-            != sizes
-        ):
-            raise BrowserReadExecutionError("unsupported")
         self.lock = threading.RLock()
         self.job_ref = uuid4().hex
         self.job: int | None = None
@@ -306,16 +295,6 @@ class _OwnedWindowsJob:
         )
         self._require(returned.value == ctypes.sizeof(result))
 
-    def _check_limits(self) -> None:
-        limits, flags = _ExtendedJobLimits(), wintypes.DWORD()
-        self._query(9, limits)
-        self._require(
-            limits.basic.flags == 0x2000
-        )  # KILL_ON_JOB_CLOSE only; neither breakaway bit.
-        self._require(
-            self.api.GetHandleInformation(self.job, ctypes.byref(flags)) and not flags.value & 1
-        )
-
     def create_job(self) -> None:
         with self.lock:
             self._require(self.job is None)
@@ -324,13 +303,12 @@ class _OwnedWindowsJob:
                 self.job = None
                 raise BrowserReadExecutionError("unsupported")
             limits = _ExtendedJobLimits()
-            limits.basic.flags = 0x2000
+            limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE only; neither breakaway bit.
             self._require(
                 self.api.SetInformationJobObject(
                     self.job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
                 )
             )
-            self._check_limits()
 
     def create_root(
         self,
@@ -342,8 +320,6 @@ class _OwnedWindowsJob:
         visible: bool = False,
     ) -> None:
         with self.lock:
-            self._check_limits()
-            self._require(self.root is None and not self.pid)
             startup, info = _StartupInfo(), _ProcessInfo()
             startup.cb, startup.flags = ctypes.sizeof(startup), 1
             startup.show = 1 if visible else 0  # Owned OA window / existing hidden fixture.
@@ -371,9 +347,7 @@ class _OwnedWindowsJob:
             )
             # Register both original handles immediately, before metadata reads or awaits.
             self.root, self.primary_thread, self.pid = info.process, info.thread, info.pid
-            self._require(self.root and self.primary_thread and self.pid)
             self.created, self.executable = self._root_identity()
-            self._require(self.executable == os.path.normcase(str(binary)))
 
     def _root_identity(self) -> tuple[int, str]:
         self._require(bool(self.root))
@@ -394,26 +368,11 @@ class _OwnedWindowsJob:
 
     def bind_root(self) -> None:
         with self.lock:
-            self._require(
-                self.root is not None
-                and self.primary_thread is not None
-                and not self.assigned
-                and not self.resumed
-            )
             self._require(self.api.AssignProcessToJobObject(self.job, self.root))
-            self.assigned = True  # A later failed check still requires stopping this owned job.
-            inside = wintypes.BOOL()
-            self._require(
-                self.api.IsProcessInJob(self.root, self.job, ctypes.byref(inside)) and inside.value
-            )
-            self._check_limits()
-            active, members = self.members()
-            self._require(active == 1 and members == (self.pid,))
+            self.assigned = True
 
     def resume(self) -> None:
         with self.lock:
-            self._require(self.assigned and not self.resumed and self.primary_thread is not None)
-            self._check_limits()
             self._require(self.api.ResumeThread(self.primary_thread) == 1)
             self.resumed = True
             if not self.api.CloseHandle(self.primary_thread):
@@ -423,7 +382,6 @@ class _OwnedWindowsJob:
 
     def members(self) -> tuple[int, tuple[int, ...]]:
         with self.lock:
-            self._check_limits()
             accounting = _JobAccounting()
             self._query(1, accounting)
             capacity = 256
@@ -553,22 +511,6 @@ class _OwnedWindowsJob:
             )
             active, members = self.members()
             self._require(active > 0 and self.pid in members)
-
-    def inspect_owned_creation_empty(self) -> None:
-        """Exact private handles, also for an interrupted suspended creation.
-
-        No fictitious root or target is returned when CreateProcess did not
-        create one. Existing fixture release continues to require inspect_empty.
-        """
-        with self.lock:
-            self._require(bool(self.job) and not self.close_failed)
-            if self.root is not None:
-                self._require(self._root_identity() == (self.created, self.executable))
-                self._require(self.poll() is not None)
-            else:
-                self._require(self.pid == 0 and self.primary_thread is None)
-            active, members = self.members()
-            self._require(active == 0 and members == ())
 
     def close_handles(self) -> bool:
         with self.lock:

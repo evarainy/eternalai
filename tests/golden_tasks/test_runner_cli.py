@@ -285,3 +285,57 @@ def test_cli_isolates_model_dump_system_exit_without_canary_echo(
     assert marker not in repr(summary)
     assert marker not in captured.out
     assert marker not in captured.err
+
+
+def test_summary_item_keys_gain_agentscope_fields_only_when_set() -> None:
+    legacy = GoldenTaskResult("GT-X", "negative", "passed", []).to_summary_item()
+    replay = GoldenTaskResult(
+        "GT-X",
+        "negative",
+        "not_applicable",
+        ["why"],
+        injection="none",
+        observed={"clause": "H4(d)", "status": "failed", "reasons": ["why"]},
+    ).to_summary_item()
+
+    assert set(legacy) == {"golden_task_id", "category", "status", "reasons"}
+    assert replay["injection"] == "none"
+    assert replay["observed"]["status"] == "failed"
+
+
+def test_agentscope_seam_fills_only_missing_input_schema() -> None:
+    from scripts.golden_task_evaluator import _build_capability_spec
+
+    raw = {"capability_id": "oa.x"}
+    declared = {
+        "capability_id": "oa.y",
+        "input_schema": {"type": "object", "properties": {"a": {}}},
+    }
+
+    assert _build_capability_spec(raw).input_schema == {}
+    assert _build_capability_spec(raw, "agentscope").input_schema == {
+        "type": "object",
+        "properties": {},
+    }
+    assert _build_capability_spec(declared, "agentscope").input_schema == declared["input_schema"]
+
+
+def test_agentscope_not_applicable_requires_completed_run(monkeypatch: Any) -> None:
+    from scripts import golden_task_evaluator as evaluator
+
+    # GT-006 is H4(d): a completed run is not_applicable and keeps its observation.
+    completed = evaluator.evaluate_golden_task("GT-006", "agentscope")
+    assert completed.status == "not_applicable"
+    assert completed.observed is not None
+    assert completed.observed["clause"] == "H4(d)"
+    assert completed.observed["status"] in {"passed", "failed"}
+
+    # A runner assertion error must not be hidden behind not_applicable.
+    async def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("runner broke")
+
+    monkeypatch.setattr(evaluator, "_run_fixture", broken)
+    errored = evaluator.evaluate_golden_task("GT-006", "agentscope")
+    assert errored.status == "failed"
+    assert errored.observed is None
+    assert "runner broke" in errored.reasons[0]
