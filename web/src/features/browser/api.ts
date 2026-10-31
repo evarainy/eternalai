@@ -118,7 +118,8 @@ function parseFillStop(value: unknown): FillStopReport | null {
 }
 
 function boundedText(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length <= maxLength;
+  // Backend limits count Unicode code points, not UTF-16 code units (an emoji is length 2 in JS).
+  return typeof value === 'string' && Array.from(value).length <= maxLength;
 }
 
 function parseHandoff(value: unknown): BrowserHandoff | null {

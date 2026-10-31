@@ -181,9 +181,12 @@ function BrowserRunMonitor({
         }
         if (currentRead.current === response && response.handoff != null
             && response.handoff.deadline !== handoffDeadline) {
-          // §9.1: once sealed, observe until handoff.deadline + 180 s; stopping is never a release.
+          // §9.1: once sealed, observe for (deadline - sealed_at) + 180 s of monotonic time. Both
+          // instants are server clock, so a fast or slow client clock cannot shorten observation.
+          // Stopping observation is never a release.
           handoffDeadline = response.handoff.deadline;
-          deadline = performance.now() + Date.parse(handoffDeadline) + 180_000 - Date.now();
+          const sealedMs = Math.max(0, Date.parse(handoffDeadline) - Date.parse(response.handoff.sealed_at));
+          deadline = performance.now() + sealedMs + 180_000;
           armDeadline();
         }
         timer = setTimeout(() => { void poll(); }, 2000);
@@ -261,6 +264,13 @@ function BrowserRunMonitor({
   const handoff = fillStopMode ? read.handoff ?? null : null;
   // §9.4: an M2 D `completed` run means "filled and stopped", not a confirmed submission.
   const fillStopHistory = fillStopMode && read.run.status === 'completed' && handoff === null;
+  // §9.1 pre-seal: "running" copy only once the window is really being filled (not while the write
+  // confirmation is pending or missing); other pre-seal failures keep the existing card.
+  const awaitingStart = handoff === null && read.run.status === 'running'
+    && (read.writePreview != null || read.run.progress?.phase === 'queued');
+  const panelShown = fillStopMode && !fillStopHistory && !awaitingStart;
+  const panelCopy = panelShown && (handoff !== null || read.run.status === 'running'
+    || read.run.status === 'cancelled');
   return (
     <div>
       {fillStopMode && read.run.progress?.phase === 'queued' && read.run.result === null
@@ -289,14 +299,14 @@ function BrowserRunMonitor({
         resultValue={read.fillStop == null ? read.value : null}
         statusLabel={fillStopHistory ? FILL_STOP_HISTORY_STATUS_LABEL : undefined}
         // A sealed run ends through the panel's "结束协助" (same endpoint), not the card button.
-        onCancel={handoff === null ? onCancel : undefined}
+        onCancel={handoff === null && !(panelShown && read.run.status === 'running') ? onCancel : undefined}
       />
-      {fillStopMode && !fillStopHistory ? (
+      {panelShown ? (
         // Sealed or pre-seal D card (§9.1); the panel decides what a null handoff shows.
         <BrowserHandoffPanel run={read.run} handoff={handoff}
           onEndAssist={() => onCancel(target.accepted.task_id, target.accepted.run_id)} />
       ) : null}
-      {handoff !== null ? null : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (
+      {panelCopy ? null : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (
         <Alert showIcon type={read.run.status === 'completed' && read.run.result?.verification === 'verified'
           && read.fillStop.verification === 'verified' ? 'success' : 'warning'}
           title={read.run.status === 'completed' && read.run.result?.verification === 'verified' && read.fillStop.verification === 'verified'
