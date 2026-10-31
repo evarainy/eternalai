@@ -976,7 +976,14 @@ class PostgreSQLBrowserRunStore:
         terminal_ok: bool = False,
         cleanup_outcome: RunCleanup | None = None,
         read_candidate: RunSnapshot | None = None,
+        latest: bool = False,
     ) -> RunSnapshot:
+        """latest: decide on the locked row instead of the caller's pre-lock revision.
+
+        Only for owner requests that carry no client revision (cancel, handoff
+        check). The worker's claim renewal bumps the revision every few seconds;
+        such a request still re-decides every business fact on the locked row.
+        """
         if action == "cleanup":
             if cleanup_outcome is None:
                 raise BrowserRunStoreError("browser_run_cleanup_invalid")
@@ -1008,7 +1015,7 @@ class PostgreSQLBrowserRunStore:
             lock=True,
         )
         if (
-            current.state_revision != expected.state_revision
+            (not latest and current.state_revision != expected.state_revision)
             or current.admission != expected.admission
             or (not terminal_ok and current.status not in _ACTIVE)
         ):
@@ -3474,7 +3481,9 @@ class PostgreSQLBrowserRunStore:
     ) -> RunSnapshot:
         async with self._transaction() as session:
             initial = await self._read_run(session, owner, task_id, run_id)
-            current = await self._locked(session, initial, "cancel", worker=False, terminal_ok=True)
+            current = await self._locked(
+                session, initial, "cancel", worker=False, terminal_ok=True, latest=True,
+            )
             if current.status not in _ACTIVE or current.cancel_requested:
                 return current
             result = await self._update(session, current, {"cancel_requested": True})
@@ -3745,6 +3754,7 @@ class PostgreSQLBrowserRunStore:
                 "handoff_check",
                 worker=False,
                 terminal_ok=True,
+                latest=True,
             )
             # Every precondition precedes the idempotent verifying return.
             record = (

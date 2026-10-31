@@ -172,6 +172,25 @@ def make_router(
             ) from None
 
     @router.post(
+        "/browser-runs/{task_id}/{run_id}/verify-result",
+        response_model=BrowserRunResponse, status_code=202,
+    )
+    async def verify_result(
+        task_id: RunIdentifier, run_id: RunIdentifier, body: BrowserCancelRequest,
+        response: Response, principal: Principal = Depends(require_principal),
+    ) -> BrowserRunResponse:
+        response.headers.update(_HEADERS)
+        bound_service, session = bind(principal, body.session_id)
+        try:
+            return await bound_service.check_handoff(principal, session, task_id, run_id)
+        except BrowserChatError as error:
+            raise HTTPException(
+                error.http_status,
+                {"code": error.code, "message": "Result check was not accepted."},
+                headers=_HEADERS,
+            ) from None
+
+    @router.post(
         "/browser-runs/{task_id}/{run_id}/decision",
         response_model=BrowserRunResponse,
     )

@@ -55,6 +55,11 @@ class BrowserChatService:
     ) -> BrowserRunResponse:
         return await self.submission.cancel(principal, bound_session, task_id, run_id)
 
+    async def check_handoff(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> BrowserRunResponse:
+        return await self.submission.check_handoff(principal, bound_session, task_id, run_id)
+
     async def decide_write(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
         decision: Literal["confirmed", "rejected"],
