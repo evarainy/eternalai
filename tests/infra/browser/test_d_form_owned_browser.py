@@ -18,21 +18,33 @@ from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
 
 def contract():
     return OwnedOALoginContract(
-        login_path="/synthetic-login", login_id="#synthetic-user",
-        password="#synthetic-password", submit="#synthetic-submit",
+        login_path="/synthetic-login",
+        login_id="#synthetic-user",
+        password="#synthetic-password",
+        submit="#synthetic-submit",
         stops={name: "#synthetic-" + name for name in ("captcha", "mfa", "sso", "warning")},
     )
 
 
 def owned(tmp_path):
     return OwnedDFormBrowser(
-        chromium=tmp_path / "chromium.exe", root=tmp_path / "runs",
-        origin="https://synthetic.invalid", contract=contract(),
+        chromium=tmp_path / "chromium.exe",
+        root=tmp_path / "runs",
+        origin="https://synthetic.invalid",
+        contract=contract(),
     )
 
 
-@pytest.mark.parametrize("path", ["//other.invalid/x", "https://other.invalid/x",
-                                  "/\\other.invalid", "/login?redirect=x", "/x\n"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "//other.invalid/x",
+        "https://other.invalid/x",
+        "/\\other.invalid",
+        "/login?redirect=x",
+        "/x\n",
+    ],
+)
 def test_login_navigation_cannot_replace_origin(path):
     with pytest.raises(ValueError, match="browser_login_contract_invalid"):
         replace(contract(), login_path=path)
@@ -58,6 +70,7 @@ def test_close_owned_terminates_own_job_and_refuses_without_closed_handles(tmp_p
                 await owner.close_owned()
         owner.job.stop_and_wait.assert_called_once()
         assert owner.owned_resource_cleanup_proven is closed
+
     asyncio.run(exercise())
 
 
@@ -68,23 +81,50 @@ def test_close_owned_without_created_job_has_nothing_to_terminate(tmp_path):
 
 
 def state_runtime(tmp_path):
-    owner = BrowserOwner(tenant_id="synthetic-tenant", user_id="synthetic-user",
-                         session_id="sid_v1.synthetic.signature")
-    binding = BrowserBindingFact(owner.tenant_id, owner.user_id, "oa", "synthetic-binding", 3,
-                                 bytes(range(32)))
-    auth = BrowserAuthFact(owner, None, bytes(range(32)),
-                           datetime.now(UTC) + timedelta(minutes=5), "synthetic-run",
-                           "verified-session-v1")
-    claim = BrowserLeaseClaim(auth, binding, 2, 1, "synthetic-holder", "synthetic-operation",
-                              "d_form_fill_stop", auth.expires_at)
-    run = SimpleNamespace(run_id="synthetic-run", task_id="synthetic-task", owner=owner,
-                          admission=object(), worker_epoch=1, lease_epoch=2, status="completed")
-    state = _State(run, binding, b"synthetic-resource",
-                   tmp_path / "receipt.json", "synthetic-event")
+    owner = BrowserOwner(
+        tenant_id="synthetic-tenant",
+        user_id="synthetic-user",
+        session_id="sid_v1.synthetic.signature",
+    )
+    binding = BrowserBindingFact(
+        owner.tenant_id, owner.user_id, "oa", "synthetic-binding", 3, bytes(range(32))
+    )
+    auth = BrowserAuthFact(
+        owner,
+        None,
+        bytes(range(32)),
+        datetime.now(UTC) + timedelta(minutes=5),
+        "synthetic-run",
+        "verified-session-v1",
+    )
+    claim = BrowserLeaseClaim(
+        auth,
+        binding,
+        2,
+        1,
+        "synthetic-holder",
+        "synthetic-operation",
+        "d_form_fill_stop",
+        auth.expires_at,
+    )
+    run = SimpleNamespace(
+        run_id="synthetic-run",
+        task_id="synthetic-task",
+        owner=owner,
+        admission=object(),
+        worker_epoch=1,
+        lease_epoch=2,
+        status="completed",
+    )
+    state = _State(
+        run, binding, b"synthetic-resource", tmp_path / "receipt.json", "synthetic-event"
+    )
     state.claim = claim
     state.owned_browser = SimpleNamespace(
-        attachment_cleanup_proven=True, owned_resource_cleanup_proven=False,
-        close_owned=AsyncMock(), closed_job_identity={"job": "synthetic-job"},
+        attachment_cleanup_proven=True,
+        owned_resource_cleanup_proven=False,
+        close_owned=AsyncMock(),
+        closed_job_identity={"job": "synthetic-job"},
     )
     runtime = object.__new__(DFormRuntime)
     runtime._states = {run.run_id: state}
@@ -105,10 +145,16 @@ def test_portal_stop_timeout_keeps_cleanup_responsibility_and_quarantines(tmp_pa
     async def exercise():
         owner = owned(tmp_path)
         owner.native = {
-            "pid": 1, "created": 1.0, "executable": "synthetic-chromium",
-            "profile": "synthetic-profile", "profile_root": "synthetic-root",
-            "port": 1, "context_id": "synthetic-context", "target_id": "synthetic-target",
-            "host": "127.0.0.1", "scheme": "https",
+            "pid": 1,
+            "created": 1.0,
+            "executable": "synthetic-chromium",
+            "profile": "synthetic-profile",
+            "profile_root": "synthetic-root",
+            "port": 1,
+            "context_id": "synthetic-context",
+            "target_id": "synthetic-target",
+            "host": "127.0.0.1",
+            "scheme": "https",
         }
         driver = SimpleNamespace(stop=AsyncMock(side_effect=TimeoutError))
 
@@ -117,9 +163,13 @@ def test_portal_stop_timeout_keeps_cleanup_responsibility_and_quarantines(tmp_pa
 
         monkeypatch.setattr(PortalFlow, "connect", connect)
         monkeypatch.setattr(PortalFlow, "prepare_page", AsyncMock())
-        monkeypatch.setattr(owner, "protect_context", AsyncMock(
-            return_value=SimpleNamespace(detach=AsyncMock()),
-        ))
+        monkeypatch.setattr(
+            owner,
+            "protect_context",
+            AsyncMock(
+                return_value=SimpleNamespace(detach=AsyncMock()),
+            ),
+        )
         monkeypatch.setattr(owner, "enter_portal_once", AsyncMock())
         with pytest.raises(BrowserReadExecutionError):
             await owner.prepare_portal(AsyncMock())
@@ -164,6 +214,7 @@ def test_attachment_exit_attempts_owned_close_but_quarantines_without_proof(tmp_
         assert state.owned_browser.close_owned.await_count == 2
         assert runtime._cleanup_authorize.await_count == 4
         assert state.owned_browser.owned_resource_cleanup_proven is False
+
     asyncio.run(exercise())
 
 
@@ -175,6 +226,7 @@ def test_explicit_close_requires_current_independent_authority_before_job_action
             await runtime.close_owned_browser(run)
         state.owned_browser.close_owned.assert_not_awaited()
         runtime._leases.cleanup.assert_not_awaited()
+
     asyncio.run(exercise())
 
 
@@ -182,20 +234,25 @@ def test_explicit_close_releases_only_after_owned_and_attachment_proof(tmp_path)
     async def exercise():
         runtime, state, run = state_runtime(tmp_path)
         order = []
+
         async def authorize(_run):
             order.append("authorize")
+
         async def close():
             order.append("close-job")
             state.owned_browser.owned_resource_cleanup_proven = True
+
         async def release(_claim, evidence):
             assert state.attachment_cleanup_proven and state.owned_resource_cleanup_proven
             assert evidence == b"synthetic-release-proof"
             order.append("release")
             return True
+
         runtime._cleanup_authorize.side_effect = authorize
         state.owned_browser.close_owned.side_effect = close
         runtime._leases.cleanup.side_effect = release
         assert await runtime.close_owned_browser(run) == "released"
         assert order == ["authorize", "close-job", "authorize", "release"]
         assert state.released and state.cleanup_proven
+
     asyncio.run(exercise())
