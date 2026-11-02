@@ -64,6 +64,8 @@ app/infra/mcp/*
 app/infra/observability/*
 !app/infra/orchestration/
 app/infra/orchestration/*
+!app/infra/orchestration/agentscope_runtime/
+app/infra/orchestration/agentscope_runtime/*
 !app/infra/organization_directory/
 app/infra/organization_directory/*
 !app/infra/persistence/
@@ -240,6 +242,7 @@ services/decision/*
 !app/infra/fixed_txt.py
 !app/infra/job_queue/__init__.py
 !app/infra/job_queue/in_memory.py
+!app/infra/llm/agentscope_chat.py
 !app/infra/llm/json_structured_output.py
 !app/infra/llm/mock_llm/mock_llm_provider.py
 !app/infra/llm/mock_structured_output/mock_structured_output_provider.py
@@ -252,6 +255,16 @@ services/decision/*
 !app/infra/observability/sanitizer.py
 !app/infra/orchestration/__init__.py
 !app/infra/orchestration/agent_adapter.py
+!app/infra/orchestration/agentscope_read_tools.py
+!app/infra/orchestration/agentscope_runtime/__init__.py
+!app/infra/orchestration/agentscope_runtime/browser_handoff.py
+!app/infra/orchestration/agentscope_runtime/catalog.py
+!app/infra/orchestration/agentscope_runtime/document_route.py
+!app/infra/orchestration/agentscope_runtime/ledger.py
+!app/infra/orchestration/agentscope_runtime/proposal.py
+!app/infra/orchestration/agentscope_runtime/runtime.py
+!app/infra/orchestration/agentscope_runtime/session.py
+!app/infra/orchestration/agentscope_runtime/toolkit.py
 !app/infra/orchestration/overview_evaluation.py
 !app/infra/organization_directory/__init__.py
 !app/infra/organization_directory/importer.py

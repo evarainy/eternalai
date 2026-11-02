@@ -101,7 +101,8 @@ FROZEN_GT_IDS = (
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
-# legacy is the required gate; agentscope is a local, non-gating replay.
+# Required CI gates both engines: agentscope (default runtime) and legacy
+# (explicit compatibility); the CLI default stays legacy.
 GoldenEngine = Literal["legacy", "agentscope"]
 GOLDEN_ENGINES: tuple[GoldenEngine, ...] = ("legacy", "agentscope")
 # The new runtime exposes no ``action`` capability (H4(d)) and has no alias

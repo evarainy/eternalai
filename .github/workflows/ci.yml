@@ -160,7 +160,13 @@ jobs:
 
       # ── Golden task regression gate ──────────────────────────────────
       # Activates the deferred CI step from P0-GT-002 §6 + P0-INFRA-007 pending actions.
-      - name: Golden tasks
+      # Both engines are gated: agentscope is the default runtime (H4 contract:
+      # 34 total, 26 scored, 8 not_applicable); legacy stays an explicit compatibility
+      # gate and is removed only when the legacy runtime is retired.
+      - name: Golden tasks (agentscope, default runtime)
+        run: uv run python scripts/run_golden_tasks.py --engine agentscope --gate
+
+      - name: Golden tasks (legacy, explicit)
         run: uv run python scripts/run_golden_tasks.py --gate
 
   frontend-checks:

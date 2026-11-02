@@ -453,6 +453,9 @@ def create_production_app(
         if components.agentscope_runtime is None:
             raise RuntimeError("runtime_engine_installation_invalid")
         runtime = components.agentscope_runtime
+    logging.getLogger("uvicorn.error.runtime").info(
+        "runtime_engine_selected engine=%s", resolved_settings.runtime_engine
+    )
     application_factory = create_app if _application_factory is None else _application_factory
     return application_factory(
         runtime=runtime,

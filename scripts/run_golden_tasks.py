@@ -53,7 +53,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--engine",
         choices=("legacy", "agentscope"),
         default="legacy",
-        help="runtime under test; agentscope replay is gated only locally, not in CI",
+        help=(
+            "runtime under test; required CI gates both agentscope (default runtime)"
+            " and legacy (explicit compatibility)"
+        ),
     )
     parser.add_argument(
         "--ids",

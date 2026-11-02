@@ -908,6 +908,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
     components = SimpleNamespace(
         validate_workflows=AsyncMock(),
         runtime=None,
+        agentscope_runtime=object(),
         admin_registry_service=None,
         leader_roster_admin_service=None,
         work_object_service=None,
@@ -1302,7 +1303,10 @@ def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db)
     client.close()
 
 
-def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, dispatch_db):
+@pytest.mark.parametrize("engine", ["agentscope", "legacy"])
+def test_production_revocation_store_reaches_all_protected_routers(
+    engine, monkeypatch, dispatch_db
+):
     from fastapi import HTTPException
 
     from app.event_loop import make_event_loop
@@ -1312,10 +1316,18 @@ def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, 
 
     db = dispatch_db
     monkeypatch.setattr("app.composition.make_async_session_factory", lambda **_kwargs: db.factory)
+    monkeypatch.setenv("RUNTIME_ENGINE", engine)
     settings = replace(
         ProductionSettings.from_environment(), csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS
     )
+    assert settings.runtime_engine == engine
     components = build_production_components(settings)
+    actual_runtime = (
+        components.agentscope_runtime
+        if settings.runtime_engine == "agentscope"
+        else components.runtime
+    )
+    assert actual_runtime is not None
     assert isinstance(components.session_revocations, PostgreSQLSessionRevocationStore)
     assert components.session_revocations._session_factory is db.factory
     safe = replace(
@@ -1364,7 +1376,7 @@ def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, 
                 "message": "hello",
                 "client_capabilities": {},
             },
-            components.runtime,
+            actual_runtime,
             "handle_user_message",
         ),
         ("GET", "/api/v1/work-objects", None, components.work_object_service, "list_for_principal"),

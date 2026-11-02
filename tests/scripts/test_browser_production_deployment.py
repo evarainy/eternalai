@@ -26,6 +26,10 @@ _DEPLOYMENT = _ROOT / "infra/docker/browser-runtime"
 _ENTRY_SOURCES = (
     "scripts/run_browser_production.py", "scripts/run_browser_registered_server.py",
     "app/main.py",  # The API role imports this only after selecting its role.
+    # The default agentscope runtime is imported inside build_production_components.
+    "app/infra/llm/agentscope_chat.py",
+    "app/infra/orchestration/agentscope_read_tools.py",
+    "app/infra/orchestration/agentscope_runtime/runtime.py",
 )
 
 
