@@ -643,7 +643,7 @@ M0 已由 PR #224 合并；2026-10-27 已批准 M1 分棒，`P2-RUNTIME-AGENTSCO
 
 ### Runtime 替换 M1 收口新增欠债与已批需求（2026-10-28）
 
-M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`，以及 M3 D 人工交接 `P2-RUNTIME-AGENTSCOPE-M3-001`、M4 Excel 与流程增量 `P2-RUNTIME-AGENTSCOPE-M4-001`、M5 集成与验收 `P2-RUNTIME-AGENTSCOPE-M5-001`；分配 ID 不等于排期。2026-10-28 已批顺序中的 R-APP、M2、M3 已完成；尚未执行部分按 [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 9 条替代，AgentScope 2.0.11 正式版替换（GA-001，PR #248）已合并，M6 默认入口与 Golden 新路径切换为当前棒，随后新功能基础、远程画面与接管、依赖业务输入的功能；M5 暂缓（部署推后），旧代码删除另行专项授权。R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
+M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回放 `P2-RUNTIME-AGENTSCOPE-M2-001`、M6 退役与默认入口切换 `P2-RUNTIME-AGENTSCOPE-M6-001`、R-APP `P2-AUTH-RENEWAL-APP-001`、R-MCP `P2-AUTH-RENEWAL-MCP-001`，以及 M3 D 人工交接 `P2-RUNTIME-AGENTSCOPE-M3-001`、M4 Excel 与流程增量 `P2-RUNTIME-AGENTSCOPE-M4-001`、M5 集成与验收 `P2-RUNTIME-AGENTSCOPE-M5-001`；分配 ID 不等于排期。2026-10-28 已批顺序中的 R-APP、M2、M3 已完成；尚未执行部分按 [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 9 条替代，AgentScope 2.0.11 正式版替换（GA-001）已合并，M6 默认入口与 Golden 新路径切换为当前棒，随后新功能基础、远程画面与接管、依赖业务输入的功能；M5 暂缓（部署推后），旧代码删除另行专项授权。R-MCP 待外部 E1 完成后开工（D5 已决，见 [DECISIONS 2026-10-28](DECISIONS.md#2026-10-28--裁决使用中会话续期确认卡账号绑定与-m1-收口)）。无归属项保持待分配。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
