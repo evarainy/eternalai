@@ -159,6 +159,22 @@ _D_FORM_LOG_CODES = frozenset(CODES) | frozenset(
         "CONTROL_PASSWORD_TYPE",
         "CDP_PORT_TIMEOUT",
         "CDP_TARGET_TIMEOUT",
+        # Fixed browser_start sub-step that raised; details go to d_form_browser_failure.
+        "BROWSER_START_DIRS",
+        "BROWSER_START_JOB_CREATE",
+        "BROWSER_START_JOB_ROOT",
+        "BROWSER_START_JOB_BIND",
+        "BROWSER_START_JOB_RESUME",
+        "BROWSER_START_PORT_FILE",
+        "BROWSER_START_DRIVER",
+        "BROWSER_START_CDP_CONNECT",
+        "BROWSER_START_CDP_CONTEXT",
+        "BROWSER_START_GUARD",
+        # Fixed reason a terminal cleanup kept the lease out of release.
+        "ATTACHMENT_PROOF_MISSING",
+        "OWNED_PROOF_MISSING",
+        "RESOURCE_REF_MISSING",
+        "LEASE_RELEASE_REJECTED",
         "AUTOMATION_STOP_FAILED",
         "JOB_HANDLE_CLOSE_FAILED",
         "PORTAL_ENTRY_HTTP",
@@ -208,6 +224,42 @@ _D_FORM_FENCE_FAILURE_TYPES = frozenset(
         "AssertionError",
     }
 )
+_D_FORM_BROWSER_FAILURE_STEPS = frozenset(
+    {
+        "dirs",
+        "job_create",
+        "job_root",
+        "job_bind",
+        "job_resume",
+        "port_file",
+        "driver",
+        "cdp_connect",
+        "cdp_context",
+        "guard",
+        "driver_stop",
+    }
+)
+_D_FORM_JOB_FAILURE_STEPS = frozenset({"job_create", "job_root", "job_bind", "job_resume"})
+# Playwright exception names carry a "playwright." prefix, apart from the builtin TimeoutError.
+_D_FORM_BROWSER_FAILURE_TYPES = _D_FORM_FENCE_FAILURE_TYPES | frozenset(
+    {
+        "FileNotFoundError",
+        "FileExistsError",
+        "PermissionError",
+        "NotADirectoryError",
+        "IsADirectoryError",
+        "UnicodeDecodeError",
+        "IndexError",
+        "KeyError",
+        "NotImplementedError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "playwright.Error",
+        "playwright.TimeoutError",
+        "playwright.TargetClosedError",
+    }
+)
 # Fixed Stop codes for the portal preparation failure diagnosis only.
 _D_FORM_PORTAL_STOP_CODES = frozenset(CODES) - {"OK"}
 # Same fixed portal suffix as the Referer in app/infra/auth/oa.py:187; it is only
@@ -254,6 +306,50 @@ def log_d_form_fence_failure(stage: str, error: BaseException, began: float) -> 
         )
     except Exception:
         pass  # A diagnostic failure must not replace the fence exception.
+
+
+def _closed_int(value: object) -> str:
+    return str(value) if type(value) is int else "none"
+
+
+def log_d_form_browser_failure(step: str, error: BaseException, began: float, job: Any) -> None:
+    """One failed browser_start sub-step: closed fields only, never text, paths or values."""
+    try:
+        last_error = "none"
+        if step in _D_FORM_JOB_FAILURE_STEPS:
+            try:
+                import ctypes
+
+                # Same thread, no await since the failing call; auxiliary only.
+                last_error = _closed_int(getattr(ctypes, "get_last_error")())
+            except Exception:
+                pass  # Not available off Windows: keep the closed fallback.
+        root_exit = "none"
+        try:
+            if job is not None and getattr(job, "resumed", False) is True:
+                status = job.poll()  # Non-blocking; None while the root still runs.
+                root_exit = "running" if status is None else _closed_int(status)
+        except Exception:
+            pass  # A closed or missing root handle keeps the other fields.
+        kind = type(error)
+        name = kind.__name__
+        if kind.__module__.split(".", 1)[0] == "playwright":
+            name = "playwright." + name
+        code: object = getattr(error, "code", None)
+        _logger.info(
+            "d_form_browser_failure step=%s exception_type=%s error_code=%s errno=%s "
+            "winerror=%s last_error=%s root_exit=%s elapsed_ms=%d",
+            step if type(step) is str and step in _D_FORM_BROWSER_FAILURE_STEPS else "unknown",
+            name if name in _D_FORM_BROWSER_FAILURE_TYPES else "UnknownException",
+            code if type(code) is str and code in _D_FORM_LOG_CODES else "error",
+            _closed_int(getattr(error, "errno", None)),
+            _closed_int(getattr(error, "winerror", None)),
+            last_error,
+            root_exit,
+            max(0, int((time.monotonic() - began) * 1000)),
+        )
+    except Exception:
+        pass  # A diagnostic failure must not replace the start exception.
 
 
 Fence = Callable[[], Awaitable[None]]
@@ -366,6 +462,8 @@ class OwnedDFormBrowser:
         self.page: Any = None
         self.native: dict[str, object] | None = None
         self.attachment_cleanup_proven = False
+        # Set synchronously before the first driver start; never cleared afterwards.
+        self.driver_start_attempted = False
         self.owned_resource_cleanup_proven = False
         self.identity_verified = False
         self.violation = False
@@ -476,126 +574,148 @@ class OwnedDFormBrowser:
 
         self._stage("browser_start")
         await fence()
-        folder = self.root / ("run-" + uuid4().hex)
-        folder.mkdir()
-        profile = folder / "profile"
-        profile.mkdir()
-        environment = {
-            k: os.environ[k] for k in ("SystemRoot", "WINDIR", "COMSPEC") if k in os.environ
-        }
-        for key, name in (
-            ("TEMP", "temp"),
-            ("TMP", "temp"),
-            ("LOCALAPPDATA", "local"),
-            ("APPDATA", "app"),
-        ):
-            destination = folder / name
-            destination.mkdir(exist_ok=True)
-            environment[key] = str(destination)
-        self.job = _OwnedWindowsJob()  # Save handle owner before native operations/awaits.
-        self.job.create_job()
-        self.job.create_root(
-            self.chromium,
-            [
-                str(self.chromium),
-                "--remote-debugging-address=127.0.0.1",
-                "--remote-debugging-port=0",
-                "--user-data-dir=" + str(profile),
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-background-networking",
-                "--disable-component-update",
-                "--disable-sync",
-                "--disable-extensions",
-                "--disable-breakpad",
-                "--disable-crash-reporter",
-                "--start-maximized",
-                "about:blank",
-            ],
-            environment,
-            folder,
-            visible=True,
-        )
-        self.job.bind_root()
-        self.job.resume()
-        # Chromium writes "<port>\n<browser path>" once its CDP endpoint is listening.
-        deadline = time.monotonic() + 25
-        active_port = profile / "DevToolsActivePort"
-        lines: list[str] = []
-        while len(lines) < 2:
-            if time.monotonic() >= deadline:
-                self._stage("browser_start", "failed", "CDP_PORT_TIMEOUT")
-                raise BrowserReadExecutionError("timeout")
-            await asyncio.sleep(0.1)
-            if active_port.is_file():
-                lines = active_port.read_text(encoding="ascii").splitlines()
-        self.port = int(lines[0])
-        self.playwright = await asyncio.wait_for(async_playwright().start(), 15)
-        # Exact browser endpoint: no HTTP discovery request, so a host HTTP proxy
-        # never sits between the driver and this loopback port.
-        self.browser = await self.playwright.chromium.connect_over_cdp(
-            "ws://127.0.0.1:" + lines[0] + lines[1],
-            timeout=10000,
-        )
-        # Replace this new Job's empty startup page with one page in a new context.
-        startup = self.browser.contexts[0].pages[0]
-        root = await self.browser.new_browser_cdp_session()
-        created = await root.send("Target.createBrowserContext", {"disposeOnDetach": False})
-        self.context_id = created["browserContextId"]
-        created = await root.send(
-            "Target.createTarget",
-            {
-                "url": "about:blank",
-                "browserContextId": self.context_id,
-                "newWindow": True,
-                "background": False,
-            },
-        )
-        self.target_id = created["targetId"]
-        await root.detach()
-        deadline = time.monotonic() + 10
-        while self.page is None:
-            for wrapper in self.browser.contexts:
-                for page in wrapper.pages:
-                    if page is startup:
-                        continue
-                    session = await wrapper.new_cdp_session(page)
-                    try:
-                        info = (await session.send("Target.getTargetInfo"))["targetInfo"]
-                    finally:
-                        await session.detach()
-                    if info.get("targetId") == self.target_id:
-                        self.page, self.context = page, wrapper
-            if self.page is None:
+        step = "dirs"
+        try:
+            folder = self.root / ("run-" + uuid4().hex)
+            folder.mkdir()
+            profile = folder / "profile"
+            profile.mkdir()
+            environment = {
+                k: os.environ[k] for k in ("SystemRoot", "WINDIR", "COMSPEC") if k in os.environ
+            }
+            for key, name in (
+                ("TEMP", "temp"),
+                ("TMP", "temp"),
+                ("LOCALAPPDATA", "local"),
+                ("APPDATA", "app"),
+            ):
+                destination = folder / name
+                destination.mkdir(exist_ok=True)
+                environment[key] = str(destination)
+            step = "job_create"
+            self.job = _OwnedWindowsJob()  # Save handle owner before native operations/awaits.
+            self.job.create_job()
+            step = "job_root"
+            self.job.create_root(
+                self.chromium,
+                [
+                    str(self.chromium),
+                    "--remote-debugging-address=127.0.0.1",
+                    "--remote-debugging-port=0",
+                    "--user-data-dir=" + str(profile),
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-sync",
+                    "--disable-extensions",
+                    "--disable-breakpad",
+                    "--disable-crash-reporter",
+                    "--start-maximized",
+                    "about:blank",
+                ],
+                environment,
+                folder,
+                visible=True,
+            )
+            step = "job_bind"
+            self.job.bind_root()
+            step = "job_resume"
+            self.job.resume()
+            step = "port_file"
+            # Chromium writes "<port>\n<browser path>" once its CDP endpoint is listening.
+            deadline = time.monotonic() + 25
+            active_port = profile / "DevToolsActivePort"
+            lines: list[str] = []
+            while len(lines) < 2:
                 if time.monotonic() >= deadline:
-                    self._stage("browser_start", "failed", "CDP_TARGET_TIMEOUT")
+                    self._stage("browser_start", "failed", "CDP_PORT_TIMEOUT")
                     raise BrowserReadExecutionError("timeout")
                 await asyncio.sleep(0.1)
-        await startup.close()
-        protected = await self.protect_context(self.browser, self.context)
-        await protected.detach()
-        host = urlsplit(self.origin).hostname
+                if active_port.is_file():
+                    lines = active_port.read_text(encoding="ascii").splitlines()
+            self.port = int(lines[0])
+            step = "driver"
+            # Same synchronous step, no await between: from here only a real stop
+            # of this driver may prove the attachment gone again.
+            self.driver_start_attempted = True
+            self.attachment_cleanup_proven = False
+            self.playwright = await asyncio.wait_for(async_playwright().start(), 15)
+            step = "cdp_connect"
+            # Exact browser endpoint: no HTTP discovery request, so a host HTTP proxy
+            # never sits between the driver and this loopback port.
+            self.browser = await self.playwright.chromium.connect_over_cdp(
+                "ws://127.0.0.1:" + lines[0] + lines[1],
+                timeout=10000,
+            )
+            step = "cdp_context"
+            # Replace this new Job's empty startup page with one page in a new context.
+            startup = self.browser.contexts[0].pages[0]
+            root = await self.browser.new_browser_cdp_session()
+            created = await root.send("Target.createBrowserContext", {"disposeOnDetach": False})
+            self.context_id = created["browserContextId"]
+            created = await root.send(
+                "Target.createTarget",
+                {
+                    "url": "about:blank",
+                    "browserContextId": self.context_id,
+                    "newWindow": True,
+                    "background": False,
+                },
+            )
+            self.target_id = created["targetId"]
+            await root.detach()
+            deadline = time.monotonic() + 10
+            while self.page is None:
+                for wrapper in self.browser.contexts:
+                    for page in wrapper.pages:
+                        if page is startup:
+                            continue
+                        session = await wrapper.new_cdp_session(page)
+                        try:
+                            info = (await session.send("Target.getTargetInfo"))["targetInfo"]
+                        finally:
+                            await session.detach()
+                        if info.get("targetId") == self.target_id:
+                            self.page, self.context = page, wrapper
+                if self.page is None:
+                    if time.monotonic() >= deadline:
+                        self._stage("browser_start", "failed", "CDP_TARGET_TIMEOUT")
+                        raise BrowserReadExecutionError("timeout")
+                    await asyncio.sleep(0.1)
+            await startup.close()
+            step = "guard"
+            protected = await self.protect_context(self.browser, self.context)
+            await protected.detach()
+            host = urlsplit(self.origin).hostname
 
-        async def route(item: Any) -> None:
-            # Only the configured OA host (baseline 4); its own requests pass unchanged.
-            request = item.request
-            if urlsplit(request.url).hostname == host:
-                await item.continue_()
-                return
-            if request.is_navigation_request() and request.frame is self.page.main_frame:
-                # Leaving the OA site, not a blocked resource of an OA page.
-                if not self.violation:
-                    log_d_form_stage(
-                        self.current_stage, "failed", "ROUTE_ORIGIN_DENIED", self.began
-                    )
-                self._mark_violation("VIOLATION_FOREIGN_NAVIGATION")
-            await item.abort()
+            async def route(item: Any) -> None:
+                # Only the configured OA host (baseline 4); its own requests pass unchanged.
+                request = item.request
+                if urlsplit(request.url).hostname == host:
+                    await item.continue_()
+                    return
+                if request.is_navigation_request() and request.frame is self.page.main_frame:
+                    # Leaving the OA site, not a blocked resource of an OA page.
+                    if not self.violation:
+                        log_d_form_stage(
+                            self.current_stage, "failed", "ROUTE_ORIGIN_DENIED", self.began
+                        )
+                    self._mark_violation("VIOLATION_FOREIGN_NAVIGATION")
+                await item.abort()
 
-        async def websocket(item: Any) -> None:
-            await item.close()  # Context routes do not cover WebSockets; none is opened.
+            async def websocket(item: Any) -> None:
+                await item.close()  # Context routes do not cover WebSockets; none is opened.
 
-        await self.context.route("**/*", route)
-        await self.context.route_web_socket("**/*", websocket)
+            await self.context.route("**/*", route)
+            await self.context.route_web_socket("**/*", websocket)
+        except Exception as error:
+            log_d_form_browser_failure(step, error, self.began, self.job)
+            try:
+                self._stage("browser_start", "failed", "BROWSER_START_" + step.upper())
+            except Exception:
+                pass  # A diagnostic failure must not replace the start exception.
+            raise
         self._stage("browser_start", "success")
         self._stage("page")
         try:
@@ -820,9 +940,13 @@ class OwnedDFormBrowser:
                     # Route callbacks still in flight must not touch a closing target.
                     await self.context.unroute_all(behavior="ignoreErrors")
                 await asyncio.wait_for(self.playwright.stop(), 10)
-            except Exception:
+            except Exception as error:
+                log_d_form_browser_failure("driver_stop", error, self.began, self.job)
                 return  # Attachment state unknown: the caller quarantines the lease.
             self.playwright = None
+            self.attachment_cleanup_proven = True
+        if self.portal is None and self.playwright is None and not self.driver_start_attempted:
+            # No driver start was ever attempted and no portal exists: nothing attached.
             self.attachment_cleanup_proven = True
 
     async def close_owned(self) -> None:

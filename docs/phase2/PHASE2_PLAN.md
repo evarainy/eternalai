@@ -692,6 +692,15 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 根进程存活时用户关窗不被识别 | 交接期间用户手动关闭 OA 窗口后，若 Chrome 根进程仍存活，系统不会据此终结交接，等到时限；根进程退出则按设计数秒内终结。哪种情况属实取决于 H6，未实测 | 雨爷补做真实验收 H6（见下一行） | 待分配（视 H6 结果） | H6 实测后：根进程退出则关闭本行；根进程存活则增加关窗识别，或裁决接受等到时限 | 设计 §12.3 H6、附 A 推断②、§13.1 ⑤；[DECISIONS 2026-11-01](DECISIONS.md#2026-11-01--裁决m3-d-人工交接合同受限终结与先合并后验收) |
 | M3 真实验收未做；旧路径（legacy 默认入口）D 完成语义已改为人工交接，真实环境未验收 | 雨爷 2026-11-01 同意“审核全过就先合并”，设计 §12.3 的真实验收未做：H1–H6、H8、H9 与最后做的 H7 均待补，其中 A1 已授权雨爷本人提交一次测试单、确认可撤回并自行撤回，A4 由雨爷本人注销；H7 实际重启后端及 A6 开发库租约人工恢复仍须执行时另行授权。M3 同时改变了默认入口旧路径的 D 完成语义：填写核验通过后不再 completed，改为保留窗口并进入人工交接，由用户在 OA 核对并亲自提交，“结束协助”关闭；首版验证 run（持久化计划 `initial_validation`）仍按 M2 填写核验即 completed 并关窗，actors 首版审查与激活链只有合成与静态证据。上述行为在真实环境尚未验收。前端展示文案、聊天前置、受限终结均只有合成与静态证据。合并前已完成新上下文自审修复、合成环境独立 Monitor 三轮 PASS 与跨模型最终静态审核 PASS（证据留 PR）；真实 OA、真实提交（A1）、注销（A4）、重启（H7）及 actors 首版 validate→review→confirm→activate 管理全链仍未实测，待雨爷回来补做 | 雨爷回来补做真实验收 | 待雨爷验收（无新 task_id）；发现问题另开修复棒，task_id 待分配 | H1–H9 逐项取得脱敏证据，其中 H10 时限用 Monitor 临时缩短常量取证并标“非真实环境”；取不到的项保持未实测并说明缺项 | 设计 §12.3、§12.4、§13.2 Q3；PR #244 验证结果；仓库外 `controller-dispatch/opus_m3_impl1.out.md`、`opus_m3_impl2.out.md`、`opus_m3_impl3.out.md`、`opus_m3_fix_s12.out.md`、`opus_m3_fix_s5.out.md`、`opus_m3_impl4.out.md`、`sonnet_m3_s6b.out.md`；[DECISIONS 2026-11-01](DECISIONS.md#2026-11-01--裁决m3-d-人工交接合同受限终结与先合并后验收) |
 
+### D 启动失败清理修复新增欠债（2026-11-02）
+
+`P2-D-START-CLEANUP-FIX-001`（PR #246，候选未合并）期间登记；计划为仓库外 `runtime-agentscope-20261021/DFIX_PLAN.md`（含评审处置）。本节不关闭既有欠债：M3「重启后 D 资源/租约回收（Q5 b）」与「D 门户阶段日志不区分子步骤」原行保持不变。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| D browser_start 约 526ms 失败的根因未定 | 2026-11-02 05:04Z 开发环境一次 D 报修在 browser_start 阶段失败，原日志只有 `error`，RCA 结论 INCONCLUSIVE；本棒只增加子步骤封闭诊断，不提前修推断原因 | 无 | 待分配 | 再次发生时依靠 `d_form_browser_failure` 日志定位到具体子步骤并定点修复，或由雨爷裁决接受 | 仓库外 `runtime-agentscope-20261021/controller-dispatch/astra_h7_browser_start_rca.out.md`；PR #246 |
+| driver 启动中失败及原生关闭证明缺失时仍 quarantine，需要人工恢复 | `async_playwright().start()` 抛错或超时时，半启动的 driver 子进程没有句柄可证明其退出，附件证明保持 false，租约 quarantine（Chromium Job 仍由 `close_owned` 终止）；driver 启动前失败只在原生资源关闭证明也成立时才释放，Job 对象已建但句柄创建失败等情形取不到该证明，同样不释放；本棒不扩大原生清理修改范围 | 无 | 待分配 | 能证明 driver 子进程退出、以及空 Job 句柄时原生关闭证明的方案落地，或由雨爷裁决接受 | `app/infra/browser/d_form_owned_browser.py::OwnedDFormBrowser.stop_automation`；`app/infra/browser/d_windows_query.py::_OwnedWindowsJob.create_job`；仓库外 `DFIX_PLAN.md` §2 与评审处置；PR #246 |
+
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
 `P2-AUTH-RENEWAL-APP-001` 合并时登记；方案为仓库外 `RAPP_PLAN_v1.3.md`，验证与评审证据留 PR #241。
