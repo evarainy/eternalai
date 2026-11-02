@@ -120,7 +120,7 @@ explicitly names a future dedicated allowlist file.
 | python | sqlalchemy | >=2.0,<3.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (SQLAlchemy backend baseline) |
 | python | psycopg | >=3.1,<4.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-004A / P0-INFRA-004 database baseline runtime driver |
 | python | asyncpg | ==0.32.0 | backend-runtime | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 controller-relayed authorization for asyncpg + Proactor compatibility and exact dependency metadata scope |
-| python | agentscope | ==2.0.11.dev0 (source archive of commit 6c60853f4237dbc237803cdee2fb96a27a6a0611, sha256 af3fc9d4413acdbbd5744909702230e301461454c15c4b0844625718cf6130eb, pinned by uv.lock) | production | public_source_archive_development_only; no approved offline cache | P2-RUNTIME-AGENTSCOPE-M0-001; 雨爷 2026-10-21 approved Runtime replacement plan v1.3 M0 (in-process SDK, infra-only types); production-transitive inventory below |
+| python | agentscope | ==2.0.11 (PyPI release 2026-10-27, wheel sha256 9b602aebc76d349425193469f2c4dd413d2bff837a4d22b27cac57653349877a, pinned by uv.lock) | production | public_registry_development_only; no approved offline cache | P2-RUNTIME-AGENTSCOPE-M0-001; 雨爷 2026-10-21 approved Runtime replacement plan v1.3 M0 (in-process SDK, infra-only types); P2-RUNTIME-AGENTSCOPE-GA-001: 雨爷 2026-11-02 DECISIONS 裁决第 5、9 条 replaced the pinned source archive with the 2.0.11 release; production-transitive inventory below |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
@@ -173,7 +173,7 @@ installed because the SDK requires them; installation does not enable them.
 | anthropic | 1.17.0 | MIT | new |
 | bidict | 0.24.1 | MPL-2.0 | new |
 | cached-property | 2.0.1 | BSD | new |
-| certifi | 2026.4.22 | MPL-2.0 | already locked; now production |
+| certifi | 2026.10.23 | MPL-2.0 | already locked; now production; raised from 2026.4.22 by agentscope 2.0.11 (certifi>=2026.10.19) |
 | charset-normalizer | 3.5.2 | MIT | new |
 | dashscope | 1.27.8 | Apache-2.0 | new |
 | docstring-parser | 0.18.0 | MIT | new |
