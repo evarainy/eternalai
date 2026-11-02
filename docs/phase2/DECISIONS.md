@@ -3303,7 +3303,7 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
    - (e) GT-014 别名选择器无承接：新路径不新增生产别名解析器（别名选择属旧 IntentRouter 行为）。GT-014 在新路径回放中合同不适用、单列报告。
    - (f) GT-009、GT-015～024 fixture 缺输入 schema：不改 fixture；新路径回放接缝仅在回放进程内，为未声明 `input_schema` 的 fixture 能力补一个空对象 schema，不写入 fixture 文件、不进生产目录，生产目录对缺 schema 仍失败关闭。M1B 一次性诊断：补空对象 schema 后这 11 题中 GT-023、GT-024 全部断言通过，其余 9 题（非确认类）主判据通过，注入配对未跑；M2 回放须补跑注入配对并披露。
    - 汇总：新路径正式回放的分母为 26 题（34 减去 (d)(e) 的 8 题）；8 题合同不适用，单列报告，仍由旧路径 required Golden 覆盖，旧路径退役（M6）前重新评估是否在新路径补等价回归。因本条改变新路径回放运行规则，M2 须按同一版本包全量 34 题回放，并披露各类题的处理与影响（沿用第 4 条“判卷契约或运行选择规则变更须全量回放并披露影响”）。
-7. **后继排序（雨爷 2026-10-28 批准，经 Astra high 评审调整，2026-10-28）**：依据仓库外总体方案 `PLAN.md` §11 工作包表与 `ORDER_REVIEW_astra.md`（AGREE_WITH_CHANGES，技术调整已采纳，雨爷授权“没问题就推进”）。这是推荐顺序，不是全串行的技术硬依赖。
+7. **后继排序（雨爷 2026-10-28 批准，经 Astra high 评审调整，2026-10-28）**：依据仓库外总体方案 `PLAN.md` §11 工作包表与 `ORDER_REVIEW_astra.md`（AGREE_WITH_CHANGES，技术调整已采纳，雨爷授权“没问题就推进”）。这是当时的推荐顺序，不是全串行的技术硬依赖；尚未执行部分已由 [2026-11-02 裁决](#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 9 条替代，以下保留历史决策语境。
    - **主线顺序**：R-APP `P2-AUTH-RENEWAL-APP-001` → M2 `P2-RUNTIME-AGENTSCOPE-M2-001`（原功能完整迁移与新路径 Golden 正式回放）→ M3 `P2-RUNTIME-AGENTSCOPE-M3-001`（D 人工交接）→ M4 `P2-RUNTIME-AGENTSCOPE-M4-001`（Excel 与流程增量）→ M6 `P2-RUNTIME-AGENTSCOPE-M6-001` 代码与退役准备 → M5 `P2-RUNTIME-AGENTSCOPE-M5-001`（集成与最终候选验收）→ M6 实际切换 → 聊天页模型下拉框与步骤小字。
    - **调整一，M3 合同前移**：在 M2 浏览器接线之前，先固定 M3 的状态转换、DB CHECK 约束、卡片映射和自动化证据封存合同；不要求整个 M3 先完成。
    - **调整二，M6 切换准备前移**：包括确认协调器从旧 RuntimeImpl 提取、8 题合同不适用的退役再评估；这部分纳入 M5 的最终候选，否则 M5 之后再改代码须补做相应验收。旧代码删除另需授权。
@@ -3340,6 +3340,40 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 7. **离开期间当次授权（2026-11-01）**：雨爷原话“我要离开一段时间 后面的工作你自己继续推进 技术问题你与astra商量就可以决定 红线与架构变更才找我确认，合并的权限现在就给你了。”本次授权用于推进 M3 及合并 PR #244，仍须最终候选满足约定审核与 required checks；不包括删除、schema、凭据等未单独授权的红线动作，不扩为长期自主合并或技术裁决规则。
 8. **首版验证运行适用范围澄清（2026-11-01，Astra `DECISION: FIX`）**：`M3_DESIGN.md::§15` 补明只有已激活发布的业务 run 进入人工交接；可信首版验证 run 由已持久化、MAC 绑定的 `app/browser_skill/models.py::TeachingPlan.purpose == initial_validation` 判定，保留 M2“填写核验通过即 completed 并关窗”，只证明填写，不证明业务提交。分流不用 prepared 状态、HTTP 参数、配置模式或管理员身份；坏计划报错不回退，初验不写 handoff seal，既有授权复核与初验证明要求保留。不放宽业务 verified 条件或激活准入，不修复历史 run；这是恢复既有首版准入合同的技术澄清，不声称 v1.2 原文早已写明该例外。
 9. **verify-result 503 说明补列（2026-11-01，Astra `DECISION: B`）**：`M3_DESIGN.md::§8.2` 与 `app/api/v1/browser_runs.py::_VERIFY_RESULT_ERRORS` 同列 503 `browser_chat_unavailable`（浏览器业务不可用）和 `authentication_unavailable`（认证依赖故障，复用 require_session/require_principal 且未另行转换的端点共有，本端点沿用）。仅说明性补全，不新增失败条件、权限、状态码或结构，不改变实际返回；不泛称所有认证端点共有，也不把本次补列追认为 v1.2 原文。
-10. **先合并后补真实验收（2026-11-01）**：雨爷明确“审核全过就先合并”。PR #244 合并前已完成新上下文自审修复、独立 Monitor 三轮 PASS（合成环境）及跨模型最终静态审核 PASS；真实环境设计 §12.3 H 系列、actors 首版 validate→request_review→confirm→activate 管理全链均未完成验收，待雨爷回来补做，发现问题另开修复棒。H10 仅有临时缩短时限的 Monitor 证据，不等于真实等待。旧路径（legacy 默认入口）的 D 完成语义也已改成人工交接，真实环境未验收；CI、静态 PASS 与合成验证均不能核销这些义务。
+10. **先合并后补真实验收（2026-11-01）**：雨爷明确“审核全过就先合并”。PR #244 合并前已完成新上下文自审修复、独立 Monitor 三轮 PASS（合成环境）及跨模型最终静态审核 PASS；真实环境设计 §12.3 H 系列、actors 首版 validate→request_review→confirm→activate 管理全链均未完成验收，待雨爷回来补做，发现问题另开修复棒。截至 2026-11-01，H10 仅有临时缩短时限的 Monitor 证据，不等于真实等待；2026-11-02 后续真实验收结果见 [STATUS](STATUS.md) 与 [PLAN M3 新增欠债](PHASE2_PLAN.md#runtime-替换-m3-新增欠债2026-11-01)。旧路径（legacy 默认入口）的 D 完成语义也已改成人工交接，真实环境未验收；CI、静态 PASS 与合成验证均不能核销这些义务。
 
-**承接与保留项**：M3 已由 PR #244 合并，当前结果、来源日期与 M4 `P2-RUNTIME-AGENTSCOPE-M4-001` 后继指针见 [STATUS](STATUS.md)，沿用雨爷 2026-10-28 第 7 条已批顺序。[PLAN M3 新增欠债](PHASE2_PLAN.md#runtime-替换-m3-新增欠债2026-11-01) 保留六项义务；既有 D v30、OA 密码绑定降级与 R-OA 欠债 3 只按本条更新承接边界，未决 activation 保持原值并待 GOV-SYNC 后续裁决，不分配新 task_id。受限终结不等于解决 OA 绑定降级或自动重登；本条不核销 V08、重启自动释放/再次调用及真实环境验收。
+**承接与保留项**：M3 已由 PR #244 合并，当前结果与来源日期见 [STATUS](STATUS.md)；当时的 M4 后继顺序已由 [2026-11-02 裁决](#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 9 条替代。[PLAN M3 新增欠债](PHASE2_PLAN.md#runtime-替换-m3-新增欠债2026-11-01) 保留六项义务；既有 D v30、OA 密码绑定降级与 R-OA 欠债 3 只按本条更新承接边界，未决 activation 保持原值并待 GOV-SYNC 后续裁决，不分配新 task_id。受限终结不等于解决 OA 绑定降级或自动重登；本条不核销 V08、重启自动释放/再次调用及真实环境验收。
+
+
+## 2026-11-02 — 裁决：云端自动办理方向、聊天上传填表、后续技术选型定稿与开发顺序调整
+
+**来源与范围**：雨爷 2026-11-02 的原话与决定，见仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾同期记录；技术选型依据同目录下 `tech-research/SELECTION_SUMMARY.md` 的 v2、ChatGPT 交叉核对与 v3 定稿补充，及 `tech-research/RESEARCH_A_sol.md`、`tech-research/RESEARCH_B_sol.md`、`tech-research/RESEARCH_C_sol.md`、`tech-research/RESEARCH_D_sol.md`、`tech-research/RESEARCH_E1_sol.md`、`tech-research/RESEARCH_E2_sol.md`。本条只登记已决方向、选型与顺序，不搬入调研正文，不表示功能已实现或本治理棒重新验收；汇总中“仅新通用作业进队列、旧调度器不换”的早期建议由第 4 条雨爷最终决定覆盖。
+
+1. **云端自动办理**：浏览器类任务全部在服务端执行，用户离线照常继续；保留确认执行卡片，用业务语言写清要办什么、填什么值，确认后全自动执行至最终提交。真实启用自动提交仍按流程逐项授权，测试阶段仍由人手动提交。M3 人工交接转为自动提交失败、需人工核对和测试阶段的兜底，修订仓库外总体方案 `PLAN.md::§1`“AI 填写后由人亲自最终提交”的长期口径。自动提交须复用 `app/browser_skill/submission.py::BrowserSubmissionService.decide_write`、`app/infra/persistence/browser/runs.py::PostgreSQLBrowserRunStore.reserve_write_dispatch`、`app/browser_skill/scheduling.py::resolve_dispatch` 的 unknown 不重放语义；每个流程须提供提交结果查询方式与成功判据，按原身份与业务唯一键核对单号或业务后态，结果不明保持待核实、不重复提交。本条不直接启用或取消当前测试阶段的提交拦截。
+2. **远程画面**：可选，默认只看、可接管；浏览器不在用户终端运行，不迁移 OA 会话或 cookie。首选 Playwright 1.63 自带 screencast + 服务端白名单输入转发；人机互斥按“停收新动作 → 排空在途 → 独占人工 → 交还后重新观察”。需要页面外界面或现场输入法实测不过时改用 KasmVNC；Chrome 101 与麒麟输入法兼容性尚未实测。
+3. **聊天上传 Excel 自动填表**：模型只提出“列 → 已批准字段/查找键”的映射提案；确认卡绑定原件哈希、工作表、范围与映射，服务端确定性取数与写入，查不到时显式标注，允许下载部分完成结果。扩展仓库外总体方案 `PLAN.md::§7`“仅受审报表定义 ID”的入口口径，模型仍不产生行数据。首版只收 `.xlsx`，xls/WPS et 提示另存为 xlsx；LibreOffice 隔离转换作为后续兼容导入开关，样表验收后才开启。结果默认在原表副本上只填确认过的空格，含不保真对象时改交“干净结果表 + 原表”。
+4. **所有任务类型支持后台执行**：确认后持久入队，由独立 worker 执行，支持离线继续、重启续跑、取消与限并发；统一采用 Procrastinate（PostgreSQL）。浏览器 run 的业务账本、租约与围栏仍以现有 PG run 存储为准，队列只负责派发，保证单一执行所有者；重启续跑不重放 unknown 外部写入，也不把 M3 Q5 b 的资源恢复欠债当成已解决。现有进程内调度 `app/credential_polling.py::CredentialPollingScheduler`、`app/work_dispatch/recurrence.py::WorkObjectSeriesScheduler`、`app/organization_directory_sync.py::OrganizationDirectoryScheduler`、`app/browser_skill/supervisor.py::BrowserWorkerSupervisor` 按后续任务逐步迁移，迁移前修正“入队即完成”的调用假设。队列 schema 安装属于 DB schema 变更，实施时须专项授权。
+5. **技术选型定稿**：按下表承接；不整体引入任何外部平台或 agent runtime，许可登记只针对所选组件/模块，实施时保留声明与第三方来源。
+
+   | 用途 | 选定技术与接入边界 | 许可口径 |
+   |---|---|---|
+   | 新建报表 | XlsxWriter；合计公式 + 服务端缓存值 | BSD-2-Clause |
+   | 上传读取/回填、单位固定模板 | openpyxl；原表副本定点填空，按第 3 条处理保真限制 | MIT |
+   | 上传安全 | zipfile + defusedxml + 部件策略；oletools 仅旧格式深查 | Python 标准库 PSF；defusedxml PSF；oletools BSD（依赖另核） |
+   | 后台任务 | Procrastinate（PostgreSQL），按第 4 条统一派发 | MIT |
+   | 远程画面与接管 | Playwright screencast + OpenBot/Steel 小模块 | Playwright Apache-2.0；OpenBot MIT；Steel Apache-2.0 |
+   | 预教采集 | Playwright pick_locator/recorder 作采集入口；回放仍经 `app/browser_skill/teaching.py::replay_draft` | Playwright Apache-2.0 |
+   | 产物存储 | 私有卷 + PG 元数据（HMAC）；复用 `app/infra/browser/local_file_artifacts.py::LocalFileArtifacts` 思路但独立用途 | 仓内实现；PostgreSQL License |
+   | 下载 | 同源 GET + FileResponse | 复用现有 Starlette（BSD-3-Clause） |
+   | 聊天上传入口 | Ant Design X Attachments | MIT |
+   | 容器编排 | Docker SDK for Python | Apache-2.0 |
+   | 镜像 | Debian slim（API）+ Playwright 官方 noble ARM64（浏览器 worker） | 镜像内组件各按原许可保留，不以 Playwright 许可覆盖整镜像 |
+   | Runtime 与 MCP | AgentScope 换 2.0.11 正式版；MCP 保持 2.2.0 | AgentScope Apache-2.0；MCP Python SDK MIT |
+   | vLLM | 仅登记调研建议，不动现网 | Apache-2.0；建议详见仓库外选型汇总 |
+
+6. **复用优先与许可口径**：重申 `AGENTS.md` 的实现取舍，优先成熟实现与已有依赖，只做必要薄适配。MIT/Apache/BSD 代码可复用，须保留许可声明并登记第三方来源；GPL/AGPL/ELv2、附加品牌或商用条款项目，以及无明确许可的项目只借思路，不复制代码、UI、提示词或资源。具体包括 Skyvern、Kortix/Suna、Cherry Studio、Dify、Open WebUI、LobeHub、QwenPaw 专有 skill 与无明确许可的 Composio open-dot；不把同一项目局部宽松许可外推整个项目。
+7. **部署推后**：M5 目标机演示暂缓，全部开发在本机完成，服务器迁移另开任务。目标服务器口径为银河麒麟 V11（2503，内核 6.6）ARM + Docker，尚非本棒现场实测；迁移时核实 `nkvers`/`uname`、页大小（64 KiB 风险）、cgroup v2 与 `cgroup.kill`、Docker cgroup 驱动、KYSEC 与 Chromium 沙箱。每任务独立隔离资源已获雨爷同意，不由此派生服务器变更或部署授权。
+8. **产物保留**：生成文件与上传原件各保留 14 天，输入自封存、输出自发布起算；到期先拒绝下载，再幂等删除。后续考虑文件服务器；该产品生命周期不全局改写现有浏览器产物 TTL，也不授权本治理棒删除文件。
+9. **开发顺序调整**：替换 2026-10-28 第 7 条已批顺序中尚未执行部分：GOV-SYNC（本棒 `P2-GOV-SYNC-20261102`）→ AgentScope 2.0.11 正式版替换（`P2-RUNTIME-AGENTSCOPE-GA-001`）→ 默认入口切换到 agentscope 与 Golden 改走新路径（M6 代码部分 `P2-RUNTIME-AGENTSCOPE-M6-001`，旧代码退役删除另行专项授权）→ 新功能基础（后台任务、文件产物与下载、聊天上传）→ 远程画面与接管 → 依赖业务输入的功能（上传填表映射、新报表、自动提交、3～4 个预教流程）。工具命中率（零词面）改进穿插进行；尚未执行的 M1B 真实写入、R-APP V1–V8、R-OA V3–V5 真实验收随时可做，不占开发顺序，也不因前移 M6 而核销。M5 暂缓（部署推后），R-MCP 继续待外部 E1；既有 M6 承接义务仍保留，新功能细分 task_id 未明确者保持待分配。
+
+**承接与保留项**：当前后继与 2026-11-02 真实验收结果见 [STATUS](STATUS.md)；待业务输入、远程兼容性、队列 schema 授权与服务器核实项见 [PLAN 本次新增欠债](PHASE2_PLAN.md#云端自动办理与技术选型新增欠债2026-11-02)。M3 Q4 核实来源、Q5 b 重启人工恢复、actors 首版管理全链等未完成义务继续保留。PR #246 已合并并完成启动早期失败租约释放及恢复后再次报修的真实验证，不代表原启动异常根因已定，也不代表重启自动回收完成。本治理棒只登记裁决，不能视为真实自动提交、DB schema 安装、生产部署或旧代码删除的专项授权。
