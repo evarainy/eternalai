@@ -1,8 +1,10 @@
 """Synthetic exact-context and retention regressions; no real OA login proof."""
 
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -256,3 +258,112 @@ def test_explicit_close_releases_only_after_owned_and_attachment_proof(tmp_path)
         assert state.released and state.cleanup_proven
 
     asyncio.run(exercise())
+
+
+class _SyntheticJob:
+    """Stands in for the Windows Job: no process; the test writes the port file itself."""
+
+    def __init__(self):
+        self.job_ref, self.resumed, self.profile = "synthetic-job", False, None
+        self.stop_and_wait = Mock()
+
+    def create_job(self):
+        pass
+
+    def create_root(self, chromium, args, environment, folder, visible):
+        prefix = "--user-data-dir="
+        self.profile = Path(next(a for a in args if a.startswith(prefix))[len(prefix) :])
+
+    def bind_root(self):
+        pass
+
+    def resume(self):
+        self.resumed = True
+
+    def poll(self):
+        return None  # Root still running.
+
+    def close_handles(self):
+        return True
+
+
+@pytest.mark.parametrize("failed_step", ["dirs", "driver"])
+def test_browser_start_failure_releases_only_when_no_driver_start_was_attempted(
+    tmp_path, monkeypatch, caplog, failed_step
+):
+    from playwright.async_api import Error as PlaywrightError
+
+    from app.infra.browser import d_windows_query
+
+    caplog.set_level(logging.INFO, logger="uvicorn.error.d_form")
+    driver = SimpleNamespace(start=AsyncMock(side_effect=PlaywrightError("synthetic-start-text")))
+    monkeypatch.setattr(d_windows_query, "_OwnedWindowsJob", _SyntheticJob)
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: driver)
+
+    async def exercise():
+        owner = owned(tmp_path)
+        if failed_step == "dirs":
+            # The runs root does not exist: the first mkdir fails before any Job.
+            with pytest.raises(FileNotFoundError):
+                await owner.create_and_login(Mock(), AsyncMock())
+            assert owner.job is None
+            driver.start.assert_not_called()
+        else:
+            owner.root.mkdir()
+            proofs_before_start = []
+
+            async def external_stop():
+                # A concurrent stop before Chromium has written its port file.
+                while owner.job is None or not owner.job.resumed:
+                    await asyncio.sleep(0.01)
+                await owner.stop_automation()
+                proofs_before_start.append(owner.attachment_cleanup_proven)
+                (owner.job.profile / "DevToolsActivePort").write_text(
+                    "9222\n/devtools/browser/synthetic\n", encoding="ascii"
+                )
+
+            failure, stopped = await asyncio.gather(
+                owner.create_and_login(Mock(), AsyncMock()),
+                asyncio.wait_for(external_stop(), 10),
+                return_exceptions=True,
+            )
+            assert isinstance(failure, PlaywrightError) and stopped is None
+            assert proofs_before_start == [True]
+            driver.start.assert_awaited_once()
+        assert owner.driver_start_attempted is (failed_step == "driver")
+        assert owner.playwright is None and not owner.attachment_cleanup_proven
+
+        runtime, state, run = state_runtime(tmp_path)
+        state.owned_browser, state.resource_ref = owner, None
+        result = await runtime.cleanup(run)
+        # The actual Job/root close record replaces the missing resource reference.
+        assert owner.owned_resource_cleanup_proven and state.resource_ref is not None
+        if failed_step == "dirs":
+            assert result == "released" and state.released and owner.attachment_cleanup_proven
+            runtime._leases.cleanup.assert_awaited_once()
+            runtime._leases.quarantine.assert_not_awaited()
+        else:
+            assert result == "quarantined" and not state.released
+            assert not owner.attachment_cleanup_proven
+            owner.job.stop_and_wait.assert_called_once()
+            runtime._leases.cleanup.assert_not_awaited()
+            runtime._leases.quarantine.assert_awaited_once()
+
+    asyncio.run(exercise())
+    expected = {
+        "dirs": (
+            "d_form_browser_failure step=dirs exception_type=FileNotFoundError "
+            "error_code=error errno=2 ",
+            "stage=browser_start status=failed code=BROWSER_START_DIRS ",
+            "stage=cleanup_release status=success code=OK ",
+        ),
+        "driver": (
+            "d_form_browser_failure step=driver exception_type=playwright.Error "
+            "error_code=error errno=none winerror=none last_error=none root_exit=running ",
+            "stage=browser_start status=failed code=BROWSER_START_DRIVER ",
+            "stage=cleanup_release status=failed code=ATTACHMENT_PROOF_MISSING ",
+        ),
+    }[failed_step]
+    for line in expected:
+        assert line in caplog.text
+    assert str(tmp_path) not in caplog.text and "synthetic-start-text" not in caplog.text

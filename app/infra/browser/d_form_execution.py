@@ -991,7 +991,17 @@ class DFormRuntime:
             if result == "released":
                 log_d_form_stage(stage, "success", "OK", state.began)
             elif not state.cleanup_failure_logged:
-                log_d_form_stage(stage, "failed", "unavailable", state.began)
+                # First missing fact, in the order _cleanup_state requires them.
+                reason = (
+                    "ATTACHMENT_PROOF_MISSING"
+                    if not state.attachment_cleanup_proven
+                    else "OWNED_PROOF_MISSING"
+                    if not state.owned_resource_cleanup_proven
+                    else "RESOURCE_REF_MISSING"
+                    if state.resource_ref is None
+                    else "LEASE_RELEASE_REJECTED"
+                )
+                log_d_form_stage(stage, "failed", reason, state.began)
                 state.cleanup_failure_logged = True
             return result
         except Exception:
