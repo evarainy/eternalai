@@ -1,0 +1,121 @@
+"""Background worker process: ``python -m app.worker``.
+
+A separate process from the 18005 API with no HTTP listener. It loads only
+``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
+hold limit): no OA, identity, session or LLM secrets. It does not import the production
+composition, runtime, MCP or browser stacks. The loop is psycopg + Selector.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+from datetime import datetime
+
+from sqlalchemy.engine import make_url
+
+from app.background_jobs import JobExecution, build_job_kinds
+from app.config import WorkerSettings
+from app.db.session import make_async_engine, make_async_session_factory
+from app.dependency_checks import build_readonly_checks
+from app.event_loop import make_event_loop
+from app.infra.jobs.execution import BackgroundJobRunner
+from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
+from app.infra.jobs.procrastinate_app import (
+    RUNNER_CONTEXT_KEY,
+    SESSIONS_CONTEXT_KEY,
+    build_procrastinate_app,
+    psycopg_conninfo,
+)
+from app.infra.jobs.queue_sql import GENERAL_QUEUE, MAINTENANCE_QUEUE
+from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
+from app.infra.organization_directory.sync_state import PostgreSQLOrganizationDirectorySync
+from app.organization_directory_sync import OrganizationDirectorySyncService
+from app.ports.organization_directory import (
+    OrganizationDirectorySnapshot,
+    OrganizationDirectorySourcePort,
+)
+
+_LOGGER = logging.getLogger("uvicorn.error.background_jobs")
+SHUTDOWN_GRACEFUL_TIMEOUT_SECONDS = 30.0
+
+
+def psycopg_database_url(database_url: str) -> str:
+    """The worker always uses psycopg (Selector loop), whatever the API driver is."""
+
+    return make_url(database_url).set(drivername="postgresql+psycopg").render_as_string(
+        hide_password=False
+    )
+
+
+async def _no_source_reader(
+    _source: OrganizationDirectorySourcePort, _fetched_at: datetime
+) -> OrganizationDirectorySnapshot:
+    raise RuntimeError("organization_directory_source_not_installed")
+
+
+async def run_worker(settings: WorkerSettings) -> None:
+    database_url = psycopg_database_url(settings.database_url)
+    engine = make_async_engine(database_url)
+    sessions = make_async_session_factory(engine)
+    try:
+        checks = build_readonly_checks(
+            database_url=database_url,
+            redis_url=settings.redis_url,
+            timeout_seconds=settings.health_timeout_seconds,
+            directory_max_age_s=settings.organization_directory_max_age_s,
+            organization_directory=PostgreSQLOrganizationDirectory(sessions),
+            directory_sync=OrganizationDirectorySyncService(
+                store=PostgreSQLOrganizationDirectorySync(sessions),
+                reader=_no_source_reader,
+                source_opener=None,
+                max_age_s=settings.organization_directory_max_age_s,
+            ),
+        )
+        runner = BackgroundJobRunner(
+            PostgreSQLBackgroundJobLedger(sessions),
+            build_job_kinds(settings.self_check_max_hold_seconds),
+            JobExecution(
+                checks={**checks.health, **checks.diagnostics},
+                check_timeout_seconds=settings.health_timeout_seconds,
+            ),
+        )
+        app = build_procrastinate_app(psycopg_conninfo(database_url))
+        async with app.open_async():
+            _LOGGER.info(
+                "background_worker_started queues=%s,%s concurrency=%s",
+                GENERAL_QUEUE,
+                MAINTENANCE_QUEUE,
+                settings.concurrency,
+            )
+            await app.run_worker_async(
+                queues=[GENERAL_QUEUE, MAINTENANCE_QUEUE],
+                concurrency=settings.concurrency,
+                shutdown_graceful_timeout=SHUTDOWN_GRACEFUL_TIMEOUT_SECONDS,
+                delete_jobs="never",
+                # Windows: asyncio.Runner turns Ctrl+C into cancelling this task, which
+                # the official worker handles as a graceful stop.
+                install_signal_handlers=sys.platform != "win32",
+                additional_context={RUNNER_CONTEXT_KEY: runner, SESSIONS_CONTEXT_KEY: sessions},
+            )
+    finally:
+        await engine.dispose()
+        _LOGGER.info("background_worker_stopped")
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
+    settings = WorkerSettings.from_env()
+    database_url = psycopg_database_url(settings.database_url)
+    with asyncio.Runner(loop_factory=lambda: make_event_loop(database_url=database_url)) as runner:
+        try:
+            runner.run(run_worker(settings))
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            _LOGGER.info("background_worker_interrupted")
+
+
+if __name__ == "__main__":
+    main()

@@ -14,12 +14,15 @@ import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db.config import get_database_url
-from app.mcp.models import ServiceConfig
+
+if TYPE_CHECKING:
+    # Runtime import stays in _mcp_services so WorkerSettings never loads MCP modules.
+    from app.mcp.models import ServiceConfig
 
 _DEFAULT_LLM_BASE_URL = "http://34.74.11.38:8011/v1"
 _DEFAULT_LLM_MODEL = "glm-4.7"
@@ -30,6 +33,7 @@ _DEFAULT_LLM_TOP_P = 0.95
 _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
+_MAX_SELF_CHECK_HOLD_SECONDS = 600
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
 _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS = 300
 _DEFAULT_OA_USER_PROFILE_PATH = "/api/hrm/resource/getResourceBaseTitle"
@@ -352,6 +356,8 @@ class ProductionSettings:
     oa_recovery_kick_window_seconds: int = _DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS
     organization_directory_max_age_s: int = 172800
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
+    # Upper bound for the self-check ``hold_seconds`` parameter; 0 forbids holding.
+    background_self_check_max_hold_seconds: int = 0
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -530,6 +536,7 @@ class ProductionSettings:
             ),
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
+            background_self_check_max_hold_seconds=_self_check_max_hold(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
@@ -1104,7 +1111,14 @@ def _base64_key(
     return decoded
 
 
-__all__ = ("OAReadAdapterMode", "ProductionSettings", "RedisConnectionURL", "RuntimeEngine")
+__all__ = (
+    "OAReadAdapterMode",
+    "ProductionSettings",
+    "RedisConnectionURL",
+    "RuntimeEngine",
+    "WORKER_ENVIRONMENT_KEYS",
+    "WorkerSettings",
+)
 
 
 def _directory_max_age(source: Mapping[str, str]) -> int:
@@ -1114,6 +1128,59 @@ def _directory_max_age(source: Mapping[str, str]) -> int:
     if re.fullmatch(r"[1-9][0-9]{0,5}", raw) is None or not 86400 <= int(raw) <= 604800:
         raise ValueError("ORGANIZATION_DIRECTORY_MAX_AGE_S must be an integer in 86400..604800")
     return int(raw)
+
+
+def _self_check_max_hold(source: Mapping[str, str]) -> int:
+    return _integer_in_range(
+        source,
+        "BACKGROUND_SELF_CHECK_MAX_HOLD_SECONDS",
+        0,
+        minimum=0,
+        maximum=_MAX_SELF_CHECK_HOLD_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class WorkerSettings:
+    """Only the values the background worker needs; no OA, identity or LLM secrets."""
+
+    database_url: str = field(repr=False)
+    redis_url: RedisConnectionURL
+    health_timeout_seconds: float
+    organization_directory_max_age_s: int
+    concurrency: int
+    self_check_max_hold_seconds: int
+
+    @classmethod
+    def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
+        source = os.environ if environment is None else environment
+        return cls(
+            database_url=get_database_url(source),
+            redis_url=_redis_url(source),
+            health_timeout_seconds=_bounded_float(
+                source,
+                "HEALTH_TIMEOUT_S",
+                _DEFAULT_HEALTH_TIMEOUT_SECONDS,
+                minimum=0.0,
+                maximum=_MAX_HEALTH_TIMEOUT_SECONDS,
+                minimum_inclusive=False,
+            ),
+            organization_directory_max_age_s=_directory_max_age(source),
+            concurrency=_integer_in_range(
+                source, "BACKGROUND_WORKER_CONCURRENCY", 2, minimum=1, maximum=8
+            ),
+            self_check_max_hold_seconds=_self_check_max_hold(source),
+        )
+
+
+WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
+    "DATABASE_URL",
+    "REDIS_URL",
+    "HEALTH_TIMEOUT_S",
+    "ORGANIZATION_DIRECTORY_MAX_AGE_S",
+    "BACKGROUND_WORKER_CONCURRENCY",
+    "BACKGROUND_SELF_CHECK_MAX_HOLD_SECONDS",
+)
 
 
 def _directory_source_user(source: Mapping[str, str]) -> str | None:
@@ -1126,6 +1193,8 @@ def _directory_source_user(source: Mapping[str, str]) -> str | None:
 
 
 def _mcp_services(source: Mapping[str, str]) -> tuple[ServiceConfig, ...]:
+    from app.mcp.models import ServiceConfig
+
     raw = source.get("MCP_SERVICE_CONFIGS_JSON", "[]")
     try:
         if len(raw.encode()) > 65536:

@@ -121,6 +121,7 @@ explicitly names a future dedicated allowlist file.
 | python | psycopg | >=3.1,<4.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-004A / P0-INFRA-004 database baseline runtime driver |
 | python | asyncpg | ==0.32.0 | backend-runtime | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-11 controller-relayed authorization for asyncpg + Proactor compatibility and exact dependency metadata scope |
 | python | agentscope | ==2.0.11 (PyPI release 2026-10-27, wheel sha256 9b602aebc76d349425193469f2c4dd413d2bff837a4d22b27cac57653349877a, pinned by uv.lock) | production | public_registry_development_only; no approved offline cache | P2-RUNTIME-AGENTSCOPE-M0-001; 雨爷 2026-10-21 approved Runtime replacement plan v1.3 M0 (in-process SDK, infra-only types); P2-RUNTIME-AGENTSCOPE-GA-001: 雨爷 2026-11-02 DECISIONS 裁决第 5、9 条 replaced the pinned source archive with the 2.0.11 release; production-transitive inventory below |
+| python | procrastinate | ==3.10.0 (PyPI wheel sha256 949ad25b4377c30e03a9d0e053d15dfa47ef02b3f12ae8a7f3254686183c152c, pinned by uv.lock) | production | public_registry_development_only | P2-BACKGROUND-FOUNDATION-001；DECISIONS 2026-11-02 第 4、5 条，2026-11-03 第 4 条及「新功能基础总体方案批准与一次性授权」；MIT；production-transitive inventory below |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
@@ -224,6 +225,25 @@ installed because the SDK requires them; installation does not enable them.
 | websocket-client | 1.9.2 | Apache-2.0 | new |
 | wsproto | 1.3.2 | MIT | new |
 | yarl | 1.25.1 | Apache-2.0 | new |
+
+## Procrastinate production-transitive inventory
+
+Informational inventory for P2-BACKGROUND-FOUNDATION-001; it is not parsed by
+`scripts/check_dependencies.py`. These packages are the production closure added
+by the `procrastinate` row above. Versions are the exact `uv.lock` pins. The
+manifest keeps `psycopg[binary]`; `psycopg-pool` enters only as a transitive of
+`procrastinate` (`psycopg[pool]`). Every row is `public_registry_development_only`.
+
+| package | locked_version | license | lock_status |
+|---|---|---|---|
+| asgiref | 3.13.0 | BSD-3-Clause | new |
+| croniter | 6.2.4 | MIT | new |
+| psycopg-pool | 3.3.3 | LGPL-3.0-only (same license family as the already-used psycopg) | new |
+| python-dateutil | 4.0.0 | BSD-3-Clause | new |
+| attrs | 26.1.0 | MIT | already locked |
+| typing-extensions | 4.15.0 | PSF-2.0 | already locked |
+| packaging | 26.2 | Apache-2.0 OR BSD-2-Clause | already locked |
+| tzdata | 2026.2 | Apache-2.0 | already locked |
 
 ## Excluded frontend candidates
 
