@@ -157,11 +157,17 @@ function parseFillFields(value: unknown): BrowserFillFields | null {
   return { category: fields.category, position: fields.position, description: fields.description };
 }
 
+const WRITE_PREVIEW_KEYS = ['request_id', 'action_digest', 'request_digest', 'skill_id',
+  'skill_version', 'publication_digest', 'site_id', 'object_type', 'business_key_digest',
+  'parameter_set_digest', 'binding_revision', 'write_steps_digest', 'expires_at'] as const;
+
 function parseWritePreview(value: unknown): Record<string, unknown> | null {
-  const item = exactRecord(value, ['request_id', 'action_digest', 'request_digest', 'skill_id',
-    'skill_version', 'publication_digest', 'site_id', 'object_type', 'business_key_digest',
-    'parameter_set_digest', 'binding_revision', 'write_steps_digest', 'expires_at', 'fields']);
+  // `fields` is optional in the contract (default null); accept it omitted or present.
+  const withFields = typeof value === 'object' && value !== null
+    && Object.prototype.hasOwnProperty.call(value, 'fields');
+  const item = exactRecord(value, withFields ? [...WRITE_PREVIEW_KEYS, 'fields'] : WRITE_PREVIEW_KEYS);
   if (item === null || item.skill_id !== 'd_form_fill_stop' || item.object_type !== 'bound_form') return null;
+  if (!withFields) item.fields = null;
   for (const key of ['request_id', 'skill_id', 'skill_version', 'site_id', 'object_type']) {
     if (!isSafeBrowserId(item[key])) return null;
   }
