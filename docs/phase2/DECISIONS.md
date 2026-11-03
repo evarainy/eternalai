@@ -3411,3 +3411,12 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 4. **作业恢复设计要点（便于后续追溯，细节以方案 §1.3 为准）**：一条队列行最多执行一次，不使用 Procrastinate 原地 retry（含 `retry_stalled_jobs`/`retry_job`/`retry_job_by_id` 与手工 retry）；执行身份为领取时生成的 `claim_token`，停滞由账本心跳判定，恢复一律换新队列行，派发总数含首次不超过 3；首棒不接收 write 类作业。
 
 **承接与保留项**：当前后继见 [STATUS](STATUS.md)；方案 §8.4 欠债 Q1–Q9 登记于 [PLAN](PHASE2_PLAN.md#新功能基础总体方案批准登记2026-11-03)。2026-11-02、2026-11-03 拆分裁决的其余义务不因本条核销。
+
+## 2026-11-03 — 裁决：后台作业同事务入队改用官方 SQL 函数与开发库目标识别口径
+
+**来源与范围**：雨爷 2026-11-03 在 `P2-BACKGROUND-FOUNDATION-001` 施工前与真实验收中的两项裁决（该棒已由 PR #253 合并，验收与评审证据留 PR）。依据仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/DRIVER_CONSULT_astra.md`（Astra 只读核实与选型）。本条不扩大 [2026-11-03 方案批准](#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 的一次性授权，附录 A/B DDL 与哈希不变。
+
+1. **同事务入队方式（O1）**：本机 18005 在 win32 以 asyncpg + Proactor 运行（浏览器子进程链需要），psycopg 异步连接不能在 Proactor 上使用，总体方案 §1.2「取 psycopg 原生连接 + `defer_async`」在日常 18005 上不可用。改为在现有 SQLAlchemy 会话的同一事务内调用 Procrastinate 3.10.0 官方 SQL 函数入队与取消（`app/infra/jobs/queue_sql.py::defer_job`、`cancel_job`），由该会话唯一提交，驱动无关。替代总体方案 §1.2 的接线、§8.3 第一项，以及 [2026-11-03 拆分](#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条中“Procrastinate external connection，psycopg 3”的实现手段；该条“入队须与业务写入同一事务提交、不得把待投递报成已入队”的合同不变。worker 仍为独立 psycopg + Selector 进程，使用官方 worker 与周期任务。升级 Procrastinate 须重新核对 `queue_sql.py` 模块文档所列 SQL 合同。后两棒在 18005 侧的队列操作沿用此方式。
+2. **开发库执行前目标识别第 2 项口径**：`eternalai-postgres-1` 因 `docker-compose.yml` 的 postgres `ports` 未写主机 IP，`docker port` 除 `127.0.0.1:5432` 外另列同一容器的 `[::]:5432`。总体方案 §4 第 2 项按“输出包含 `127.0.0.1:5432`”判定通过；第 1、3、4 项及“任一项不符即停”不变。是否收紧该发布见 [PLAN](PHASE2_PLAN.md#后台任务基础-p2-background-foundation-001-新增欠债2026-11-03)「开发库端口另在 IPv6 全地址发布」行。
+
+**承接与保留项**：当前状态与后继见 [STATUS](STATUS.md)；总体方案其余条目、方案欠债 Q1–Q9 与首棒新增欠债不因本条核销。
