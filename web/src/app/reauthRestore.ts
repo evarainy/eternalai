@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { getReturnPath } from '../pages/loginNavigation';
 import { useAIDockStore } from '../stores/aiDockStore';
-import type { AIDockMode, TranscriptEntry } from '../stores/aiDockStore';
+import type { AIDockMode, PendingCollection, TranscriptEntry } from '../stores/aiDockStore';
 import { parsePageContext } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import { useAuthStore } from '../stores/authStore';
@@ -39,7 +39,12 @@ interface DockSnapshot {
   sessionId: string | null;
   transcript: TranscriptEntry[];
   confirmationResults: Record<string, UserActionOutcome>;
+  /** Pending D collection reference; absent in copies written before it was kept. */
+  collection?: StoredCollection | null;
 }
+
+/** A pending collection without its generation: generations restart on a full reload. */
+type StoredCollection = Omit<PendingCollection, 'authGeneration'>;
 
 interface ReauthSnapshot {
   v: 1;
@@ -148,6 +153,14 @@ function captureForReauth(
       sessionId: dock.sessionId,
       transcript: dock.transcript,
       confirmationResults: dock.confirmationResults,
+      collection: dock.collection === null
+        || dock.collection.authGeneration !== previous.generation
+        || dock.collection.sessionId !== dock.sessionId ? null : {
+          reference: dock.collection.reference,
+          sessionId: dock.collection.sessionId,
+          serverSessionId: dock.collection.serverSessionId,
+          ownerKey: dock.collection.ownerKey,
+        },
     },
     forms,
     returned: [],
@@ -221,6 +234,28 @@ function parsedPageContext(value: unknown): PageContextDeclaration | null {
   }
 }
 
+function storedCollection(value: unknown): StoredCollection | null {
+  if (!isRecord(value) || Object.keys(value).length !== 4 || !isRecord(value.reference)
+      || typeof value.sessionId !== 'string' || typeof value.serverSessionId !== 'string'
+      || !/^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(value.serverSessionId)
+      || !(value.ownerKey === null || typeof value.ownerKey === 'string')) return null;
+  const reference = value.reference;
+  if (Object.keys(reference).length !== 2 || typeof reference.task_id !== 'string'
+      || !/^[A-Za-z0-9_-]{1,96}$/.test(reference.task_id) || typeof reference.version !== 'number'
+      || !Number.isInteger(reference.version) || reference.version < 1
+      || reference.version > 32) return null;
+  return {
+    reference: { task_id: reference.task_id, version: reference.version },
+    sessionId: value.sessionId, serverSessionId: value.serverSessionId, ownerKey: value.ownerKey,
+  };
+}
+
+/** The transcript ends on a D collection card (nothing answered after it). */
+function endsOnCollectionCard(transcript: TranscriptEntry[]): boolean {
+  const last = transcript[transcript.length - 1];
+  return last !== undefined && last.role === 'assistant' && last.dFormCollection !== undefined;
+}
+
 function consumeSnapshot(scope: string | null, generation: number): void {
   const snapshot = readStored();
   removeStored();
@@ -228,6 +263,7 @@ function consumeSnapshot(scope: string | null, generation: number): void {
   // Generations restart on a full reload, so only the account scope decides here.
   if (snapshot === null || scope === null || snapshot.scope !== scope) return;
   const current = useAIDockStore.getState();
+  const collection = storedCollection(snapshot.dock.collection);
   current.restoreSession({
     draft: snapshot.dock.draft,
     sessionId: snapshot.dock.sessionId,
@@ -235,6 +271,10 @@ function consumeSnapshot(scope: string | null, generation: number): void {
     transcript: snapshot.dock.transcript,
     confirmationResults: snapshot.dock.confirmationResults,
     pageContext: parsedPageContext(snapshot.dock.pageContext),
+    // Bound to the generation whose fresh /me just proved the same account scope.
+    collection: collection === null ? null : { ...collection, authGeneration: generation },
+    // Never searched in the history: a card without its kept reference only says it expired.
+    collectionLost: collection === null && endsOnCollectionCard(snapshot.dock.transcript),
   });
   useAIDockStore.setState({
     ...(current.mode === 'closed' && snapshot.dock.mode !== 'closed' ? {

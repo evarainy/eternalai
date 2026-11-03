@@ -86,6 +86,7 @@ from app.infra.orchestration.agentscope_runtime.document_route import (
     timeout_turn,
 )
 from app.infra.orchestration.agentscope_runtime.ledger import (
+    AuthorizationRequired,
     BindingCard,
     BrowserSettled,
     Clarify,
@@ -127,6 +128,7 @@ from app.ports.browser_gateway import (
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.error_codes import ErrorCode
+from app.ports.request_context import RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import (
     ConfirmationOwner,
@@ -247,6 +249,16 @@ def _intent_failure_message(reason: _IntentReason) -> tuple[str, str]:
 
 
 _SESSION_INVALID = ("当前登录会话无效，请重新登录。", "The login session is invalid.")
+# The only wording of the MCP authorization hint (fixed, never model text). The
+# reason code is an internal UI code of the bind card, not a Gateway ErrorCode.
+MCP_AUTHORIZATION_MESSAGE = "需要到软件中心授权综合业务系统后才能访问"
+MCP_AUTHORIZATION_FALLBACK = "Authorize the business system in the software center first."
+MCP_AUTHORIZATION_REASON = "mcp_authorization_required"
+# A selected placeholder whose recheck failed: the ordinary denial, no hint.
+_MCP_ACCESS_DENIED = (
+    "当前无法访问该业务系统，请重新登录后再试。",
+    "The business system is not accessible; sign in again and retry.",
+)
 # Model failures caused by response shape or budgets, as opposed to the provider.
 _SHAPE_ERRORS = frozenset(
     {"forbidden_request_shape", "tool_call_budget_exceeded", "model_call_budget_exceeded"}
@@ -1038,6 +1050,7 @@ class AgentScopeRuntime:
                 if browser is not None and self._browser_registration is not None
                 else None
             ),
+            authorization_hint=deps.mcp_authorization_hint,
         )
         if visible is None:
             return await self._catalog_invalid(turn, None)
@@ -1048,10 +1061,10 @@ class AgentScopeRuntime:
                 "agentscope_catalog scope_excluded=%s turn=%s",
                 visible.scope_excluded, turn.turn_id,
             )
-        if not visible.capabilities and spec is None:
+        if not visible.capabilities and not visible.authorization_required and spec is None:
             # No agent is built and no model is called.
             return await self._empty_catalog(turn, visible.active_count)
-        catalog = build_tool_catalog(visible.capabilities)
+        catalog = build_tool_catalog(visible.capabilities, visible.authorization_required)
         if spec is not None:
             # Only for this trusted browser request; never carried to another turn.
             assert browser is not None
@@ -1072,6 +1085,16 @@ class AgentScopeRuntime:
         ledger.browser_tools = {
             tool.name: tool.capability_id for tool in catalog.tools if tool.kind == "browser"
         }
+        ledger.authorization_tools = {
+            tool.name: tool.capability_id
+            for tool in catalog.tools
+            if tool.kind == "authorization"
+        }
+        if ledger.authorization_tools:
+            _RUNTIME_LOGGER.info(
+                "agentscope_catalog authorization_placeholders=%s turn=%s",
+                len(ledger.authorization_tools), turn.turn_id,
+            )
         ledger.catalog_attributes = catalog.trace_attributes()
         model = deps.model_factory()
         # Once per ordinary turn; every model call of the turn sees the same items.
@@ -1081,10 +1104,23 @@ class AgentScopeRuntime:
         _RUNTIME_LOGGER.info(
             "agentscope_knowledge items=%s turn=%s", len(knowledge), turn.turn_id
         )
+        hint = deps.mcp_authorization_hint
         kit = await build_turn_toolkit(
             catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
             model=model, prompt_version=M1_PROMPT_VERSION,
             knowledge=knowledge, knowledge_digest=self._knowledge_digest,
+            authorization_recheck=(
+                None
+                if hint is None
+                else lambda capability_id: hint(
+                    scope.ai_user_id,
+                    capability_id,
+                    RequestOrgContext(
+                        request_id=turn.trace_id, channel=scope.channel,
+                        tenant_id=scope.tenant_id,
+                    ),
+                )
+            ),
         )
         agent = create_bounded_agent(
             name=AGENT_NAME,
@@ -1137,6 +1173,9 @@ class AgentScopeRuntime:
             # The published card is the builder envelope; never model text.
             item = ledger.executions[terminal.execution_index]
             return _Outcome("r0_proposal", item.envelope, None)
+        if isinstance(terminal, AuthorizationRequired):
+            # Nothing of the turn ran after the selection; never model text.
+            return self._authorization_outcome(turn, terminal)
         if ledger.staged is not None:
             # Staged but never published (CAS lost, timeout, failed post-check):
             # abandoned; the waiting marks may already exist.
@@ -1255,6 +1294,25 @@ class AgentScopeRuntime:
             return self._internal_failure(turn, None)
         return _Outcome("r6_answer", envelope, self._close(turn, None, "completed", None))
 
+    def _authorization_outcome(self, turn: _Turn, terminal: AuthorizationRequired) -> _Outcome:
+        """Fixed MCP authorization card, or the ordinary denial when the recheck failed."""
+
+        if not terminal.recheck_passed:
+            return _Outcome(
+                "mcp_authorization_denied",
+                self._build_failed(turn, *_MCP_ACCESS_DENIED),
+                self._close(turn, None, "denied", "policy_denied"),
+            )
+        envelope = self._deps.response_builder.build_operator_handback_bind_required(
+            turn.response_id, turn.task_id, turn.scope.session_id,
+            MCP_AUTHORIZATION_MESSAGE, MCP_AUTHORIZATION_FALLBACK, turn.trace_id,
+            "business_platform", reason_code=MCP_AUTHORIZATION_REASON,
+        )
+        return _Outcome(
+            "mcp_authorization_required", envelope,
+            self._close(turn, None, "binding_required", "identity_unbound"),
+        )
+
     def _checked_text(self, turn: _Turn, ledger: TurnLedger, text: str | None) -> str | None:
         """Drop final text that carries standalone tool-call blocks; never parse them.
 
@@ -1301,6 +1359,16 @@ class AgentScopeRuntime:
             await self._step(
                 turn, "no_capability_found", "blocked", error_code="capability_not_found",
                 attributes={"reason": "no_matching_capability"},
+            )
+        elif rule in {"mcp_authorization_required", "mcp_authorization_denied"}:
+            await self._intent(
+                turn, "blocked",
+                {**stats, "result": "valid", "match": "authorization",
+                 "recheck_passed": rule == "mcp_authorization_required"},
+                error_code=(
+                    "identity_unbound" if rule == "mcp_authorization_required"
+                    else "policy_denied"
+                ),
             )
         elif rule == "r2_rejected":
             first = ledger.failures[0]

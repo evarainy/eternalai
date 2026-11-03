@@ -10,6 +10,9 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
+import shutil
+import stat
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -69,6 +72,7 @@ _D_FORM_LOG_STAGES = frozenset(
         "chat_confirmation",
         "cleanup_owned",
         "cleanup_release",
+        "cleanup_profile",
         "worker_1",
         "worker_2",
         "worker_3",
@@ -177,6 +181,9 @@ _D_FORM_LOG_CODES = frozenset(CODES) | frozenset(
         "LEASE_RELEASE_REJECTED",
         "AUTOMATION_STOP_FAILED",
         "JOB_HANDLE_CLOSE_FAILED",
+        # Fixed reasons the exact run directory was kept; errno/winerror logged apart.
+        "PROFILE_DIR_BOUNDARY_DENIED",
+        "PROFILE_DIR_REMOVE_FAILED",
         "PORTAL_ENTRY_HTTP",
         "PORTAL_ENTRY_NAV_MISMATCH",
         "AUTH_WINDOW_INSUFFICIENT",
@@ -310,6 +317,19 @@ def log_d_form_fence_failure(stage: str, error: BaseException, began: float) -> 
 
 def _closed_int(value: object) -> str:
     return str(value) if type(value) is int else "none"
+
+
+# The only directory this runtime creates per run, directly under the owned root.
+OWNED_RUNS_ROOT_NAME = "owned-resource-runs"
+_RUN_DIRECTORY = re.compile(r"run-[0-9a-f]{32}")
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Symlink, junction or any other reparse point; never followed."""
+    status = os.lstat(path)
+    return stat.S_ISLNK(status.st_mode) or bool(
+        getattr(status, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
 
 
 def log_d_form_browser_failure(step: str, error: BaseException, began: float, job: Any) -> None:
@@ -475,6 +495,9 @@ class OwnedDFormBrowser:
         self.portal: Any = None
         self.preparation_error: str | None = None
         self.closed_job_identity: dict[str, object] | None = None
+        # The exact run directory this instance created; set right after its mkdir.
+        self.created_dir: Path | None = None
+        self.created_dir_removed = False
         self.current_stage = "browser_start"
         self.began = time.monotonic()
 
@@ -578,6 +601,8 @@ class OwnedDFormBrowser:
         try:
             folder = self.root / ("run-" + uuid4().hex)
             folder.mkdir()
+            # Before any other mkdir or await: a partial start can still be reclaimed.
+            self.created_dir = folder
             profile = folder / "profile"
             profile.mkdir()
             environment = {
@@ -948,6 +973,60 @@ class OwnedDFormBrowser:
         if self.portal is None and self.playwright is None and not self.driver_start_attempted:
             # No driver start was ever attempted and no portal exists: nothing attached.
             self.attachment_cleanup_proven = True
+
+    async def remove_created_dir(self) -> bool:
+        """Delete only the exact directory this instance created; True once it is gone.
+
+        The caller must first prove the terminal Run's cleanup authority and that
+        every attachment and the owned Job exited. The target must be a
+        ``run-<32 hex>`` direct child of the trusted root whose resolved last
+        segment is ``owned-resource-runs``; the root itself, an escape, or a
+        symlink/junction/reparse target is refused. Links inside are removed,
+        never followed. "Already absent" counts only after those checks.
+        """
+        target = self.created_dir
+        if target is None:
+            return False
+        if self.created_dir_removed:
+            return True
+        try:
+            root = self.root.resolve(strict=True)
+            if (
+                root.name != OWNED_RUNS_ROOT_NAME
+                or target.parent != self.root
+                or _RUN_DIRECTORY.fullmatch(target.name) is None
+                or _is_link_or_reparse(self.root)
+            ):
+                self._profile_cleanup_failed("PROFILE_DIR_BOUNDARY_DENIED")
+                return False
+            try:
+                if _is_link_or_reparse(target) or target.resolve(strict=True).parent != root:
+                    self._profile_cleanup_failed("PROFILE_DIR_BOUNDARY_DENIED")
+                    return False
+            except FileNotFoundError:
+                self.created_dir_removed = True
+                log_d_form_stage("cleanup_profile", "success", "OK", self.began)
+                return True
+            await asyncio.to_thread(shutil.rmtree, target)
+            if os.path.lexists(target):
+                self._profile_cleanup_failed("PROFILE_DIR_REMOVE_FAILED")
+                return False
+        except OSError as error:
+            # e.g. a file still held open on Windows; the directory stays as it is.
+            self._profile_cleanup_failed("PROFILE_DIR_REMOVE_FAILED", error)
+            return False
+        self.created_dir_removed = True
+        log_d_form_stage("cleanup_profile", "success", "OK", self.began)
+        return True
+
+    def _profile_cleanup_failed(self, code: str, error: OSError | None = None) -> None:
+        log_d_form_stage("cleanup_profile", "failed", code, self.began)
+        _logger.info(
+            "d_form_profile_cleanup status=failed code=%s errno=%s winerror=%s",
+            code,
+            _closed_int(getattr(error, "errno", None)),
+            _closed_int(getattr(error, "winerror", None)),
+        )
 
     async def close_owned(self) -> None:
         """Caller must independently authorize this exact Run's cleanup first."""

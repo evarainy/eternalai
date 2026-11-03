@@ -484,3 +484,25 @@
     animation: none;
   }
 }
+
+.fillFields {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.fillFields > div {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px;
+}
+
+.fillFields dt {
+  font-weight: 600;
+}
+
+.fillFields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

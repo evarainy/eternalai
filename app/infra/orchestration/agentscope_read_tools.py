@@ -135,6 +135,9 @@ class AgentScopeRuntimeDependencies:
     browser_orchestration: AgentOrchestrationPort | None = None
     d_form_collection_store: DFormCollectionStorePort | None = None
     document_qa: DocumentQAService | None = None
+    # (ai_user_id, capability_id, context) -> the candidate is policy-hidden only
+    # because this user has not authorized its MCP service (placeholder only).
+    mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)

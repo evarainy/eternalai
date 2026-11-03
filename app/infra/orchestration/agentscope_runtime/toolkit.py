@@ -10,6 +10,11 @@ every model call actually exposed, ties each tool call to that call and ends
 the turn without another provider call once a terminal outcome is recorded.
 Only public AgentScope interfaces are used; ``builtin_meta_tool`` is replaced
 after construction and checked (uv.lock pins the version; re-check on upgrade).
+
+An MCP authorization placeholder has no executor. A model response that calls
+one is replaced, before any of its tool calls is dispatched, by the terminal
+answer: the whole response is dropped and the turn ends on the authorization
+outcome, so no business call of that response runs.
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ from app.infra.orchestration.agentscope_read_tools import (
 )
 from app.infra.orchestration.agentscope_runtime.catalog import GROUP_RULES, ToolCatalog
 from app.infra.orchestration.agentscope_runtime.ledger import (
+    AuthorizationRequired,
     CallSnapshot,
     Clarify,
     TurnLedger,
@@ -147,8 +153,13 @@ async def build_turn_toolkit(
     prompt_version: str,
     knowledge: Sequence[str] = (),
     knowledge_digest: str | None = None,
+    authorization_recheck: Callable[[str], bool] | None = None,
 ) -> TurnToolkit:
-    """Register this turn's catalog as tool groups plus the two control tools."""
+    """Register this turn's catalog as tool groups plus the two control tools.
+
+    ``authorization_recheck`` re-checks, by capability id, that a selected
+    placeholder is still hidden only by the missing authorization.
+    """
 
     groups: list[ToolGroup] = []
     for group in catalog.groups:
@@ -161,6 +172,15 @@ async def build_turn_toolkit(
                 continue
             if tool.kind == "browser":
                 tools.append(BrowserTool(tool.name, tool.description, tool.input_schema))
+                continue
+            if tool.kind == "authorization":
+                # Never a ToolExecutor: selecting it only ends the turn.
+                tools.append(
+                    AuthorizationPlaceholder(
+                        ledger, tool.name, tool.capability_id, tool.description,
+                        tool.input_schema,
+                    )
+                )
                 continue
             executor = ToolExecutor(scope, deps, ledger, tool.binding, tool.name, limits)
             tools.append(
@@ -208,6 +228,7 @@ async def build_turn_toolkit(
         prompt_version=prompt_version,
         knowledge=knowledge,
         knowledge_digest=knowledge_digest,
+        authorization_recheck=authorization_recheck,
     )
     return TurnToolkit(toolkit=toolkit, middleware=middleware, group_of=group_of)
 
@@ -360,6 +381,35 @@ class _ControlTool(ToolBase):
         )
 
 
+class AuthorizationPlaceholder(_ControlTool):
+    """MCP capability the current user has not authorized; selected, never run.
+
+    The middleware ends the turn before this is dispatched. Reaching ``call``
+    means that interception did not happen: the turn still ends, on the
+    denial path, and nothing is executed here.
+    """
+
+    def __init__(
+        self,
+        ledger: TurnLedger,
+        name: str,
+        capability_id: str,
+        description: str,
+        input_schema: dict[str, Any],
+    ) -> None:
+        super().__init__(ledger)
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+        self._capability_id = capability_id
+
+    async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
+        if self._ledger.terminal is None:
+            self._ledger.terminal = AuthorizationRequired(self._capability_id, False)
+        halt_tool_use(_agent_state, "turn_terminal")
+        return _error("需要先完成业务系统授权。", "mcp_authorization_required")
+
+
 class ReportUnsupported(_ControlTool):
     """Control tool: no visible group can handle this business request."""
 
@@ -444,8 +494,10 @@ class M1Middleware(MiddlewareBase):
         prompt_version: str,
         knowledge: Sequence[str] = (),
         knowledge_digest: str | None = None,
+        authorization_recheck: Callable[[str], bool] | None = None,
     ) -> None:
         self._catalog = catalog
+        self._authorization_recheck = authorization_recheck
         # Bounded once per turn by the runtime; never part of AgentState.
         self._knowledge = tuple(knowledge)
         self._knowledge_digest = knowledge_digest
@@ -536,6 +588,24 @@ class M1Middleware(MiddlewareBase):
                     ):
                         _log_d_input_shape(block)
             ledger.response_tools[index] = tuple(names)
+            selected = next((name for name in names if name in ledger.authorization_tools), None)
+            if selected is not None:
+                # Whole response: no call of it, business or control, is dispatched.
+                capability_id = ledger.authorization_tools[selected]
+                recheck = self._authorization_recheck
+                passed = recheck is not None and recheck(capability_id)
+                ledger.terminal = AuthorizationRequired(capability_id, passed)
+                logging.getLogger("uvicorn.error.agentscope_runtime").info(
+                    "agentscope_mcp_authorization recheck=%s calls=%s turn=%s",
+                    int(passed), len(names), current_turn_id(),
+                )
+                return ChatResponse(
+                    content=[TextBlock(text=TERMINAL_TEXT)],
+                    is_last=True,
+                    id=response.id,
+                    usage=response.usage,
+                    finished_reason=FinishedReason.COMPLETED,
+                )
         return response
 
     async def on_acting(
@@ -600,6 +670,7 @@ __all__ = (
     "TERMINAL_TEXT",
     "M1Middleware",
     "AskUser",
+    "AuthorizationPlaceholder",
     "BrowserTool",
     "M1ResetTools",
     "ProposeWrite",

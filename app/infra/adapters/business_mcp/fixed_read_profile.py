@@ -812,6 +812,30 @@ class FixedReadLocalOwner:
         )
 
 
+# allowed / hidden only because the current user has not authorized / hidden.
+CandidateAccess = Literal["allowed", "authorization_required", "hidden"]
+
+
+def _owner_matches(
+    owner: FixedReadLocalOwner | None,
+    ready: bool,
+    session: AuthenticatedSessionContext,
+    tenant_id: str,
+    user_id: str,
+    now: datetime,
+) -> bool:
+    """The bound owner is ready, current and the same login as ``session``."""
+
+    return (
+        owner is not None
+        and ready
+        and owner.tenant_id == tenant_id
+        and owner.user_id == user_id
+        and owner.fingerprint == session.fingerprint
+        and (owner.expires_at is None or owner.expires_at > now)
+    )
+
+
 def _transaction_key(transaction: AuthorizationTransaction) -> tuple[str, str, int, str]:
     return (
         transaction.state_digest,
@@ -1111,12 +1135,7 @@ class FixedReadProfile(IdentityAssertionPort):
         tool: str = TOOL,
         require_ready: bool = True,
     ) -> bool:
-        if (
-            not self.service.enabled
-            or tenant_id != self.approval.tenant_id
-            or service_config_id != self.service.service_config_id
-            or (tool != TOOL and tool not in self.approved_reads)
-        ):
+        if not self._configured_for(tenant_id, service_config_id, tool):
             return False
         if self.approval.local_owner_source == "fixed":
             return user_id == self.approval.user_id
@@ -1125,15 +1144,19 @@ class FixedReadProfile(IdentityAssertionPort):
         session = authenticated_session.get()
         now = datetime.now(UTC)
         return (
-            owner is not None
-            and session is not None
-            and (not require_ready or ready)
-            and owner.tenant_id == tenant_id
-            and owner.user_id == user_id == session.principal.ai_user_id
+            session is not None
+            and session.principal.ai_user_id == user_id
             and session.principal.org_ctx.tenant_id == tenant_id
-            and owner.fingerprint == session.fingerprint
-            and (owner.expires_at is None or owner.expires_at > now)
             and session.expires_at > now
+            and _owner_matches(owner, ready or not require_ready, session, tenant_id, user_id, now)
+        )
+
+    def _configured_for(self, tenant_id: str, service_config_id: str, tool: str) -> bool:
+        return (
+            self.service.enabled
+            and tenant_id == self.approval.tenant_id
+            and service_config_id == self.service.service_config_id
+            and (tool == TOOL or tool in self.approved_reads)
         )
 
     def tool_for_capability(self, capability_id: str) -> str | None:
@@ -1144,6 +1167,61 @@ class FixedReadProfile(IdentityAssertionPort):
                 return tool
         return None
 
+    def candidate_access(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> tuple[CandidateAccess, str | None]:
+        """Visibility of one candidate and its closed reason, from one owner snapshot.
+
+        ``allowed`` is exactly ``permits(require_ready=True)``. Only a valid,
+        self-consistent login session whose user lacks a ready owner yields
+        ``authorization_required``; config, capability, fixed-user and session
+        failures stay ``hidden``. Reasons are log codes only, never shown.
+        """
+
+        tool = self.tool_for_capability(capability_id)
+        tenant_id = request_context.tenant_id
+        if tool is None:
+            return "hidden", "mcp_candidate_capability_mismatch"
+        if not self._configured_for(tenant_id, self.service.service_config_id, tool):
+            return "hidden", "mcp_candidate_config_denied"
+        if self.approval.local_owner_source == "fixed":
+            if ai_user_id == self.approval.user_id:
+                return "allowed", None
+            return "hidden", "mcp_candidate_user_mismatch"
+        with self._owner_lock:
+            owner, ready = self._bound_owner, self._owner_ready
+        session = authenticated_session.get()
+        now = datetime.now(UTC)
+        # Session precondition first: without a current, self-consistent login
+        # session the request takes the ordinary login/denial path.
+        if session is None:
+            return "hidden", "mcp_candidate_session_missing"
+        if session.expires_at <= now:
+            return "hidden", "mcp_candidate_session_expired"
+        if (
+            session.principal.ai_user_id != ai_user_id
+            or session.principal.org_ctx.tenant_id != tenant_id
+        ):
+            return "hidden", "mcp_candidate_session_scope_mismatch"
+        if _owner_matches(owner, ready, session, tenant_id, ai_user_id, now):
+            return "allowed", None
+        if owner is None:
+            reason = "mcp_candidate_owner_missing"
+        elif not ready:
+            reason = "mcp_candidate_owner_not_ready"
+        elif owner.tenant_id != tenant_id or owner.user_id != ai_user_id:
+            # The owner belongs to someone else: the current user is unauthorized.
+            reason = "mcp_candidate_owner_scope_mismatch"
+        elif owner.fingerprint != session.fingerprint:
+            reason = "mcp_candidate_session_mismatch"
+        else:
+            reason = "mcp_candidate_owner_expired"
+        return "authorization_required", reason
+
     def permits_candidate(
         self,
         *,
@@ -1151,53 +1229,32 @@ class FixedReadProfile(IdentityAssertionPort):
         capability_id: str,
         request_context: RequestOrgContext,
     ) -> bool:
-        tool = self.tool_for_capability(capability_id)
-        allowed = tool is not None and self.permits(
-            tenant_id=request_context.tenant_id,
-            user_id=ai_user_id,
-            service_config_id=self.service.service_config_id,
-            tool=tool,
-            require_ready=True,
+        access, reason = self.candidate_access(
+            ai_user_id=ai_user_id, capability_id=capability_id, request_context=request_context
         )
-        if not allowed:
-            owner = self._bound_owner
-            session = authenticated_session.get()
-            now = datetime.now(UTC)
-            if tool is None:
-                reason = "mcp_candidate_capability_mismatch"
-            elif not self.service.enabled or request_context.tenant_id != self.approval.tenant_id:
-                reason = "mcp_candidate_config_denied"
-            elif self.approval.local_owner_source == "fixed":
-                reason = "mcp_candidate_user_mismatch"
-            elif owner is None:
-                reason = "mcp_candidate_owner_missing"
-            elif session is None:
-                reason = "mcp_candidate_session_missing"
-            elif not self._owner_ready:
-                reason = "mcp_candidate_owner_not_ready"
-            elif (
-                owner.tenant_id != request_context.tenant_id
-                or owner.user_id != ai_user_id
-                or ai_user_id != session.principal.ai_user_id
-                or session.principal.org_ctx.tenant_id != request_context.tenant_id
-            ):
-                reason = "mcp_candidate_owner_scope_mismatch"
-            elif owner.fingerprint != session.fingerprint:
-                reason = "mcp_candidate_session_mismatch"
-            elif owner.expires_at is not None and owner.expires_at <= now:
-                reason = "mcp_candidate_owner_expired"
-            elif session.expires_at <= now:
-                reason = "mcp_candidate_session_expired"
-            else:
-                reason = "mcp_candidate_denied"
+        if access != "allowed":
             record_mcp_event(
                 "candidate_visibility",
                 "failed",
                 profile=self.service,
-                tool=tool or TOOL,
-                error_code=reason,
+                tool=self.tool_for_capability(capability_id) or TOOL,
+                error_code=reason or "mcp_candidate_denied",
             )
-        return allowed
+        return access == "allowed"
+
+    def authorization_hint(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> bool:
+        """Whether a hidden candidate is hidden only because this user has not authorized."""
+
+        access, _ = self.candidate_access(
+            ai_user_id=ai_user_id, capability_id=capability_id, request_context=request_context
+        )
+        return access == "authorization_required"
 
     async def verify(
         self,

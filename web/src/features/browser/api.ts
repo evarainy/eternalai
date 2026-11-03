@@ -42,10 +42,23 @@ export function isBrowserUnconfirmed(envelope: unknown, clientRequestId: string)
 export interface BrowserRunRead {
   readonly run: ParsedBrowserRunView;
   readonly value: Record<string, unknown> | null;
+  /** Digests of the current fill confirmation; its `fields` are the owner's three values or null. */
   readonly writePreview?: Record<string, unknown> | null;
   readonly fillStop?: FillStopReport | null;
   /** Present only on D runs the worker has sealed for the user's own submission (§8.1). */
   readonly handoff?: BrowserHandoff | null;
+}
+
+export interface BrowserFillFields {
+  readonly category: string;
+  readonly position: string;
+  readonly description: string;
+}
+
+/** The three values a D fill confirmation shows; null when the server withholds them. */
+export function writePreviewFields(read: BrowserRunRead): BrowserFillFields | null {
+  const fields = read.writePreview?.fields;
+  return fields === null || fields === undefined ? null : fields as BrowserFillFields;
 }
 
 export interface BrowserHandoff {
@@ -131,19 +144,30 @@ function parseHandoff(value: unknown): BrowserHandoff | null {
     return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at,
       deadline: item.deadline, fields: null };
   }
-  const fields = exactRecord(item.fields, ['category', 'position', 'description']);
-  if (fields === null || !boundedText(fields.category, 100) || !boundedText(fields.position, 500)
-      || !boundedText(fields.description, 500)) return null;
+  const fields = parseFillFields(item.fields);
+  if (fields === null) return null;
   return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at, deadline: item.deadline,
-    fields: { category: fields.category, position: fields.position,
-      description: fields.description } };
+    fields };
 }
 
+function parseFillFields(value: unknown): BrowserFillFields | null {
+  const fields = exactRecord(value, ['category', 'position', 'description']);
+  if (fields === null || !boundedText(fields.category, 100) || !boundedText(fields.position, 500)
+      || !boundedText(fields.description, 500)) return null;
+  return { category: fields.category, position: fields.position, description: fields.description };
+}
+
+const WRITE_PREVIEW_KEYS = ['request_id', 'action_digest', 'request_digest', 'skill_id',
+  'skill_version', 'publication_digest', 'site_id', 'object_type', 'business_key_digest',
+  'parameter_set_digest', 'binding_revision', 'write_steps_digest', 'expires_at'] as const;
+
 function parseWritePreview(value: unknown): Record<string, unknown> | null {
-  const item = exactRecord(value, ['request_id', 'action_digest', 'request_digest', 'skill_id',
-    'skill_version', 'publication_digest', 'site_id', 'object_type', 'business_key_digest',
-    'parameter_set_digest', 'binding_revision', 'write_steps_digest', 'expires_at']);
+  // `fields` is optional in the contract (default null); accept it omitted or present.
+  const withFields = typeof value === 'object' && value !== null
+    && Object.prototype.hasOwnProperty.call(value, 'fields');
+  const item = exactRecord(value, withFields ? [...WRITE_PREVIEW_KEYS, 'fields'] : WRITE_PREVIEW_KEYS);
   if (item === null || item.skill_id !== 'd_form_fill_stop' || item.object_type !== 'bound_form') return null;
+  if (!withFields) item.fields = null;
   for (const key of ['request_id', 'skill_id', 'skill_version', 'site_id', 'object_type']) {
     if (!isSafeBrowserId(item[key])) return null;
   }
@@ -154,6 +178,11 @@ function parseWritePreview(value: unknown): Record<string, unknown> | null {
   if (typeof item.binding_revision !== 'number' || !Number.isSafeInteger(item.binding_revision)
       || item.binding_revision < 1 || typeof item.expires_at !== 'string'
       || !Number.isFinite(Date.parse(item.expires_at))) return null;
+  if (item.fields !== null) {
+    const fields = parseFillFields(item.fields);
+    if (fields === null) return null;
+    item.fields = fields;
+  }
   return item;
 }
 

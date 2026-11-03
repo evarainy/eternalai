@@ -79,8 +79,21 @@ class BrowserChatBindingResolverPort(Protocol):
         ...
 
 
+class BrowserHandoffFields(Contract):
+    """The owner's own three submitted values, returned only to that session."""
+
+    category: str = Field(max_length=100, repr=False)
+    position: str = Field(max_length=500, repr=False)
+    description: str = Field(max_length=500, repr=False)
+
+
 class BrowserWritePreview(Contract):
-    """Allowlisted digests for a current queued HumanGate request, never values."""
+    """Allowlisted digests for a current queued HumanGate request.
+
+    ``fields`` carries the D fill-stop owner's own three frozen values, only when
+    they are the exact admitted input of this run; every other skill gets null.
+    The values are display only: the decision binds the digests, never these.
+    """
 
     request_id: OpaqueId
     action_digest: Digest
@@ -95,14 +108,7 @@ class BrowserWritePreview(Contract):
     binding_revision: int
     write_steps_digest: Digest
     expires_at: datetime
-
-
-class BrowserHandoffFields(Contract):
-    """The owner's own three submitted values, returned only to that session."""
-
-    category: str = Field(max_length=100, repr=False)
-    position: str = Field(max_length=500, repr=False)
-    description: str = Field(max_length=500, repr=False)
+    fields: BrowserHandoffFields | None = None
 
 
 class BrowserHandoffView(Contract):

@@ -21,6 +21,7 @@ import {
 } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
+import { fieldLabel, targetSystemLabels } from '../contracts/businessLabels';
 import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import {
@@ -41,7 +42,9 @@ import {
   SESSION_BUSY_NOTICE,
   submitBrowserMessage,
   submitOrdinaryBrowserCapableMessage,
+  writePreviewFields,
   type BrowserAccepted,
+  type BrowserFillFields,
   type BrowserRunRead,
 } from '../features/browser/api';
 import {
@@ -56,8 +59,8 @@ import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
-import type { UIComponentTargetSystem, UserAction } from '../generated/runtime/runtime.schemas';
-import { useAIDockStore } from '../stores/aiDockStore';
+import type { UserAction } from '../generated/runtime/runtime.schemas';
+import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
@@ -287,8 +290,8 @@ function BrowserRunMonitor({
               onClick={() => onRecoverOriginal?.()}>恢复原任务确认</Button>} />
         ) : null}
       {read.writePreview != null ? (
-        <Alert type="warning" showIcon title="确认仅填写三项后停止"
-          description="仅填写类别、故障位置和故障描述，不保存或提交。具体值在本地浏览器协调框核对。"
+        <Alert type="warning" showIcon title="确认执行操作吗？即将执行工单报修流程"
+          description={<FillConfirmationFields fields={writePreviewFields(read)} />}
           action={<Space>
             <Button disabled={deciding} onClick={() => { void onDecide('rejected'); }}>拒绝</Button>
             <Button type="primary" loading={deciding} onClick={() => { void onDecide('confirmed'); }}>确认填写</Button>
@@ -372,20 +375,12 @@ const UNSUCCESSFUL_KINDS: ReadonlySet<PresentationKind> = new Set<PresentationKi
   'request_error',
 ]);
 
-const targetSystemLabels: Record<
-  Exclude<UIComponentTargetSystem, null>,
-  string
-> = {
-  oa: 'OA',
-  u8: 'U8',
-  hikvision_ivms: '海康 iVMS',
-  business_platform: '业务平台',
-};
-
 /**
  * 提示词卡。2026-08-27「低数字素养用户的界面硬约束」§二 的缓解模式要求给可见示例，不能只留一个空
  * 白输入框；这里的四条主问句与副说明都逐字照 `Chat.dc.html` 定稿。
  */
+const COLLECTION_UPDATED_NOTICE = '原追问已更新，请按最新的追问补充信息。';
+
 const STARTER_PROMPTS = [
   {
     key: 'today',
@@ -432,6 +427,21 @@ const RequestTextArea = forwardRef<TextAreaRef, RequestTextAreaProps>(
   },
 );
 
+/** The three values the confirmation fills, under the D manifest's business names. */
+function FillConfirmationFields({ fields }: { fields: BrowserFillFields | null }) {
+  if (fields === null) return <Text type="secondary">暂时无法显示填写内容。</Text>;
+  return (
+    <dl className={styles.fillFields}>
+      {(['category', 'position', 'description'] as const).map((key) => (
+        <div key={key}>
+          <dt>{fieldLabel(key)}</dt>
+          <dd>{fields[key]}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function AssistantDetails({
   entry,
   onAction,
@@ -452,9 +462,12 @@ function AssistantDetails({
   }
   if (entry.presentationKind === 'binding' && entry.targetSystem) {
     return (
-      <Text className={styles.guidance}>
-        目标系统：{targetSystemLabels[entry.targetSystem]}
-      </Text>
+      <>
+        <Text className={styles.guidance}>
+          目标系统：{targetSystemLabels[entry.targetSystem]}
+        </Text>
+        {entry.mcpAuthorizationPath && <a href={entry.mcpAuthorizationPath}>去授权</a>}
+      </>
     );
   }
   return (
@@ -520,10 +533,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
   const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
   const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
-  const [collection, setCollection] = useState<{
-    reference: DFormCollectionReference; sessionId: string; authGeneration: number;
-    ownerKey: string | null; serverSessionId: string;
-  } | null>(null);
+  // Kept in the dock store so a same-tab re-login or reload restores it with the conversation.
+  const collection = useAIDockStore((state) => state.collection);
+  const setCollection = useAIDockStore((state) => state.setCollection);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const browserGeneration = useRef(0);
@@ -586,7 +598,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       }
       setBrowserIdentityReady(true);
     }).catch(() => { /* Keep the previous browser result hidden until retry. */ });
-  }, [refetchMe]);
+  }, [refetchMe, setCollection]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
@@ -827,6 +839,22 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
           const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
           store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
+        if (submission.collection !== null && error instanceof ApiError
+            && (error.status === 404 || error.status === 409)) {
+          // The backend refused the reference itself (gone/expired or a newer version):
+          // stop continuing it; never resend the reply as a new request.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          setCollection(null);
+          const notice = projectTextResponse(
+            error.status === 404 ? COLLECTION_LOST_NOTICE : COLLECTION_UPDATED_NOTICE, 'session',
+          );
+          useAIDockStore.getState().applyConfirmationResult(sessionId, reference, notice);
           return notice;
         }
         const projectedError = projectRequestError(error);

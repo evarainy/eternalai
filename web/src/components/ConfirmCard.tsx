@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Button } from 'antd';
 import type { UserAction } from '../generated/runtime/runtime.schemas';
 import type { ConfirmCardView } from '../contracts/runtimeProjection';
+import { fieldLabel, operationName, targetSystemLabels } from '../contracts/businessLabels';
 import styles from './RuntimeViews.module.css';
 
 interface ConfirmCardProps {
@@ -43,12 +44,10 @@ export function ConfirmCard({
       <div className={styles.panelHeading}>
         <h3 className={styles.panelTitle}>提交前请逐项复核</h3>
       </div>
-      <p className={styles.reviewSummary}>{confirm.operationSummary}</p>
+      <p className={styles.reviewSummary}>{operationName(confirm.operationSummary)}</p>
       <dl className={styles.facts}>
-        <dt>能力标识</dt>
-        <dd>{confirm.capabilityId}</dd>
         <dt>目标系统</dt>
-        <dd>{confirm.targetSystem === null ? '未指定' : confirm.targetSystem}</dd>
+        <dd>{confirm.targetSystem === null ? '未指定' : targetSystemLabels[confirm.targetSystem]}</dd>
       </dl>
 
       <div className={styles.arguments}>
@@ -57,12 +56,12 @@ export function ConfirmCard({
           {confirm.fieldNames.map((fieldName) =>
             displayedNames.has(fieldName) ? (
               <div key={fieldName}>
-                <dt>{fieldName}</dt>
+                <dt>{fieldLabel(fieldName)}</dt>
                 <dd>{confirm.displayedArgumentValues[fieldName]}</dd>
               </div>
             ) : (
               <div key={fieldName}>
-                <dt>{fieldName}</dt>
+                <dt>{fieldLabel(fieldName)}</dt>
                 <dd className={styles.fieldValueUnavailable}>未提供可展示值</dd>
               </div>
             ),
@@ -71,7 +70,7 @@ export function ConfirmCard({
             .filter(([fieldName]) => !confirm.fieldNames.includes(fieldName))
             .map(([fieldName, fieldValue]) => (
               <div key={fieldName}>
-                <dt>{fieldName}</dt>
+                <dt>{fieldLabel(fieldName)}</dt>
                 <dd>{fieldValue}</dd>
               </div>
             ))}
