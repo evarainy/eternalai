@@ -700,7 +700,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 自动提交每流程结果查询方式待提供 | 自动提交须按原身份与业务唯一键查询单号或业务后态；缺少逐流程查询方式与成功判据时，无法核实成功，unknown 必须保持待核实、不重放 | 雨爷 / 业务方提供结果查询方式与成功判据，并逐流程授权真实启用 | 待分配（自动提交功能；业务输入就绪后） | 每流程查询与成功判据核定、接入并经授权真实验证，结果不明路径不重复提交；既有 M3 Q4/V08 另按其条件核销 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 1 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` v3 |
 | 远程画面 Chrome 101 / 麒麟输入法未实测 | Playwright screencast 与白名单输入转发已选定，但目标浏览器、中文输入与接管交还尚未现场验证；页面外操作或输入法不过时转 KasmVNC | 对应真实浏览器 / 输入法环境 | 待分配（远程画面与接管任务；麒麟项随迁移任务） | Chrome 101 观看/接管、中文输入、人机互斥和交还后重新观察实测通过，或完成 KasmVNC 备选验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 2、5、7 条；仓库外选型汇总 |
-| Procrastinate 队列 schema 待专项授权 | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者 | 雨爷对目标数据库 schema 安装的专项授权 | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
+| Procrastinate 队列 schema 待专项授权 | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者 | 无（雨爷 2026-11-03 已批准开发库与测试库的 schema upgrade，见 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 第 2 条） | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
 | 服务器现场核实项待完成 | M5 暂缓（部署推后）；麒麟 V11 2503 / 内核 6.6 ARM + Docker 为目标口径，尚未现场确认，64 KiB 页、cgroup 与沙箱兼容性不能由调研推定通过 | 目标服务器可用与迁移 / 部署专项授权 | 待分配（服务器迁移独立任务） | 现场核实 nkvers/uname、页大小、cgroup v2/cgroup.kill、Docker cgroup 驱动、KYSEC 与 Chromium 沙箱并完成目标环境验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 7 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` 现场需核实项 |
 
 ### D 启动失败清理修复新增欠债（2026-11-02）
@@ -739,6 +739,22 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 同一用户多任务并行 | 当前一个任务未完成时聊天框禁用（前端禁用，后端对同会话并发请求返回 `runtime_session_busy`）；雨爷 2026-11-03 要求后台执行任务时可继续发起其他任务、并行而非串行，后面再做 | 无 | 待分配（随后台任务基础 `P2-BACKGROUND-FOUNDATION-001` 及后续迁移承接；该棒首棒范围是否包含待其总体方案确定） | 一个任务在后台执行时同一用户可继续发起并完成其他任务，并经真实流程核对 | `web/src/pages/ChatPage.tsx::ChatPage`（`Sender` 的 `disabled={mutation.isPending}` 与 `submit` 的浏览器运行守卫）；`app/api/v1/runtime.py::_session_busy` |
 | 已终结运行目录删除失败后无自动重试 | 目录删除在释放租约之前执行一次；删除失败（如 Windows 文件占用）只记 `cleanup_profile` 封闭原因码与 errno/winerror，租约照常释放，释放成功后不再重试，解除占用也不会触发重试；只有释放前本次调用失败、由清理补偿重入时才会随之再删。适用于 failed/completed/cancelled 全部已终结运行；与 Q5 b（重启后实例与 Job 证明丢失）分列 | 无 | 待分配 | 残留目录有获授权的回收路径（仍须精确归属与退出证明），或裁决接受残留并说明人工处理方式 | `app/infra/browser/d_form_owned_browser.py::OwnedDFormBrowser.remove_created_dir`；`app/infra/browser/d_form_execution.py::DFormRuntime._close_owned_state` |
 | 确认卡缺业务名的操作与字段 | 治理 MCP 写操作没有已批准的中文业务名，普通确认卡与 MCP 恢复卡按原键显示，不虚构名称。操作：`clothing_plan_preview`、`clothing_plan_submit`、`talk_preparation_save`、`talk_record_draft_save`、`talk_record_submit`、`talk_task_claim`；可展示字段：`artifactId`、`taskId`、`personId`、`jyId`、`jqId`、`templateId`、`warehouseId`、`year`、`batchMonth`、`distDate`、`durationMinutes`、`occurredAt`、`locationCode`、`talkTypeCode`、`effectCode` | 业务方提供已批准的业务名称（外部） | 待分配 | 上列操作与字段均有已批准业务名并接入共用标签映射，经真实确认卡核对 | `web/src/contracts/businessLabels.ts`；`app/infra/adapters/business_mcp/catalog.py::catalog` 的 `displayable_argument_fields` |
+
+### 新功能基础总体方案批准登记（2026-11-03）
+
+`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。三棒尚未施工，以下各项不因方案批准而关闭。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 四个旧调度器迁移（含 OA 待办同步进后台） | 已决逐项迁移；凭据轮询依赖“入队即完成”；worker 持有凭据需另行授权 | `P2-BACKGROUND-FOUNDATION-001` | 待分配（逐项） | 每项迁移后终态、取消、重启续跑经真实验证，凭据边界获授权 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；[DECISIONS 2026-11-03 拆分](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条 |
+| XlsxWriter 推迟 | 基础三棒不生成报表 | 业务输入（报表样表） | 待分配（新报表棒） | 完成 allowlist 登记、锁定与真实验收 | DECISIONS 2026-11-02 第 5 条 |
+| 上传解析的网络与文件隔离及 LibreOffice 兼容导入 | 本机只剥离环境变量（J5）；xls/et 只提示另存 | 目标 Linux 容器；样表 | 待分配 | 解析容器无业务网、无凭据文件并经验证；样表验收后开启兼容导入 | DECISIONS 2026-11-02 第 3、7 条；方案 J5 |
+| write 类后台作业协议 | 首棒注册即拒绝 write 类 kind | 首个写入类后台 kind | 待分配（自动提交等） | 以业务账本作为副作用权威、unknown 不重放经真实验证；所需 DDL 另行授权 | 方案 §1.3；DECISIONS 2026-11-02 第 1、4 条 |
+| 已完成作业行与队列历史保留（含换代遗留的无主 doing 队列行） | 首版不清理 | 无 | 待分配 | 保留策略与删除授权完成，或确认数据量没有影响 | 方案 §1.3、§8.2 |
+| Linux worker 优雅停止与部署 | 部署推后 | 服务器迁移授权 | 待分配 | 目标环境 SIGTERM 优雅停止、账本心跳判停换代与 reconcile 经实测；POSIX 下载重开与清理互斥方案确定并验证 | DECISIONS 2026-11-02 第 7 条；方案 §2.6 |
+| 输出发布与产物棒正向链路 | 产物棒没有真实生产者 | `P2-CHAT-UPLOAD-001`；首个输出生产者 | `P2-CHAT-UPLOAD-001`（输入）；待分配（输出） | 输入链路在上传棒验收，输出链路在首个生产者棒验收 | 方案 J7 |
+| 产物 HMAC 密钥轮换 | 首版只有 `v1` | 无 | 待分配 | 有轮换需求时实现密钥环并验证 | 方案 J9 |
+| 本人跨会话文件入口 | J10 只在当前会话可见 | 无 | 待分配 | 有需求时设计“我的文件”列表并经隔离验收 | 方案 §2.4 |
 
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
