@@ -1103,9 +1103,11 @@ describe('ChatPage response projection', () => {
       name: '确认提交这项操作',
     });
     expect(confirmButton.className).toContain('minimumActionTarget');
-    expect(screen.getByText('oa.approval.confirm')).toBeInTheDocument();
+    // Business wording only: no capability id and no protocol enum on the card.
+    expect(screen.queryByText('oa.approval.confirm')).not.toBeInTheDocument();
     expect(screen.getByText('提交 OA 审批同意操作')).toBeInTheDocument();
-    expect(screen.getByText('oa')).toBeInTheDocument();
+    expect(screen.queryByText('oa')).not.toBeInTheDocument();
+    expect(screen.getByText('OA')).toBeInTheDocument();
     expect(screen.getByText('decision')).toBeInTheDocument();
     expect(screen.getByText('同意')).toBeInTheDocument();
     expect(screen.getByText('comment')).toBeInTheDocument();

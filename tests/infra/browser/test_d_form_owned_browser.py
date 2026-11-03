@@ -127,6 +127,8 @@ def state_runtime(tmp_path):
         owned_resource_cleanup_proven=False,
         close_owned=AsyncMock(),
         closed_job_identity={"job": "synthetic-job"},
+        # No run directory was created: terminal cleanup has nothing to delete.
+        created_dir=None,
     )
     runtime = object.__new__(DFormRuntime)
     runtime._states = {run.run_id: state}

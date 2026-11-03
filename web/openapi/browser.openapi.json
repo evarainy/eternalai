@@ -675,7 +675,7 @@
       },
       "BrowserWritePreview": {
         "additionalProperties": false,
-        "description": "Allowlisted digests for a current queued HumanGate request, never values.",
+        "description": "Allowlisted digests for a current queued HumanGate request.\n\n``fields`` carries the D fill-stop owner's own three frozen values, only when\nthey are the exact admitted input of this run; every other skill gets null.\nThe values are display only: the decision binds the digests, never these.",
         "properties": {
           "action_digest": {
             "pattern": "^[a-f0-9]{64}$",
@@ -695,6 +695,16 @@
             "format": "date-time",
             "title": "Expires At",
             "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserHandoffFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "object_type": {
             "pattern": "^[A-Za-z0-9_-]{1,96}$",

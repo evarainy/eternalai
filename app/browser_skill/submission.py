@@ -18,7 +18,9 @@ from typing import Any, Literal, Never
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as SchemaValidationError
+from pydantic import ValidationError as ContractValidationError
 from referencing import Registry
 
 from app.browser_skill.compiler import (
@@ -992,7 +994,10 @@ class BrowserSubmissionService:
         return self._envelope(request, "running", accepted.model_dump(), diagnostic=diagnostic)
 
     @staticmethod
-    def _write_confirmation_view(preparation: BrowserWritePreparation) -> BrowserWritePreview:
+    def _write_confirmation_view(
+        preparation: BrowserWritePreparation,
+        fields: BrowserHandoffFields | None = None,
+    ) -> BrowserWritePreview:
         return BrowserWritePreview(
             request_id=preparation.request_id,
             action_digest=preparation.action_digest,
@@ -1007,7 +1012,55 @@ class BrowserSubmissionService:
             binding_revision=preparation.binding_revision,
             write_steps_digest=preparation.write_steps_digest,
             expires_at=preparation.expires_at,
+            fields=fields,
         )
+
+    async def _write_preview_fields(
+        self,
+        run: RunSnapshot,
+        preparation: BrowserWritePreparation,
+    ) -> BrowserHandoffFields | None:
+        """The D owner's three frozen values for its own current confirmation, else None.
+
+        Called only after the owner's store read of this run and the gate checks.
+        The prepared parameter set must be exactly the admitted input; any other
+        state yields no values (closed reason code only), never a relaxed match.
+        """
+        if not self._fill_stop_reports:
+            return None
+        reason: str
+        if preparation.parameter_set_digest != run.admission.input_digest.hex():
+            reason = "parameter_set_mismatch"
+        else:
+            publication = await self._publications.get_frozen(
+                run.owner,
+                run.admission.publication_digest.hex(),
+            )
+            arguments = (
+                None
+                if publication is None
+                else self._cipher.decrypt_input(run.admission).get("arguments")
+            )
+            if publication is None:
+                reason = "publication_unavailable"
+            elif not isinstance(arguments, dict) or set(arguments) != {
+                "category", "position", "description"
+            }:
+                reason = "arguments_unavailable"
+            else:
+                try:
+                    _validate_schema(arguments, publication.manifest.capability.input_schema)
+                    return BrowserHandoffFields(
+                        category=arguments["category"],
+                        position=arguments["position"],
+                        description=arguments["description"],
+                    )
+                except (
+                    BrowserChatError, SchemaError, SchemaValidationError, ContractValidationError
+                ):
+                    reason = "arguments_invalid"
+        logging.getLogger(__name__).info("browser_write_preview_fields absent reason=%s", reason)
+        return None
 
     async def _ensure_write_preparation(
         self,
@@ -1999,7 +2052,9 @@ class BrowserSubmissionService:
             or request.expires_at <= datetime.now(UTC)
         ):
             return None
-        return self._write_confirmation_view(preparation)
+        return self._write_confirmation_view(
+            preparation, await self._write_preview_fields(run, preparation)
+        )
 
     async def write_preview(
         self,
@@ -2008,7 +2063,7 @@ class BrowserSubmissionService:
         task_id: str,
         run_id: str,
     ) -> BrowserWritePreview:
-        """Internal value-free preview for the same authenticated Run owner."""
+        """Internal preview for the same authenticated Run owner (D: its own three values)."""
         invocation = self._invocation(principal, bound_session)
         try:
             run = await self._store.get(invocation.owner, task_id, run_id)

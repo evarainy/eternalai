@@ -96,6 +96,18 @@ class Unsupported:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorizationRequired:
+    """The model selected an MCP authorization placeholder; nothing was executed.
+
+    ``recheck_passed`` is the session/owner recheck made when the call was
+    seen: False ends the turn on the ordinary denial path, without the hint.
+    """
+
+    capability_id: str
+    recheck_passed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class Clarify:
     """The model asked the user for missing information with ask_user."""
 
@@ -132,7 +144,10 @@ class TurnLedger:
     catalog_attributes: Mapping[str, Any]
     executions: list[LedgerExecution] = field(default_factory=list)
     failures: list[LedgerFailure] = field(default_factory=list)
-    terminal: BindingCard | Proposal | Unsupported | Clarify | BrowserSettled | None = None
+    terminal: (
+        BindingCard | Proposal | Unsupported | Clarify | BrowserSettled
+        | AuthorizationRequired | None
+    ) = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
     call_of: dict[str, int] = field(default_factory=dict)
@@ -146,6 +161,9 @@ class TurnLedger:
     write_tools: Mapping[str, str] = field(default_factory=dict)
     # Browser tool name -> capability id; a subset of business_tools (M2 §3.3).
     browser_tools: Mapping[str, str] = field(default_factory=dict)
+    # MCP authorization placeholder name -> capability id; a subset of
+    # business_tools that never has an executor.
+    authorization_tools: Mapping[str, str] = field(default_factory=dict)
     # Waiting proposal staged with the coordinator but not yet published.
     staged: StagedWaiting | None = None
     # Bounded futures the session waits for before rollback and release.
@@ -174,6 +192,7 @@ class TurnLedger:
 
 
 __all__ = (
+    "AuthorizationRequired",
     "BindingCard",
     "BrowserSettled",
     "CallSnapshot",

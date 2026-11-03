@@ -122,6 +122,8 @@ export interface ProjectedResponse {
   dFormCollection?: DFormCollectionReference;
   dFormCategoryOptions?: readonly string[];
   mcpRecoveryPath?: string;
+  /** Fixed in-site entry of the MCP authorization hint; never a server-supplied link. */
+  mcpAuthorizationPath?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -607,6 +609,11 @@ function structuredData(
   };
 }
 
+// Internal UI reason code of the backend MCP authorization card (bind_required).
+const MCP_AUTHORIZATION_REASON = 'mcp_authorization_required';
+export const MCP_CONNECTIONS_ANCHOR = 'mcp-connections';
+const MCP_AUTHORIZATION_PATH = `/apps#${MCP_CONNECTIONS_ANCHOR}`;
+
 export function projectResponse(
   value: unknown,
   navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
@@ -721,6 +728,10 @@ export function projectResponse(
       presentationKind: 'binding',
       ...(typeof targetSystem === 'string'
         ? { targetSystem: targetSystem as GeneratedTargetSystem }
+        : {}),
+      ...(targetSystem === 'business_platform' &&
+      value.ui.reason_code === MCP_AUTHORIZATION_REASON
+        ? { mcpAuthorizationPath: MCP_AUTHORIZATION_PATH }
         : {}),
     };
   }

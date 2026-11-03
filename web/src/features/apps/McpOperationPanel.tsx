@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Input } from 'antd';
 import { getMcpOperation, listMcpOperations, resumeMcpOperation, safeMcpLink } from '../../api/mcp';
 import type { OperationView, ResumeRequestAction } from '../../generated/mcp/mcp.schemas';
+import { fieldLabel } from '../../contracts/businessLabels';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './McpPanels.module.css';
 
@@ -81,11 +82,11 @@ function Operation({ generation }: { generation: number }) {
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {operation && <div className={styles.row}>
       <p role="status">{states[operation.state]}</p>
-      <p>业务平台：{operation.service_name}；动作：{operation.action}</p>
-      <dl aria-label="原参数安全摘要">{Object.entries(operation.argument_preview).map(([field, value]) => <div key={field}><dt>{field}</dt><dd>{String(value)}</dd></div>)}</dl>
+      <p>业务平台：{operation.service_name}；操作：{operation.action}</p>
+      <dl aria-label="原参数安全摘要">{Object.entries(operation.argument_preview).map(([field, value]) => <div key={field}><dt>{fieldLabel(field)}</dt><dd>{String(value)}</dd></div>)}</dl>
       {operation.state === 'VERIFIED_SUCCESS' && operation.result &&
         <pre aria-label="已核实业务结果">{JSON.stringify(operation.result, null, 2)}</pre>}
-      <p className={styles.muted}>仅显示允许展示的参数；确认绑定完整原参数，正文及敏感字段不会在此展开。</p>
+      <p className={styles.muted}>这里只列出部分内容，确认后按原操作的全部内容办理。</p>
       {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('confirm')}>确认原操作</Button>}
       {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('cancel')}>取消</Button>}
       {operation.recovery_action === 'takeover' && <Button disabled={busy} onClick={() => void run('takeover')}>核验重新授权并接管</Button>}

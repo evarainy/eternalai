@@ -178,6 +178,7 @@ from app.ports.organization_directory import (
 )
 from app.ports.organization_directory_sync import DirectorySourceError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
+from app.ports.request_context import RequestOrgContext
 from app.ports.response_projection_contract import ApprovedResponseProjection
 from app.ports.runtime import RuntimePort
 from app.ports.structured_output import StructuredOutputPort
@@ -738,6 +739,7 @@ def _build_agentscope_runtime(
     model_factory: Callable[[], Any],
     model_name: str,
     session_idle_ttl_seconds: int,
+    mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None,
 ) -> tuple[RuntimePort, Callable[..., None]]:
     """The single wiring of the AgentScope path; AgentScope is imported only here.
 
@@ -798,6 +800,7 @@ def _build_agentscope_runtime(
             browser_orchestration=browser_orchestration,
             d_form_collection_store=d_form_collection_store,
             document_qa=document_qa,
+            mcp_authorization_hint=mcp_authorization_hint,
         )
     )
     return runtime, runtime.install_browser
@@ -1221,6 +1224,17 @@ def build_production_components(
             ),
             model_name=settings.llm_model,
             session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
+            # Placeholders only for candidates the policy hid solely because
+            # this user has not authorized the fixed MCP service.
+            mcp_authorization_hint=(
+                (
+                    lambda user, capability, context: fixed_read.authorization_hint(
+                        ai_user_id=user, capability_id=capability, request_context=context
+                    )
+                )
+                if fixed_read is not None
+                else None
+            ),
         )
     resolved_binding_verifier = credential_binding_verifier
     if resolved_binding_verifier is None:

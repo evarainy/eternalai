@@ -6,11 +6,30 @@ import {
 } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import type { UserActionOutcome } from '../contracts/userActionOutcome';
-import type { ProjectedResponse } from '../contracts/runtimeProjection';
+import { projectTextResponse } from '../contracts/runtimeProjection';
+import type { DFormCollectionReference, ProjectedResponse } from '../contracts/runtimeProjection';
 
 export type AIDockMode = 'closed' | 'drawer' | 'pinned';
 type OpenAIDockMode = Exclude<AIDockMode, 'closed'>;
 type AIDockSessionContextMode = 'general' | 'page';
+
+/**
+ * The reply the last D collection card waits for. Only a reference: the backend re-checks
+ * owner, session, version and expiry on every continuation. ``authGeneration`` is the auth
+ * generation it is valid under; a restored reference is bound to the generation that restored it.
+ */
+export interface PendingCollection {
+  reference: DFormCollectionReference;
+  /** Client conversation id the card belongs to. */
+  sessionId: string;
+  /** Backend session id that issued the card; a continuation must come back on it. */
+  serverSessionId: string;
+  ownerKey: string | null;
+  authGeneration: number;
+}
+
+/** Fixed notice when a restored conversation's pending collection can no longer continue. */
+export const COLLECTION_LOST_NOTICE = '原追问已失效，请重新发起报修。';
 
 /** A conversation brought back by a same-account re-login (see app/reauthRestore.ts). */
 export interface RestoredDockSession {
@@ -21,6 +40,10 @@ export interface RestoredDockSession {
   confirmationResults: Record<string, UserActionOutcome>;
   /** The page context the conversation was bound to when it was captured. */
   pageContext: PageContextDeclaration | null;
+  /** Pending collection, already bound to the restoring generation; applied only with the rest. */
+  collection: PendingCollection | null;
+  /** The transcript ends on a collection card whose reference was not kept (older copy). */
+  collectionLost: boolean;
 }
 
 export type TranscriptEntry =
@@ -44,6 +67,7 @@ interface AIDockState {
   sessionId: string | null;
   transcript: TranscriptEntry[];
   confirmationResults: Record<string, UserActionOutcome>;
+  collection: PendingCollection | null;
   applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
   appendTranscript: (entry: TranscriptEntry) => void;
   clearSession: () => void;
@@ -54,6 +78,7 @@ interface AIDockState {
   openDock: () => void;
   registerPageContext: (candidate: unknown) => void;
   restoreSession: (restored: RestoredDockSession) => void;
+  setCollection: (collection: PendingCollection | null) => void;
   setDraft: (draft: string) => void;
   setMode: (mode: AIDockMode) => void;
   startNewSession: () => void;
@@ -104,6 +129,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   sessionId: null,
   transcript: [],
   confirmationResults: {},
+  collection: null,
   applyConfirmationResult: (sessionId, responseId, result) =>
     set((state) => {
       if (state.sessionId !== sessionId) return state;
@@ -133,6 +159,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionId: null,
       transcript: [],
       confirmationResults: {},
+      collection: null,
     }),
   clearPageContext: (expectedSurfaceId) =>
     set((state) => {
@@ -206,6 +233,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
             sessionId: null,
             transcript: [],
             confirmationResults: {},
+            collection: null,
           };
         }
         return { contextNotice: null, pageContextDeclaration: next };
@@ -219,6 +247,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           sessionId: null,
           transcript: [],
           confirmationResults: {},
+          collection: null,
         };
       }
       if (pageBindingChanged(previous, next)) {
@@ -230,6 +259,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           sessionId: null,
           transcript: [],
           confirmationResults: {},
+          collection: null,
         };
       }
       return { pageContextDeclaration: next, restoredPageContext: null };
@@ -246,15 +276,22 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         // The page already declared a different context: same outcome as a live context switch.
         return { contextNotice: '页面上下文已重新建立；已默认开始新的临时对话。' };
       }
+      // The reference lands with the conversation it belongs to, or not at all.
+      const collection = restored.collection !== null
+        && restored.collection.sessionId === restored.sessionId ? restored.collection : null;
       return {
         ...draft,
         sessionId: restored.sessionId,
         sessionContextMode: restored.sessionContextMode,
-        transcript: restored.transcript,
+        transcript: restored.collectionLost && collection === null
+          ? [...restored.transcript, projectTextResponse(COLLECTION_LOST_NOTICE, 'session')]
+          : restored.transcript,
         confirmationResults: restored.confirmationResults,
         restoredPageContext: current === null ? restored.pageContext : null,
+        collection,
       };
     }),
+  setCollection: (collection) => set({ collection }),
   setDraft: (draft) => set({ draft }),
   setMode: (mode) =>
     set((state) => ({
@@ -274,5 +311,6 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionId: newSessionId(),
       transcript: [],
       confirmationResults: {},
+      collection: null,
     })),
 }));

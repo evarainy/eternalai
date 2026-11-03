@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from 'antd';
 import { authorizeMcp, disconnectMcp, listMcpConnections, listMcpServices, safeMcpAuthorizationLink } from '../../api/mcp';
 import type { ConnectionView, ServiceView } from '../../generated/mcp/mcp.schemas';
+import { MCP_CONNECTIONS_ANCHOR } from '../../contracts/runtimeProjection';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './McpPanels.module.css';
 
@@ -46,6 +47,7 @@ function Connections({ generation }: { generation: number }) {
   const live = useRef(true);
   const sequence = useRef(0);
   const inFlight = useRef(false);
+  const section = useRef<HTMLElement>(null);
   const current = (id: number) => live.current && sequence.current === id && useAuthStore.getState().generation === generation;
 
   useEffect(() => {
@@ -63,6 +65,14 @@ function Connections({ generation }: { generation: number }) {
     });
     return () => { live.current = false; };
   }, [generation]);
+
+  // The hash target renders only after the async load, so the browser's own
+  // anchor jump finds nothing: scroll once loading has settled.
+  useEffect(() => {
+    if (!loading && window.location.hash === `#${MCP_CONNECTIONS_ANCHOR}`) {
+      section.current?.scrollIntoView?.({ block: 'start' });
+    }
+  }, [loading]);
 
   async function act(service: ServiceView, connection?: ConnectionView) {
     if (inFlight.current) return;
@@ -89,7 +99,7 @@ function Connections({ generation }: { generation: number }) {
     }
   }
 
-  return <section className={styles.panel} aria-label="业务服务连接">
+  return <section ref={section} id={MCP_CONNECTIONS_ANCHOR} className={styles.panel} aria-label="业务服务连接">
     <h2>业务服务连接</h2>
     <p className={styles.muted}>分别连接单位提供的业务服务，授权由业务平台本人确认。</p>
     {loading && <p role="status">正在读取连接状态…</p>}

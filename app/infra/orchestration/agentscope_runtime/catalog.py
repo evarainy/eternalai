@@ -7,7 +7,10 @@ write groups (except READ_WORKFLOW_IDS, which are read tools); action and mock
 capabilities are never visible, and browser
 capabilities are excluded silently (counted only). There is no lexical
 pre-selection. Grouping is a pure function of the visible definitions so
-offline evaluation can call it directly. The one registered browser
+offline evaluation can call it directly. A business capability hidden only
+because the current user has not authorized the MCP service becomes an
+authorization placeholder in its read group: never both a placeholder and an
+executable tool, and never given an executor. The one registered browser
 capability of a trusted browser request is added by the runtime as an
 external tool in its own group (M2 §3.3).
 """
@@ -16,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 from uuid import uuid4
@@ -76,7 +79,7 @@ SCOPE_EXCLUDED_PREFIX = "browser."
 # together with a write proposal (each must be called alone).
 BROWSER_GROUP = "oa_browser"
 BROWSER_GROUP_PURPOSE = "在 OA 网页中由浏览器代为处理已登记的事项，不会保存或提交。"
-ToolKind = Literal["read", "write", "browser"]
+ToolKind = Literal["read", "write", "browser", "authorization"]
 # Second-level split inside one primary group, applied only when the primary
 # group does not fit in one chunk: {group: ((subgroup, (capability suffix,
 # ...)), ...)}. Subgroup names must not contain "_other_".
@@ -206,6 +209,9 @@ class VisibleCatalog:
     # The requested browser capability when it is active and policy-visible,
     # before the type and prefix filters; the runtime decides on exposure.
     browser: CapabilitySpec | None = None
+    # Policy-excluded capabilities whose only obstacle is the current user's
+    # missing MCP authorization; disjoint from ``capabilities``.
+    authorization_required: tuple[CapabilitySpec, ...] = ()
 
 
 async def visible_capabilities(
@@ -217,8 +223,12 @@ async def visible_capabilities(
     channel: RequestChannel,
     request_id: str | None = None,
     browser_capability_id: str | None = None,
+    authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None,
 ) -> VisibleCatalog | None:
-    """This request's policy-previewed active query/workflow set, or None if invalid."""
+    """This request's policy-previewed active query/workflow set, or None if invalid.
+
+    ``authorization_hint`` is asked only about excluded in-scope candidates.
+    """
 
     # Same rule as the legacy Runtime's _visible_capabilities.
     try:
@@ -232,6 +242,7 @@ async def visible_capabilities(
         request_id=request_id or str(uuid4()), channel=channel, tenant_id=tenant_id
     )
     visible: list[CapabilitySpec] = []
+    authorization: list[CapabilitySpec] = []
     for item in sorted(active, key=lambda capability: capability.capability_id):
         try:
             verdict = await policy.preview_capability(
@@ -239,6 +250,16 @@ async def visible_capabilities(
                 capability_id=item.capability_id,
                 request_context=request_context.model_copy(deep=True),
             )
+            if (
+                verdict == "exclude"
+                and authorization_hint is not None
+                and item.type in VISIBLE_TYPES
+                and not item.capability_id.startswith(SCOPE_EXCLUDED_PREFIX)
+                and authorization_hint(
+                    ai_user_id, item.capability_id, request_context.model_copy(deep=True)
+                )
+            ):
+                authorization.append(item.model_copy(deep=True))
         except Exception:
             return None
         if verdict == "exclude":
@@ -258,21 +279,35 @@ async def visible_capabilities(
         active_count=len(active),
         scope_excluded=len(typed) - len(in_scope),
         browser=browser,
+        authorization_required=tuple(authorization),
     )
 
 
-def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
-    """Project, name and group the visible definitions; no AgentScope types."""
+def build_tool_catalog(
+    specs: Sequence[CapabilitySpec],
+    authorization: Sequence[CapabilitySpec] = (),
+) -> ToolCatalog:
+    """Project, name and group the visible definitions; no AgentScope types.
+
+    ``authorization`` definitions become placeholders in their read group; a
+    capability id in both lists collides and neither is registered.
+    """
 
     excluded: dict[str, int] = {}
     candidates: list[CatalogTool] = []
-    for spec in sorted(specs, key=lambda item: item.capability_id):
+    entries = sorted(
+        [(spec, False) for spec in specs] + [(spec, True) for spec in authorization],
+        key=lambda item: item[0].capability_id,
+    )
+    for spec, placeholder in entries:
         name = spec.capability_id.replace(".", "__")
         if _TOOL_NAME.fullmatch(name) is None:
             _count(excluded, "tool_name_invalid")
             continue
         kind: ToolKind = (
-            "write"
+            "authorization"
+            if placeholder
+            else "write"
             if spec.type == "workflow" and spec.capability_id not in READ_WORKFLOW_IDS
             else "read"
         )
@@ -296,7 +331,12 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
                 name=name,
                 capability_id=spec.capability_id,
                 group=group,
-                description=_description(spec, schema),
+                # A placeholder is selected, never run: no required-argument hint.
+                description=(
+                    f"{spec.name}：{spec.short_description}"
+                    if placeholder
+                    else _description(spec, schema)
+                ),
                 input_schema=schema,
                 schema_digest=hashlib.sha256(
                     canonical_json(schema).encode("utf-8")
@@ -321,13 +361,14 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
             tools.append(tool)
 
     # Each member's entry in its group description: "name: summary" or name.
-    summaries = {spec.capability_id: discovery_summary(spec) for spec in specs}
+    described = [spec for spec, _ in entries]
+    summaries = {spec.capability_id: discovery_summary(spec) for spec in described}
     spec_names = {
         spec.capability_id: (
             spec.name if summaries[spec.capability_id] is None
             else f"{spec.name}：{summaries[spec.capability_id]}"
         )
-        for spec in specs
+        for spec in described
     }
     groups: list[CatalogGroup] = []
     grouped: list[CatalogTool] = []
@@ -348,7 +389,7 @@ def build_tool_catalog(specs: Sequence[CapabilitySpec]) -> ToolCatalog:
     return ToolCatalog(
         tools=tuple(grouped),
         groups=tuple(groups),
-        visible_count=len(specs),
+        visible_count=len(entries),
         excluded=tuple(sorted(excluded.items())),
         summary_omitted=sum(1 for tool in grouped if summaries[tool.capability_id] is None),
     )

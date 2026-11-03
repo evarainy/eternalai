@@ -903,17 +903,7 @@ class DFormRuntime:
             return "released"
         if state.process is not None and state.process.returncode is None:
             await self._stop(state)
-        state.attachment_cleanup_proven = (
-            self._exited(state)
-            and not state.output_invalid
-            and (state.owned_browser is None or state.owned_browser.attachment_cleanup_proven)
-            and (
-                state.process is None
-                or not state.input_sent
-                or state.stages.get(7, {}).get("status") == "PASS"
-                and state.process.returncode in (0, 2)
-            )
-        )
+        state.attachment_cleanup_proven = self._attachments_exited(state)
         state.cleanup_proven = (
             state.attachment_cleanup_proven and state.owned_resource_cleanup_proven
         )
@@ -938,6 +928,23 @@ class DFormRuntime:
             return "quarantined"
         state.released = True
         return "released"
+
+    def _attachments_exited(self, state: _State) -> bool:
+        """Worker, its output and every owned-browser attachment provably ended.
+
+        The release predicate of ``_cleanup_state``; never set from a guess.
+        """
+        return (
+            self._exited(state)
+            and not state.output_invalid
+            and (state.owned_browser is None or state.owned_browser.attachment_cleanup_proven)
+            and (
+                state.process is None
+                or not state.input_sent
+                or state.stages.get(7, {}).get("status") == "PASS"
+                and state.process.returncode in (0, 2)
+            )
+        )
 
     def install_cleanup_authority(
         self,
@@ -986,6 +993,15 @@ class DFormRuntime:
                     }
                 ).encode()
             await self._cleanup_authorize(run)
+            if (
+                state.owned_browser.created_dir is not None
+                and state.owned_resource_cleanup_proven
+                and self._attachments_exited(state)
+            ):
+                # Terminal Run, authority just re-checked, full exit proven: delete
+                # the exact run directory before the lease can be reused. A failure
+                # is logged and kept; it never changes the release decision below.
+                await state.owned_browser.remove_created_dir()
             stage = "cleanup_release"
             result = await self._cleanup_state(run, state)
             if result == "released":
