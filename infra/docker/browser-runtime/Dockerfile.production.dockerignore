@@ -52,6 +52,8 @@ app/infra/human_gate/*
 app/infra/identity/*
 !app/infra/job_queue/
 app/infra/job_queue/*
+!app/infra/jobs/
+app/infra/jobs/*
 !app/infra/llm/
 app/infra/llm/*
 !app/infra/llm/mock_llm/
@@ -120,10 +122,12 @@ services/decision/*
 !app/admin/leader_roster.py
 !app/admin/registry.py
 !app/application.py
+!app/background_jobs.py
 !app/api/__init__.py
 !app/api/v1/__init__.py
 !app/api/v1/admin.py
 !app/api/v1/auth.py
+!app/api/v1/background_jobs.py
 !app/api/v1/browser_runs.py
 !app/api/v1/credential_bindings.py
 !app/api/v1/csrf.py
@@ -159,6 +163,7 @@ services/decision/*
 !app/config.py
 !app/contracts/sdui/models.py
 !app/credential_polling.py
+!app/dependency_checks.py
 !app/db/__init__.py
 !app/db/config.py
 !app/db/health.py
@@ -242,6 +247,9 @@ services/decision/*
 !app/infra/fixed_txt.py
 !app/infra/job_queue/__init__.py
 !app/infra/job_queue/in_memory.py
+!app/infra/jobs/__init__.py
+!app/infra/jobs/ledger.py
+!app/infra/jobs/queue_sql.py
 !app/infra/llm/agentscope_chat.py
 !app/infra/llm/json_structured_output.py
 !app/infra/llm/mock_llm/mock_llm_provider.py
@@ -329,6 +337,7 @@ services/decision/*
 !app/ports/adapter.py
 !app/ports/agent_orchestration.py
 !app/ports/auth.py
+!app/ports/background_jobs.py
 !app/ports/browser_fill_stop.py
 !app/ports/browser_gateway.py
 !app/ports/browser_chat.py
