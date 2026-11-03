@@ -700,7 +700,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 自动提交每流程结果查询方式待提供 | 自动提交须按原身份与业务唯一键查询单号或业务后态；缺少逐流程查询方式与成功判据时，无法核实成功，unknown 必须保持待核实、不重放 | 雨爷 / 业务方提供结果查询方式与成功判据，并逐流程授权真实启用 | 待分配（自动提交功能；业务输入就绪后） | 每流程查询与成功判据核定、接入并经授权真实验证，结果不明路径不重复提交；既有 M3 Q4/V08 另按其条件核销 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 1 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` v3 |
 | 远程画面 Chrome 101 / 麒麟输入法未实测 | Playwright screencast 与白名单输入转发已选定，但目标浏览器、中文输入与接管交还尚未现场验证；页面外操作或输入法不过时转 KasmVNC | 对应真实浏览器 / 输入法环境 | 待分配（远程画面与接管任务；麒麟项随迁移任务） | Chrome 101 观看/接管、中文输入、人机互斥和交还后重新观察实测通过，或完成 KasmVNC 备选验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 2、5、7 条；仓库外选型汇总 |
-| Procrastinate 队列 schema 待专项授权 | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者。2026-11-03 `P2-BACKGROUND-FOUNDATION-001` 已交付 R1/R2、接收与 worker 代码并在测试库升级：代码已交、开发库升级与真实验收待做，本行不关闭 | 无（雨爷 2026-11-03 已批准开发库与测试库的 schema upgrade，见 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 第 2 条） | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
+| Procrastinate 队列 schema 待专项授权（已关闭） | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者。2026-11-03 `P2-BACKGROUND-FOUNDATION-001` 交付 R1/R2、同事务接收与独立 worker，开发库与测试库已升级，合并前在 18005 加 worker 上真实验证持久入队、独立 worker、重启续跑（强杀与 Ctrl+C 两路换代）、取消、限并发与单一执行所有者（换代后旧队列行不再执行），本行关闭；unknown 写入不重放与四个旧调度器迁移分别由下文[新功能基础总体方案批准登记](#新功能基础总体方案批准登记2026-11-03)中“write 类后台作业协议”“四个旧调度器迁移”两行承接 | 无（雨爷 2026-11-03 已批准开发库与测试库的 schema upgrade，见 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 第 2 条） | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
 | 服务器现场核实项待完成 | M5 暂缓（部署推后）；麒麟 V11 2503 / 内核 6.6 ARM + Docker 为目标口径，尚未现场确认，64 KiB 页、cgroup 与沙箱兼容性不能由调研推定通过 | 目标服务器可用与迁移 / 部署专项授权 | 待分配（服务器迁移独立任务） | 现场核实 nkvers/uname、页大小、cgroup v2/cgroup.kill、Docker cgroup 驱动、KYSEC 与 Chromium 沙箱并完成目标环境验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 7 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` 现场需核实项 |
 
 ### D 启动失败清理修复新增欠债（2026-11-02）
@@ -742,7 +742,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### 新功能基础总体方案批准登记（2026-11-03）
 
-`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。首棒候选已交付、待真实验收与合并（见下节），后两棒尚未施工；以下各项不因方案批准而关闭。
+`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。首棒候选已交付并完成合并前真实验收、待合并（见下节），后两棒尚未施工；以下各项不因方案批准而关闭。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
@@ -762,10 +762,12 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 18005 加 worker 真实验收未做 | 施工只获测试库授权；开发库 upgrade、18005 重启与 worker 启停、§1.6 第 13 项故障注入均由主控验收时执行，测试库冒烟不代替真实验收 | 无 | `P2-BACKGROUND-FOUNDATION-001`（合并前验收） | 开发库按方案 §4 目标识别后 upgrade；方案 §1.6 第 1–13 项在开发库 18005 加 worker 上实测；含 asyncpg 上的绑定与返回 id、同事务回滚、提交后通知、取消两分支与换代 | 方案 §1.6、§8.3；[DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) |
-| Windows Ctrl+C 优雅停止与停机中断原因值未实测 | worker 在 Windows 不装信号处理，Ctrl+C 由 `asyncio.Runner` 取消主任务，期望走官方“优雅停止，30 秒后以 SHUTDOWN 中断”；只经源码核对 | 无 | `P2-BACKGROUND-FOUNDATION-001`（§1.6 第 9 项） | 第 9 项实测；不成立则记录实际行为并另定处置 | 方案 §1.4、§8.3；`app/worker.py::run_worker` |
+| 18005 加 worker 真实验收未做（已关闭） | 施工只获测试库授权；开发库 upgrade、18005 重启与 worker 启停、§1.6 第 13 项故障注入均由主控验收时执行，测试库冒烟不代替真实验收。2026-11-03 合并前已完成：开发库目标识别后升级，§1.6 第 1–13 项全部通过（第 8 项“取消中再次取消”因界面隐藏按钮只以静态 Review 取证），本行关闭 | 无 | `P2-BACKGROUND-FOUNDATION-001`（合并前验收） | 开发库按方案 §4 目标识别后 upgrade；方案 §1.6 第 1–13 项在开发库 18005 加 worker 上实测；含 asyncpg 上的绑定与返回 id、同事务回滚、提交后通知、取消两分支与换代 | 方案 §1.6、§8.3；[DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) |
+| Windows Ctrl+C 优雅停止与停机中断原因值未实测（已关闭） | worker 在 Windows 不装信号处理，Ctrl+C 由 `asyncio.Runner` 取消主任务，期望走官方“优雅停止，30 秒后以 SHUTDOWN 中断”。2026-11-03 第 9 项实测：Ctrl+C 后停止领取，30 秒宽限后队列行记 aborted、账本不写结果，对账换代后成功（派发 2 次），本行关闭 | 无 | `P2-BACKGROUND-FOUNDATION-001`（§1.6 第 9 项） | 第 9 项实测；不成立则记录实际行为并另定处置 | 方案 §1.4、§8.3；`app/worker.py::run_worker` |
 | 固定测试库留有冒烟作业行 | 2026-11-03 开发冒烟在 `eternalai_test` 写入作业账本与队列行；R1/R2 downgrade 只允许空表，本机对该库执行经过 R1/R2 的 downgrade 用例会被拒绝（CI 临时库不受影响）；删除这些行需专项授权 | 雨爷删除授权或测试库重置授权 | 待分配 | 获授权清除测试库这些行，或裁决本机不再运行经过 R1/R2 的 downgrade 用例 | 方案 §4 R1/R2 downgrade 条件；`alembic/versions/20261103_120000_procrastinate_queue_3_10_0.py::downgrade` |
 | 健康页旧占位文件未删 | 健康页已改读真实 `/health`，`web/src/api/mockHealth.ts` 不再被引用；删除文件需专项授权 | 雨爷删除授权 | 待分配 | 获授权删除该文件，或确认保留 | `web/src/pages/HealthPage.tsx::HealthPage` |
+| 健康页提交后取消按钮未即时出现（一次观察） | 2026-11-03 验收第 6 项：worker 停止时第二次提交自检后，“取消本次自检”按钮未出现，刷新后出现并取消成功；未复现、未定位 | 无 | 待分配 | 复现并定位后修复，或多次操作确认不再出现 | `web/src/features/background-jobs/SelfCheckPanel.tsx::SelfCheckPanel` |
+| 开发库端口另在 IPv6 全地址发布 | `docker-compose.yml` 的 postgres `ports` 未写主机 IP，`eternalai-postgres-1` 除 `127.0.0.1:5432` 外另发布 `[::]:5432`（2026-08 建容器起即有）；方案 §4 只预期回环发布 | 雨爷决定是否收紧（改 compose 需重建容器） | 待分配 | compose 改为只绑回环并重建容器，或确认保留 | `docker-compose.yml` postgres `ports`；方案 §4 执行前目标识别第 2 项 |
 
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
