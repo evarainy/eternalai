@@ -3374,6 +3374,20 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 6. **复用优先与许可口径**：重申 `AGENTS.md` 的实现取舍，优先成熟实现与已有依赖，只做必要薄适配。MIT/Apache/BSD 代码可复用，须保留许可声明并登记第三方来源；GPL/AGPL/ELv2、附加品牌或商用条款项目，以及无明确许可的项目只借思路，不复制代码、UI、提示词或资源。具体包括 Skyvern、Kortix/Suna、Cherry Studio、Dify、Open WebUI、LobeHub、QwenPaw 专有 skill 与无明确许可的 Composio open-dot；不把同一项目局部宽松许可外推整个项目。
 7. **部署推后**：M5 目标机演示暂缓，全部开发在本机完成，服务器迁移另开任务。目标服务器口径为银河麒麟 V11（2503，内核 6.6）ARM + Docker，尚非本棒现场实测；迁移时核实 `nkvers`/`uname`、页大小（64 KiB 风险）、cgroup v2 与 `cgroup.kill`、Docker cgroup 驱动、KYSEC 与 Chromium 沙箱。每任务独立隔离资源已获雨爷同意，不由此派生服务器变更或部署授权。
 8. **产物保留**：生成文件与上传原件各保留 14 天，输入自封存、输出自发布起算；到期先拒绝下载，再幂等删除。后续考虑文件服务器；该产品生命周期不全局改写现有浏览器产物 TTL，也不授权本治理棒删除文件。
-9. **开发顺序调整**：替换 2026-10-28 第 7 条已批顺序中尚未执行部分：GOV-SYNC（本棒 `P2-GOV-SYNC-20261102`）→ AgentScope 2.0.11 正式版替换（`P2-RUNTIME-AGENTSCOPE-GA-001`）→ 默认入口切换到 agentscope 与 Golden 改走新路径（M6 代码部分 `P2-RUNTIME-AGENTSCOPE-M6-001`，旧代码退役删除另行专项授权）→ 新功能基础（后台任务、文件产物与下载、聊天上传）→ 远程画面与接管 → 依赖业务输入的功能（上传填表映射、新报表、自动提交、3～4 个预教流程）。工具命中率（零词面）改进穿插进行；尚未执行的 M1B 真实写入、R-APP V1–V8、R-OA V3–V5 真实验收随时可做，不占开发顺序，也不因前移 M6 而核销。M5 暂缓（部署推后），R-MCP 继续待外部 E1；既有 M6 承接义务仍保留，新功能细分 task_id 未明确者保持待分配。
+9. **开发顺序调整**：替换 2026-10-28 第 7 条已批顺序中尚未执行部分：GOV-SYNC（本棒 `P2-GOV-SYNC-20261102`）→ AgentScope 2.0.11 正式版替换（`P2-RUNTIME-AGENTSCOPE-GA-001`）→ 默认入口切换到 agentscope 与 Golden 改走新路径（M6 代码部分 `P2-RUNTIME-AGENTSCOPE-M6-001`，旧代码退役删除另行专项授权）→ 新功能基础（后台任务、文件产物与下载、聊天上传）→ 远程画面与接管 → 依赖业务输入的功能（上传填表映射、新报表、自动提交、3～4 个预教流程）。工具命中率（零词面）改进穿插进行；尚未执行的 M1B 真实写入、R-APP V1–V8、R-OA V3–V5 真实验收随时可做，不占开发顺序，也不因前移 M6 而核销。M5 暂缓（部署推后），R-MCP 继续待外部 E1；既有 M6 承接义务仍保留，新功能细分 task_id 未明确者保持待分配（新功能基础三棒的 task_id 已由 [2026-11-03 裁决](#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 1 条分配）。
 
 **承接与保留项**：当前后继与 2026-11-02 真实验收结果见 [STATUS](STATUS.md)；待业务输入、远程兼容性、队列 schema 授权与服务器核实项见 [PLAN 本次新增欠债](PHASE2_PLAN.md#云端自动办理与技术选型新增欠债2026-11-02)。M3 Q4 核实来源、Q5 b 重启人工恢复、actors 首版管理全链等未完成义务继续保留。PR #246 已合并并完成启动早期失败租约释放及恢复后再次报修的真实验证，不代表原启动异常根因已定，也不代表重启自动回收完成。本治理棒只登记裁决，不能视为真实自动提交、DB schema 安装、生产部署或旧代码删除的专项授权。
+
+## 2026-11-03 — 裁决：新功能基础拆分与监理模板口径对齐
+
+**来源与范围**：雨爷 2026-11-03 授权主控在 Astra 只读核实后自行决定新功能基础的准备与治理事项（“建议做的你安排 codex astra 去核实，然后你决定”）。依据仓库外 `E:/code/eternalai-reviews/gov-sync-20261103/TECH_VERIFY_astra.md` 与 `STALE_COMMITS_astra.md`。本条只登记拆分、顺序与授权前置，不构成 DB schema、依赖安装、文件删除、分支删除或合并的专项授权。
+
+1. **新功能基础拆为三棒，串行**：`P2-BACKGROUND-FOUNDATION-001`（后台任务基础，A 档、高风险）→ `P2-FILE-ARTIFACTS-001`（文件产物与下载，A 档、高风险）→ `P2-CHAT-UPLOAD-001`（聊天上传，B 档、高风险）。依赖为前一棒的合同与运行能力：产物到期清理由队列周期任务执行，上传封存依赖产物存储。共享 `pyproject.toml`/`uv.lock`/allowlist、`app/composition.py`、`app/application.py` 与 Alembic revision 链均单 writer。
+2. **总体方案先行、schema 一次申请**：首棒开工前写一份覆盖三棒的 A 档总体方案，固定作业接收、事务、取消、限并发与恢复合同，文件归属与 [2026-11-02 裁决](#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 8 条 14 天生命周期，以及上传信任边界；方案列出三棒全部新增 DB 对象的完整 DDL（Procrastinate 官方 schema 的全部表、类型、函数、触发器、索引与独立 namespace，加业务新增表），经现役路由独立评审后一次性向雨爷申请 schema 授权，可分 migration 执行。授权前只准备代码与 SQL，不应用到任何库。后两棒在总体方案对应节之上补短 plan，仍经独立评审。
+3. **首棒范围**：新队列与独立 worker 骨架及一条实际任务闭环。`app/credential_polling.py::CredentialPollingScheduler`、`app/work_dispatch/recurrence.py::WorkObjectSeriesScheduler`、`app/organization_directory_sync.py::OrganizationDirectoryScheduler`、`app/browser_skill/supervisor.py::BrowserWorkerSupervisor` 保持原接线，按 2026-11-02 第 4 条逐项迁移另开任务；其中只有 CredentialPollingScheduler 依赖“入队返回即完成”，迁移时先修正。确认后入队须与业务写入同一事务提交（Procrastinate external connection，psycopg 3）；做不到时方案写明差异交雨爷裁决，不得把“待投递”报成“已入队”。Windows 浏览器链使用 asyncpg 与 Proactor 事件循环，不在首棒接入。
+4. **依赖按棒引入**：首棒引入 procrastinate 及其闭包；上传棒引入 openpyxl、et-xmlfile、defusedxml，选用 multipart 时补 python-multipart 直接依赖；XlsxWriter 到新报表棒再引入。每项先登记 `docs/dev/dependency_policy.md` allowlist 与许可来源，再改 manifest 与锁文件。
+5. **删除实现另授权**：产物到期删除与失败临时件回收属于删除实现，产物棒方案须列出精确存储根与对象范围，随方案申请专项授权。
+6. **旧分支提交不并入**：`phase2/P2-GOV-SYNC-DISPATCH-20261018` 上 3 个未进主干的提交，其内容已被主干后续提交吸收或由 2026-10-22、2026-10-23、2026-10-26 裁决替代，无遗漏的雨爷决定；不 cherry-pick，分支保留（删除另需授权）。
+7. **监理模板口径对齐**：`docs/phase2/MONITOR_PROMPT_TEMPLATE.md` 原“治理文档不得写 PR 号”比 `AGENTS.md`「状态同步」更严，按 `AGENTS.md`「权威、范围与执行」模板不得另设门禁，改为只禁 commit SHA 与 CI run id。M6 第 1 轮据旧模板判定的阻断已处置，不追溯。
+
+**承接与保留项**：当前后继见 [STATUS](STATUS.md)；[PLAN](PHASE2_PLAN.md#云端自动办理与技术选型新增欠债2026-11-02)「Procrastinate 队列 schema 待专项授权」行的 activation 改为首棒，旧调度器迁移仍待分配。2026-11-02 裁决其余义务、M3 Q5 b、真实自动提交与服务器部署均不因本条核销。
