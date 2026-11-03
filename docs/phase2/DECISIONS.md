@@ -3391,3 +3391,23 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 7. **监理模板口径对齐**：`docs/phase2/MONITOR_PROMPT_TEMPLATE.md` 原“治理文档不得写 PR 号”比 `AGENTS.md`「状态同步」更严，按 `AGENTS.md`「权威、范围与执行」模板不得另设门禁，改为只禁 commit SHA 与 CI run id。M6 第 1 轮据旧模板判定的阻断已处置，不追溯。
 
 **承接与保留项**：当前后继见 [STATUS](STATUS.md)；[PLAN](PHASE2_PLAN.md#云端自动办理与技术选型新增欠债2026-11-02)「Procrastinate 队列 schema 待专项授权」行的 activation 改为首棒，旧调度器迁移仍待分配。2026-11-02 裁决其余义务、M3 Q5 b、真实自动提交与服务器部署均不因本条核销。
+
+## 2026-11-03 — 裁决：新功能基础总体方案批准与一次性授权
+
+**来源与范围**：雨爷 2026-11-03 原话“批准，含第 8 条”，批准对象为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（总体方案 v1.6，经 Astra 七轮评审，末轮 PASS 并判定可一次性批准；评审记录同目录 `FOUNDATION_PLAN_REVIEW_astra*.md`）。本条登记批准与授权边界，不搬入方案正文；方案正文、附录 A/B（DDL）与 §8.1 授权文本以该冻结文件为准。本条不授权合并、部署或任何 downgrade。
+
+1. **方案批准**：新功能基础三棒 `P2-BACKGROUND-FOUNDATION-001`（A 档、高风险）→ `P2-FILE-ARTIFACTS-001`（A 档、高风险）→ `P2-CHAT-UPLOAD-001`（B 档、高风险）按总体方案 v1.6 施工；后两棒在总体方案对应节之上补短 plan。审查链按 `AGENTS.md`：施工 → 跨模型静态 Review → 获授权真实流程验收，不默认加自审或 Monitor。
+2. **一次性授权（方案 §8.1 第 1–8 条全部，限三棒施工与验收期）**：
+   - Schema 只 upgrade（R1、R2 随首棒，R3 随产物棒），内容以附录 A（Procrastinate 3.10.0 官方 `schema.sql`，哈希以方案为准，不符即停）与附录 B 为准；目标只限开发库 `127.0.0.1:5432/eternalai`（容器 `eternalai-postgres-1`）与测试库 `127.0.0.1:15432/eternalai_test`（容器 `eternalai_test_db-postgres-1`），每次执行前按方案 §4 核对目标。
+   - 上述两库中 `public.background_jobs`、`public.file_artifacts` 与 `eternalai_queue.*` 的记账写入；不改其他表数据。
+   - 雨爷本人账号的验收操作（后台服务自检的提交/重放/取消；指定非敏感 xlsx 样表与仓库外合成测试文件的上传/引用/下载）；跨账号隔离只用雨爷提供并本人登录的第二测试账号，没有则标未真实验收。
+   - 进程操作：启动或重启本机 18005 以加载当前棒代码；对 `python -m app.worker` 进程启动、Ctrl+C 停止与强杀。
+   - 存储根：创建标准根 `E:/eternalai-data/file-artifacts-standard` 与样本根 `E:/eternalai-data/file-artifacts-acceptance-sample`；只在两根下按方案 §6 的 D1a、D1b、D2 删除元数据对应文件，D4 为队列库内部记账行删除。
+   - 依赖：项目内 `uv sync` 从公共 PyPI 下载方案 §5 所列版本，按棒引入，wheel 哈希不符即停。
+   - 密钥：产物 MAC 钥由雨爷本人生成并写入 `.env`，施工方不生成、不读取、不写入。
+   - 可选第 8 条已批准：在测试库 `eternalai_test` 执行一次受控故障注入脚本验证接收事务回滚，脚本不提交。
+   - **不含**：合并、部署、downgrade；其他库（含同实例 `eternalai_dispatch_test`、`eternalai_pilot`）、路径与进程；OA/用户业务凭据的获取或持有；两根以外的文件删除及根目录、元数据行、已完成作业行的删除；生产或真实业务数据。
+3. **裁决项按推荐**：J1 首棒以“后台服务自检”加 `background_jobs.reconcile` 验收后台骨架，不据此宣称业务处理函数或旧调度器迁移已验收；J5 本机上传检查仅剥离环境变量，作为本机开发期例外接受，网络与文件隔离随 Linux 容器实现；J6 样本根 300 秒保留、仅棒 3 验收窗口使用，标准根固定 14 天；J7 产物棒记“代码完成、部分验收”，输入链路随上传棒验收，输出链路随首个生产者；J9 产物 MAC 钥 `key_id=v1`，API 与 worker 持有，暂不轮换；J10 附件只在当前会话界面可见，401 重登可恢复，刷新或主动退出后不显示，本人直链有效至到期。
+4. **作业恢复设计要点（便于后续追溯，细节以方案 §1.3 为准）**：一条队列行最多执行一次，不使用 Procrastinate 原地 retry（含 `retry_stalled_jobs`/`retry_job`/`retry_job_by_id` 与手工 retry）；执行身份为领取时生成的 `claim_token`，停滞由账本心跳判定，恢复一律换新队列行，派发总数含首次不超过 3；首棒不接收 write 类作业。
+
+**承接与保留项**：当前后继见 [STATUS](STATUS.md)；方案 §8.4 欠债 Q1–Q9 登记于 [PLAN](PHASE2_PLAN.md#新功能基础总体方案批准登记2026-11-03)。2026-11-02、2026-11-03 拆分裁决的其余义务不因本条核销。
