@@ -78,13 +78,22 @@ _WRITE_INPUT = {
 _SUBJECT = "synthetic-subject"
 
 
-def _spec(capability_id: str, kind: str, name: str) -> CapabilitySpec:
+def _spec(
+    capability_id: str,
+    kind: str,
+    name: str,
+    *,
+    input_schema: dict[str, Any] | None = None,
+    displayable: tuple[str, ...] = (),
+) -> CapabilitySpec:
     output_schema = runtime_output_schema("registry_fakes.default")
+    if input_schema is None:
+        input_schema = _WRITE_INPUT if kind == "workflow" else _OBJECT
     return CapabilitySpec(
         capability_id=capability_id,
         name=name,
         type=kind,
-        input_schema=_WRITE_INPUT if kind == "workflow" else _OBJECT,
+        input_schema=input_schema,
         input_schema_digest=f"input-{capability_id}",
         output_schema=output_schema,
         output_schema_digest=schema_digest(output_schema),
@@ -97,6 +106,7 @@ def _spec(capability_id: str, kind: str, name: str) -> CapabilitySpec:
         target_system="oa",
         execution_identity="user_delegated",
         binding_required=False,
+        displayable_argument_fields=list(displayable),
     )
 
 
@@ -109,9 +119,9 @@ def _definition(two_steps: bool) -> WorkflowDefinition:
     return WorkflowDefinition(workflow_id=WORKFLOW, version="1.0.0", steps=tuple(steps))
 
 
-def _specs(two_steps: bool) -> list[CapabilitySpec]:
+def _specs(two_steps: bool, workflow: CapabilitySpec | None = None) -> list[CapabilitySpec]:
     specs = [
-        _spec(WORKFLOW, "workflow", "发起请假"),
+        _spec(WORKFLOW, "workflow", "发起请假") if workflow is None else workflow,
         _spec(FIRST[0], "query", "请假预览"),
         _spec(FIRST[1], "action", "提交请假"),
     ]
@@ -123,13 +133,14 @@ def _specs(two_steps: bool) -> list[CapabilitySpec]:
 class Model(OpenAIChatModel):
     """Proposes the leave workflow on START; any other message gets plain text."""
 
-    def __init__(self, group: str, log: list[str]) -> None:
+    def __init__(self, group: str, log: list[str], arguments: dict[str, Any] | None = None) -> None:
         super().__init__(
             credential=OpenAICredential(api_key=SecretStr("EMPTY"),
                                         base_url="http://model.invalid/v1"),
             model="c-suite", stream=False, max_retries=0,
         )
         self._group, self._log = group, log
+        self._arguments = {"days": 2} if arguments is None else arguments
 
     async def _call_api(self, model_name: str, messages: list[Msg], tools: Any = None,
                         tool_choice: Any = None, **kwargs: Any) -> ChatResponse:
@@ -141,7 +152,7 @@ class Model(OpenAIChatModel):
         if text == START and not calls:
             return _call("reset_tools", {self._group: True})
         if text == START and calls[-1] == "reset_tools":
-            return _call(WORKFLOW.replace(".", "__"), {"days": 2})
+            return _call(WORKFLOW.replace(".", "__"), self._arguments)
         return ChatResponse(content=[TextBlock(text="好的。")], is_last=True)
 
 
@@ -209,14 +220,20 @@ class Stack:
         return self.runtime._deps.confirmations
 
 
-def _stack(*, two_steps: bool = False, shared: Stack | None = None) -> Stack:
+def _stack(
+    *,
+    two_steps: bool = False,
+    shared: Stack | None = None,
+    workflow: CapabilitySpec | None = None,
+    arguments: dict[str, Any] | None = None,
+) -> Stack:
     """A runtime stack; ``shared`` simulates a restart of ``shared``'s process.
 
     Durable state survives (HumanGate, stores, the governed operation store);
     process memory (coordinator, engine checkpoints, AgentState) does not.
     """
     if shared is None:
-        registry = Registry(*_specs(two_steps))
+        registry = Registry(*_specs(two_steps, workflow))
         tasks, trace, gateway, gate = TaskStore(), RecordingTrace(), Gateway(), Gate()
         model_log: list[str] = []
     else:
@@ -236,7 +253,7 @@ def _stack(*, two_steps: bool = False, shared: Stack | None = None) -> Stack:
         capability_registry=stack.registry, gateway=stack.gateway,
         trace_port=stack.trace, llm_provider=MockLLMProvider(),
         structured_output=MockStructuredOutputProvider(), intent_model="c-suite",
-        model_factory=lambda: Model(group, stack.model_log),
+        model_factory=lambda: Model(group, stack.model_log, arguments),
         workflow_engine=stack.engine, human_gate_port=stack.gate,
     )
     return stack
@@ -761,5 +778,62 @@ def test_c6_same_account_new_login_confirms_an_unclaimed_governed_card(
         decision = await stack.gate.get_decision(after.gate_request_id)
         assert decision is not None and decision.decision == "confirmed"
         assert stack.tasks.records[card.task_id].status == "completed"
+
+    asyncio.run(run())
+
+
+# --- Confirmation card projection on the new path (GT-029..GT-033) -----------
+# Same protective properties as the legacy action fixtures, carried by a workflow
+# proposal through the production stack; the trace/policy shape is not copied.
+
+_PROJECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "employee_id": {"type": "string"},
+        "days": {"type": "integer"},
+        "ratio": {"type": "number"},
+        "urgent": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "attachments": {"type": "array", "items": {"type": "string"}},
+        "meta": {"type": "object"},
+        "note": {"type": "string"},
+        "approver": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+_PROJECTION_CASES: dict[str, tuple[tuple[str, ...], dict[str, Any], dict[str, str]]] = {
+    # GT-030: no allowlist declared, so nothing is displayed.
+    "no_allowlist": ((), {"employee_id": "E-1", "days": 2}, {}),
+    # GT-029 scalars render as str; GT-031 non-scalars, GT-032 >200 chars, GT-033
+    # an allowlisted field absent from this call, and the unlisted field are hidden.
+    "mixed_allowlist": (
+        ("employee_id", "days", "ratio", "urgent", "attachments", "meta", "note", "approver"),
+        {
+            "employee_id": "E-1",
+            "days": 2,
+            "ratio": 0.5,
+            "urgent": True,
+            "reason": "unlisted",
+            "attachments": ["a"],
+            "meta": {"k": "v"},
+            "note": "s" * 201,
+        },
+        {"employee_id": "E-1", "days": "2", "ratio": "0.5", "urgent": "True"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", ["no_allowlist", "mixed_allowlist"])
+def test_new_path_confirm_card_projects_only_allowed_values(case: str) -> None:
+    displayable, arguments, expected = _PROJECTION_CASES[case]
+    workflow = _spec(
+        WORKFLOW, "workflow", "发起请假", input_schema=_PROJECTION_SCHEMA, displayable=displayable
+    )
+
+    async def run() -> None:
+        stack = _stack(workflow=workflow, arguments=arguments)
+        card = await _propose(stack)
+        assert card.ui.payload.displayed_argument_values == expected
+        assert stack.engine.resume_calls == 0 and FIRST[1] not in stack.gateway.calls
 
     asyncio.run(run())

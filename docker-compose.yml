@@ -82,6 +82,7 @@ services:
       LLM_TOP_K: ${LLM_TOP_K:-20}
       LLM_ENABLE_THINKING: ${LLM_ENABLE_THINKING:-false}
       HEALTH_TIMEOUT_S: ${HEALTH_TIMEOUT_S:-5}
+      RUNTIME_ENGINE: ${RUNTIME_ENGINE:-agentscope}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:${OTEL_COLLECTOR_PORT:-4317}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-placeholder_public_key}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-placeholder_secret_key}

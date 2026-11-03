@@ -34,6 +34,7 @@ x-runtime: &runtime
     CSRF_ALLOWED_ORIGINS: ${CSRF_ALLOWED_ORIGINS:?Set the approved HTTPS origins}
     LLM_BASE_URL: ${LLM_BASE_URL:?Set the internal vLLM origin}
     LLM_MODEL: ${LLM_MODEL:?Set the approved local main model}
+    RUNTIME_ENGINE: ${RUNTIME_ENGINE:-agentscope}
     BROWSER_ENABLED: "true"
     BROWSER_TRANSPORT: playwright
     HF_HUB_OFFLINE: "1"

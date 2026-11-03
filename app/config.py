@@ -307,8 +307,8 @@ class ProductionSettings:
     # SESSION_COOKIE_TTL_S is the idle window; the absolute cap is off when None.
     session_absolute_ttl_seconds: int | None = None
     session_renew_min_interval_seconds: int = _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS
-    # Runtime behind /api/v1/runtime; AgentScope is imported only for "agentscope".
-    runtime_engine: RuntimeEngine = "legacy"
+    # Runtime behind /api/v1/runtime; AgentScope is the default, legacy stays selectable.
+    runtime_engine: RuntimeEngine = "agentscope"
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_contract_pack_dir: Path | None = None
@@ -865,7 +865,7 @@ def _canonical_origin_host(hostname: str, name: str) -> str:
 
 
 def _runtime_engine(source: Mapping[str, str]) -> RuntimeEngine:
-    value = source.get("RUNTIME_ENGINE", "legacy")
+    value = source.get("RUNTIME_ENGINE", "agentscope")
     if value not in {"legacy", "agentscope"}:
         raise RuntimeError("RUNTIME_ENGINE must be legacy or agentscope")
     return cast(RuntimeEngine, value)
