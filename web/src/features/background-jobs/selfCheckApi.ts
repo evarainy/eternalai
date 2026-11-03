@@ -1,4 +1,5 @@
 import { ApiError, customInstance } from '../../api/mutator';
+import { useAuthStore } from '../../stores/authStore';
 import {
   cancelBackgroundJobApiV1BackgroundJobsJobIdCancelPost,
   getBackgroundJobApiV1BackgroundJobsJobIdGet,
@@ -31,10 +32,16 @@ function submitOnce(body: BackgroundJobCreateRequest, key: string): Promise<Back
 export async function submitSelfCheck(holdSeconds: number): Promise<BackgroundJobAcceptResponse> {
   const key = crypto.randomUUID();
   const body = { kind: SELF_CHECK_KIND, params: { hold_seconds: holdSeconds } };
+  const generation = useAuthStore.getState().generation;
   try {
     return await submitOnce(body, key);
   } catch (error) {
     if (error instanceof ApiError && error.code === 'background_job_accept_outcome_unknown') {
+      // The retry only settles the original submitter's transaction: never under another login.
+      const auth = useAuthStore.getState();
+      if (auth.status !== 'authenticated' || auth.generation !== generation) {
+        throw new ApiError(409, 'identity_changed', '身份已变化，请重新读取。');
+      }
       return submitOnce(body, key);
     }
     throw error;

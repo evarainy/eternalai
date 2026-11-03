@@ -7,11 +7,14 @@ rows; another user's job is indistinguishable from a missing one (404).
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict
 
 from app.api.v1.csrf import PrincipalDependency
@@ -22,6 +25,7 @@ from app.ports.background_jobs import BackgroundJobError, BackgroundJobStatus, B
 _NO_STORE = {"Cache-Control": "no-store"}
 _ERRORS: dict[str, tuple[int, str]] = {
     "idempotency_key_invalid": (422, "需要提供一个有效的幂等键。"),
+    "background_job_request_invalid": (422, "后台任务请求格式不正确。"),
     "background_job_kind_invalid": (422, "不支持的后台任务类型。"),
     "background_job_params_invalid": (422, "后台任务参数不正确。"),
     "background_job_idempotency_conflict": (409, "该请求编号已用于另一项后台任务。"),
@@ -100,10 +104,25 @@ def _idempotency_key(request: Request) -> UUID:
         _fail("idempotency_key_invalid")
 
 
+class _BackgroundJobRoute(APIRoute):
+    """Framework validation errors use the route's error envelope and never echo input."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def handle(request: Request) -> Response:
+            try:
+                return await original(request)
+            except RequestValidationError:
+                _fail("background_job_request_invalid")
+
+        return handle
+
+
 def make_router(
     service: BackgroundJobService | None, require_principal: PrincipalDependency
 ) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=_BackgroundJobRoute)
     errors: dict[int | str, dict[str, Any]] = {
         code: {"model": BackgroundJobErrorResponse} for code in (404, 409, 422, 429, 503)
     }

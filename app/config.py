@@ -14,12 +14,15 @@ import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db.config import get_database_url
-from app.mcp.models import ServiceConfig
+
+if TYPE_CHECKING:
+    # Runtime import stays in _mcp_services so WorkerSettings never loads MCP modules.
+    from app.mcp.models import ServiceConfig
 
 _DEFAULT_LLM_BASE_URL = "http://34.74.11.38:8011/v1"
 _DEFAULT_LLM_MODEL = "glm-4.7"
@@ -1190,6 +1193,8 @@ def _directory_source_user(source: Mapping[str, str]) -> str | None:
 
 
 def _mcp_services(source: Mapping[str, str]) -> tuple[ServiceConfig, ...]:
+    from app.mcp.models import ServiceConfig
+
     raw = source.get("MCP_SERVICE_CONFIGS_JSON", "[]")
     try:
         if len(raw.encode()) > 65536:
