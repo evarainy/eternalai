@@ -700,7 +700,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 自动提交每流程结果查询方式待提供 | 自动提交须按原身份与业务唯一键查询单号或业务后态；缺少逐流程查询方式与成功判据时，无法核实成功，unknown 必须保持待核实、不重放 | 雨爷 / 业务方提供结果查询方式与成功判据，并逐流程授权真实启用 | 待分配（自动提交功能；业务输入就绪后） | 每流程查询与成功判据核定、接入并经授权真实验证，结果不明路径不重复提交；既有 M3 Q4/V08 另按其条件核销 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 1 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` v3 |
 | 远程画面 Chrome 101 / 麒麟输入法未实测 | Playwright screencast 与白名单输入转发已选定，但目标浏览器、中文输入与接管交还尚未现场验证；页面外操作或输入法不过时转 KasmVNC | 对应真实浏览器 / 输入法环境 | 待分配（远程画面与接管任务；麒麟项随迁移任务） | Chrome 101 观看/接管、中文输入、人机互斥和交还后重新观察实测通过，或完成 KasmVNC 备选验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 2、5、7 条；仓库外选型汇总 |
-| Procrastinate 队列 schema 待专项授权 | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者 | 无（雨爷 2026-11-03 已批准开发库与测试库的 schema upgrade，见 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 第 2 条） | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
+| Procrastinate 队列 schema 待专项授权 | 队列安装需要 DB schema 变更，本次只定选型；进程内调度迁移前须修正入队即完成假设，浏览器业务账本/租约/围栏仍由现有 PG run 存储负责，单一执行所有者。2026-11-03 `P2-BACKGROUND-FOUNDATION-001` 已交付 R1/R2、接收与 worker 代码并在测试库升级：代码已交、开发库升级与真实验收待做，本行不关闭 | 无（雨爷 2026-11-03 已批准开发库与测试库的 schema upgrade，见 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 第 2 条） | `P2-BACKGROUND-FOUNDATION-001`（后台任务基础；四个旧调度器的逐项迁移待分配，见 [DECISIONS 2026-11-03](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条） | 获专项授权后安装 schema，并验证持久入队、独立 worker、重启续跑、取消、限并发与单一执行所有者；unknown 写入不重放 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/M3_CONTROLLER_STATE.md` 末尾最终决定 |
 | 服务器现场核实项待完成 | M5 暂缓（部署推后）；麒麟 V11 2503 / 内核 6.6 ARM + Docker 为目标口径，尚未现场确认，64 KiB 页、cgroup 与沙箱兼容性不能由调研推定通过 | 目标服务器可用与迁移 / 部署专项授权 | 待分配（服务器迁移独立任务） | 现场核实 nkvers/uname、页大小、cgroup v2/cgroup.kill、Docker cgroup 驱动、KYSEC 与 Chromium 沙箱并完成目标环境验收 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 7 条；仓库外 `E:/code/eternalai-reviews/runtime-agentscope-20261021/tech-research/SELECTION_SUMMARY.md` 现场需核实项 |
 
 ### D 启动失败清理修复新增欠债（2026-11-02）
@@ -742,7 +742,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### 新功能基础总体方案批准登记（2026-11-03）
 
-`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。三棒尚未施工，以下各项不因方案批准而关闭。
+`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。首棒候选已交付、待真实验收与合并（见下节），后两棒尚未施工；以下各项不因方案批准而关闭。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
@@ -755,6 +755,17 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 输出发布与产物棒正向链路 | 产物棒没有真实生产者 | `P2-CHAT-UPLOAD-001`；首个输出生产者 | `P2-CHAT-UPLOAD-001`（输入）；待分配（输出） | 输入链路在上传棒验收，输出链路在首个生产者棒验收 | 方案 J7 |
 | 产物 HMAC 密钥轮换 | 首版只有 `v1` | 无 | 待分配 | 有轮换需求时实现密钥环并验证 | 方案 J9 |
 | 本人跨会话文件入口 | J10 只在当前会话可见 | 无 | 待分配 | 有需求时设计“我的文件”列表并经隔离验收 | 方案 §2.4 |
+
+### 后台任务基础 `P2-BACKGROUND-FOUNDATION-001` 新增欠债（2026-11-03）
+
+本棒（A 档、高风险，串行）按方案 v1.6 §1 及雨爷 2026-11-03 O1 裁决施工：接收、取消与换代在现有 SQLAlchemy 事务内调用 Procrastinate 3.10.0 官方 SQL 函数，替换方案 §1.2 的 psycopg 原生连接接线；方案 §8.3 第一项相应改为在 asyncpg/Proactor 的 18005 上验收。上节方案欠债继续有效。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 18005 加 worker 真实验收未做 | 施工只获测试库授权；开发库 upgrade、18005 重启与 worker 启停、§1.6 第 13 项故障注入均由主控验收时执行，测试库冒烟不代替真实验收 | 无 | `P2-BACKGROUND-FOUNDATION-001`（合并前验收） | 开发库按方案 §4 目标识别后 upgrade；方案 §1.6 第 1–13 项在开发库 18005 加 worker 上实测；含 asyncpg 上的绑定与返回 id、同事务回滚、提交后通知、取消两分支与换代 | 方案 §1.6、§8.3；[DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) |
+| Windows Ctrl+C 优雅停止与停机中断原因值未实测 | worker 在 Windows 不装信号处理，Ctrl+C 由 `asyncio.Runner` 取消主任务，期望走官方“优雅停止，30 秒后以 SHUTDOWN 中断”；只经源码核对 | 无 | `P2-BACKGROUND-FOUNDATION-001`（§1.6 第 9 项） | 第 9 项实测；不成立则记录实际行为并另定处置 | 方案 §1.4、§8.3；`app/worker.py::run_worker` |
+| 固定测试库留有冒烟作业行 | 2026-11-03 开发冒烟在 `eternalai_test` 写入作业账本与队列行；R1/R2 downgrade 只允许空表，本机对该库执行经过 R1/R2 的 downgrade 用例会被拒绝（CI 临时库不受影响）；删除这些行需专项授权 | 雨爷删除授权或测试库重置授权 | 待分配 | 获授权清除测试库这些行，或裁决本机不再运行经过 R1/R2 的 downgrade 用例 | 方案 §4 R1/R2 downgrade 条件；`alembic/versions/20261103_120000_procrastinate_queue_3_10_0.py::downgrade` |
+| 健康页旧占位文件未删 | 健康页已改读真实 `/health`，`web/src/api/mockHealth.ts` 不再被引用；删除文件需专项授权 | 雨爷删除授权 | 待分配 | 获授权删除该文件，或确认保留 | `web/src/pages/HealthPage.tsx::HealthPage` |
 
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 

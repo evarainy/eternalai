@@ -30,6 +30,7 @@ from app.api.v1.work_objects import (
     OA_PENDING_WORKFLOWS_CAPABILITY_ID,
     WorkObjectService,
 )
+from app.background_jobs import BackgroundJobService, build_job_kinds
 from app.config import (
     MCP_TLS_CA_OAUTH_ENDPOINTS,
     ProductionSettings,
@@ -44,8 +45,8 @@ from app.credential_polling import (
     CredentialSessionRecovery,
     OASessionKeeper,
 )
-from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
+from app.dependency_checks import build_readonly_checks
 from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
@@ -92,11 +93,11 @@ from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
 from app.infra.fixed_txt import FixedTxtReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
-from app.infra.health import RedisHealthCheck
 from app.infra.human_gate import PostgreSQLHumanGate
 from app.infra.identity.mcp_identity import McpIdentityMapping
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.job_queue.in_memory import InMemoryJobQueue
+from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.mcp.driver import McpDriver
@@ -148,7 +149,6 @@ from app.mcp.models import ServiceConfig
 from app.mcp.oauth import OAuthConnections, PendingIdentityPolicy
 from app.mcp.operations import GovernedOperations
 from app.memory import SessionMemory
-from app.organization_directory_policy import check_dispatch_department_policy
 from app.organization_directory_sync import (
     OrganizationDirectoryScheduler,
     OrganizationDirectorySyncService,
@@ -238,6 +238,7 @@ class ProductionComponents:
     # M1 AgentScope runtime; built only when RUNTIME_ENGINE == "agentscope",
     # so AgentScope is otherwise never imported.
     agentscope_runtime: RuntimePort | None = None
+    background_jobs: BackgroundJobService | None = None
 
 
 def build_credential_store(
@@ -1369,18 +1370,18 @@ def build_production_components(
         job_queue=credential_polling_job_queue,
         tick_seconds=credential_polling_policy.scheduler_tick_seconds,
     )
+    readonly_checks = build_readonly_checks(
+        database_url=settings.database_url,
+        redis_url=settings.redis_url,
+        timeout_seconds=settings.health_timeout_seconds,
+        directory_max_age_s=settings.organization_directory_max_age_s,
+        organization_directory=organization_directory,
+        directory_sync=directory_sync_service,
+    )
     resolved_health_checks: Mapping[str, HealthCheck]
     if health_checks is None:
         resolved_health_checks = {
-            "database": partial(
-                check_database_health,
-                settings.database_url,
-                timeout_seconds=settings.health_timeout_seconds,
-            ),
-            "redis": RedisHealthCheck(
-                redis_url=settings.redis_url,
-                timeout_seconds=settings.health_timeout_seconds,
-            ),
+            **readonly_checks.health,
             "vllm": partial(
                 production_llm.check_health,
                 settings.llm_model,
@@ -1480,15 +1481,12 @@ def build_production_components(
         health_timeout_seconds=settings.health_timeout_seconds,
         health_checks=resolved_health_checks,
         organization_directory_scheduler=directory_scheduler,
-        diagnostic_checks={
-            "organization_directory": directory_sync_service.diagnostic,
-            "organization_directory_dispatch_policy": partial(
-                check_dispatch_department_policy,
-                organization_directory,
-                max_age_s=settings.organization_directory_max_age_s,
-            ),
-        },
+        diagnostic_checks=dict(readonly_checks.diagnostics),
         user_profile=user_profile,
+        background_jobs=BackgroundJobService(
+            PostgreSQLBackgroundJobLedger(session_factory),
+            build_job_kinds(settings.background_self_check_max_hold_seconds),
+        ),
     )
 
 

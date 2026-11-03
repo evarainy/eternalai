@@ -174,6 +174,18 @@ const PROJECTS = [
       },
     ],
   },
+  {
+    project: 'backgroundJobs',
+    input: './openapi/background-jobs.openapi.json',
+    target: './src/generated/background-jobs/background-jobs.ts',
+    operations: [
+      { path: '/api/v1/background-jobs', method: 'get', operationId: 'list_background_jobs_api_v1_background_jobs_get' },
+      { path: '/api/v1/background-jobs', method: 'post', operationId: 'submit_background_job_api_v1_background_jobs_post' },
+      { path: '/api/v1/background-jobs/{job_id}', method: 'get', operationId: 'get_background_job_api_v1_background_jobs__job_id__get' },
+      { path: '/api/v1/background-jobs/{job_id}/cancel', method: 'post', operationId: 'cancel_background_job_api_v1_background_jobs__job_id__cancel_post' },
+      { path: '/api/v1/health', method: 'get', operationId: 'health_api_v1_health_get' },
+    ],
+  },
 ] as const;
 
 const ADMIN_PROJECT = {
@@ -203,8 +215,10 @@ from typing import Any
 from fastapi import FastAPI
 from app.api.v1.admin import make_router as admin_router
 from app.api.v1.auth import make_router as auth_router, make_require_principal
+from app.api.v1.background_jobs import make_router as background_jobs_router
 from app.api.v1.csrf import make_require_csrf, make_csrf_protected_principal
 from app.api.v1.credential_bindings import make_router as bindings_router
+from app.api.v1.health import make_router as health_router
 from app.api.v1.mcp import make_router as mcp_router
 from app.api.v1.me import make_router as me_router
 from app.api.v1.runtime import make_router as runtime_router
@@ -231,6 +245,8 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
     app.include_router(series_router(None, protected), prefix="/api/v1/work-object-series")
     app.include_router(me_router(None, protected), prefix="/api/v1/me")
     app.include_router(bindings_router(None, protected), prefix="/api/v1/credential-bindings")
+    app.include_router(health_router(), prefix="/api/v1")
+    app.include_router(background_jobs_router(None, protected), prefix="/api/v1/background-jobs")
     return app
 
 
@@ -500,7 +516,7 @@ describe('FastAPI-derived Orval clients', () => {
     });
   });
   it(
-    're-exports seven FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    're-exports eight FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -513,8 +529,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(9);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(9);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(10);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(10);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

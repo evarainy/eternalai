@@ -1,0 +1,11 @@
+Procrastinate 3.10.0 official queue schema, vendored byte-for-byte (MIT, see LICENSE.md).
+
+source_url: https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/sql/schema.sql
+tag: 3.10.0
+schema_sql_sha256: c70ec4b400a60ad9592787653aae5ae77ae41bf801d56b5bd2712751a07f2009
+wheel: procrastinate-3.10.0-py3-none-any.whl
+wheel_sha256: 949ad25b4377c30e03a9d0e053d15dfa47ef02b3f12ae8a7f3254686183c152c
+
+The Alembic revision 20261103_120000 verifies schema_sql_sha256 before executing the file.
+Runtime code never reads the installed package schema. Upgrading Procrastinate requires a
+new reviewed revision and re-checking app/infra/jobs/queue_sql.py (SQL function contract).

@@ -885,7 +885,7 @@ def test_production_directory_scheduler_and_diagnostics_are_wired(
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "checks": {
             "database": "ok", "organization_directory": "failed",
-            "organization_directory_dispatch_policy": "failed",
+            "organization_directory_dispatch_policy": "failed", "background_worker": "failed",
         }}
     assert calls == ["start", "stop"]
     assert forbidden.await_count == 0
@@ -1299,6 +1299,7 @@ def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db)
         "database": "ok",
         "organization_directory": "failed",
         "organization_directory_dispatch_policy": "ok",
+        "background_worker": "failed",
     }
     client.close()
 

@@ -18,6 +18,7 @@ from app.api.v1.auth import (
 from app.api.v1.auth import (
     make_router as make_auth_router,
 )
+from app.api.v1.background_jobs import make_router as make_background_jobs_router
 from app.api.v1.browser_runs import make_router as make_browser_runs_router
 from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.credential_bindings import make_router as make_credential_binding_router
@@ -34,6 +35,7 @@ from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
+from app.background_jobs import BackgroundJobService
 from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
@@ -107,6 +109,7 @@ def create_app(
     browser_management: DFormManagementPort | None = None,
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
+    background_job_service: BackgroundJobService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -199,13 +202,21 @@ def create_app(
     application.include_router(
         make_mcp_router(mcp_service, csrf_protected_principal), prefix="/api/v1/mcp"
     )
+    resolved_diagnostics = dict(diagnostic_checks or {})
+    if background_job_service is not None:
+        # Diagnostic only: a stopped worker never makes the API unhealthy.
+        resolved_diagnostics["background_worker"] = background_job_service.worker_alive
     application.include_router(
         make_health_router(
             health_checks,
             timeout_seconds=health_timeout_seconds,
-            diagnostic_checks=diagnostic_checks,
+            diagnostic_checks=resolved_diagnostics,
         ),
         prefix="/api/v1",
+    )
+    application.include_router(
+        make_background_jobs_router(background_job_service, csrf_protected_principal),
+        prefix="/api/v1/background-jobs",
     )
     application.include_router(
         make_auth_router(
@@ -493,6 +504,7 @@ def create_production_app(
         browser_submission=(browser_vertical.submission if browser_vertical is not None else None),
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
+        background_job_service=components.background_jobs,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

@@ -97,6 +97,20 @@ export default defineConfig({
       },
     },
   },
+  backgroundJobs: {
+    input: './openapi/background-jobs.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/background-jobs/background-jobs.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
   me: {
     input: './openapi/me.openapi.json',
     output: {
