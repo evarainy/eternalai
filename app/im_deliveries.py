@@ -88,10 +88,7 @@ class IMDeliveryService:
     async def confirm(
         self, principal: Principal, delivery_id: UUID, confirmation_sha256: str,
     ) -> DeliveryView:
-        try:
-            fingerprint = bytes.fromhex(confirmation_sha256)
-        except ValueError:
-            raise IMDeliveryError("im_delivery_confirmation_invalid", 422) from None
+        fingerprint = bytes.fromhex(confirmation_sha256)
         record = await self._store.confirm(principal, delivery_id, fingerprint)
         _LOGGER.info(
             "im_delivery_confirmed delivery_id=%s queue_job_id=%s state=%s",

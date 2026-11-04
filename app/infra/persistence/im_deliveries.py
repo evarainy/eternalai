@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import fields
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import RowMapping, text
@@ -230,10 +230,7 @@ class PostgreSQLIMDeliveryStore:
             recipient = await self._recipient(
                 session, record.tenant_id, record.recipient_ai_user_id, record
             )
-            if (record.recipient_binding_id != recipient.binding_id
-                    or record.recipient_mapping_version != recipient.version
-                    or confirmation_digest(record, initiator, recipient)
-                    != record.confirmation_sha256):
+            if confirmation_digest(record, initiator, recipient) != record.confirmation_sha256:
                 raise IMDeliveryError("im_delivery_mapping_changed")
             queue_id = await defer_job(
                 session, queue_name=GENERAL_QUEUE, task_name=_SEND_TASK,
@@ -258,14 +255,11 @@ class PostgreSQLIMDeliveryStore:
         receipts = (
             await session.execute(
                 text(
-                    "SELECT v.verification_id, v.result, v.comment, v.created_at "
-                    "FROM public.im_verifications v JOIN public.im_deliveries d "
-                    "ON d.delivery_id=v.delivery_id WHERE d.tenant_id=:tenant "
-                    "AND d.delivery_id=:id "
-                    "AND (d.initiator_ai_user_id=:user OR d.recipient_ai_user_id=:user) "
-                    "ORDER BY v.created_at, v.verification_id"
+                    "SELECT verification_id, result, comment, created_at "
+                    "FROM public.im_verifications WHERE delivery_id=:id "
+                    "ORDER BY created_at, verification_id"
                 ),
-                {**_owner(principal), "id": record.delivery_id},
+                {"id": record.delivery_id},
             )
         ).mappings().all()
         source = vars(record)
@@ -375,11 +369,10 @@ class PostgreSQLIMDeliveryStore:
             )
 
     @staticmethod
-    def _card(record: DeliveryRecord, recipient: DeliveryBinding) -> PrivateCard:
+    def _card(record: DeliveryRecord) -> PrivateCard:
         return PrivateCard(
             provider=record.provider, im_instance_id=record.im_instance_id,
             realm_id=record.realm_id, sender_bot_id=record.sender_bot_id,
-            recipient_im_user_id=recipient.im_user_id,
             target_conversation_ref=record.target_conversation_ref,
             card_content=record.card_content,
         )
@@ -415,8 +408,6 @@ class PostgreSQLIMDeliveryStore:
             )
             if (record.tenant_id != "default" or initiator is None or recipient is None
                     or record.recipient_ai_user_id not in self._recipients
-                    or recipient.binding_id != record.recipient_binding_id
-                    or recipient.version != record.recipient_mapping_version
                     or confirmation_digest(record, initiator, recipient)
                     != record.confirmation_sha256):
                 await session.execute(
@@ -439,7 +430,7 @@ class PostgreSQLIMDeliveryStore:
                 )
             ).mappings().one()
             claimed = _record(row)
-            return claimed, self._card(claimed, recipient)
+            return claimed, self._card(claimed)
 
     async def finish(
         self, delivery_id: UUID, attempt_id: UUID, result: DeliveryResult,
@@ -485,13 +476,7 @@ class PostgreSQLIMDeliveryStore:
                     )
                 ).mappings().one()
                 record = _record(row)
-            recipient = await self._binding(
-                session, record.tenant_id, record.recipient_ai_user_id, record
-            )
-            if (recipient is None or recipient.binding_id != record.recipient_binding_id
-                    or recipient.version != record.recipient_mapping_version):
-                return None
-            return record, self._card(record, recipient)
+            return record, self._card(record)
 
     async def recover_ready(self) -> None:
         async with self._session(write=True) as session:
@@ -514,10 +499,7 @@ class PostgreSQLIMDeliveryStore:
                         {"id": record.delivery_id},
                     )
                     continue
-                queue = (
-                    None if record.queue_job_id is None
-                    else await read_job_state(session, record.queue_job_id)
-                )
+                queue = await read_job_state(session, cast(int, record.queue_job_id))
                 # A queue worker can die after marking doing and before claiming
                 # this ready row. Old and replacement tasks still compete for
                 # the same ready -> sending transition, so only one can send.

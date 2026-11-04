@@ -28,6 +28,7 @@ import WorkDispatchPage from '../features/work-dispatch/WorkDispatchPage';
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
   readMe: vi.fn(),
+  imConfiguration: vi.fn(),
 }));
 
 vi.mock('../generated/credential-bindings/credential-bindings', () => ({
@@ -36,6 +37,11 @@ vi.mock('../generated/credential-bindings/credential-bindings', () => ({
 
 vi.mock('../generated/me/me', () => ({
   readMeApiV1MeGet: apiMocks.readMe,
+}));
+
+vi.mock('../generated/im-context/im-context', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../generated/im-context/im-context')>(),
+  configurationApiV1ImContextConfigurationGet: apiMocks.imConfiguration,
 }));
 
 const DISPLAY_NAME = '甲用户';
@@ -98,6 +104,8 @@ describe('application authentication boundary', () => {
     useNavigationStore.setState({ collapsed: false });
     apiMocks.readMe.mockReset();
     apiMocks.readMe.mockResolvedValue(meResponse());
+    apiMocks.imConfiguration.mockReset();
+    apiMocks.imConfiguration.mockResolvedValue(null);
     apiMocks.getBinding.mockReset();
     apiMocks.getBinding.mockResolvedValue({
       bound: true,
@@ -692,6 +700,7 @@ describe('application authentication boundary', () => {
     window.history.pushState({}, '', path);
     render(<App routes={staticAppRoutes({ LazyMessagesPage: MessagesPage })} />);
 
+    expect(await screen.findByText(reason)).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
     ).toBeInTheDocument();

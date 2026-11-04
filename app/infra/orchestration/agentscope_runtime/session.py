@@ -83,7 +83,9 @@ class SessionCoordinator:
         digest = hmac.new(self._secret, _KEY_DOMAIN + fingerprint, sha256).hexdigest()
         return (tenant_id, ai_user_id, digest, session_id)
 
-    def acquire(self, key: SessionKey, *, expires_at: datetime | None) -> AgentState:
+    def acquire(
+        self, key: SessionKey, *, expires_at: datetime | None, transient: bool = False,
+    ) -> AgentState:
         """Mark the session busy and return its state; raise if already busy.
 
         No await between the check and the set, so two turns cannot both pass.
@@ -103,7 +105,8 @@ class SessionCoordinator:
         entry.last_used = self._clock()
         entry.hard_expiry = expires_at
         self._entries.move_to_end(key)
-        return entry.state
+        # Source material never enters the ordinary session's cached AgentState.
+        return AgentState() if transient else entry.state
 
     def release(self, key: SessionKey) -> None:
         entry = self._entries.get(key)

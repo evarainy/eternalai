@@ -44,6 +44,14 @@ interface OpenApiDocument {
 
 const PROJECTS = [
   {
+    project: 'imContext', input: './openapi/im-context.openapi.json', target: './src/generated/im-context/im-context.ts',
+    operations: [
+      { path: '/api/v1/im-context/configuration', method: 'get', operationId: 'configuration_api_v1_im_context_configuration_get' },
+      { path: '/api/v1/im-context/login', method: 'post', operationId: 'login_api_v1_im_context_login_post' },
+      { path: '/api/v1/im-context/sources', method: 'post', operationId: 'select_api_v1_im_context_sources_post' },
+    ],
+  },
+  {
     project: 'mcp', input: './openapi/mcp.openapi.json', target: './src/generated/mcp/mcp.ts',
     operations: [
       { path: '/api/v1/mcp/connections', method: 'get', operationId: 'connections_api_v1_mcp_connections_get' },
@@ -238,6 +246,7 @@ from app.api.v1.im_deliveries import make_router as im_deliveries_router
 from app.api.v1.mcp import make_router as mcp_router
 from app.api.v1.me import make_router as me_router
 from app.api.v1.runtime import make_router as runtime_router
+from app.api.v1.im_context import make_router as im_context_router
 from app.api.v1.work_objects import make_router as work_router
 from app.api.v1.work_object_series import make_router as series_router
 
@@ -256,6 +265,7 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
         session_revocations=session_revocations, session_cookie_ttl_seconds=session_cookie_ttl_seconds,
         session_cookie_secure=False), prefix="/api/v1/auth")
     app.include_router(runtime_router(None, protected, session_binder), prefix="/api/v1/runtime")
+    app.include_router(im_context_router(None, protected, session_binder), prefix="/api/v1/im-context")
     app.include_router(admin_router(None, protected), prefix="/api/v1/admin")
     app.include_router(work_router(work_object_service, protected), prefix="/api/v1/work-objects")
     app.include_router(series_router(None, protected), prefix="/api/v1/work-object-series")
@@ -563,8 +573,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(11);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(11);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(12);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(12);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

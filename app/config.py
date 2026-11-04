@@ -332,6 +332,47 @@ class IMDeliverySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ZulipSettings:
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    helper_url: str
+    jwt_secret: bytes = field(repr=False)
+    tls_ca_file: str | None = None
+
+    def __post_init__(self) -> None:
+        for origin in (self.origin, self.host_origin):
+            parsed = urlsplit(origin)
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or origin != f"https://{parsed.netloc}"):
+                raise ValueError("im_origin_invalid")
+        helper = urlsplit(self.helper_url)
+        if (self.origin == self.host_origin or self.helper_url != self.origin + helper.path
+                or not helper.path.startswith("/") or helper.path == "/"
+                or not self.im_instance_id or not self.realm_id or len(self.jwt_secret) < 32):
+            raise ValueError("im_configuration_invalid")
+
+
+def _zulip_settings(source: Mapping[str, str]) -> ZulipSettings | None:
+    provider = source.get("IM_PROVIDER", "").strip()
+    if not provider:
+        return None
+    if provider != "zulip":
+        raise RuntimeError("im_provider_unsupported")
+    return ZulipSettings(
+        origin=_required(source, "IM_ZULIP_ORIGIN"),
+        host_origin=_required(source, "IM_HOST_ORIGIN"),
+        im_instance_id=_required(source, "IM_INSTANCE_ID"),
+        realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+        helper_url=_required(source, "IM_SESSION_HELPER_URL"),
+        jwt_secret=_base64_key(source, "IM_ZULIP_JWT_SECRET_B64", minimum_bytes=32),
+        tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
 
@@ -415,8 +456,14 @@ class ProductionSettings:
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
     browser: BrowserSettings = field(default_factory=BrowserSettings)
     fixed_document: FixedDocumentSettings | None = field(default=None, repr=False)
+    zulip: ZulipSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.zulip is not None and (
+            self.source_tenant_id != "default" or not self.session_cookie_secure
+            or self.zulip.host_origin not in self.csrf_allowed_origins
+        ):
+            raise ValueError("im_host_configuration_invalid")
         ids = [profile.service_config_id for profile in self.mcp_services]
         if len(ids) != len(set(ids)) or any(
             p.tenant_id != self.source_tenant_id for p in self.mcp_services
@@ -592,6 +639,7 @@ class ProductionSettings:
             im_delivery=IMDeliverySettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
+            zulip=_zulip_settings(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(

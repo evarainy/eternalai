@@ -28,6 +28,7 @@ from app.api.v1.csrf import (
 )
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
+from app.api.v1.im_context import make_router as make_im_context_router
 from app.api.v1.im_deliveries import make_router as make_im_deliveries_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
@@ -41,6 +42,7 @@ from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.im_context import IMContextService
 from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
 from app.infra.browser.composition import BrowserVerticalComponents
@@ -114,6 +116,7 @@ def create_app(
     background_job_service: BackgroundJobService | None = None,
     im_delivery_service: IMDeliveryService | None = None,
     close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
+    im_context: IMContextService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -248,8 +251,13 @@ def create_app(
             csrf_protected_principal,
             session_binder,
             browser_chat=browser_chat,
+            im_context=im_context,
         ),
         prefix="/api/v1/runtime",
+    )
+    application.include_router(
+        make_im_context_router(im_context, csrf_protected_principal, session_binder),
+        prefix="/api/v1/im-context",
     )
     application.include_router(
         make_browser_runs_router(
@@ -519,6 +527,7 @@ def create_production_app(
         background_job_service=components.background_jobs,
         im_delivery_service=components.im_deliveries,
         close_im_deliveries=components.close_im_deliveries,
+        im_context=components.im_context,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

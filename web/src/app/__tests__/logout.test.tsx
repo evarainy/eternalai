@@ -3,10 +3,17 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../../stores/authStore';
 import { useLogout } from '../logout';
 
+const imMocks = vi.hoisted(() => ({ configuration: vi.fn() }));
+
+vi.mock('../../generated/im-context/im-context', () => ({
+  configurationApiV1ImContextConfigurationGet: imMocks.configuration,
+}));
+
 const posted = vi.fn();
 
 beforeEach(() => {
   useAuthStore.setState({ status: 'authenticated', generation: 40 });
+  imMocks.configuration.mockResolvedValue(null);
   posted.mockReset();
   vi.stubGlobal('BroadcastChannel', class {
     constructor(public name: string) {}
@@ -49,7 +56,7 @@ it('current_confirmed_logout_broadcasts_exactly_once', async () => {
   );
   const { result } = renderHook(useLogout);
   let operation!: Promise<void>;
-  act(() => { operation = result.current.logout(); });
+  await act(async () => { operation = result.current.logout(); });
   expect(result.current.pending).toBe(true);
   expect(posted).not.toHaveBeenCalled();
   expect(useAuthStore.getState().status).toBe('authenticated');
@@ -72,7 +79,7 @@ it.each([200, 401, 503])('old_generation_logout_result_never_broadcasts %s', asy
   );
   const { result } = renderHook(useLogout);
   let operation!: Promise<void>;
-  act(() => { operation = result.current.logout(); });
+  await act(async () => { operation = result.current.logout(); });
   act(() => {
     useAuthStore.getState().markUnauthenticated();
     useAuthStore.getState().markAuthenticated();

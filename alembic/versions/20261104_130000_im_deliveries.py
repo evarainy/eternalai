@@ -1,13 +1,13 @@
 """Text-delivery Outbox and explicit recipient verification history.
 
-Authored only. Before execution, integrate V1's im_account_bindings migration and
-adapt the parent to the then-unique head. No file-artifact dependency is present.
+Authored only. Follows V1's im_account_bindings migration; execution requires
+separate authorization. No file-artifact dependency is present.
 """
 
 from alembic import op
 
 revision = "20261104_130000"
-down_revision = "20261103_120100"
+down_revision = "20261104_120000"
 branch_labels = None
 depends_on = None
 

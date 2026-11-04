@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, Modal, Select } from 'antd';
+import { ApiError } from '../../api/mutator';
 import { useAuthStore } from '../../stores/authStore';
 import { DeliveryPanel } from './DeliveryPanel';
 import { deliveryError, prepareDelivery, readDeliveryRecipients } from './deliveryApi';
@@ -49,7 +50,13 @@ function DeliveryComposer({ text }: { text: string }) {
       const preview = await prepareDelivery(request);
       if (current()) setView(preview);
     } catch (failure) {
-      if (current()) setError(deliveryError(failure));
+      if (current()) {
+        setError(deliveryError(failure));
+        if (failure instanceof ApiError && (
+          failure.status === 422 && ['im_delivery_expiry_invalid', 'im_delivery_recipient_invalid'].includes(failure.code)
+          || failure.status === 409 && ['im_delivery_mapping_invalid', 'im_delivery_mapping_unavailable', 'im_delivery_recipient_unavailable'].includes(failure.code)
+        )) setPending(null);
+      }
     } finally {
       inFlight.current = false;
       if (current()) setBusy(false);

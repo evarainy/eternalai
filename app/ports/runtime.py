@@ -15,6 +15,7 @@ from app.ports.auth import Principal
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import TaskVersionBindingManifest, VersionBinding
+from app.ports.im_context import AuthorizedIMContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.response_projection_contract import ProjectionContractSnapshot
 
@@ -32,6 +33,9 @@ d_form_collection_reference: ContextVar[DFormCollectionReference | None] = Conte
 )
 chat_client_request_id: ContextVar[str | None] = ContextVar(
     "chat_client_request_id", default=None,
+)
+im_source_context: ContextVar[AuthorizedIMContext | None] = ContextVar(
+    "im_source_context", default=None,
 )
 
 type UserActionOutcome = Literal[

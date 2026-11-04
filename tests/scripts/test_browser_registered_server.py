@@ -121,6 +121,7 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
         "credential_polling_scheduler": None, "organization_directory_scheduler": None,
         "diagnostic_checks": {}, "validate_workflows": None, "mcp_service": None,
         "background_jobs": None,
+        "im_context": None,
     }
     components = SimpleNamespace(**values)
     vertical = SimpleNamespace(chat=None, submission=object())

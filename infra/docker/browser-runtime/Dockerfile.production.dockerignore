@@ -40,10 +40,10 @@ app/infra/adapters/business_mcp/*
 app/infra/adapters/oa/*
 !app/infra/auth/
 app/infra/auth/*
-!app/infra/browser/
-app/infra/browser/*
 !app/infra/communication/
 app/infra/communication/*
+!app/infra/browser/
+app/infra/browser/*
 !app/infra/gateway/
 app/infra/gateway/*
 !app/infra/health/
@@ -134,6 +134,7 @@ services/decision/*
 !app/api/v1/credential_bindings.py
 !app/api/v1/csrf.py
 !app/api/v1/health.py
+!app/api/v1/im_context.py
 !app/api/v1/mcp.py
 !app/api/v1/me.py
 !app/api/v1/mock_control.py
@@ -163,6 +164,11 @@ services/decision/*
 !app/browser_skill/write_workflow.py
 !app/composition.py
 !app/config.py
+!app/im_context.py
+!app/infra/communication/zulip.py
+!app/infra/persistence/im_context.py
+!app/ports/communication.py
+!app/ports/im_context.py
 !app/contracts/sdui/models.py
 !app/credential_polling.py
 !app/dependency_checks.py
@@ -357,7 +363,6 @@ services/decision/*
 !app/ports/error_codes.py
 !app/ports/evaluation.py
 !app/ports/fixed_document.py
-!app/ports/communication.py
 !app/ports/im_deliveries.py
 !app/ports/human_gate.py
 !app/ports/identity_mapping.py
@@ -401,7 +406,6 @@ services/decision/*
 !app/api/v1/im_deliveries.py
 !app/infra/communication/__init__.py
 !app/infra/communication/composition.py
-!app/infra/communication/zulip.py
 !app/infra/persistence/im_deliveries.py
 !app/version_binding.py
 !app/work_dispatch/__init__.py

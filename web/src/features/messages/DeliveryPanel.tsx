@@ -3,7 +3,7 @@ import { Alert, Button, Input, Radio, Space, Tag } from 'antd';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import {
-  cancelDelivery, confirmDelivery, DELIVERY_STATE_LABELS, deliveryError, deliveryTime,
+  cancelDelivery, confirmDelivery, DELIVERY_STATE_LABELS, deliveryError, deliveryResultReason, deliveryTime,
   readDelivery, reconcileDelivery, verifyDelivery,
 } from './deliveryApi';
 import type { DeliveryView, VerificationResult, VerifyDelivery } from './deliveryApi';
@@ -66,6 +66,7 @@ export function DeliveryPanel({ deliveryId, initial = null }: {
   const isInitiator = view?.viewer_role === 'initiator';
   const canVerify = view !== null && !isInitiator && view.confirmed_at !== null
     && view.state !== 'cancelled' && view.state !== 'expired';
+  const resultReason = view === null ? null : deliveryResultReason(view.result_code);
 
   return (
     <section className={styles.panel} aria-label="文字送核记录">
@@ -84,6 +85,7 @@ export function DeliveryPanel({ deliveryId, initial = null }: {
           <div><dt>发送结果</dt><dd><Tag>{DELIVERY_STATE_LABELS[view.state]}</Tag>{view.remote_message_id ? `消息编号 ${view.remote_message_id}` : ''}</dd></div>
           <div><dt>本人核实</dt><dd>{view.verifications.length === 0 ? '乙尚未明确核实' : '已有乙本人回执，见下方记录'}</dd></div>
         </dl>
+        {resultReason === null ? null : <p>{resultReason}</p>}
         <p className={styles.label}>实际文字卡与留言</p>
         <pre className={styles.card}>{view.card_content}</pre>
         {view.state === 'unknown' || view.state === 'sending' ? (

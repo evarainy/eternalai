@@ -18,11 +18,15 @@ interface AuthenticationState {
   status: AuthenticationStatus;
   markAuthenticated: () => void;
   markUnauthenticated: (expectedGeneration?: number) => void;
+  invalidateIdentity: (status?: AuthenticationStatus) => void;
 }
 
 export const useAuthStore = create<AuthenticationState>((set) => ({
   generation: 0,
   status: 'unknown',
+  invalidateIdentity: (status = 'unknown') => set((state) => ({
+    generation: state.generation + 1, status,
+  })),
   markAuthenticated: () =>
     set((state) => ({
       generation: state.generation + 1,

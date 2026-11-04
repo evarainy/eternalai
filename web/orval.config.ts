@@ -1,6 +1,17 @@
 import { defineConfig } from 'orval';
 
 export default defineConfig({
+  imContext: {
+    input: './openapi/im-context.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/im-context/im-context.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   mcp: {
     input: './openapi/mcp.openapi.json',
     output: {
