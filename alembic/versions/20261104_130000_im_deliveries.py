@@ -4,6 +4,8 @@ Authored only. Follows V1's im_account_bindings migration; execution requires
 separate authorization. No file-artifact dependency is present.
 """
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20261104_130000"
@@ -75,4 +77,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Disable IM delivery and retain its history; downgrade is not supported")
+    # Like V1, an explicitly requested empty-schema round trip is reversible.
+    # Any delivery/receipt history requires disabling the feature and retaining it.
+    connection = op.get_bind()
+    connection.execute(sa.text(
+        "LOCK TABLE im_deliveries, im_verifications IN ACCESS EXCLUSIVE MODE"
+    ))
+    if connection.execute(sa.text(
+        "SELECT EXISTS(SELECT 1 FROM im_deliveries) "
+        "OR EXISTS(SELECT 1 FROM im_verifications)"
+    )).scalar_one():
+        raise RuntimeError("im_deliveries_downgrade_irreversible")
+    op.drop_table("im_verifications")
+    op.drop_table("im_deliveries")

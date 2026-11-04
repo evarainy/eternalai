@@ -931,6 +931,8 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         health_timeout_seconds=settings.health_timeout_seconds,
         user_profile=None,
         background_jobs=None,
+        im_deliveries=None,
+        close_im_deliveries=None,
         im_context=None,
     )
     application = object()
