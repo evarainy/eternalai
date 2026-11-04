@@ -257,7 +257,9 @@ class IMContextService:
             raise IMContextError("im_source_expired")
         try:
             binding = await self._binding(principal)
-            if (binding.binding_id, binding.mapping_version) != (ref.binding_id, ref.mapping_version):
+            if (binding.binding_id, binding.mapping_version) != (
+                ref.binding_id, ref.mapping_version,
+            ):
                 raise IMContextError("im_mapping_changed")
             result = await self._read(binding, ref.selection)
             if _manifest(result.messages) != ref.manifest:
