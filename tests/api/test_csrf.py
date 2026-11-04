@@ -48,7 +48,10 @@ _SAME_SITE_DIFFERENT_ORIGIN = "https://evil.example.gov.cn"
 _CROSS_SITE_ORIGIN = "https://attacker.invalid"
 _BINDING_ID = "synthetic-binding"
 _UNSAFE_METHODS = frozenset({"DELETE", "PATCH", "POST", "PUT"})
-_INTENTIONAL_CSRF_EXEMPT_ROUTES: frozenset[tuple[str, str]] = frozenset()
+# The dedicated V3 webhook authenticates the configured Bot token, not a Cookie.
+_INTENTIONAL_CSRF_EXEMPT_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("POST", "/api/v1/im-inbound/{agent_id}"),
+})
 _ROUTE_PARAMETER = re.compile(r"\{(?P<name>[^}:]+)(?::[^}]+)?\}")
 
 

@@ -1,5 +1,7 @@
 """Personal published-text agents, grants and atomic IM Inbox; authored only."""
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20261104_150000"
@@ -115,4 +117,35 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("personal_agents_downgrade_requires_explicit_retention_plan")
+    # Required CI may round-trip an empty V3 schema. Published material or any
+    # V3 history must be retained; a real downgrade needs separate authorization.
+    connection = op.get_bind()
+    connection.execute(sa.text(
+        "LOCK TABLE personal_agents, personal_agent_materials, personal_agent_grants, "
+        "im_inbox, im_deliveries IN ACCESS EXCLUSIVE MODE"
+    ))
+    if connection.execute(sa.text(
+        "SELECT EXISTS(SELECT 1 FROM personal_agents) "
+        "OR EXISTS(SELECT 1 FROM personal_agent_materials) "
+        "OR EXISTS(SELECT 1 FROM personal_agent_grants) "
+        "OR EXISTS(SELECT 1 FROM im_inbox)"
+    )).scalar_one():
+        raise RuntimeError("personal_agents_downgrade_requires_explicit_retention_plan")
+    op.execute("DROP INDEX ux_im_delivery_inbox_reply")
+    op.execute("ALTER TABLE im_deliveries DROP CONSTRAINT ck_im_delivery_origin")
+    op.execute("""ALTER TABLE im_deliveries
+        DROP COLUMN origin_inbox_id,
+        DROP COLUMN reply_slot,
+        ALTER COLUMN recipient_ai_user_id SET NOT NULL,
+        ALTER COLUMN recipient_binding_id SET NOT NULL,
+        ALTER COLUMN recipient_mapping_version SET NOT NULL,
+        ALTER COLUMN confirmation_sha256 SET NOT NULL,
+        ALTER COLUMN send_expires_at SET NOT NULL""")
+    op.execute("""ALTER TABLE im_deliveries
+        ADD CONSTRAINT ck_im_delivery_confirmed_enqueued CHECK
+        (state NOT IN ('ready','sending','accepted','known_rejected','unknown')
+         OR (confirmed_at IS NOT NULL AND queue_job_id IS NOT NULL))""")
+    op.drop_table("im_inbox")
+    op.drop_table("personal_agent_grants")
+    op.drop_table("personal_agent_materials")
+    op.drop_table("personal_agents")
