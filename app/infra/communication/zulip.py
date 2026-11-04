@@ -362,7 +362,7 @@ class ZulipDeliveryAdapter:
                     "num_after": 0,
                     "apply_markdown": "false",
                     "narrow": json.dumps([
-                        {"operator": "dm", "operand": recipient},
+                        {"operator": "dm", "operand": [recipient]},
                         {"operator": "search", "operand": str(delivery_id)},
                     ]),
                 },
