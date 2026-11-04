@@ -573,8 +573,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(12);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(12);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(13);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(13);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

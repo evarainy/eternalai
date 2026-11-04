@@ -6,7 +6,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
-RequestChannel: TypeAlias = Literal["web", "cli", "api", "mock"]
+RequestChannel: TypeAlias = Literal["web", "cli", "api", "mock", "im"]
 
 
 class RequestOrgContext(BaseModel):

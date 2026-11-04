@@ -6,13 +6,13 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.ports.auth import Principal
-from app.ports.communication import DeliveryResult, PrivateCard
+from app.ports.communication import DeliveryMessage, DeliveryResult
 
 DeliveryState = Literal[
     "prepared", "ready", "sending", "accepted", "known_rejected", "unknown",
@@ -105,9 +105,9 @@ class DeliveryRecord:
     delivery_id: UUID
     tenant_id: str
     initiator_ai_user_id: str
-    recipient_ai_user_id: str
-    recipient_binding_id: UUID
-    recipient_mapping_version: bytes = field(repr=False)
+    recipient_ai_user_id: str | None
+    recipient_binding_id: UUID | None
+    recipient_mapping_version: bytes | None = field(repr=False)
     provider: str
     im_instance_id: str
     realm_id: str
@@ -115,12 +115,12 @@ class DeliveryRecord:
     target_conversation_ref: str
     card_content: str = field(repr=False)
     note: str = field(repr=False)
-    confirmation_sha256: bytes = field(repr=False)
+    confirmation_sha256: bytes | None = field(repr=False)
     idempotency_key: UUID
     state: DeliveryState
     created_at: datetime
     confirmed_at: datetime | None
-    send_expires_at: datetime
+    send_expires_at: datetime | None
     queue_job_id: int | None
     send_attempt_id: UUID | None
     attempt_started_at: datetime | None
@@ -128,6 +128,8 @@ class DeliveryRecord:
     accepted_at: datetime | None
     result_code: str | None
     updated_at: datetime
+    origin_inbox_id: UUID | None = None
+    reply_slot: Literal["private", "group_status"] | None = None
 
 
 def _digest(value: dict[str, str]) -> bytes:
@@ -145,14 +147,14 @@ def confirmation_digest(
         "initiator": record.initiator_ai_user_id,
         "initiator_binding": str(initiator.binding_id),
         "initiator_mapping": initiator.version.hex(),
-        "recipient": record.recipient_ai_user_id,
+        "recipient": cast(str, record.recipient_ai_user_id),
         "recipient_binding": str(recipient.binding_id),
         "recipient_mapping": recipient.version.hex(),
         "provider": record.provider, "instance": record.im_instance_id,
         "realm": record.realm_id, "bot": record.sender_bot_id,
         "conversation": record.target_conversation_ref,
         "content": record.card_content, "note": record.note,
-        "send_expires_at": record.send_expires_at.isoformat(),
+        "send_expires_at": cast(datetime, record.send_expires_at).isoformat(),
     })
 
 
@@ -185,7 +187,9 @@ class IMDeliveryStorePort(Protocol):
         self, principal: Principal, delivery_id: UUID, request: DeliveryVerification,
     ) -> None: ...
 
-    async def claim(self, delivery_id: UUID) -> tuple[DeliveryRecord, PrivateCard] | None: ...
+    async def origin_inbox(self, delivery_id: UUID) -> UUID | None: ...
+
+    async def claim(self, delivery_id: UUID) -> tuple[DeliveryRecord, DeliveryMessage] | None: ...
 
     async def finish(
         self, delivery_id: UUID, attempt_id: UUID, result: DeliveryResult,
@@ -193,6 +197,6 @@ class IMDeliveryStorePort(Protocol):
 
     async def uncertain(
         self, delivery_id: UUID,
-    ) -> tuple[DeliveryRecord, PrivateCard] | None: ...
+    ) -> tuple[DeliveryRecord, DeliveryMessage] | None: ...
 
     async def recover_ready(self) -> None: ...

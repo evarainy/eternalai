@@ -7,11 +7,11 @@ import hashlib
 import hmac
 import json
 import ssl
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from pydantic import SecretStr
 
 from app.config import ZulipSettings
 from app.ports.communication import (
+    DeliveryMessage,
     DeliveryResult,
     IMAccountBinding,
     IMLoginForm,
@@ -27,7 +28,8 @@ from app.ports.communication import (
     IMReadContext,
     IMReadIdentity,
     IMSelection,
-    PrivateCard,
+    InboundEvent,
+    VerifiedInboundMessage,
 )
 from app.ports.im_context import IMContextError
 
@@ -36,10 +38,74 @@ def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _source_conversation(raw: dict[str, Any]) -> tuple[str, Literal["private", "group"]]:
+    """Use the same exact topic and full participant set for callback and rereads."""
+    if raw.get("type") == "stream":
+        if type(raw.get("stream_id")) is not int or not isinstance(raw.get("subject"), str):
+            raise IMContextError("im_source_changed")
+        return _canonical({
+            "type": "stream", "stream_id": raw["stream_id"], "topic": raw["subject"],
+        }), "group"
+    recipients = raw.get("display_recipient")
+    if (raw.get("type") != "private" or not isinstance(recipients, list)
+            or not recipients or any(
+                not isinstance(user, dict) or type(user.get("id")) is not int
+                or user["id"] <= 0 for user in recipients
+            )):
+        raise IMContextError("im_source_changed")
+    users = sorted({user["id"] for user in recipients})
+    if raw.get("sender_id") not in users:
+        raise IMContextError("im_source_changed")
+    return _canonical({"type": "private", "user_ids": users}), (
+        "private" if len(users) == 2 else "group"
+    )
+
+
+def _inbound_event(
+    raw: object, *, instance: str, realm: str, target_bot_id: str,
+    trigger: object,
+) -> InboundEvent:
+    if (not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] <= 0
+            or type(raw.get("sender_id")) is not int or raw["sender_id"] <= 0
+            or not isinstance(raw.get("content"), str)
+            or raw.get("content_type") != "text/x-markdown"
+            or trigger not in ("direct_message", "mention")):
+        raise IMContextError("im_source_changed")
+    if ((raw.get("type") == "stream" and trigger != "mention")
+            or (raw.get("type") == "private" and trigger != "direct_message")):
+        raise IMContextError("im_source_changed")
+    conversation, kind = _source_conversation(raw)
+    if raw["type"] == "private" and int(target_bot_id) not in json.loads(conversation)["user_ids"]:
+        raise IMContextError("im_source_changed")
+    content = raw["content"].replace("\r\n", "\n").replace("\r", "\n")
+    fingerprint = hashlib.sha256(_canonical({
+        "provider": "zulip", "instance": instance, "realm": realm,
+        "target_bot": target_bot_id, "source_message_id": str(raw["id"]),
+        "trigger": trigger, "sender": str(raw["sender_id"]),
+        "conversation": conversation,
+        "source_version": {name: raw.get(name) for name in (
+            "timestamp", "last_edit_timestamp", "last_moved_timestamp", "edit_history",
+        )},
+        "content_sha256": hashlib.sha256(content.encode()).hexdigest(),
+    }).encode()).digest()
+    return InboundEvent(
+        provider="zulip", im_instance_id=instance, realm_id=realm,
+        target_bot_id=target_bot_id, source_message_id=str(raw["id"]),
+        trigger_kind=trigger,
+        sender_id=str(raw["sender_id"]), conversation_ref=conversation,
+        conversation_kind=kind, payload_fingerprint=fingerprint,
+    )
+
+
 @dataclass(slots=True)
 class _Batch:
     client: httpx2.AsyncClient = field(repr=False)
     user_id: int
+    human_active: bool
 
 
 class ZulipCommunicationAdapter:
@@ -97,7 +163,7 @@ class ZulipCommunicationAdapter:
                 self._settings.im_instance_id,
                 self._settings.realm_id,
                 str(uid),
-                _Batch(client, uid),
+                _Batch(client, uid, me.get("is_bot") is False and me.get("is_active") is True),
             )
 
     async def _request(
@@ -227,6 +293,102 @@ class ZulipCommunicationAdapter:
         )
 
 
+class ZulipInboundAdapter:
+    def __init__(
+        self, reader: ZulipCommunicationAdapter, *,
+        webhook_tokens: Mapping[str, SecretStr],
+        bot_credentials: Mapping[str, tuple[str, SecretStr]],
+    ) -> None:
+        self._reader = reader
+        self._tokens = webhook_tokens
+        self._bots = bot_credentials
+
+    async def check_identity(self, binding: IMAccountBinding) -> None:
+        settings = self._reader._settings
+        if (binding.status != "active" or (
+            binding.provider, binding.im_instance_id, binding.realm_id,
+        ) != ("zulip", settings.im_instance_id, settings.realm_id)):
+            raise IMContextError("im_identity_changed")
+        async with self._reader.current_identity(binding) as identity:
+            if (identity.im_user_id != binding.im_user_id
+                    or not cast(_Batch, identity.handle).human_active):
+                raise IMContextError("im_identity_changed")
+
+    def authenticate_callback(
+        self, *, target_bot_id: str, payload: dict[str, object],
+    ) -> InboundEvent:
+        token = payload.get("token")
+        expected = self._tokens.get(target_bot_id)
+        if (expected is None or not isinstance(token, str)
+                or not hmac.compare_digest(token.encode(), expected.get_secret_value().encode())):
+            raise IMContextError("im_inbound_authentication_failed", 401)
+        settings = self._reader._settings
+        return _inbound_event(
+            payload.get("message"), instance=settings.im_instance_id,
+            realm=settings.realm_id, target_bot_id=target_bot_id, trigger=payload.get("trigger"),
+        )
+
+    async def reread_trigger(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> VerifiedInboundMessage:
+        settings = self._reader._settings
+        if (binding.status != "active" or (
+            binding.provider, binding.im_instance_id, binding.realm_id, binding.im_user_id,
+        ) != (event.provider, event.im_instance_id, event.realm_id, event.sender_id)
+                or (event.provider, event.im_instance_id, event.realm_id)
+                != ("zulip", settings.im_instance_id, settings.realm_id)):
+            raise IMContextError("im_identity_changed")
+        credentials = self._bots.get(event.target_bot_id)
+        if credentials is None:
+            raise IMContextError("im_bot_identity_unavailable", 503)
+        mid = self._reader._number(event.source_message_id)
+        params = {"apply_markdown": "false", "allow_empty_topic_name": "true"}
+        async with self._reader.current_identity(binding) as identity:
+            if identity.im_user_id != binding.im_user_id:
+                raise IMContextError("im_identity_changed")
+            batch = cast(_Batch, identity.handle)
+            if not batch.human_active:
+                raise IMContextError("im_inbound_sender_invalid")
+            result = await self._reader._request(
+                batch.client, "GET", f"/api/v1/messages/{mid}", params=params,
+            )
+            raw = result.get("message")
+            current = _inbound_event(
+                raw, instance=settings.im_instance_id, realm=settings.realm_id,
+                target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
+            )
+            if current != event:
+                raise IMContextError("im_source_changed")
+            # The reader established visibility. The Bot read only verifies its own
+            # real recipient/mention flags; it cannot substitute for that reader.
+            email, api_key = credentials
+            auth = httpx2.BasicAuth(email, api_key.get_secret_value())
+            bot = await self._reader._request(
+                batch.client, "GET", "/api/v1/users/me", auth=auth,
+            )
+            if (str(bot.get("user_id")) != event.target_bot_id
+                    or bot.get("is_bot") is not True or bot.get("is_active") is not True):
+                raise IMContextError("im_bot_identity_changed")
+            bot_result = await self._reader._request(
+                batch.client, "GET", f"/api/v1/messages/{mid}", auth=auth, params=params,
+            )
+            bot_raw = bot_result.get("message")
+            target_event = _inbound_event(
+                bot_raw, instance=settings.im_instance_id, realm=settings.realm_id,
+                target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
+            )
+            if target_event != event:
+                raise IMContextError("im_source_changed")
+            if event.conversation_kind == "group":
+                flags = cast(dict[str, Any], bot_raw).get("flags")
+                if not isinstance(flags, list) or "mentioned" not in flags:
+                    raise IMContextError("im_inbound_target_invalid")
+            return VerifiedInboundMessage(
+                event,
+                cast(dict[str, Any], raw)["content"].replace("\r\n", "\n").replace("\r", "\n"),
+            )
+
+
 class ZulipDeliveryAdapter:
     def __init__(
         self,
@@ -240,6 +402,7 @@ class ZulipDeliveryAdapter:
         bot_email: str,
         bot_api_key: SecretStr,
         host_origin: str,
+        bots: Mapping[str, tuple[str, SecretStr]] | None = None,
     ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
@@ -247,7 +410,8 @@ class ZulipDeliveryAdapter:
         self._instance = im_instance_id
         self._realm = realm_id
         self._bot_id = sender_bot_id
-        self._auth = httpx2.BasicAuth(bot_email, bot_api_key.get_secret_value())
+        self._bots = dict(bots or {})
+        self._bots[sender_bot_id] = (bot_email, bot_api_key)
         self._host_origin = host_origin.rstrip("/")
 
     @staticmethod
@@ -256,10 +420,10 @@ class ZulipDeliveryAdapter:
             raise ValueError("im_delivery_identity_invalid")
         return int(value)
 
-    def _conversation(self, recipient: str) -> str:
+    def _conversation(self, recipient: str, sender_bot_id: str) -> str:
         return json.dumps(
             {"type": "private", "user_ids": sorted(
-                {self._number(self._bot_id), self._number(recipient)}
+                {self._number(sender_bot_id), self._number(recipient)}
             )},
             sort_keys=True,
             separators=(",", ":"),
@@ -272,14 +436,14 @@ class ZulipDeliveryAdapter:
         initiator_label: str,
         recipient_im_user_id: str,
         note: str,
-    ) -> PrivateCard:
-        target = self._conversation(recipient_im_user_id)
+    ) -> DeliveryMessage:
+        target = self._conversation(recipient_im_user_id, self._bot_id)
         content = (
             f"EternalAI 助手，受{initiator_label}委托\n\n{note}\n\n"
             f"投递编号：{delivery_id}\n"
             f"[回到 EternalAI 核实文字]({self._host_origin}/messages?delivery={delivery_id})"
         )
-        return PrivateCard(
+        return DeliveryMessage(
             provider=self._provider,
             im_instance_id=self._instance,
             realm_id=self._realm,
@@ -288,16 +452,65 @@ class ZulipDeliveryAdapter:
             card_content=content,
         )
 
-    def _recipient(self, card: PrivateCard) -> int:
-        if ((card.provider, card.im_instance_id, card.realm_id, card.sender_bot_id)
-                != (self._provider, self._instance, self._realm, self._bot_id)):
-            raise ValueError("im_delivery_target_changed")
-        users = cast(list[int], json.loads(card.target_conversation_ref)["user_ids"])
-        return next(user for user in users if str(user) != self._bot_id)
+    def prepare_agent_reply(
+        self, *, delivery_id: UUID, sender_bot_id: str, recipient_im_user_id: str, text: str,
+    ) -> DeliveryMessage:
+        return DeliveryMessage(
+            provider=self._provider, im_instance_id=self._instance, realm_id=self._realm,
+            sender_bot_id=sender_bot_id,
+            target_conversation_ref=self._conversation(recipient_im_user_id, sender_bot_id),
+            card_content=f"{text}\n\n投递编号：{delivery_id}",
+        )
 
-    async def _bot_identity(self) -> bool:
+    def prepare_group_status(
+        self, *, delivery_id: UUID, sender_bot_id: str, conversation_ref: str,
+    ) -> DeliveryMessage:
+        return DeliveryMessage(
+            provider=self._provider, im_instance_id=self._instance, realm_id=self._realm,
+            sender_bot_id=sender_bot_id, target_conversation_ref=conversation_ref,
+            card_content=f"请求已接收，请查看与助手的私聊。\n投递编号：{delivery_id}",
+            kind="group_status",
+        )
+
+    def _target(
+        self, message: DeliveryMessage,
+    ) -> tuple[httpx2.BasicAuth, dict[str, str], list[dict[str, object]]]:
+        if ((message.provider, message.im_instance_id, message.realm_id)
+                != (self._provider, self._instance, self._realm)
+                or message.sender_bot_id not in self._bots):
+            raise ValueError("im_delivery_target_changed")
+        email, api_key = self._bots[message.sender_bot_id]
+        auth = httpx2.BasicAuth(email, api_key.get_secret_value())
+        conversation = json.loads(message.target_conversation_ref)
+        if conversation["type"] == "private":
+            users = conversation["user_ids"]
+            bot_id = self._number(message.sender_bot_id)
+            if (not isinstance(users, list) or any(type(user) is not int for user in users)
+                    or bot_id not in users or len(set(users)) != len(users)
+                    or len(users) < 2 or (message.kind == "private" and len(users) != 2)):
+                raise ValueError("im_delivery_target_changed")
+            recipients = [user for user in users if user != bot_id]
+            data = {"type": "direct", "to": json.dumps(recipients)}
+            narrow: list[dict[str, object]] = [{"operator": "dm", "operand": recipients}]
+        elif conversation["type"] == "stream" and message.kind == "group_status":
+            if (type(conversation.get("stream_id")) is not int
+                    or not isinstance(conversation.get("topic"), str)):
+                raise ValueError("im_delivery_target_changed")
+            data = {
+                "type": "stream", "to": str(conversation["stream_id"]),
+                "topic": conversation["topic"],
+            }
+            narrow = [
+                {"operator": "channel", "operand": conversation["stream_id"]},
+                {"operator": "topic", "operand": conversation["topic"]},
+            ]
+        else:
+            raise ValueError("im_delivery_target_changed")
+        return auth, data, narrow
+
+    async def _bot_identity(self, bot_id: str, auth: httpx2.BasicAuth) -> bool:
         response = await self._client.get(
-            self._base_url + "/api/v1/users/me", auth=self._auth, follow_redirects=False
+            self._base_url + "/api/v1/users/me", auth=auth, follow_redirects=False
         )
         data = response.json()
         return (
@@ -305,18 +518,18 @@ class ZulipDeliveryAdapter:
             and isinstance(data, dict)
             and data.get("result") == "success"
             and type(data.get("user_id")) is int
-            and str(data["user_id"]) == self._bot_id
+            and str(data["user_id"]) == bot_id
             and data.get("is_bot") is True
             and data.get("is_active") is True
         )
 
-    async def send_private_card(self, card: PrivateCard) -> DeliveryResult:
+    async def send_message_once(self, message: DeliveryMessage) -> DeliveryResult:
         try:
-            recipient = self._recipient(card)
-        except ValueError:
+            auth, target, _ = self._target(message)
+        except (ValueError, KeyError, TypeError):
             return DeliveryResult("known_rejected", None, "im_delivery_target_changed")
         try:
-            if not await self._bot_identity():
+            if not await self._bot_identity(message.sender_bot_id, auth):
                 return DeliveryResult("known_rejected", None, "im_bot_identity_changed")
         except (httpx2.RequestError, ValueError):
             # No send request was made, so this preflight failure is unambiguous.
@@ -324,13 +537,9 @@ class ZulipDeliveryAdapter:
         try:
             response = await self._client.post(
                 self._base_url + "/api/v1/messages",
-                auth=self._auth,
+                auth=auth,
                 follow_redirects=False,
-                data={
-                    "type": "direct",
-                    "to": json.dumps([recipient]),
-                    "content": card.card_content,
-                },
+                data={**target, "content": message.card_content},
             )
             data = response.json()
         except (httpx2.RequestError, ValueError):
@@ -344,31 +553,31 @@ class ZulipDeliveryAdapter:
                 return DeliveryResult("known_rejected", None, "im_delivery_rejected")
         return DeliveryResult("unknown", None, "im_delivery_response_unknown")
 
-    async def reconcile_private_card(
-        self, card: PrivateCard, delivery_id: UUID
+    async def reconcile_message(
+        self, message: DeliveryMessage, delivery_id: UUID
     ) -> DeliveryResult:
         unknown = DeliveryResult("unknown", None, "im_delivery_unconfirmed")
         try:
-            recipient = self._recipient(card)
-            if not await self._bot_identity():
+            auth, _, narrow = self._target(message)
+            if not await self._bot_identity(message.sender_bot_id, auth):
                 return unknown
             response = await self._client.get(
                 self._base_url + "/api/v1/messages",
-                auth=self._auth,
+                auth=auth,
                 follow_redirects=False,
                 params={
                     "anchor": "newest",
                     "num_before": 100,
                     "num_after": 0,
                     "apply_markdown": "false",
-                    "narrow": json.dumps([
-                        {"operator": "dm", "operand": [recipient]},
+                    "allow_empty_topic_name": "true",
+                    "narrow": json.dumps(narrow + [
                         {"operator": "search", "operand": str(delivery_id)},
                     ]),
                 },
             )
             data = response.json()
-        except (httpx2.RequestError, ValueError):
+        except (httpx2.RequestError, ValueError, KeyError, TypeError):
             return unknown
         if (response.status_code != 200 or not isinstance(data, dict)
                 or data.get("result") != "success"
@@ -382,24 +591,22 @@ class ZulipDeliveryAdapter:
         raw = messages[0]
         if not isinstance(raw, dict):
             return unknown
-        message = cast(dict[str, Any], raw)
-        recipients = message.get("display_recipient")
-        if (message.get("type") != "private"
-                or type(message.get("sender_id")) is not int
-                or str(message["sender_id"]) != card.sender_bot_id
-                or not isinstance(recipients, list)
-                or any(not isinstance(user, dict) or type(user.get("id")) is not int
-                       for user in recipients)):
+        remote = cast(dict[str, Any], raw)
+        if (type(remote.get("sender_id")) is not int
+                or str(remote["sender_id"]) != message.sender_bot_id):
             return unknown
-        expected = {self._number(card.sender_bot_id), recipient}
-        if (len(recipients) != len(expected) or {user["id"] for user in recipients} != expected):
+        try:
+            conversation, _ = _source_conversation(remote)
+        except IMContextError:
             return unknown
-        content = message.get("content")
-        if (message.get("content_type") != "text/x-markdown"
+        if conversation != message.target_conversation_ref:
+            return unknown
+        content = remote.get("content")
+        if (remote.get("content_type") != "text/x-markdown"
                 or not isinstance(content, str)
-                or message.get("last_edit_timestamp") is not None
-                or message.get("edit_history")
-                or content != card.card_content
-                or type(message.get("id")) is not int or message["id"] <= 0):
+                or remote.get("last_edit_timestamp") is not None
+                or remote.get("edit_history")
+                or content != message.card_content
+                or type(remote.get("id")) is not int or remote["id"] <= 0):
             return unknown
-        return DeliveryResult("accepted", str(message["id"]), "im_delivery_reconciled")
+        return DeliveryResult("accepted", str(remote["id"]), "im_delivery_reconciled")

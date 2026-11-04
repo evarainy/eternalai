@@ -30,9 +30,11 @@ from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.im_context import make_router as make_im_context_router
 from app.api.v1.im_deliveries import make_router as make_im_deliveries_router
+from app.api.v1.im_inbound import make_router as make_im_inbound_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
+from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
@@ -59,6 +61,7 @@ from app.infra.browser.multi_installation import BrowserVerticalCollection
 from app.infra.persistence.browser.chat_handoff import PostgreSQLBrowserIntentHandoff
 from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
+from app.personal_agents import PersonalAgentService
 from app.ports.auth import (
     AuthenticationPort,
     Principal,
@@ -115,6 +118,8 @@ def create_app(
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
     im_delivery_service: IMDeliveryService | None = None,
+    personal_agent_service: PersonalAgentService | None = None,
+    close_personal_agents: Callable[[], Awaitable[None]] | None = None,
     close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
     im_context: IMContextService | None = None,
 ) -> FastAPI:
@@ -180,8 +185,12 @@ def create_app(
                         if credential_started and credential_polling_scheduler is not None:
                             await credential_polling_scheduler.stop()
                     finally:
-                        if close_im_deliveries is not None:
-                            await close_im_deliveries()
+                        try:
+                            if close_im_deliveries is not None:
+                                await close_im_deliveries()
+                        finally:
+                            if close_personal_agents is not None:
+                                await close_personal_agents()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -232,6 +241,13 @@ def create_app(
     application.include_router(
         make_im_deliveries_router(im_delivery_service, csrf_protected_principal),
         prefix="/api/v1/im-deliveries",
+    )
+    application.include_router(
+        make_personal_agents_router(personal_agent_service, csrf_protected_principal),
+        prefix="/api/v1/personal-agents",
+    )
+    application.include_router(
+        make_im_inbound_router(personal_agent_service), prefix="/api/v1/im-inbound",
     )
     application.include_router(
         make_auth_router(
@@ -528,6 +544,8 @@ def create_production_app(
         im_delivery_service=components.im_deliveries,
         close_im_deliveries=components.close_im_deliveries,
         im_context=components.im_context,
+        personal_agent_service=components.personal_agents,
+        close_personal_agents=components.close_personal_agents,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

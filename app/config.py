@@ -372,6 +372,80 @@ def _zulip_settings(source: Mapping[str, str]) -> ZulipSettings | None:
     )
 
 
+class _PersonalAgentBotConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bot_id: str = Field(min_length=1)
+    bot_email_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    bot_api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    webhook_token_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def personal_agent_environment_keys(source: Mapping[str, str]) -> tuple[str, ...]:
+    """Only explicit Bot credential references may enter the worker environment."""
+
+    raw = source.get("IM_PERSONAL_AGENTS_JSON", "[]")
+    try:
+        bots = TypeAdapter(tuple[_PersonalAgentBotConfig, ...]).validate_json(raw)
+    except ValidationError:
+        raise RuntimeError("personal_agent_configuration_invalid") from None
+    if not bots:
+        return ()
+    credential_keys = tuple(dict.fromkeys(
+        key for bot in bots
+        for key in (bot.bot_email_env, bot.bot_api_key_env, bot.webhook_token_env)
+    ))
+    return (*credential_keys, "IM_SESSION_HELPER_URL", "IM_ZULIP_JWT_SECRET_B64",
+            "RUNTIME_ENGINE", "LLM_BASE_URL", "LLM_MODEL")
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalAgentBotSettings:
+    bot_id: str
+    bot_email: str = field(repr=False)
+    bot_api_key: SecretStr = field(repr=False)
+    webhook_token: SecretStr = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalAgentSettings:
+    zulip: ZulipSettings = field(repr=False)
+    bots: tuple[PersonalAgentBotSettings, ...] = field(repr=False)
+    llm_base_url: str
+    llm_model: str
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> PersonalAgentSettings | None:
+        try:
+            bots = TypeAdapter(tuple[_PersonalAgentBotConfig, ...]).validate_json(
+                source.get("IM_PERSONAL_AGENTS_JSON", "[]")
+            )
+        except ValidationError:
+            raise RuntimeError("personal_agent_configuration_invalid") from None
+        if not bots:
+            return None
+        if _runtime_engine(source) != "agentscope":
+            raise RuntimeError("personal_agent_runtime_unsupported")
+        if not source.get("IM_DELIVERY_BOT_ID", "").strip():
+            raise RuntimeError("personal_agent_delivery_required")
+        zulip = _zulip_settings(source)
+        if zulip is None or len({bot.bot_id for bot in bots}) != len(bots):
+            raise RuntimeError("personal_agent_configuration_invalid")
+        return cls(
+            zulip=zulip,
+            bots=tuple(PersonalAgentBotSettings(
+                bot_id=bot.bot_id,
+                bot_email=_required(source, bot.bot_email_env),
+                bot_api_key=SecretStr(_required(source, bot.bot_api_key_env)),
+                webhook_token=SecretStr(_required(source, bot.webhook_token_env)),
+            ) for bot in bots),
+            llm_base_url=_http_base_url(
+                source, "LLM_BASE_URL", default=_DEFAULT_LLM_BASE_URL,
+            ),
+            llm_model=_required(source, "LLM_MODEL", default=_DEFAULT_LLM_MODEL),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
@@ -451,6 +525,7 @@ class ProductionSettings:
     # Upper bound for the self-check ``hold_seconds`` parameter; 0 forbids holding.
     background_self_check_max_hold_seconds: int = 0
     im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
+    personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -637,6 +712,7 @@ class ProductionSettings:
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             background_self_check_max_hold_seconds=_self_check_max_hold(source),
             im_delivery=IMDeliverySettings.from_env(source),
+            personal_agents=PersonalAgentSettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
             zulip=_zulip_settings(source),
@@ -1215,6 +1291,7 @@ def _base64_key(
 __all__ = (
     "OAReadAdapterMode",
     "ProductionSettings",
+    "PersonalAgentSettings",
     "RedisConnectionURL",
     "RuntimeEngine",
     "WORKER_ENVIRONMENT_KEYS",
@@ -1243,7 +1320,7 @@ def _self_check_max_hold(source: Mapping[str, str]) -> int:
 
 @dataclass(frozen=True)
 class WorkerSettings:
-    """Worker values, including an optional IM Bot; no OA, session or LLM secrets."""
+    """Queue values plus optional IM Bot, reader and tool-free model settings."""
 
     database_url: str = field(repr=False)
     redis_url: RedisConnectionURL
@@ -1252,6 +1329,7 @@ class WorkerSettings:
     concurrency: int
     self_check_max_hold_seconds: int
     im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
+    personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1273,6 +1351,7 @@ class WorkerSettings:
             ),
             self_check_max_hold_seconds=_self_check_max_hold(source),
             im_delivery=IMDeliverySettings.from_env(source),
+            personal_agents=PersonalAgentSettings.from_env(source),
         )
 
 
@@ -1293,6 +1372,7 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     "IM_DELIVERY_BOT_EMAIL",
     "IM_DELIVERY_BOT_API_KEY",
     "IM_DELIVERY_RECIPIENTS_JSON",
+    "IM_PERSONAL_AGENTS_JSON",
 )
 
 

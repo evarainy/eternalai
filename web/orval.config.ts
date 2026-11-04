@@ -1,6 +1,17 @@
 import { defineConfig } from 'orval';
 
 export default defineConfig({
+  personalAgents: {
+    input: './openapi/personal-agents.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/personal-agents/personal-agents.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   imContext: {
     input: './openapi/im-context.openapi.json',
     output: {

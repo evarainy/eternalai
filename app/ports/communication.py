@@ -83,13 +83,48 @@ class CommunicationLoginPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class PrivateCard:
+class DeliveryMessage:
     provider: str
     im_instance_id: str
     realm_id: str
     sender_bot_id: str
     target_conversation_ref: str = field(repr=False)
     card_content: str = field(repr=False)
+    kind: Literal["private", "group_status"] = "private"
+
+
+@dataclass(frozen=True, slots=True)
+class InboundEvent:
+    """Authenticated callback metadata, never a user principal or stored question."""
+
+    provider: str
+    im_instance_id: str
+    realm_id: str
+    target_bot_id: str
+    source_message_id: str
+    trigger_kind: Literal["direct_message", "mention"]
+    sender_id: str
+    conversation_ref: str = field(repr=False)
+    conversation_kind: Literal["private", "group"]
+    payload_fingerprint: bytes = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedInboundMessage:
+    event: InboundEvent
+    question: str = field(repr=False)
+
+
+class CommunicationInboundPort(Protocol):
+    async def check_identity(self, binding: IMAccountBinding) -> None: ...
+
+    def authenticate_callback(
+        self, *, target_bot_id: str, payload: dict[str, object],
+    ) -> InboundEvent: ...
+
+    async def reread_trigger(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> VerifiedInboundMessage: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +142,18 @@ class CommunicationDeliveryPort(Protocol):
         initiator_label: str,
         recipient_im_user_id: str,
         note: str,
-    ) -> PrivateCard: ...
+    ) -> DeliveryMessage: ...
 
-    async def send_private_card(self, card: PrivateCard) -> DeliveryResult: ...
+    def prepare_agent_reply(
+        self, *, delivery_id: UUID, sender_bot_id: str, recipient_im_user_id: str, text: str,
+    ) -> DeliveryMessage: ...
 
-    async def reconcile_private_card(
-        self, card: PrivateCard, delivery_id: UUID
+    def prepare_group_status(
+        self, *, delivery_id: UUID, sender_bot_id: str, conversation_ref: str,
+    ) -> DeliveryMessage: ...
+
+    async def send_message_once(self, message: DeliveryMessage) -> DeliveryResult: ...
+
+    async def reconcile_message(
+        self, message: DeliveryMessage, delivery_id: UUID
     ) -> DeliveryResult: ...

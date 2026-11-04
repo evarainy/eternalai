@@ -5,8 +5,9 @@ Usage (separate terminal): ``uv run python scripts/run_background_worker.py``.
 Each ``WorkerSettings`` key is taken from the process environment first, then from the
 repository root ``.env`` (same precedence and worktree resolution as
 ``scripts/check_dev_environment.py``); ``.env`` is opened only when a key is missing.
-Only those keys plus ``SYSTEMROOT``/``PATH`` reach the worker, so no other secret enters
-its environment. Only the database host, port and name are printed.
+Only those keys, explicitly configured personal-Bot credential references and
+``SYSTEMROOT``/``PATH`` reach the worker. Reader and model settings are forwarded
+only when personal Bots are configured. Only database host, port and name are printed.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from app.config import WORKER_ENVIRONMENT_KEYS  # noqa: E402
+from app.config import WORKER_ENVIRONMENT_KEYS, personal_agent_environment_keys  # noqa: E402
 from app.db.config import normalize_database_url  # noqa: E402
 
 _PLATFORM_KEYS = ("SYSTEMROOT", "PATH")
@@ -71,6 +72,11 @@ def worker_environment() -> dict[str, str]:
     missing = set(WORKER_ENVIRONMENT_KEYS) - selected.keys()
     if missing:
         selected.update(_dotenv_values(_repository_env_path(), missing))
+    bot_keys = personal_agent_environment_keys(selected)
+    selected.update({name: os.environ[name] for name in bot_keys if name in os.environ})
+    missing_bot_keys = set(bot_keys) - selected.keys()
+    if missing_bot_keys:
+        selected.update(_dotenv_values(_repository_env_path(), missing_bot_keys))
     for name in _PLATFORM_KEYS:
         if name in os.environ:
             selected[name] = os.environ[name]

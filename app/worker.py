@@ -2,9 +2,10 @@
 
 A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
-hold limit), plus the optional fixed IM Bot: no OA, session or LLM secrets. It does not
-import the production
-composition, runtime, MCP or browser stacks. The loop is psycopg + Selector.
+hold limit), plus optional IM Bot and reader configuration. When personal agents
+are enabled it also loads the tool-free published-material model seam, without
+the production composition, ordinary chat, OA or browser stacks. The loop is
+psycopg + Selector.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import asyncio
 import logging
 import sys
 from datetime import datetime
+from functools import partial
 
 from sqlalchemy.engine import make_url
 
@@ -21,11 +23,12 @@ from app.config import WorkerSettings
 from app.db.session import make_async_engine, make_async_session_factory
 from app.dependency_checks import build_readonly_checks
 from app.event_loop import make_event_loop
-from app.infra.communication.composition import build_im_delivery
+from app.infra.communication.composition import build_im_delivery, build_personal_agents
 from app.infra.jobs.execution import BackgroundJobRunner
 from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
 from app.infra.jobs.procrastinate_app import (
     IM_DELIVERY_CONTEXT_KEY,
+    PERSONAL_AGENT_CONTEXT_KEY,
     RUNNER_CONTEXT_KEY,
     SESSIONS_CONTEXT_KEY,
     build_procrastinate_app,
@@ -63,8 +66,27 @@ async def run_worker(settings: WorkerSettings) -> None:
     engine = make_async_engine(database_url)
     sessions = make_async_session_factory(engine)
     delivery_client = None
+    personal_client = None
     try:
-        delivery_service, delivery_client = build_im_delivery(settings.im_delivery, sessions)
+        delivery_service, delivery_client = build_im_delivery(
+            settings.im_delivery, sessions, settings.personal_agents,
+        )
+        personal_runtime = None
+        if settings.personal_agents is not None:
+            from app.infra.llm.agentscope_chat import build_chat_model
+            from app.infra.orchestration.agentscope_runtime.personal_agent import (
+                AgentScopePersonalAgentRuntime,
+            )
+
+            personal_runtime = AgentScopePersonalAgentRuntime(partial(
+                build_chat_model, base_url=settings.personal_agents.llm_base_url,
+                model=settings.personal_agents.llm_model,
+            ))
+        personal_service, personal_client = build_personal_agents(
+            settings.personal_agents, sessions, personal_runtime,
+        )
+        if delivery_service is not None:
+            delivery_service.set_agent_replies(personal_service)
         checks = build_readonly_checks(
             database_url=database_url,
             redis_url=settings.redis_url,
@@ -105,6 +127,7 @@ async def run_worker(settings: WorkerSettings) -> None:
                 additional_context={
                     RUNNER_CONTEXT_KEY: runner, SESSIONS_CONTEXT_KEY: sessions,
                     IM_DELIVERY_CONTEXT_KEY: delivery_service,
+                    PERSONAL_AGENT_CONTEXT_KEY: personal_service,
                 },
             )
     finally:
@@ -112,7 +135,11 @@ async def run_worker(settings: WorkerSettings) -> None:
             if delivery_client is not None:
                 await delivery_client.aclose()
         finally:
-            await engine.dispose()
+            try:
+                if personal_client is not None:
+                    await personal_client.aclose()
+            finally:
+                await engine.dispose()
         _LOGGER.info("background_worker_stopped")
 
 

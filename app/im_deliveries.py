@@ -21,6 +21,7 @@ from app.ports.im_deliveries import (
     IMDeliveryStorePort,
     confirmation_digest,
 )
+from app.ports.personal_agents import AgentReplyPort
 
 _LOGGER = logging.getLogger("uvicorn.error.im_deliveries")
 
@@ -29,6 +30,10 @@ class IMDeliveryService:
     def __init__(self, store: IMDeliveryStorePort, sender: CommunicationDeliveryPort) -> None:
         self._store = store
         self._sender = sender
+        self._agent_replies: AgentReplyPort | None = None
+
+    def set_agent_replies(self, service: AgentReplyPort | None) -> None:
+        self._agent_replies = service
 
     async def recipients(self, principal: Principal) -> list[DeliveryRecipient]:
         return await self._store.recipients(principal)
@@ -108,7 +113,12 @@ class IMDeliveryService:
         return await self.get(principal, delivery_id)
 
     async def send(self, delivery_id: UUID) -> None:
-        claimed = await self._store.claim(delivery_id)
+        if await self._store.origin_inbox(delivery_id) is None:
+            claimed = await self._store.claim(delivery_id)
+        else:
+            if self._agent_replies is None:
+                raise IMDeliveryError("personal_agent_unavailable", 503)
+            claimed = await self._agent_replies.claim_reply(delivery_id)
         if claimed is None:
             return
         record, card = claimed
@@ -118,7 +128,7 @@ class IMDeliveryService:
             delivery_id, record.queue_job_id, attempt_id,
         )
         try:
-            result = await self._sender.send_private_card(card)
+            result = await self._sender.send_message_once(card)
         except asyncio.CancelledError:
             # The committed attempt remains sending. Recovery can only read IM.
             _LOGGER.info("im_delivery_interrupted delivery_id=%s attempt_id=%s",
@@ -135,7 +145,7 @@ class IMDeliveryService:
         if pending is None:
             return
         record, card = pending
-        result = await self._sender.reconcile_private_card(card, delivery_id)
+        result = await self._sender.reconcile_message(card, delivery_id)
         if result.state != "accepted":
             result = DeliveryResult("unknown", None, result.result_code)
         await self._store.finish(delivery_id, cast(UUID, record.send_attempt_id), result)
