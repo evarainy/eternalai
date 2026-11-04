@@ -661,33 +661,30 @@ class PostgreSQLFileArtifactStore:
         )
 
     async def _cleanup_candidates(self) -> tuple[list[UUID], list[UUID]]:
-        """Rows that keep failing sort last so they cannot starve a batch."""
+        """One batch of at most ``BATCH_SIZE`` rows across D1a and D1b candidates.
 
-        params = {"scope": self._storage.scope, "limit": BATCH_SIZE}
+        Rows that keep failing sort last so they cannot starve a batch.
+        """
+
         async with self._sessions() as session:
-            due = (
+            rows = (
                 await session.execute(
                     text(
-                        "SELECT artifact_id FROM public.file_artifacts "
-                        "WHERE storage_scope = :scope AND state IN ('available','expired') "
-                        "AND expires_at <= now() - interval '10 minutes' "
-                        "ORDER BY removal_attempts, expires_at LIMIT :limit"
+                        "SELECT artifact_id, state FROM public.file_artifacts "
+                        "WHERE storage_scope = :scope AND ("
+                        "(state IN ('available','expired') "
+                        "AND expires_at <= now() - interval '10 minutes') "
+                        "OR (state = 'pending' "
+                        "AND lease_expires_at <= now() - interval '1 minute')) "
+                        "ORDER BY removal_attempts, CASE WHEN state = 'pending' "
+                        "THEN lease_expires_at ELSE expires_at END LIMIT :limit"
                     ),
-                    params,
+                    {"scope": self._storage.scope, "limit": BATCH_SIZE},
                 )
-            ).scalars().all()
-            pending = (
-                await session.execute(
-                    text(
-                        "SELECT artifact_id FROM public.file_artifacts "
-                        "WHERE storage_scope = :scope AND state = 'pending' "
-                        "AND lease_expires_at <= now() - interval '1 minute' "
-                        "ORDER BY removal_attempts, lease_expires_at LIMIT :limit"
-                    ),
-                    params,
-                )
-            ).scalars().all()
-        return list(due), list(pending)
+            ).all()
+        due = [row.artifact_id for row in rows if row.state != "pending"]
+        pending = [row.artifact_id for row in rows if row.state == "pending"]
+        return due, pending
 
     async def _remove_due(self, artifact_id: UUID, counters: _CleanupCounters) -> None:
         """D1a: expire in its own transaction, unlink, then mark removed."""

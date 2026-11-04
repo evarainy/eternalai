@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from app.api.v1.csrf import PrincipalDependency
 from app.file_artifacts import FileArtifactService
@@ -66,8 +66,22 @@ class PinnedFileResponse(FileResponse):
         self._pin_fd = download.pin_fd
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_no_store(message: Message) -> None:
+            # Starlette answers bad or unsatisfiable Range headers with a fresh response
+            # (400/416) that does not carry this response's headers; keep every start
+            # message uncacheable.
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() != b"cache-control"
+                ]
+                headers.append((b"cache-control", b"private, no-store"))
+                message = {**message, "headers": headers}
+            await send(message)
+
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive, send_no_store)
         finally:
             os.close(self._pin_fd)
 
