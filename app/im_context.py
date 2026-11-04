@@ -134,6 +134,8 @@ class IMContextService:
                 identity.realm_id,
                 identity.im_user_id,
             )
+        if await self._binding(principal) != binding:
+            raise IMContextError("im_mapping_changed")
         await self._session(principal, "im-login-form")
         return binding, self._login.build_login_form(binding)
 
@@ -201,6 +203,8 @@ class IMContextService:
         login, session = await self._session(principal, bound_session)
         binding = await self._binding(principal)
         result = await self._read(binding, selection)
+        if await self._binding(principal) != binding:
+            raise IMContextError("im_mapping_changed")
         await self._session(principal, bound_session)
         self._sweep()
         if len(self._refs) >= 1024 or sum(r.login == login for r in self._refs.values()) >= 8:
@@ -257,6 +261,8 @@ class IMContextService:
         result = await self._read(binding, ref.selection)
         if _manifest(result.messages) != ref.manifest:
             raise IMContextError("im_source_changed")
+        if await self._binding(principal) != binding:
+            raise IMContextError("im_mapping_changed")
         await self._session(principal, bound_session)
         if ref.expires_at <= datetime.now(UTC):
             raise IMContextError("im_source_expired")
