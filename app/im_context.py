@@ -255,14 +255,21 @@ class IMContextService:
             raise IMContextError("im_source_not_found", 404)
         if (ref.login, ref.session, ref.purpose) != (login, session, "self_read"):
             raise IMContextError("im_source_expired")
-        binding = await self._binding(principal)
-        if (binding.binding_id, binding.mapping_version) != (ref.binding_id, ref.mapping_version):
-            raise IMContextError("im_mapping_changed")
-        result = await self._read(binding, ref.selection)
-        if _manifest(result.messages) != ref.manifest:
-            raise IMContextError("im_source_changed")
-        if await self._binding(principal) != binding:
-            raise IMContextError("im_mapping_changed")
+        try:
+            binding = await self._binding(principal)
+            if (binding.binding_id, binding.mapping_version) != (ref.binding_id, ref.mapping_version):
+                raise IMContextError("im_mapping_changed")
+            result = await self._read(binding, ref.selection)
+            if _manifest(result.messages) != ref.manifest:
+                raise IMContextError("im_source_changed")
+            if await self._binding(principal) != binding:
+                raise IMContextError("im_mapping_changed")
+        except IMContextError as error:
+            if error.http_status in {404, 409}:
+                # Once observed invalid, this reference cannot revive if permissions return.
+                self._refs.pop(ref_ids[0], None)
+            _LOG.info("im_stage stage=revalidate result=rejected code=%s", error.code)
+            raise
         await self._session(principal, bound_session)
         if ref.expires_at <= datetime.now(UTC):
             raise IMContextError("im_source_expired")
