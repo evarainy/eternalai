@@ -116,7 +116,7 @@ class PostgreSQLPersonalAgentStore:
         async with self._session() as session:
             row = (await session.execute(text(
                 "SELECT * FROM public.personal_agents WHERE agent_id=:id "
-                "AND tenant_id='default' AND status='active'"
+                "AND tenant_id='default'"
             ), {"id": agent_id})).mappings().one_or_none()
             if row is None:
                 raise PersonalAgentError("personal_agent_not_found", 404)
