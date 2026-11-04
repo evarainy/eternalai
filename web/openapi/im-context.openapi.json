@@ -1,0 +1,293 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IMLoginResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action_url": {
+            "title": "Action Url",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "helper_url": {
+            "title": "Helper Url",
+            "type": "string"
+          },
+          "host_origin": {
+            "title": "Host Origin",
+            "type": "string"
+          },
+          "im_instance_id": {
+            "title": "Im Instance Id",
+            "type": "string"
+          },
+          "im_origin": {
+            "title": "Im Origin",
+            "type": "string"
+          },
+          "im_user_id": {
+            "title": "Im User Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "im_instance_id",
+          "realm_id",
+          "im_user_id",
+          "im_origin",
+          "host_origin",
+          "helper_url",
+          "action_url",
+          "fields",
+          "expires_at"
+        ],
+        "title": "IMLoginResponse",
+        "type": "object"
+      },
+      "SourceMessage": {
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "text"
+        ],
+        "title": "SourceMessage",
+        "type": "object"
+      },
+      "SourceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_ref": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Conversation Ref",
+            "type": "string"
+          },
+          "im_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Im Instance Id",
+            "type": "string"
+          },
+          "im_user_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Im User Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "realm_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "im_instance_id",
+          "realm_id",
+          "im_user_id",
+          "message_id",
+          "conversation_ref",
+          "session_id"
+        ],
+        "title": "SourceRequest",
+        "type": "object"
+      },
+      "SourceResponse": {
+        "properties": {
+          "deep_link": {
+            "title": "Deep Link",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/SourceMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "ref_id": {
+            "title": "Ref Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref_id",
+          "expires_at",
+          "messages",
+          "deep_link"
+        ],
+        "title": "SourceResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/im-context/login": {
+      "post": {
+        "operationId": "login_api_v1_im_context_login_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMLoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Login"
+      }
+    },
+    "/api/v1/im-context/sources": {
+      "post": {
+        "operationId": "select_api_v1_im_context_sources_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select"
+      }
+    }
+  }
+}

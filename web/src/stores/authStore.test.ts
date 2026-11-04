@@ -53,7 +53,7 @@ describe('authentication store', () => {
     const keys = Object.keys(useAuthStore.getState());
 
     expect(keys.sort()).toEqual(
-      ['generation', 'markAuthenticated', 'markUnauthenticated', 'status'].sort(),
+      ['generation', 'invalidateIdentity', 'markAuthenticated', 'markUnauthenticated', 'status'].sort(),
     );
   });
 });

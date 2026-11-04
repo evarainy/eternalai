@@ -15,6 +15,7 @@ from app.contracts.sdui.models import UserAction
 from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
+from app.ports.im_context import IMContextError, IMContextPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import (
     DFormCollectionReference,
@@ -23,6 +24,7 @@ from app.ports.runtime import (
     UserActionOutcome,
     chat_client_request_id,
     d_form_collection_reference,
+    im_source_context,
 )
 from app.ports.task_store import DFormCollectionError
 
@@ -62,6 +64,7 @@ class HandleRequest(BaseModel):
     client_capabilities: dict[str, Any] = Field(default_factory=dict)
     client_request_id: str | None = Field(default=None, min_length=1, max_length=96)
     d_form_collection: DFormCollectionReference | None = None
+    source_refs: list[str] = Field(default_factory=list, max_length=1)
 
 
 class ActionRequest(BaseModel):
@@ -187,6 +190,7 @@ def make_router(
     session_binder: Callable[[Principal, str], str] | None,
     *,
     browser_chat: BrowserChatPort | None = None,
+    im_context: IMContextPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
     handle_router = APIRouter(route_class=_PrivateHandleRoute)
@@ -197,6 +201,11 @@ def make_router(
         response: Response,
         principal: Principal = Depends(require_principal),
     ) -> ResponseEnvelope:
+        if body.source_refs and (
+            body.channel != "web" or body.d_form_collection is not None
+            or body.client_capabilities
+        ):
+            raise HTTPException(422, {"code": "im_source_combination_invalid"})
         if body.client_capabilities.get("browser_async_v1") is True:
             if body.d_form_collection is not None:
                 raise HTTPException(422, {"code": "collection_not_found"})
@@ -245,7 +254,7 @@ def make_router(
             session_binder=session_binder,
         )
         scope = None
-        if browser_chat is not None and body.client_request_id is not None:
+        if browser_chat is not None and body.client_request_id is not None and not body.source_refs:
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
             captured = authenticated_session.get()
@@ -261,14 +270,27 @@ def make_router(
         collection_token = d_form_collection_reference.set(body.d_form_collection)
         # Read only by the AgentScope runtime's confirmation receipts.
         request_id_token = chat_client_request_id.set(body.client_request_id)
+        source_token = im_source_context.set(None)
         try:
-            return await bound_runtime.handle_user_message(
+            if body.source_refs:
+                if im_context is None:
+                    raise IMContextError("im_not_enabled", 503)
+                source = await im_context.revalidate(principal, session_id, tuple(body.source_refs))
+                im_source_context.set(source)
+            result = await bound_runtime.handle_user_message(
                 channel=body.channel,
                 principal=principal,
                 session_id=session_id,
                 message=body.message,
                 client_capabilities=body.client_capabilities,
             )
+            if body.source_refs:
+                assert im_context is not None
+                await im_context.revalidate(principal, session_id, tuple(body.source_refs))
+            return result
+        except IMContextError as error:
+            raise HTTPException(error.http_status, {"code": error.code},
+                                headers=_PRIVATE_HEADERS) from None
         except DFormCollectionError as error:
             raise HTTPException(
                 404 if error.code == "collection_not_found" else 409,
@@ -278,6 +300,7 @@ def make_router(
         except RuntimeSessionBusyError:
             raise _session_busy() from None
         finally:
+            im_source_context.reset(source_token)
             chat_client_request_id.reset(request_id_token)
             d_form_collection_reference.reset(collection_token)
             browser_request_scope.reset(token)

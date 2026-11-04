@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/mutator';
 import { peekReauthPath, reauthLoginNotice } from '../app/reauthRestore';
 import { withAuthCookieLock } from '../app/sessionKeepalive';
+import { notifyIdentityRecheck } from '../app/identity';
 import { loginApiV1AuthLoginPost } from '../generated/auth/auth';
 import type { LoginApiV1AuthLoginPostBody } from '../generated/auth/auth.schemas';
 import { Icon } from '../shared/ui/Icon';
@@ -39,6 +40,7 @@ export default function LoginPage() {
       const returnPath = getReturnPath(location.state ?? { from: peekReauthPath() });
       queryClient.clear();
       markAuthenticated();
+      notifyIdentityRecheck();
       navigate(returnPath, { replace: true });
     } catch (error) {
       setErrorMessage(

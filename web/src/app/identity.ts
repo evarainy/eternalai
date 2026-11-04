@@ -4,6 +4,8 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAuthStore } from '../stores/authStore';
+import { useAIDockStore } from '../stores/aiDockStore';
+import { hasIMConfiguration } from '../features/messages/hostBridge';
 
 /**
  * 「我是谁」只问后端一次，三个消费点（顶栏、用户菜单、AI 助手问候语）读同一份缓存。
@@ -107,20 +109,32 @@ export function useIdentityRevalidation(): boolean {
         if (isCurrent()) setFailed(true);
       }
     };
-    const onFocus = () => { void recheck(); };
+    const invalidate = () => {
+      if (!hasIMConfiguration() || useAuthStore.getState().status !== 'authenticated') return;
+      useAIDockStore.getState().clearSession();
+      useAuthStore.getState().invalidateIdentity();
+    };
+    let wasHidden = document.visibilityState === 'hidden';
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') wasHidden = true;
+      else if (wasHidden) { wasHidden = false; invalidate(); void recheck(); }
+    };
+    const onFocus = () => { if (wasHidden) { wasHidden = false; invalidate(); } void recheck(); };
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.onmessage = (event: MessageEvent<unknown>) => {
-          if (event.data === RECHECK_MESSAGE) void recheck();
+          if (event.data === RECHECK_MESSAGE) { invalidate(); void recheck(); }
         };
       }
     } catch { /* Focus revalidation remains available. */ }
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       live = false;
       channel?.close();
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [generation]);
 
