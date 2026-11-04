@@ -26,6 +26,7 @@ from app.api.v1.csrf import (
     make_csrf_protected_principal,
     make_require_csrf,
 )
+from app.api.v1.file_artifacts import make_router as make_file_artifacts_router
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.mcp import McpApiService
@@ -40,6 +41,7 @@ from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.file_artifacts import FileArtifactService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
 from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.d_form_bootstrap import DFormManagement
@@ -110,6 +112,7 @@ def create_app(
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
+    file_artifact_service: FileArtifactService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -217,6 +220,10 @@ def create_app(
     application.include_router(
         make_background_jobs_router(background_job_service, csrf_protected_principal),
         prefix="/api/v1/background-jobs",
+    )
+    application.include_router(
+        make_file_artifacts_router(file_artifact_service, csrf_protected_principal),
+        prefix="/api/v1/file-artifacts",
     )
     application.include_router(
         make_auth_router(
@@ -505,6 +512,7 @@ def create_production_app(
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
         background_job_service=components.background_jobs,
+        file_artifact_service=components.file_artifacts,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

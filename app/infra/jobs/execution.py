@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from procrastinate.job_context import AbortReason, JobContext
@@ -20,6 +21,7 @@ from procrastinate.job_context import AbortReason, JobContext
 from app.background_jobs import JobExecution, JobKindSpec, JobOutcome, parse_job_params
 from app.infra.jobs.ledger import JobClaim, PostgreSQLBackgroundJobLedger
 from app.ports.background_jobs import BackgroundJobError
+from app.ports.file_artifacts import JobOutputOwner, JobOutputPublisher
 
 _LOGGER = logging.getLogger("uvicorn.error.background_jobs")
 HEARTBEAT_INTERVAL_SECONDS = 15.0
@@ -51,10 +53,12 @@ class BackgroundJobRunner:
         ledger: PostgreSQLBackgroundJobLedger,
         kinds: dict[str, JobKindSpec],
         execution: JobExecution,
+        job_outputs: Callable[[JobOutputOwner], JobOutputPublisher] | None = None,
     ) -> None:
         self._ledger = ledger
         self._kinds = kinds
         self._execution = execution
+        self._job_outputs = job_outputs
 
     async def run(self, context: JobContext, job_id: str) -> None:
         queue_job_id = context.job.id
@@ -131,7 +135,15 @@ class BackgroundJobRunner:
         if spec is None:
             raise BackgroundJobError("background_job_kind_invalid")
         params = parse_job_params(spec, claim.params)
-        return await spec.handler(params, self._execution)
+        execution = self._execution
+        if self._job_outputs is not None:
+            execution = replace(
+                execution,
+                outputs=self._job_outputs(
+                    JobOutputOwner(job_id=claim.job_id, claim_token=claim.claim_token)
+                ),
+            )
+        return await spec.handler(params, execution)
 
     async def _heartbeat(
         self, claim: JobClaim, handler: asyncio.Task[JobOutcome], cause: _CancelCause

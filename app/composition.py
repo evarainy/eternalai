@@ -50,6 +50,7 @@ from app.dependency_checks import build_readonly_checks
 from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.file_artifacts import FileArtifactService
 from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
 from app.infra.adapters.business_mcp.catalog import catalog as mcp_catalog
 from app.infra.adapters.business_mcp.catalog import workflow_definitions as mcp_definitions
@@ -116,6 +117,7 @@ from app.infra.organization_directory.validation import InvalidDirectorySnapshot
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
+from app.infra.persistence.file_artifacts import build_file_artifact_service
 from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
 from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore
 from app.infra.persistence.task_store.postgresql import (
@@ -239,6 +241,7 @@ class ProductionComponents:
     # so AgentScope is otherwise never imported.
     agentscope_runtime: RuntimePort | None = None
     background_jobs: BackgroundJobService | None = None
+    file_artifacts: FileArtifactService | None = None
 
 
 def build_credential_store(
@@ -1487,6 +1490,7 @@ def build_production_components(
             PostgreSQLBackgroundJobLedger(session_factory),
             build_job_kinds(settings.background_self_check_max_hold_seconds),
         ),
+        file_artifacts=build_file_artifact_service(settings.file_artifacts, session_factory),
     )
 
 
