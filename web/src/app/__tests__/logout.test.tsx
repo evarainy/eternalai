@@ -36,7 +36,7 @@ it.each([
   { authenticated: [] },
   {},
   null,
-])('logout_rejects_unconfirmed_payload_without_broadcast %j', async (payload) => {
+])('logout_rejects_unconfirmed_payload_without_completion_broadcast %j', async (payload) => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(new Response(JSON.stringify(payload)));
   const { result } = renderHook(useLogout);
@@ -45,11 +45,11 @@ it.each([
   expect(result.current.failed, 'malformed payload must leave logout unconfirmed').toBe(true);
   expect(result.current.pending).toBe(false);
   expect(useAuthStore.getState()).toMatchObject({ status: 'authenticated', generation: 40 });
-  expect(posted).not.toHaveBeenCalled();
+  expect(posted).toHaveBeenCalledExactlyOnceWith('eternalai-auth', 'switch-identity');
   expect(fetchSpy).toHaveBeenCalledTimes(1);
 });
 
-it('current_confirmed_logout_broadcasts_exactly_once', async () => {
+it('current_confirmed_logout_broadcasts_start_then_completion', async () => {
   let release!: (response: Response) => void;
   const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(
     new Promise<Response>((resolve) => { release = resolve; }),
@@ -58,7 +58,7 @@ it('current_confirmed_logout_broadcasts_exactly_once', async () => {
   let operation!: Promise<void>;
   await act(async () => { operation = result.current.logout(); });
   expect(result.current.pending).toBe(true);
-  expect(posted).not.toHaveBeenCalled();
+  expect(posted).toHaveBeenCalledExactlyOnceWith('eternalai-auth', 'switch-identity');
   expect(useAuthStore.getState().status).toBe('authenticated');
   await act(async () => {
     release(new Response(JSON.stringify({ authenticated: false })));
@@ -67,7 +67,9 @@ it('current_confirmed_logout_broadcasts_exactly_once', async () => {
 
   expect(useAuthStore.getState()).toMatchObject({ status: 'unauthenticated', generation: 41 });
   expect(result.current.failed).toBe(false);
-  expect(posted).toHaveBeenCalledExactlyOnceWith('eternalai-auth', 'recheck-identity');
+  expect(posted.mock.calls).toEqual([
+    ['eternalai-auth', 'switch-identity'], ['eternalai-auth', 'recheck-identity'],
+  ]);
   expect(fetchSpy).toHaveBeenCalledExactlyOnceWith('/api/v1/auth/logout',
     expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-EternalAI-CSRF': '1' }) }));
 });
@@ -92,14 +94,15 @@ it.each([200, 401, 503])('old_generation_logout_result_never_broadcasts %s', asy
     await operation;
   });
 
-  expect(posted, 'an old generation must not send a confirmed-logout broadcast').not.toHaveBeenCalled();
+  expect(posted, 'an old generation must not send a confirmed-logout broadcast')
+    .toHaveBeenCalledExactlyOnceWith('eternalai-auth', 'switch-identity');
   expect(useAuthStore.getState()).toMatchObject({ status: 'authenticated', generation: 42 });
   expect(result.current.failed).toBe(false);
   expect(result.current.pending).toBe(false);
   expect(fetchSpy).toHaveBeenCalledTimes(1);
 });
 
-it.each([403, 503, 'network'] as const)('failed_logout_never_broadcasts %s', async (failure) => {
+it.each([403, 503, 'network'] as const)('failed_logout_never_broadcasts_completion %s', async (failure) => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch');
   if (failure === 'network') fetchSpy.mockRejectedValueOnce(new TypeError('Synthetic network failure'));
   else fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({
@@ -110,7 +113,7 @@ it.each([403, 503, 'network'] as const)('failed_logout_never_broadcasts %s', asy
 
   expect(result.current.failed).toBe(true);
   expect(result.current.pending).toBe(false);
-  expect(posted).not.toHaveBeenCalled();
+  expect(posted).toHaveBeenCalledExactlyOnceWith('eternalai-auth', 'switch-identity');
   expect(useAuthStore.getState()).toMatchObject({ status: 'authenticated', generation: 40 });
   expect(fetchSpy).toHaveBeenCalledTimes(1);
 });

@@ -1,5 +1,6 @@
 import type { IMConfiguration } from '../../generated/im-context/im-context.schemas';
 import { useAuthStore } from '../../stores/authStore';
+import type { AuthenticationStatus } from '../../stores/authStore';
 import { useAIDockStore } from '../../stores/aiDockStore';
 
 type Selection = {
@@ -101,8 +102,23 @@ export function imBridgeBlocked(): boolean { return bridgeBlocked; }
 export function blockIMBridge(): void { bridgeBlocked = true; }
 export function hasIMConfiguration(): boolean { return configuration !== null; }
 export function completeIMLogout(): void { loggingOut = false; bridgeBlocked = false; }
-/** Only a server-confirmed host login may start a new IM identity cycle after a failure. */
+/** A completed host transition allows a new IM cycle once the host identity is confirmed. */
 export function beginIMLogin(): void { loggingOut = false; bridgeBlocked = false; }
+
+export function suspendIMIdentity(status: AuthenticationStatus): number {
+  bridgeBlocked = true;
+  freezeCurrent?.();
+  useAIDockStore.getState().clearSession();
+  useAuthStore.getState().invalidateIdentity(status);
+  return useAuthStore.getState().generation;
+}
+
+export function beginIMLogout(): number {
+  loggingOut = true;
+  const auth = useAuthStore.getState();
+  // Without a mounted IM identity, preserve the existing host-only failed-logout draft lifecycle.
+  return configuration === null ? auth.generation : suspendIMIdentity(auth.status);
+}
 
 export function imSessionOperation(
   config: IMConfiguration, type: 'eternalai:session-check' | 'eternalai:session-logout',
@@ -149,13 +165,9 @@ export function imSessionOperation(
   });
 }
 
-/** Freeze and invalidate before starting a fresh, correlated IM logout operation. */
+/** The caller starts the identity transition and holds the cookie lock for the entire logout. */
 export async function logoutIM(config: IMConfiguration): Promise<number> {
   configureIM(config);
-  loggingOut = true;
-  freezeCurrent?.();
-  useAIDockStore.getState().clearSession();
-  useAuthStore.getState().invalidateIdentity(useAuthStore.getState().status);
   const generation = useAuthStore.getState().generation;
   const current = () => useAuthStore.getState().generation === generation;
   const state = await imSessionOperation(config, 'eternalai:session-logout', current);
