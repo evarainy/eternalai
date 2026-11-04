@@ -399,17 +399,6 @@
             "title": "Agent Display Name",
             "type": "string"
           },
-          "answer": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Answer"
-          },
           "deliveries": {
             "items": {
               "$ref": "#/components/schemas/ReplyView"

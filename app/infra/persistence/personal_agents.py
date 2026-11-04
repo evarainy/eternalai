@@ -447,12 +447,6 @@ class PostgreSQLPersonalAgentStore:
         session: AsyncSession, context: InboxContext, delivery_id: UUID,
         message: DeliveryMessage, slot: str,
     ) -> None:
-        exists = (await session.execute(text(
-            "SELECT delivery_id FROM public.im_deliveries "
-            "WHERE origin_inbox_id=:id AND reply_slot=:slot"
-        ), {"id": context.inbox_id, "slot": slot})).scalar_one_or_none()
-        if exists is not None:
-            return
         queue_id = await defer_job(
             session, queue_name=GENERAL_QUEUE, task_name="im_deliveries.send",
             args={"delivery_id": str(delivery_id)},
@@ -571,8 +565,12 @@ class PostgreSQLPersonalAgentStore:
 
     async def requests(self, principal: Principal) -> list[RequestView]:
         async with self._session() as session:
+            binding_columns = ", ".join(
+                f"b.{item.name} AS binding_{item.name}" for item in fields(DeliveryBinding)
+            )
             rows = (await session.execute(text(
-                "SELECT i.*,a.display_name AS agent_display_name FROM public.im_inbox i "
+                f"SELECT i.*,a.display_name AS agent_display_name,{binding_columns} "
+                "FROM public.im_inbox i "
                 "JOIN public.personal_agents a ON a.agent_id=i.agent_id "
                 "JOIN public.im_account_bindings b ON b.binding_id=i.actor_binding_id "
                 "WHERE i.tenant_id=:tenant AND b.tenant_id=i.tenant_id "
@@ -582,6 +580,11 @@ class PostgreSQLPersonalAgentStore:
                 "directory": principal.org_ctx.directory_user_id})).mappings().all()
             result = []
             for row in rows:
+                actor = DeliveryBinding(**{
+                    item.name: row[f"binding_{item.name}"] for item in fields(DeliveryBinding)
+                })
+                if actor.version != bytes(row["actor_binding_version"]):
+                    continue
                 replies = (await session.execute(text(
                     "SELECT delivery_id,reply_slot,state,result_code,remote_message_id "
                     "FROM public.im_deliveries WHERE origin_inbox_id=:id ORDER BY created_at"
@@ -589,7 +592,7 @@ class PostgreSQLPersonalAgentStore:
                 # Status-only surface deliberately returns no cached answer body.
                 result.append(RequestView(
                     **{name: row[name] for name in RequestView.model_fields
-                       if name not in ("deliveries", "answer")},
+                       if name != "deliveries"},
                     deliveries=[ReplyView(**dict(reply)) for reply in replies],
                 ))
             return result

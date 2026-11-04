@@ -32,6 +32,10 @@ class IMDeliveryService:
         self._sender = sender
         self._agent_replies: AgentReplyPort | None = None
 
+    @property
+    def sender(self) -> CommunicationDeliveryPort:
+        return self._sender
+
     def set_agent_replies(self, service: AgentReplyPort | None) -> None:
         self._agent_replies = service
 

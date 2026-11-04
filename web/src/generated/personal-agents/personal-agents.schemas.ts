@@ -132,8 +132,6 @@ export interface RequestList {
   requests: RequestView[];
 }
 
-export type RequestViewAnswer = string | null;
-
 export type RequestViewResultCode = string | null;
 
 export type RequestViewState = typeof RequestViewState[keyof typeof RequestViewState];
@@ -150,7 +148,6 @@ export const RequestViewState = {
 
 export interface RequestView {
   agent_display_name: string;
-  answer?: RequestViewAnswer;
   deliveries: ReplyView[];
   inbox_id: string;
   received_at: string;

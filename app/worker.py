@@ -66,7 +66,6 @@ async def run_worker(settings: WorkerSettings) -> None:
     engine = make_async_engine(database_url)
     sessions = make_async_session_factory(engine)
     delivery_client = None
-    personal_client = None
     try:
         delivery_service, delivery_client = build_im_delivery(
             settings.im_delivery, sessions, settings.personal_agents,
@@ -82,9 +81,9 @@ async def run_worker(settings: WorkerSettings) -> None:
                 build_chat_model, base_url=settings.personal_agents.llm_base_url,
                 model=settings.personal_agents.llm_model,
             ))
-        personal_service, personal_client = build_personal_agents(
-            settings.personal_agents, sessions, personal_runtime,
-        )
+        personal_service = build_personal_agents(
+            settings.personal_agents, sessions, delivery_service.sender, personal_runtime,
+        ) if delivery_service is not None else None
         if delivery_service is not None:
             delivery_service.set_agent_replies(personal_service)
         checks = build_readonly_checks(
@@ -135,11 +134,7 @@ async def run_worker(settings: WorkerSettings) -> None:
             if delivery_client is not None:
                 await delivery_client.aclose()
         finally:
-            try:
-                if personal_client is not None:
-                    await personal_client.aclose()
-            finally:
-                await engine.dispose()
+            await engine.dispose()
         _LOGGER.info("background_worker_stopped")
 
 

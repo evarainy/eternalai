@@ -249,7 +249,6 @@ class ProductionComponents:
     close_im_deliveries: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     im_context: IMContextService | None = None
     personal_agents: PersonalAgentService | None = None
-    close_personal_agents: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
 
 
 def build_credential_store(
@@ -1414,14 +1413,13 @@ def build_production_components(
     im_deliveries, delivery_client = build_im_delivery(
         settings.im_delivery, session_factory, settings.personal_agents,
     )
-    personal_agents, personal_client = build_personal_agents(
-        settings.personal_agents, session_factory,
-    )
+    personal_agents = build_personal_agents(
+        settings.personal_agents, session_factory, im_deliveries.sender,
+    ) if im_deliveries is not None else None
     if im_deliveries is not None:
         im_deliveries.set_agent_replies(personal_agents)
     return ProductionComponents(
         personal_agents=personal_agents,
-        close_personal_agents=personal_client.aclose if personal_client is not None else None,
         im_deliveries=im_deliveries,
         close_im_deliveries=delivery_client.aclose if delivery_client is not None else None,
         agentscope_runtime=agentscope_runtime,

@@ -119,7 +119,6 @@ def create_app(
     background_job_service: BackgroundJobService | None = None,
     im_delivery_service: IMDeliveryService | None = None,
     personal_agent_service: PersonalAgentService | None = None,
-    close_personal_agents: Callable[[], Awaitable[None]] | None = None,
     close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
     im_context: IMContextService | None = None,
 ) -> FastAPI:
@@ -185,12 +184,8 @@ def create_app(
                         if credential_started and credential_polling_scheduler is not None:
                             await credential_polling_scheduler.stop()
                     finally:
-                        try:
-                            if close_im_deliveries is not None:
-                                await close_im_deliveries()
-                        finally:
-                            if close_personal_agents is not None:
-                                await close_personal_agents()
+                        if close_im_deliveries is not None:
+                            await close_im_deliveries()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -545,7 +540,6 @@ def create_production_app(
         close_im_deliveries=components.close_im_deliveries,
         im_context=components.im_context,
         personal_agent_service=components.personal_agents,
-        close_personal_agents=components.close_personal_agents,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

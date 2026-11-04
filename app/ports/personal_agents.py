@@ -84,7 +84,6 @@ class RequestView(BaseModel):
     received_at: datetime
     updated_at: datetime
     deliveries: list[ReplyView]
-    answer: str | None = Field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

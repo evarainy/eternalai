@@ -15,6 +15,7 @@ from app.infra.communication.zulip import (
 from app.infra.persistence.im_deliveries import PostgreSQLIMDeliveryStore
 from app.infra.persistence.personal_agents import PostgreSQLPersonalAgentStore
 from app.personal_agents import PersonalAgentService
+from app.ports.communication import CommunicationDeliveryPort
 from app.ports.personal_agent_runtime import PersonalAgentRuntimePort
 
 
@@ -47,23 +48,13 @@ def build_im_delivery(
 
 def build_personal_agents(
     settings: PersonalAgentSettings | None, sessions: async_sessionmaker[AsyncSession],
+    sender: CommunicationDeliveryPort,
     runtime: PersonalAgentRuntimePort | None = None,
-) -> tuple[PersonalAgentService | None, httpx2.AsyncClient | None]:
+) -> PersonalAgentService | None:
     if settings is None:
-        return None, None
+        return None
     zulip = settings.zulip
     bots = {bot.bot_id: (bot.bot_email, bot.bot_api_key) for bot in settings.bots}
-    client = httpx2.AsyncClient(
-        timeout=20.0, follow_redirects=False, trust_env=False,
-        verify=ssl.create_default_context(cafile=zulip.tls_ca_file),
-    )
-    first_bot = settings.bots[0]
-    sender = ZulipDeliveryAdapter(
-        client=client, base_url=zulip.origin, provider="zulip",
-        im_instance_id=zulip.im_instance_id, realm_id=zulip.realm_id,
-        sender_bot_id=first_bot.bot_id, bot_email=first_bot.bot_email,
-        bot_api_key=first_bot.bot_api_key, host_origin=zulip.host_origin, bots=bots,
-    )
     return PersonalAgentService(
         store=PostgreSQLPersonalAgentStore(sessions),
         inbound=ZulipInboundAdapter(
@@ -72,4 +63,4 @@ def build_personal_agents(
             bot_credentials=bots,
         ),
         sender=sender, runtime=runtime,
-    ), client
+    )
