@@ -12,29 +12,24 @@ depends_on = None
 def upgrade() -> None:
     op.execute("""CREATE TABLE im_account_bindings (
     binding_id UUID PRIMARY KEY,
-    tenant_id TEXT NOT NULL CHECK (char_length(tenant_id) BETWEEN 1 AND 256),
-    ai_user_id TEXT NOT NULL CHECK (char_length(ai_user_id) BETWEEN 1 AND 256),
+    tenant_id TEXT NOT NULL CHECK (tenant_id <> ''),
+    ai_user_id TEXT NOT NULL CHECK (ai_user_id <> ''),
     directory_user_id TEXT NOT NULL
-        CHECK (char_length(directory_user_id) BETWEEN 1 AND 256),
-    provider TEXT NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 64),
+        CHECK (directory_user_id <> ''),
+    provider TEXT NOT NULL CHECK (provider <> ''),
     im_instance_id TEXT NOT NULL
-        CHECK (char_length(im_instance_id) BETWEEN 1 AND 128),
-    realm_id TEXT NOT NULL CHECK (char_length(realm_id) BETWEEN 1 AND 256),
-    im_user_id TEXT NOT NULL CHECK (char_length(im_user_id) BETWEEN 1 AND 256),
+        CHECK (im_instance_id <> ''),
+    realm_id TEXT NOT NULL CHECK (realm_id <> ''),
+    im_user_id TEXT NOT NULL CHECK (im_user_id <> ''),
     login_subject TEXT NOT NULL
-        CHECK (char_length(login_subject) BETWEEN 1 AND 512),
+        CHECK (login_subject <> ''),
     status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
-    mapping_version BIGINT NOT NULL CHECK (mapping_version > 0),
-    verified_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT uq_im_binding_host UNIQUE
         (tenant_id, ai_user_id, provider, im_instance_id, realm_id),
     CONSTRAINT uq_im_binding_directory UNIQUE
         (tenant_id, directory_user_id, provider, im_instance_id, realm_id),
     CONSTRAINT uq_im_binding_remote UNIQUE
-        (provider, im_instance_id, realm_id, im_user_id),
-    CONSTRAINT ck_im_binding_times CHECK (updated_at >= created_at)
+        (provider, im_instance_id, realm_id, im_user_id)
 );
 """)
 

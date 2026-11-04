@@ -14,6 +14,40 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IMConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "helper_url": {
+            "title": "Helper Url",
+            "type": "string"
+          },
+          "host_origin": {
+            "title": "Host Origin",
+            "type": "string"
+          },
+          "im_instance_id": {
+            "title": "Im Instance Id",
+            "type": "string"
+          },
+          "im_origin": {
+            "title": "Im Origin",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "im_instance_id",
+          "im_origin",
+          "host_origin",
+          "helper_url"
+        ],
+        "title": "IMConfiguration",
+        "type": "object"
+      },
       "IMLoginResponse": {
         "additionalProperties": false,
         "properties": {
@@ -65,11 +99,11 @@
         "required": [
           "provider",
           "im_instance_id",
-          "realm_id",
-          "im_user_id",
           "im_origin",
           "host_origin",
           "helper_url",
+          "realm_id",
+          "im_user_id",
           "action_url",
           "fields",
           "expires_at"
@@ -99,43 +133,36 @@
         "additionalProperties": false,
         "properties": {
           "conversation_ref": {
-            "maxLength": 2048,
             "minLength": 1,
             "title": "Conversation Ref",
             "type": "string"
           },
           "im_instance_id": {
-            "maxLength": 128,
             "minLength": 1,
             "title": "Im Instance Id",
             "type": "string"
           },
           "im_user_id": {
-            "maxLength": 256,
             "minLength": 1,
             "title": "Im User Id",
             "type": "string"
           },
           "message_id": {
-            "maxLength": 256,
             "minLength": 1,
             "title": "Message Id",
             "type": "string"
           },
           "provider": {
-            "maxLength": 64,
             "minLength": 1,
             "title": "Provider",
             "type": "string"
           },
           "realm_id": {
-            "maxLength": 256,
             "minLength": 1,
             "title": "Realm Id",
             "type": "string"
           },
           "session_id": {
-            "maxLength": 256,
             "minLength": 1,
             "title": "Session Id",
             "type": "string"
@@ -233,6 +260,32 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/im-context/configuration": {
+      "get": {
+        "operationId": "configuration_api_v1_im_context_configuration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/IMConfiguration"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Configuration Api V1 Im Context Configuration Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Configuration"
+      }
+    },
     "/api/v1/im-context/login": {
       "post": {
         "operationId": "login_api_v1_im_context_login_post",

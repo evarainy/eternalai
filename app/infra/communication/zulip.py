@@ -161,20 +161,9 @@ class ZulipCommunicationAdapter:
             raise IMContextError("im_source_not_found", 404) from None
         if conversation != provided:
             raise IMContextError("im_source_not_found", 404)
-        version = json.dumps(
-            [
-                raw.get("last_edit_timestamp"),
-                raw.get("timestamp"),
-                raw.get("sender_id"),
-                conversation,
-            ],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
         return IMMessage(
             str(raw["id"]),
             selection.conversation_ref,
-            version,
             raw["content"].replace("\r\n", "\n").replace("\r", "\n"),
         )
 

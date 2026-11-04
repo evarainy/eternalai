@@ -27,9 +27,9 @@ class PostgreSQLIMAccountBindingStore:
             async with self._sessions() as session:
                 result = await session.execute(
                     text(
-                        "SELECT binding_id::text, tenant_id, ai_user_id, directory_user_id, "
+                        "SELECT tenant_id, ai_user_id, directory_user_id, "
                         "provider, im_instance_id, realm_id, im_user_id, login_subject, "
-                        "status, mapping_version FROM public.im_account_bindings "
+                        "status FROM public.im_account_bindings "
                         "WHERE tenant_id=:tenant AND ai_user_id=:user "
                         "AND directory_user_id=:directory "
                         "AND provider=:provider AND im_instance_id=:instance AND realm_id=:realm"

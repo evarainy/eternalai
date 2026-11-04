@@ -1,4 +1,4 @@
-import type { IMLoginResponse } from '../../generated/im-context/im-context.schemas';
+import type { IMConfiguration } from '../../generated/im-context/im-context.schemas';
 import { useAuthStore } from '../../stores/authStore';
 import { useAIDockStore } from '../../stores/aiDockStore';
 
@@ -17,50 +17,45 @@ export type IMEvent = {
   | { type: 'eternalai:logout-requested'; payload: Record<string, never> }
   | { type: 'eternalai:session-state'; payload: SessionState }
 );
-type IMConfiguration = Pick<IMLoginResponse,
-  'provider' | 'im_instance_id' | 'im_origin' | 'host_origin' | 'helper_url' | 'realm_id' | 'im_user_id'>;
-
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 function exact(value: Record<string, unknown>, keys: string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every((key) => key in value);
 }
-function text(value: unknown, max: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= max;
+function text(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 export function validateIMEvent(value: unknown, config: IMConfiguration): IMEvent | null {
   if (!object(value) || !exact(value, ['protocol', 'version', 'type', 'provider', 'im_instance_id', 'payload'])
       || value.protocol !== 'eternalai.im-bridge' || value.version !== 2
       || value.provider !== config.provider || value.im_instance_id !== config.im_instance_id
-      || !text(value.provider, 64) || !text(value.im_instance_id, 128) || !object(value.payload)) return null;
-  // Structured-cloned input still needs a byte bound, including Unicode payloads.
+      || !text(value.provider) || !text(value.im_instance_id) || !object(value.payload)) return null;
   const p = value.payload;
   switch (value.type) {
     case 'eternalai:message-selected':
       if (!exact(p, ['realm_id', 'im_user_id', 'message_id', 'conversation_ref'])
-          || !text(p.realm_id, 256) || !text(p.im_user_id, 256)
-          || !text(p.message_id, 256) || !text(p.conversation_ref, 2048)) return null;
+          || !text(p.realm_id) || !text(p.im_user_id)
+          || !text(p.message_id) || !text(p.conversation_ref)) return null;
       break;
     case 'eternalai:navigate':
-      if (!exact(p, ['route', 'object_ref']) || !['messages', 'work-object'].includes(String(p.route))
-          || !text(p.object_ref, 256)) return null;
+      if (!exact(p, ['route', 'object_ref']) || (p.route !== 'messages' && p.route !== 'work-object')
+          || !text(p.object_ref)) return null;
       break;
     case 'eternalai:logout-requested':
       if (!exact(p, [])) return null;
       break;
     case 'eternalai:session-state':
-      if (!text(p.nonce, 128)) return null;
+      if (!text(p.nonce)) return null;
       if (p.status === 'authenticated') {
         if (!exact(p, ['nonce', 'status', 'realm_id', 'im_user_id'])
-            || !text(p.realm_id, 256) || !text(p.im_user_id, 256)) return null;
-      } else if (!['unauthenticated', 'failed'].includes(String(p.status))
+            || !text(p.realm_id) || !text(p.im_user_id)) return null;
+      } else if ((p.status !== 'unauthenticated' && p.status !== 'failed')
           || !exact(p, ['nonce', 'status'])) return null;
       break;
     default: return null;
   }
-  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > 8192) return null;
   return value as IMEvent;
 }
 
@@ -87,7 +82,6 @@ export function configureIM(config: IMConfiguration): void {
   configuration = {
     provider: config.provider, im_instance_id: config.im_instance_id,
     im_origin: config.im_origin, host_origin: config.host_origin, helper_url: config.helper_url,
-    realm_id: config.realm_id, im_user_id: config.im_user_id,
   };
 }
 export function registerIMView(freeze: () => void, returnTo: (link: string) => void): () => void {
@@ -107,6 +101,8 @@ export function imBridgeBlocked(): boolean { return bridgeBlocked; }
 export function blockIMBridge(): void { bridgeBlocked = true; }
 export function hasIMConfiguration(): boolean { return configuration !== null; }
 export function completeIMLogout(): void { loggingOut = false; bridgeBlocked = false; }
+/** Only a server-confirmed host login may start a new IM identity cycle after a failure. */
+export function beginIMLogin(): void { loggingOut = false; bridgeBlocked = false; }
 
 export function imSessionOperation(
   config: IMConfiguration, type: 'eternalai:session-check' | 'eternalai:session-logout',
@@ -154,17 +150,15 @@ export function imSessionOperation(
 }
 
 /** Freeze and invalidate before starting a fresh, correlated IM logout operation. */
-export async function logoutIM(): Promise<number> {
-  if (configuration === null) return useAuthStore.getState().generation;
+export async function logoutIM(config: IMConfiguration): Promise<number> {
+  configureIM(config);
   loggingOut = true;
   freezeCurrent?.();
   useAIDockStore.getState().clearSession();
   useAuthStore.getState().invalidateIdentity(useAuthStore.getState().status);
   const generation = useAuthStore.getState().generation;
   const current = () => useAuthStore.getState().generation === generation;
-  if (configuration !== null) {
-    const state = await imSessionOperation(configuration, 'eternalai:session-logout', current);
-    if (!current() || state.status !== 'unauthenticated') throw new Error('im_logout_unconfirmed');
-  }
+  const state = await imSessionOperation(config, 'eternalai:session-logout', current);
+  if (!current() || state.status !== 'unauthenticated') throw new Error('im_logout_unconfirmed');
   return generation;
 }

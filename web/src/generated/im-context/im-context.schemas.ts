@@ -8,6 +8,14 @@ export interface HTTPValidationError {
   detail?: ValidationError[];
 }
 
+export interface IMConfiguration {
+  helper_url: string;
+  host_origin: string;
+  im_instance_id: string;
+  im_origin: string;
+  provider: string;
+}
+
 export type IMLoginResponseFields = {[key: string]: string};
 
 export interface IMLoginResponse {
@@ -29,40 +37,19 @@ export interface SourceMessage {
 }
 
 export interface SourceRequest {
-  /**
-   * @minLength 1
-   * @maxLength 2048
-   */
+  /** @minLength 1 */
   conversation_ref: string;
-  /**
-   * @minLength 1
-   * @maxLength 128
-   */
+  /** @minLength 1 */
   im_instance_id: string;
-  /**
-   * @minLength 1
-   * @maxLength 256
-   */
+  /** @minLength 1 */
   im_user_id: string;
-  /**
-   * @minLength 1
-   * @maxLength 256
-   */
+  /** @minLength 1 */
   message_id: string;
-  /**
-   * @minLength 1
-   * @maxLength 64
-   */
+  /** @minLength 1 */
   provider: string;
-  /**
-   * @minLength 1
-   * @maxLength 256
-   */
+  /** @minLength 1 */
   realm_id: string;
-  /**
-   * @minLength 1
-   * @maxLength 256
-   */
+  /** @minLength 1 */
   session_id: string;
 }
 
@@ -84,3 +71,5 @@ export interface ValidationError {
   msg: string;
   type: string;
 }
+
+export type ConfigurationApiV1ImContextConfigurationGet200 = IMConfiguration | null;

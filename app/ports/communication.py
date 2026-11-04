@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 @dataclass(frozen=True, slots=True)
 class IMAccountBinding:
-    binding_id: str
     tenant_id: str
     ai_user_id: str
     directory_user_id: str = field(repr=False)
@@ -21,18 +20,17 @@ class IMAccountBinding:
     im_user_id: str
     login_subject: str = field(repr=False)
     status: str
-    mapping_version: int
 
 
 class IMSelection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: str = Field(min_length=1, max_length=64)
-    im_instance_id: str = Field(min_length=1, max_length=128)
-    realm_id: str = Field(min_length=1, max_length=256)
-    im_user_id: str = Field(min_length=1, max_length=256)
-    message_id: str = Field(min_length=1, max_length=256)
-    conversation_ref: str = Field(min_length=1, max_length=2048, repr=False)
+    provider: str = Field(min_length=1)
+    im_instance_id: str = Field(min_length=1)
+    realm_id: str = Field(min_length=1)
+    im_user_id: str = Field(min_length=1)
+    message_id: str = Field(min_length=1)
+    conversation_ref: str = Field(min_length=1, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +46,6 @@ class IMReadIdentity:
 class IMMessage:
     message_id: str
     conversation_ref: str = field(repr=False)
-    version: str
     text: str = field(repr=False)
 
 

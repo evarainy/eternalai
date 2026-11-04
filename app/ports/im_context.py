@@ -43,10 +43,11 @@ class AuthorizedIMContext:
     ref_ids: tuple[str, ...] = field(repr=False)
     messages: tuple[IMMessage, ...] = field(repr=False)
     authority: IMContextPort = field(repr=False)
-    purpose: str = "self_read"
 
 
 class IMContextPort(Protocol):
+    async def check_session(self, principal: Principal, bound_session: str) -> None: ...
+
     async def select(
         self,
         principal: Principal,

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Alert from 'antd/es/alert';
-import { loginApiV1ImContextLoginPost, selectApiV1ImContextSourcesPost } from '../../generated/im-context/im-context';
+import {
+  configurationApiV1ImContextConfigurationGet, loginApiV1ImContextLoginPost,
+  selectApiV1ImContextSourcesPost,
+} from '../../generated/im-context/im-context';
 import { useAuthStore } from '../../stores/authStore';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { PlaceholderPage } from '../../shared/ui/PlaceholderPage';
@@ -31,6 +34,7 @@ export default function MessagesPage() {
     if (full === null) return;
     const sourceWindow = full.contentWindow;
     full.hidden = true;
+    let identityReady = false;
     let selectionSequence = 0;
     let removeReceiver = () => {};
     const isCurrent = () => live && useAuthStore.getState().generation === generation
@@ -38,6 +42,7 @@ export default function MessagesPage() {
     const freeze = () => {
       if (!live) return;
       live = false;
+      identityReady = false;
       removeReceiver();
       useAIDockStore.getState().clearSession();
       full.hidden = true;
@@ -53,15 +58,20 @@ export default function MessagesPage() {
     setPhaseGeneration(generation);
     useAIDockStore.getState().setIMSource(null);
     const unregister = registerIMView(freeze, (link) => {
-      if (isCurrent()) { full.hidden = true; full.src = link; useAIDockStore.getState().closeDock(); }
+      if (isCurrent() && identityReady) {
+        full.src = link;
+        full.hidden = false;
+        useAIDockStore.getState().closeDock();
+      }
     });
-    let configured = false;
     const start = async () => {
       try {
+        const fixed = await configurationApiV1ImContextConfigurationGet();
+        if (!isCurrent()) return;
+        if (fixed === null) { setPhase('disabled'); return; }
+        configureIM(fixed);
         const config = await loginApiV1ImContextLoginPost();
         if (!isCurrent()) return;
-        configureIM(config);
-        configured = true;
         const old = await imSessionOperation(config, 'eternalai:session-logout', isCurrent, abort.signal);
         if (!isCurrent()) return;
         if (old.status !== 'unauthenticated') throw new Error('im_logout_unconfirmed');
@@ -103,12 +113,14 @@ export default function MessagesPage() {
         removeReceiver = () => window.removeEventListener('message', receive);
         full.onload = async () => {
           if (!isCurrent()) return;
+          identityReady = false;
           full.hidden = true;
           try {
             const identity = await imSessionOperation(config, 'eternalai:session-check', isCurrent, abort.signal);
             if (!isCurrent()) return;
             if (identity.status !== 'authenticated' || identity.realm_id !== config.realm_id
                 || identity.im_user_id !== config.im_user_id) throw new Error('im_identity_mismatch');
+            identityReady = true;
             full.hidden = false;
             setPhase('ready');
           } catch { if (isCurrent()) failIdentity(); }
@@ -127,10 +139,7 @@ export default function MessagesPage() {
         form.submit();
         form.remove();
       } catch {
-        if (isCurrent()) {
-          if (configured) failIdentity();
-          else setPhase('disabled');
-        }
+        if (isCurrent()) failIdentity();
       }
     };
     void start();

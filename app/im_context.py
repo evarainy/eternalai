@@ -1,13 +1,12 @@
-"""Current-reader authorization and bounded, process-local IM source references."""
+"""Current-reader authorization and process-local IM source references."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from app.ports.auth import (
     Principal,
@@ -20,8 +19,8 @@ from app.ports.communication import (
     CommunicationReaderPort,
     IMAccountBinding,
     IMLoginForm,
-    IMMessage,
     IMReadContext,
+    IMReadIdentity,
     IMSelection,
 )
 from app.ports.im_context import (
@@ -38,22 +37,15 @@ def _digest(domain: str, value: bytes) -> str:
     return hashlib.sha256(domain.encode() + b"\0" + value).hexdigest()
 
 
-def _manifest(messages: tuple[IMMessage, ...]) -> tuple[tuple[str, str, str], ...]:
-    return tuple((m.message_id, m.version, _digest("im-text", m.text.encode())) for m in messages)
-
-
 @dataclass(frozen=True, slots=True)
 class _Reference:
     tenant: str
     user: str
     login: str = field(repr=False)
     session: str = field(repr=False)
-    binding_id: str
-    mapping_version: int
     selection: IMSelection = field(repr=False)
-    manifest: tuple[tuple[str, str, str], ...]
+    message_ids: tuple[str, ...]
     expires_at: datetime
-    purpose: str = "self_read"
 
 
 class IMContextService:
@@ -82,7 +74,9 @@ class IMContextService:
         self.host_origin = host_origin
         self._refs: dict[str, _Reference] = {}
 
-    async def _session(self, principal: Principal, bound_session: str) -> tuple[str, str]:
+    async def _session(
+        self, principal: Principal, bound_session: str,
+    ) -> tuple[str, str, datetime]:
         context = authenticated_session.get()
         if (
             context is None
@@ -100,7 +94,11 @@ class IMContextService:
         return (
             _digest("im-login", context.fingerprint),
             _digest("im-session", bound_session.encode()),
+            context.expires_at,
         )
+
+    async def check_session(self, principal: Principal, bound_session: str) -> None:
+        await self._session(principal, bound_session)
 
     async def _binding(self, principal: Principal) -> IMAccountBinding:
         binding = await self._store.current(
@@ -127,21 +125,13 @@ class IMContextService:
         binding = await self._binding(principal)
         # Establish that the login subject still identifies the verified remote account.
         async with self._reader.current_identity(binding) as identity:
-            self._check_identity(
-                binding,
-                identity.provider,
-                identity.im_instance_id,
-                identity.realm_id,
-                identity.im_user_id,
-            )
-        if await self._binding(principal) != binding:
-            raise IMContextError("im_mapping_changed")
+            self._check_identity(binding, identity)
         await self._session(principal, "im-login-form")
         return binding, self._login.build_login_form(binding)
 
     @staticmethod
-    def _check_identity(binding: IMAccountBinding, *identity: str) -> None:
-        if identity != (
+    def _check_identity(binding: IMAccountBinding, identity: IMReadIdentity) -> None:
+        if (identity.provider, identity.im_instance_id, identity.realm_id, identity.im_user_id) != (
             binding.provider,
             binding.im_instance_id,
             binding.realm_id,
@@ -159,13 +149,7 @@ class IMContextService:
         ) != (binding.provider, binding.im_instance_id, binding.realm_id, binding.im_user_id):
             raise IMContextError("im_identity_mismatch")
         async with self._reader.current_identity(binding) as identity:
-            self._check_identity(
-                binding,
-                identity.provider,
-                identity.im_instance_id,
-                identity.realm_id,
-                identity.im_user_id,
-            )
+            self._check_identity(binding, identity)
             _LOG.info("im_stage stage=identity result=verified")
             anchor = await self._reader.read_anchor(identity, selection)
             if (
@@ -181,11 +165,8 @@ class IMContextService:
             or len(set(ids)) != len(ids)
             or ids[-1] != selection.message_id
             or any(m.conversation_ref != selection.conversation_ref for m in result.messages)
-            or _manifest((anchor,)) != _manifest((result.messages[-1],))
         ):
             raise IMContextError("im_source_changed")
-        if len(json.dumps([m.text for m in result.messages], ensure_ascii=False).encode()) > 12288:
-            raise IMContextError("im_source_too_large")
         _LOG.info("im_stage stage=context result=read count=%s", len(ids))
         return result
 
@@ -200,39 +181,20 @@ class IMContextService:
         bound_session: str,
         selection: IMSelection,
     ) -> IMSourceReference:
-        login, session = await self._session(principal, bound_session)
+        login, session, expires = await self._session(principal, bound_session)
         binding = await self._binding(principal)
         result = await self._read(binding, selection)
-        if await self._binding(principal) != binding:
-            raise IMContextError("im_mapping_changed")
         await self._session(principal, bound_session)
         self._sweep()
-        if len(self._refs) >= 1024 or sum(r.login == login for r in self._refs.values()) >= 8:
-            raise IMContextError("im_source_capacity", 503)
-        expires = datetime.now(UTC) + timedelta(minutes=10)
         reference = _Reference(
             principal.org_ctx.tenant_id,
             principal.ai_user_id,
             login,
             session,
-            binding.binding_id,
-            binding.mapping_version,
             selection,
-            _manifest(result.messages),
+            tuple(m.message_id for m in result.messages),
             expires,
         )
-        metadata = [
-            selection.model_dump(),
-            reference.manifest,
-            binding.binding_id,
-            binding.mapping_version,
-            login,
-            session,
-            reference.tenant,
-            reference.user,
-        ]
-        if len(json.dumps(metadata, ensure_ascii=False).encode()) > 8192:
-            raise IMContextError("im_source_too_large")
         ref_id = secrets.token_urlsafe(32)
         self._refs[ref_id] = reference
         _LOG.info("im_stage stage=select result=issued")
@@ -244,7 +206,7 @@ class IMContextService:
         bound_session: str,
         ref_ids: tuple[str, ...],
     ) -> AuthorizedIMContext:
-        login, session = await self._session(principal, bound_session)
+        login, session, _ = await self._session(principal, bound_session)
         self._sweep()
         if len(ref_ids) != 1:
             raise IMContextError("im_source_invalid")
@@ -253,25 +215,12 @@ class IMContextService:
             raise IMContextError("im_source_expired")
         if (ref.tenant, ref.user) != (principal.org_ctx.tenant_id, principal.ai_user_id):
             raise IMContextError("im_source_not_found", 404)
-        if (ref.login, ref.session, ref.purpose) != (login, session, "self_read"):
+        if (ref.login, ref.session) != (login, session):
             raise IMContextError("im_source_expired")
-        try:
-            binding = await self._binding(principal)
-            if (binding.binding_id, binding.mapping_version) != (
-                ref.binding_id, ref.mapping_version,
-            ):
-                raise IMContextError("im_mapping_changed")
-            result = await self._read(binding, ref.selection)
-            if _manifest(result.messages) != ref.manifest:
-                raise IMContextError("im_source_changed")
-            if await self._binding(principal) != binding:
-                raise IMContextError("im_mapping_changed")
-        except IMContextError as error:
-            if error.http_status in {404, 409}:
-                # Once observed invalid, this reference cannot revive if permissions return.
-                self._refs.pop(ref_ids[0], None)
-            _LOG.info("im_stage stage=revalidate result=rejected code=%s", error.code)
-            raise
+        binding = await self._binding(principal)
+        result = await self._read(binding, ref.selection)
+        if tuple(m.message_id for m in result.messages) != ref.message_ids:
+            raise IMContextError("im_source_changed")
         await self._session(principal, bound_session)
         if ref.expires_at <= datetime.now(UTC):
             raise IMContextError("im_source_expired")

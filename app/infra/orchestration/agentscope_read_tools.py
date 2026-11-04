@@ -730,8 +730,8 @@ class ToolExecutor:
                         or capability.type != "query" or capability.target_system != "oa"
                         or capability.execution_identity != "user_delegated"):
                     raise IMContextError("im_capability_not_read_only", 403)
-                await scope.im_source.authority.revalidate(
-                    source_session.principal, scope.session_id, scope.im_source.ref_ids,
+                await scope.im_source.authority.check_session(
+                    source_session.principal, scope.session_id,
                 )
             execution = await deps.orchestration.execute_capability(
                 task_id=task_id,

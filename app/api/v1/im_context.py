@@ -15,7 +15,7 @@ from app.ports.im_context import IMContextError
 
 
 class SourceRequest(IMSelection):
-    session_id: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(min_length=1)
 
 
 class SourceMessage(BaseModel):
@@ -30,15 +30,18 @@ class SourceResponse(BaseModel):
     deep_link: str
 
 
-class IMLoginResponse(BaseModel):
+class IMConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider: str
     im_instance_id: str
-    realm_id: str
-    im_user_id: str
     im_origin: str
     host_origin: str
     helper_url: str
+
+
+class IMLoginResponse(IMConfiguration):
+    realm_id: str
+    im_user_id: str
     action_url: str
     fields: dict[str, str] = Field(repr=False)
     expires_at: datetime
@@ -55,6 +58,17 @@ def make_router(
         if service is None:
             raise HTTPException(503, {"code": "im_not_enabled"})
         return service
+
+    @router.get("/configuration", response_model=IMConfiguration | None)
+    async def configuration() -> IMConfiguration | None:
+        # Logout needs fixed, non-secret configuration even after host authentication expires.
+        if service is None:
+            return None
+        return IMConfiguration(
+            provider=service.provider, im_instance_id=service.im_instance_id,
+            im_origin=service.im_origin, host_origin=service.host_origin,
+            helper_url=service.helper_url,
+        )
 
     @router.post("/login", response_model=IMLoginResponse)
     async def login(principal: Principal = Depends(require_principal)) -> IMLoginResponse:
@@ -89,7 +103,7 @@ def make_router(
             result = await current.select(
                 principal,
                 bound_session,
-                IMSelection.model_validate(body.model_dump(exclude={"session_id"})),
+                IMSelection.model_construct(**body.model_dump(exclude={"session_id"})),
             )
         except IMContextError as error:
             raise HTTPException(error.http_status, {"code": error.code}) from None

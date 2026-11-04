@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { logoutApiV1AuthLogoutPost } from '../generated/auth/auth';
+import { configurationApiV1ImContextConfigurationGet } from '../generated/im-context/im-context';
 import { useAuthStore } from '../stores/authStore';
 import { notifyIdentityRecheck } from './identity';
 import { discardReauthSnapshot } from './reauthRestore';
 import { withAuthCookieLock } from './sessionKeepalive';
-import { completeIMLogout, hasIMConfiguration, logoutIM } from '../features/messages/hostBridge';
+import { completeIMLogout, logoutIM } from '../features/messages/hostBridge';
 import { customInstance, ApiError } from '../api/mutator';
 
 export function useLogout() {
@@ -27,9 +28,11 @@ export function useLogout() {
       useAuthStore.getState().generation === expectedGeneration;
     setOperation({ generation: expectedGeneration, pending: true, failed: false });
     try {
-      const withIM = hasIMConfiguration();
+      const config = await configurationApiV1ImContextConfigurationGet();
+      if (!isCurrent()) return;
+      const withIM = config !== null;
       if (withIM) {
-        const departure = logoutIM();
+        const departure = logoutIM(config);
         expectedGeneration = useAuthStore.getState().generation;
         setOperation({ generation: expectedGeneration, pending: true, failed: false });
         await departure;

@@ -451,7 +451,6 @@ class AgentScopeRuntime:
 
             if channel != "web" or d_form_collection_reference.get() is not None:
                 raise IMContextError("im_source_combination_invalid", 422)
-            source = await source.authority.revalidate(principal, session_id, source.ref_ids)
             if message.strip().casefold() in {"确认", "confirm"}:
                 text = "消息来源轮次仅支持本人只读查询；请回原会话处理待确认操作。"
                 return self._deps.response_builder.build_message(

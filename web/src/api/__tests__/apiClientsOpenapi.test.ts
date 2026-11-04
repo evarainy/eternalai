@@ -46,6 +46,7 @@ const PROJECTS = [
   {
     project: 'imContext', input: './openapi/im-context.openapi.json', target: './src/generated/im-context/im-context.ts',
     operations: [
+      { path: '/api/v1/im-context/configuration', method: 'get', operationId: 'configuration_api_v1_im_context_configuration_get' },
       { path: '/api/v1/im-context/login', method: 'post', operationId: 'login_api_v1_im_context_login_post' },
       { path: '/api/v1/im-context/sources', method: 'post', operationId: 'select_api_v1_im_context_sources_post' },
     ],

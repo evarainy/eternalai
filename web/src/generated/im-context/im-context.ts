@@ -5,6 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  ConfigurationApiV1ImContextConfigurationGet200,
   IMLoginResponse,
   SourceRequest,
   SourceResponse
@@ -15,6 +16,18 @@ import { customInstance } from '../../api/mutator';
 
 
   /**
+ * @summary Configuration
+ */
+export const configurationApiV1ImContextConfigurationGet = (
+
+ ) => {
+      return customInstance<ConfigurationApiV1ImContextConfigurationGet200>(
+      {url: `/api/v1/im-context/configuration`, method: 'GET'
+    },
+      );
+    }
+
+/**
  * @summary Login
  */
 export const loginApiV1ImContextLoginPost = (
@@ -40,5 +53,6 @@ export const selectApiV1ImContextSourcesPost = (
       );
     }
 
+export type ConfigurationApiV1ImContextConfigurationGetResult = NonNullable<Awaited<ReturnType<typeof configurationApiV1ImContextConfigurationGet>>>
 export type LoginApiV1ImContextLoginPostResult = NonNullable<Awaited<ReturnType<typeof loginApiV1ImContextLoginPost>>>
 export type SelectApiV1ImContextSourcesPostResult = NonNullable<Awaited<ReturnType<typeof selectApiV1ImContextSourcesPost>>>

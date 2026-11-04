@@ -300,8 +300,7 @@ class ZulipSettings:
         helper = urlsplit(self.helper_url)
         if (self.origin == self.host_origin or self.helper_url != self.origin + helper.path
                 or not helper.path.startswith("/") or helper.path == "/"
-                or not 1 <= len(self.im_instance_id) <= 128
-                or not 1 <= len(self.realm_id) <= 256 or len(self.jwt_secret) < 32):
+                or not self.im_instance_id or not self.realm_id or len(self.jwt_secret) < 32):
             raise ValueError("im_configuration_invalid")
 
 
