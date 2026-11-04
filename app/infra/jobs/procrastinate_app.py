@@ -8,6 +8,8 @@ worker-side dependencies through the official ``additional_context`` mechanism.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from procrastinate import App, PsycopgConnector
 from procrastinate.job_context import JobContext
 from sqlalchemy.engine import make_url
@@ -24,6 +26,7 @@ RECONCILE_TASK = "background_jobs.reconcile"
 RECONCILE_CRON = "*/1 * * * *"
 RUNNER_CONTEXT_KEY = "background_job_runner"
 SESSIONS_CONTEXT_KEY = "background_job_sessions"
+IM_DELIVERY_CONTEXT_KEY = "im_delivery_service"
 
 
 def psycopg_conninfo(database_url: str) -> str:
@@ -46,6 +49,25 @@ def build_procrastinate_app(conninfo: str) -> App:
     async def run_background_job(context: JobContext, job_id: str) -> None:
         await context.additional_context[RUNNER_CONTEXT_KEY].run(context, job_id)
 
+    @app.task(name="im_deliveries.send", queue=GENERAL_QUEUE, pass_context=True, retry=False)
+    async def send_im_delivery(context: JobContext, delivery_id: str) -> None:
+        service = context.additional_context[IM_DELIVERY_CONTEXT_KEY]
+        if service is None:
+            raise RuntimeError("im_delivery_unavailable")
+        await service.send(UUID(delivery_id))
+
+    @app.periodic(
+        cron=RECONCILE_CRON, periodic_id="im_delivery_maintenance",
+        queueing_lock="im_deliveries.maintain",
+    )
+    @app.task(name="im_deliveries.maintain", queue=MAINTENANCE_QUEUE,
+              pass_context=True, retry=False)
+    async def maintain_im_deliveries(context: JobContext, timestamp: int) -> None:
+        del timestamp
+        service = context.additional_context[IM_DELIVERY_CONTEXT_KEY]
+        if service is not None:
+            await service.maintain()
+
     @app.periodic(cron=RECONCILE_CRON, periodic_id="reconcile", queueing_lock=RECONCILE_TASK)
     @app.task(name=RECONCILE_TASK, queue=MAINTENANCE_QUEUE, pass_context=True, retry=False)
     async def reconcile(context: JobContext, timestamp: int) -> None:
@@ -59,6 +81,7 @@ __all__ = (
     "RECONCILE_TASK",
     "RUNNER_CONTEXT_KEY",
     "SESSIONS_CONTEXT_KEY",
+    "IM_DELIVERY_CONTEXT_KEY",
     "build_procrastinate_app",
     "psycopg_conninfo",
 )

@@ -42,6 +42,8 @@ app/infra/adapters/oa/*
 app/infra/auth/*
 !app/infra/browser/
 app/infra/browser/*
+!app/infra/communication/
+app/infra/communication/*
 !app/infra/gateway/
 app/infra/gateway/*
 !app/infra/health/
@@ -355,6 +357,8 @@ services/decision/*
 !app/ports/error_codes.py
 !app/ports/evaluation.py
 !app/ports/fixed_document.py
+!app/ports/communication.py
+!app/ports/im_deliveries.py
 !app/ports/human_gate.py
 !app/ports/identity_mapping.py
 !app/ports/job_queue.py
@@ -393,6 +397,12 @@ services/decision/*
 !app/runtime/response_projection.py
 !app/runtime/runtime.py
 !app/server.py
+!app/im_deliveries.py
+!app/api/v1/im_deliveries.py
+!app/infra/communication/__init__.py
+!app/infra/communication/composition.py
+!app/infra/communication/zulip.py
+!app/infra/persistence/im_deliveries.py
 !app/version_binding.py
 !app/work_dispatch/__init__.py
 !app/work_dispatch/attachments.py
