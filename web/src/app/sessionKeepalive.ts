@@ -44,25 +44,19 @@ function watchInput(listener?: () => void): () => void {
 }
 
 /**
- * Serialize renew / login / logout across tabs so an in-flight renew drains first. Without
- * Web Locks, or after a bounded wait, the request still goes out: a late cookie only points at a
- * revoked instance and costs one extra login.
+ * Serialize host and IM cookie writes across tabs. Failure to acquire the lock must never
+ * start an unlocked request: its late cookie could replace a newer identity.
  */
 export async function withAuthCookieLock<T>(operation: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
-  if (locks === undefined || typeof locks.request !== 'function') return operation();
+  if (locks === undefined || typeof locks.request !== 'function') throw new Error('auth_cookie_lock_unavailable');
   const waiting = new AbortController();
   const timer = window.setTimeout(() => { waiting.abort(); }, AUTH_LOCK_WAIT_MS);
-  let acquired = false;
   try {
     return await locks.request(AUTH_COOKIE_LOCK, { mode: 'exclusive', signal: waiting.signal }, () => {
-      acquired = true;
       window.clearTimeout(timer);
       return operation();
     });
-  } catch (error) {
-    if (acquired) throw error;
-    return operation();
   } finally {
     window.clearTimeout(timer);
   }

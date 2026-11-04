@@ -1,5 +1,16 @@
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { beforeEach, vi } from 'vitest';
+import { completeIMLogout } from '../features/messages/hostBridge';
+
+beforeEach(() => {
+  completeIMLogout();
+  // jsdom has no Web Locks; existing login/renew/logout cases use a granted lock.
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: { request: async (name: string, _options: LockOptions, callback: LockGrantedCallback) =>
+      callback({ name, mode: 'exclusive' } as Lock) },
+  });
+});
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

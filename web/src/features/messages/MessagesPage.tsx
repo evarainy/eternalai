@@ -9,6 +9,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { PlaceholderPage } from '../../shared/ui/PlaceholderPage';
 import { useLogout } from '../../app/logout';
+import { withAuthCookieLock } from '../../app/sessionKeepalive';
 import {
   blockIMBridge, configureIM, imBridgeBlocked, imLogoutInProgress, imSessionOperation, registerIMView,
   safeIMLink, validateIMEvent,
@@ -66,78 +67,98 @@ export default function MessagesPage() {
     });
     const start = async () => {
       try {
-        const fixed = await configurationApiV1ImContextConfigurationGet();
-        if (!isCurrent()) return;
-        if (fixed === null) { setPhase('disabled'); return; }
-        configureIM(fixed);
-        const config = await loginApiV1ImContextLoginPost();
-        if (!isCurrent()) return;
-        const old = await imSessionOperation(config, 'eternalai:session-logout', isCurrent, abort.signal);
-        if (!isCurrent()) return;
-        if (old.status !== 'unauthenticated') throw new Error('im_logout_unconfirmed');
-        const receive = async (event: MessageEvent<unknown>) => {
-          if (!isCurrent() || event.origin !== config.im_origin || event.source !== sourceWindow) return;
-          const data = validateIMEvent(event.data, config);
-          if (data === null) return;
-          if (data.type === 'eternalai:logout-requested') { void logoutRef.current(); return; }
-          if (full.hidden) return;
-          if (data.type === 'eternalai:navigate') {
-            navigate(data.payload.route === 'messages' ? '/messages'
-              : `/work-objects/${encodeURIComponent(data.payload.object_ref)}`);
-          } else if (data.type === 'eternalai:message-selected') {
-            if (data.payload.realm_id !== config.realm_id || data.payload.im_user_id !== config.im_user_id) {
-              failIdentity(); return;
-            }
-            const sessionId = useAIDockStore.getState().ensureSession();
-            const sequence = ++selectionSequence;
-            setSourceError(false);
-            try {
-              const source = await selectApiV1ImContextSourcesPost({
-                ...data.payload, provider: config.provider, im_instance_id: config.im_instance_id,
-                session_id: sessionId,
-              });
-              if (!isCurrent() || sequence !== selectionSequence
-                  || useAIDockStore.getState().sessionId !== sessionId) return;
-              safeIMLink(source.deep_link, config);
-              useAIDockStore.getState().setIMSource({ source, authGeneration: generation, sessionId });
-              useAIDockStore.getState().openDock();
-            } catch {
-              if (isCurrent() && sequence === selectionSequence) {
-                useAIDockStore.getState().setIMSource(null);
-                setSourceError(true);
+        await withAuthCookieLock(async () => {
+          if (!isCurrent()) return;
+          const fixed = await configurationApiV1ImContextConfigurationGet();
+          if (!isCurrent()) return;
+          if (fixed === null) { setPhase('disabled'); return; }
+          configureIM(fixed);
+          const config = await loginApiV1ImContextLoginPost();
+          if (!isCurrent()) return;
+          const old = await imSessionOperation(config, 'eternalai:session-logout', isCurrent, abort.signal);
+          if (!isCurrent()) return;
+          if (old.status !== 'unauthenticated') throw new Error('im_logout_unconfirmed');
+          const receive = async (event: MessageEvent<unknown>) => {
+            if (!isCurrent() || event.origin !== config.im_origin || event.source !== sourceWindow) return;
+            const data = validateIMEvent(event.data, config);
+            if (data === null) return;
+            if (data.type === 'eternalai:logout-requested') { void logoutRef.current(); return; }
+            if (full.hidden) return;
+            if (data.type === 'eternalai:navigate') {
+              navigate(data.payload.route === 'messages' ? '/messages'
+                : `/work-objects/${encodeURIComponent(data.payload.object_ref)}`);
+            } else if (data.type === 'eternalai:message-selected') {
+              if (data.payload.realm_id !== config.realm_id || data.payload.im_user_id !== config.im_user_id) {
+                failIdentity(); return;
+              }
+              const sessionId = useAIDockStore.getState().ensureSession();
+              const sequence = ++selectionSequence;
+              setSourceError(false);
+              try {
+                const source = await selectApiV1ImContextSourcesPost({
+                  ...data.payload, provider: config.provider, im_instance_id: config.im_instance_id,
+                  session_id: sessionId,
+                });
+                if (!isCurrent() || sequence !== selectionSequence
+                    || useAIDockStore.getState().sessionId !== sessionId) return;
+                safeIMLink(source.deep_link, config);
+                useAIDockStore.getState().setIMSource({ source, authGeneration: generation, sessionId });
+                useAIDockStore.getState().openDock();
+              } catch {
+                if (isCurrent() && sequence === selectionSequence) {
+                  useAIDockStore.getState().setIMSource(null);
+                  setSourceError(true);
+                }
               }
             }
-          }
-        };
-        window.addEventListener('message', receive);
-        removeReceiver = () => window.removeEventListener('message', receive);
-        full.onload = async () => {
+          };
+          window.addEventListener('message', receive);
+          removeReceiver = () => window.removeEventListener('message', receive);
           if (!isCurrent()) return;
-          identityReady = false;
-          full.hidden = true;
-          try {
-            const identity = await imSessionOperation(config, 'eternalai:session-check', isCurrent, abort.signal);
-            if (!isCurrent()) return;
-            if (identity.status !== 'authenticated' || identity.realm_id !== config.realm_id
-                || identity.im_user_id !== config.im_user_id) throw new Error('im_identity_mismatch');
-            identityReady = true;
-            full.hidden = false;
-            setPhase('ready');
-          } catch { if (isCurrent()) failIdentity(); }
-        };
-        if (!isCurrent() || Date.parse(config.expires_at) <= Date.now()) return;
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = safeIMLink(config.action_url, config);
-        form.target = full.name;
-        form.hidden = true;
-        for (const [name, value] of Object.entries(config.fields)) {
-          const input = document.createElement('input');
-          input.type = 'hidden'; input.name = name; input.value = value; form.append(input);
-        }
-        document.body.append(form);
-        form.submit();
-        form.remove();
+          if (Date.parse(config.expires_at) <= Date.now()) throw new Error('im_login_expired');
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = safeIMLink(config.action_url, config);
+          form.target = full.name;
+          form.hidden = true;
+          for (const [name, value] of Object.entries(config.fields)) {
+            const input = document.createElement('input');
+            input.type = 'hidden'; input.name = name; input.value = value; form.append(input);
+          }
+          document.body.append(form);
+          // Keep the cookie lock until the native SSO load and its real identity receipt finish.
+          await new Promise<void>((resolve, reject) => {
+            const stop = () => finish(new Error('im_login_unconfirmed'));
+            const timer = window.setTimeout(stop, 15000);
+            const finish = (error?: unknown) => {
+              window.clearTimeout(timer);
+              abort.signal.removeEventListener('abort', stop);
+              if (error !== undefined) reject(error);
+              else resolve();
+            };
+            abort.signal.addEventListener('abort', stop, { once: true });
+            full.onload = async () => {
+              if (!isCurrent()) { stop(); return; }
+              identityReady = false;
+              full.hidden = true;
+              try {
+                const identity = await imSessionOperation(config, 'eternalai:session-check', isCurrent, abort.signal);
+                if (!isCurrent()) { stop(); return; }
+                if (identity.status !== 'authenticated' || identity.realm_id !== config.realm_id
+                    || identity.im_user_id !== config.im_user_id) throw new Error('im_identity_mismatch');
+                identityReady = true;
+                full.hidden = false;
+                setPhase('ready');
+                finish();
+              } catch (error) {
+                finish(error);
+                if (isCurrent()) failIdentity();
+              }
+            };
+            form.submit();
+            form.remove();
+          });
+        });
       } catch {
         if (isCurrent()) failIdentity();
       }
