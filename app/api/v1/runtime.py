@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -12,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs, Valida
 
 from app.api.v1.auth import PrincipalDependency
 from app.contracts.sdui.models import UserAction
+from app.file_artifacts import FileArtifactService
 from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
+from app.ports.file_artifacts import ChatAttachmentDescriptor, ChatAttachmentError
 from app.ports.im_context import IMContextError, IMContextPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import (
@@ -22,6 +25,7 @@ from app.ports.runtime import (
     RuntimePort,
     RuntimeSessionBusyError,
     UserActionOutcome,
+    chat_attachment_context,
     chat_client_request_id,
     d_form_collection_reference,
     im_source_context,
@@ -29,6 +33,10 @@ from app.ports.runtime import (
 from app.ports.task_store import DFormCollectionError
 
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_ATTACHMENT_MESSAGES = {
+    "chat_attachment_invalid": "附件已失效或不属于当前会话，请移除后重新上传。",
+    "chat_attachment_unsupported": "当前模式不支持附件，请移除附件后再发送。",
+}
 
 
 class _PrivateHandleRoute(APIRoute):
@@ -65,6 +73,7 @@ class HandleRequest(BaseModel):
     client_request_id: str | None = Field(default=None, min_length=1, max_length=96)
     d_form_collection: DFormCollectionReference | None = None
     source_refs: list[str] = Field(default_factory=list, max_length=1)
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=5)
 
 
 class ActionRequest(BaseModel):
@@ -180,6 +189,14 @@ def _bind_runtime_request(
     return runtime, session_id
 
 
+def _attachment_error(code: str) -> HTTPException:
+    return HTTPException(
+        422,
+        {"code": code, "message": _ATTACHMENT_MESSAGES[code]},
+        headers=_PRIVATE_HEADERS,
+    )
+
+
 def _session_busy() -> HTTPException:
     return HTTPException(409, {"code": "runtime_session_busy"}, headers=_PRIVATE_HEADERS)
 
@@ -191,6 +208,7 @@ def make_router(
     *,
     browser_chat: BrowserChatPort | None = None,
     im_context: IMContextPort | None = None,
+    chat_attachments: FileArtifactService | None = None,
 ) -> APIRouter:
     router = APIRouter()
     handle_router = APIRouter(route_class=_PrivateHandleRoute)
@@ -206,6 +224,12 @@ def make_router(
             or body.client_capabilities
         ):
             raise HTTPException(422, {"code": "im_source_combination_invalid"})
+        if body.attachment_ids and (
+            body.source_refs
+            or body.d_form_collection is not None
+            or body.client_capabilities.get("browser_async_v1") is True
+        ):
+            raise _attachment_error("chat_attachment_unsupported")
         if body.client_capabilities.get("browser_async_v1") is True:
             if body.d_form_collection is not None:
                 raise HTTPException(422, {"code": "collection_not_found"})
@@ -253,6 +277,16 @@ def make_router(
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
+        attachments: tuple[ChatAttachmentDescriptor, ...] = ()
+        if body.attachment_ids:
+            if chat_attachments is None:
+                raise _attachment_error("chat_attachment_unsupported")
+            try:
+                attachments = await chat_attachments.resolve_chat_attachments(
+                    principal, session_id, body.attachment_ids
+                )
+            except ChatAttachmentError as error:
+                raise _attachment_error(error.code) from None
         scope = None
         if browser_chat is not None and body.client_request_id is not None and not body.source_refs:
             response.headers["Cache-Control"] = "no-store"
@@ -271,6 +305,7 @@ def make_router(
         # Read only by the AgentScope runtime's confirmation receipts.
         request_id_token = chat_client_request_id.set(body.client_request_id)
         source_token = im_source_context.set(None)
+        attachment_token = chat_attachment_context.set(attachments)
         try:
             if body.source_refs:
                 if im_context is None:
@@ -297,9 +332,12 @@ def make_router(
                 {"code": error.code},
                 headers=_PRIVATE_HEADERS,
             ) from None
+        except ChatAttachmentError as error:
+            raise _attachment_error(error.code) from None
         except RuntimeSessionBusyError:
             raise _session_busy() from None
         finally:
+            chat_attachment_context.reset(attachment_token)
             im_source_context.reset(source_token)
             chat_client_request_id.reset(request_id_token)
             d_form_collection_reference.reset(collection_token)

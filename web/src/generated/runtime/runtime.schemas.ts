@@ -153,6 +153,8 @@ export type HandleRequestClientRequestId = string | null;
 export type HandleRequestDFormCollection = DFormCollectionReference | null;
 
 export interface HandleRequest {
+  /** @maxItems 5 */
+  attachment_ids?: string[];
   channel: HandleRequestChannel;
   client_capabilities?: HandleRequestClientCapabilities;
   client_request_id?: HandleRequestClientRequestId;

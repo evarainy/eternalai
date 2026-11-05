@@ -83,7 +83,9 @@ export const requestWithResponse = async <T>(
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined && value !== null) query.set(key, String(value));
   }
-  const suffix = query.size > 0 ? '?' + query.toString() : '';
+  // URLSearchParams.size only exists from Chrome 113; the field browser is Chrome 101.
+  const queryString = query.toString();
+  const suffix = queryString ? '?' + queryString : '';
   const response = await fetch(url + suffix, {
     method, headers: requestHeaders, body: rawBody ?? (data instanceof Blob ? data : data === undefined ? undefined : JSON.stringify(data)), signal,
   });

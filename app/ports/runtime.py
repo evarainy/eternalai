@@ -14,6 +14,7 @@ from app.ports.agent_orchestration import ConfirmationPreview
 from app.ports.auth import Principal
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.file_artifacts import ChatAttachmentDescriptor
 from app.ports.human_gate import TaskVersionBindingManifest, VersionBinding
 from app.ports.im_context import AuthorizedIMContext
 from app.ports.response_envelope import ResponseEnvelope
@@ -36,6 +37,10 @@ chat_client_request_id: ContextVar[str | None] = ContextVar(
 )
 im_source_context: ContextVar[AuthorizedIMContext | None] = ContextVar(
     "im_source_context", default=None,
+)
+# Verified by the runtime router before the turn; metadata only, never file contents.
+chat_attachment_context: ContextVar[tuple[ChatAttachmentDescriptor, ...]] = ContextVar(
+    "chat_attachment_context", default=(),
 )
 
 type UserActionOutcome = Literal[

@@ -1,18 +1,23 @@
-"""File artifact port: owner-scoped downloads and worker-side output publication.
+"""File artifact port: owner-scoped downloads, chat uploads and worker-side outputs.
 
 ``public.file_artifacts`` is the authority for ownership and lifecycle; physical files
 are only reachable through a verified row. Another user's artifact is indistinguishable
-from a missing one.
+from a missing one. Only the standard library is imported here: the worker reaches this
+module through the persistence layer.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
+
+CHAT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class FileArtifactError(Exception):
@@ -21,6 +26,10 @@ class FileArtifactError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class ChatAttachmentError(FileArtifactError):
+    """A chat message's attachments were rejected (HTTP 422)."""
 
 
 @dataclass(frozen=True)
@@ -57,8 +66,48 @@ class FileArtifactCleanupResult:
     abandoned: int
 
 
+@dataclass(frozen=True)
+class SheetSummary:
+    """One worksheet as recorded by the upload inspection; sizes may be unknown."""
+
+    name: str
+    max_row: int | None
+    max_column: int | None
+
+
+@dataclass(frozen=True)
+class ChatUploadRequest:
+    """One raw-body upload; ``deadline`` is the ``time.monotonic()`` end of its budget."""
+
+    owner: FileArtifactOwner
+    bound_session_id: str
+    idempotency_key: UUID
+    filename: str
+    deadline: float
+
+
+@dataclass(frozen=True)
+class ChatUploadResult:
+    artifact_id: UUID
+    filename: str
+    size_bytes: int
+    sheets: tuple[SheetSummary, ...]
+    expires_at: datetime
+    replayed: bool
+
+
+@dataclass(frozen=True)
+class ChatAttachmentDescriptor:
+    """A verified chat attachment; names are untrusted user data."""
+
+    artifact_id: UUID
+    filename: str
+    sheets: tuple[SheetSummary, ...]
+
+
 ChunkWriter = Callable[[bytes], Awaitable[None]]
 OutputWriter = Callable[[ChunkWriter], Coroutine[Any, Any, None]]
+ChunkSource = AsyncIterator[bytes]
 
 
 class FileArtifactStorePort(Protocol):
@@ -70,6 +119,14 @@ class FileArtifactStorePort(Protocol):
         self, owner: JobOutputOwner, writer: OutputWriter, filename: str, media_type: str
     ) -> UUID: ...
 
+    async def upload_chat_input(
+        self, request: ChatUploadRequest, body: ChunkSource
+    ) -> ChatUploadResult: ...
+
+    async def resolve_chat_attachments(
+        self, owner: FileArtifactOwner, bound_session_id: str, artifact_ids: tuple[UUID, ...]
+    ) -> tuple[ChatAttachmentDescriptor, ...]: ...
+
     async def cleanup_once(self) -> FileArtifactCleanupResult: ...
 
 
@@ -80,6 +137,13 @@ class JobOutputPublisher(Protocol):
 
 
 __all__ = (
+    "CHAT_UPLOAD_MAX_BYTES",
+    "XLSX_MEDIA_TYPE",
+    "ChatAttachmentDescriptor",
+    "ChatAttachmentError",
+    "ChatUploadRequest",
+    "ChatUploadResult",
+    "ChunkSource",
     "ChunkWriter",
     "FileArtifactCleanupResult",
     "FileArtifactDownload",
@@ -89,4 +153,5 @@ __all__ = (
     "JobOutputOwner",
     "JobOutputPublisher",
     "OutputWriter",
+    "SheetSummary",
 )

@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { getReturnPath } from '../pages/loginNavigation';
 import { useAIDockStore } from '../stores/aiDockStore';
-import type { AIDockMode, PendingCollection, TranscriptEntry } from '../stores/aiDockStore';
+import type {
+  AIDockMode, ChatAttachment, PendingCollection, TranscriptEntry,
+} from '../stores/aiDockStore';
 import { parsePageContext } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import { useAuthStore } from '../stores/authStore';
@@ -41,6 +43,8 @@ interface DockSnapshot {
   confirmationResults: Record<string, UserActionOutcome>;
   /** Pending D collection reference; absent in copies written before it was kept. */
   collection?: StoredCollection | null;
+  /** Finished uploads waiting to be sent; absent in copies written before they were kept. */
+  draftAttachments?: ChatAttachment[];
 }
 
 /** A pending collection without its generation: generations restart on a full reload. */
@@ -161,6 +165,7 @@ function captureForReauth(
           serverSessionId: dock.collection.serverSessionId,
           ownerKey: dock.collection.ownerKey,
         },
+      draftAttachments: dock.draftAttachments,
     },
     forms,
     returned: [],
@@ -203,8 +208,11 @@ export function reauthLoginNotice(): string | null {
 /**
  * A 401 for a sent message puts it back, but only into the copy captured for that submission.
  * Idempotent; any other state (consumed, discarded, another account or generation) is untouched.
+ * The message's frozen attachments go back to the waiting attachments of the same conversation.
  */
-export function returnUnsentMessage(identity: UnsentIdentity, message: string): void {
+export function returnUnsentMessage(
+  identity: UnsentIdentity, message: string, attachments: readonly ChatAttachment[] = [],
+): void {
   const snapshot = readStored();
   if (snapshot === null || snapshot.generation !== identity.generation
       || snapshot.dock.sessionId !== identity.sessionId
@@ -213,15 +221,43 @@ export function returnUnsentMessage(identity: UnsentIdentity, message: string): 
     entry.role === 'user' && entry.requestId === identity.requestId);
   if (index === -1) return;
   const draft = snapshot.dock.draft;
+  const waiting = storedAttachments(snapshot.dock.draftAttachments);
+  const returned = attachments.filter((attachment) =>
+    !waiting.some((kept) => kept.artifact_id === attachment.artifact_id));
   writeStored({
     ...snapshot,
     dock: {
       ...snapshot.dock,
       draft: draft.length > 0 ? `${message}\n${draft}` : message,
       transcript: snapshot.dock.transcript.filter((_, position) => position !== index),
+      draftAttachments: [...returned, ...waiting].slice(0, MAX_DRAFT_ATTACHMENTS),
     },
     returned: [...snapshot.returned, identity.requestId],
   });
+}
+
+const MAX_DRAFT_ATTACHMENTS = 5;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Every entry must be a well-formed reference, or none is restored. */
+function storedAttachments(value: unknown): ChatAttachment[] {
+  if (!Array.isArray(value) || value.length > MAX_DRAFT_ATTACHMENTS) return [];
+  const attachments: ChatAttachment[] = [];
+  for (const item of value as unknown[]) {
+    if (!isRecord(item) || typeof item.artifact_id !== 'string'
+        || !UUID_PATTERN.test(item.artifact_id) || typeof item.filename !== 'string'
+        || item.filename.length === 0 || item.filename.length > 255
+        || !Array.isArray(item.sheetNames) || item.sheetNames.length > 64
+        || !item.sheetNames.every((name) => typeof name === 'string' && name.length <= 31)) {
+      return [];
+    }
+    attachments.push({
+      artifact_id: item.artifact_id,
+      filename: item.filename,
+      sheetNames: item.sheetNames as string[],
+    });
+  }
+  return attachments;
 }
 
 function parsedPageContext(value: unknown): PageContextDeclaration | null {
@@ -275,6 +311,7 @@ function consumeSnapshot(scope: string | null, generation: number): void {
     collection: collection === null ? null : { ...collection, authGeneration: generation },
     // Never searched in the history: a card without its kept reference only says it expired.
     collectionLost: collection === null && endsOnCollectionCard(snapshot.dock.transcript),
+    draftAttachments: storedAttachments(snapshot.dock.draftAttachments),
   });
   useAIDockStore.setState({
     ...(current.mode === 'closed' && snapshot.dock.mode !== 'closed' ? {

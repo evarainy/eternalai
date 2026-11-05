@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import secrets
+import time
 import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import RowMapping, text
+from sqlalchemy import RowMapping, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.file_artifacts import FileArtifactService
@@ -42,13 +43,23 @@ from app.infra.files.local_store import (
     sync_and_close,
     write_all,
 )
+from app.infra.spreadsheets.intake import INSPECTION_TIMEOUT_SECONDS, inspect_workbook
 from app.ports.file_artifacts import (
+    CHAT_UPLOAD_MAX_BYTES,
+    XLSX_MEDIA_TYPE,
+    ChatAttachmentDescriptor,
+    ChatAttachmentError,
+    ChatUploadRequest,
+    ChatUploadResult,
+    ChunkSource,
+    ChunkWriter,
     FileArtifactCleanupResult,
     FileArtifactDownload,
     FileArtifactError,
     FileArtifactOwner,
     JobOutputOwner,
     OutputWriter,
+    SheetSummary,
 )
 
 if TYPE_CHECKING:
@@ -65,6 +76,13 @@ _DEFAULT_FILENAME = "file"
 _MAX_FILENAME_CHARACTERS = 255
 _RESERVATION_LOST = "file_artifact_reservation_lost"
 _PRODUCTION_FAILED = "production_failed"
+_SEAL_OUTCOME_UNKNOWN = "file_artifact_seal_outcome_unknown"
+_UPLOAD_TIMEOUT = "chat_upload_timeout"
+_ATTACHMENT_INVALID = "chat_attachment_invalid"
+_SESSION_INPUT_LIMIT = 10
+_OWNER_INPUT_BYTES = 200 * 1024 * 1024
+# Left of the 10-minute upload budget for the sealing transaction after inspection.
+_SEAL_MARGIN_SECONDS = 10.0
 BATCH_SIZE = 100
 STANDARD_RETENTION_SECONDS = 1209600
 _COLUMNS = (
@@ -130,6 +148,21 @@ async def _in_thread(
             discard(work.result())
         raise asyncio.CancelledError
     return work.result()
+
+
+def _request_fingerprint(session_id: str, display_filename: str) -> bytes:
+    return hashlib.sha256(
+        session_id.encode("utf-8") + b"\x00" + display_filename.encode("utf-8")
+    ).digest()
+
+
+def _sheet_summaries(inspection: str | None) -> tuple[SheetSummary, ...]:
+    if inspection is None:
+        return ()
+    return tuple(
+        SheetSummary(name=sheet["name"], max_row=sheet["max_row"], max_column=sheet["max_column"])
+        for sheet in json.loads(inspection)["sheets"]
+    )
 
 
 def _removal_error(paths: tuple[Path, ...]) -> str | None:
@@ -291,7 +324,9 @@ class PostgreSQLFileArtifactStore:
 
     # ---- Reservation and ownership --------------------------------------------
 
-    async def _reserve(self, session: AsyncSession, request: _ReservationRequest) -> UUID:
+    async def _reserve(
+        self, session: AsyncSession, request: _ReservationRequest
+    ) -> tuple[UUID, str]:
         db_now: datetime = (await session.execute(text("SELECT now()"))).scalar_one()
         fields: dict[str, Any] = {
             "artifact_id": uuid4(),
@@ -326,7 +361,7 @@ class PostgreSQLFileArtifactStore:
             fields,
         )
         artifact_id: UUID = fields["artifact_id"]
-        return artifact_id
+        return artifact_id, fields["storage_reference"]
 
     async def _lock_owned(
         self, session: AsyncSession, artifact_id: UUID
@@ -413,7 +448,7 @@ class PostgreSQLFileArtifactStore:
             job = await self._job_row_live(session, owner)
             if job is None:
                 raise FileArtifactError(_RESERVATION_LOST)
-            artifact_id = await self._reserve(
+            artifact_id, _reference = await self._reserve(
                 session,
                 _ReservationRequest(
                     tenant_id=job["tenant_id"],
@@ -529,7 +564,7 @@ class PostgreSQLFileArtifactStore:
         size_bytes: int,
         digest: bytes,
         inspection: Mapping[str, object] | None,
-    ) -> None:
+    ) -> datetime:
         artifact_id = reservation.artifact_id
         try:
             async with self._sessions() as session:
@@ -548,6 +583,7 @@ class PostgreSQLFileArtifactStore:
                     "lifecycle_started_at": db_now,
                     "expires_at": db_now + self._retention,
                 }
+                expires_at: datetime = fields["expires_at"]
                 await session.execute(
                     text(
                         "UPDATE public.file_artifacts SET state = 'available', "
@@ -586,6 +622,7 @@ class PostgreSQLFileArtifactStore:
             artifact_id,
             size_bytes,
         )
+        return expires_at
 
     async def _is_available(self, artifact_id: UUID) -> bool:
         try:
@@ -636,6 +673,227 @@ class PostgreSQLFileArtifactStore:
                     )
         except Exception:
             _LOGGER.warning("file_artifact_failure_cleanup_failed artifact=%s", artifact_id)
+
+    # ---- Chat uploads ---------------------------------------------------------
+
+    async def upload_chat_input(
+        self, request: ChatUploadRequest, body: ChunkSource
+    ) -> ChatUploadResult:
+        """Transaction A, then a new upload or a replay (FOUNDATION_PLAN §2.2, §3.3)."""
+
+        owner = request.owner
+        filename = sanitize_display_filename(request.filename)
+        fingerprint = _request_fingerprint(request.bound_session_id, filename)
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": f"file-owner:{owner.tenant_id}:{owner.ai_user_id}"},
+            )
+            existing = (
+                await session.execute(
+                    text(
+                        f"SELECT {_COLUMNS}, request_fingerprint FROM public.file_artifacts "
+                        "WHERE tenant_id = :tenant_id AND owner_ai_user_id = :owner "
+                        "AND upload_idempotency_key = :key"
+                    ),
+                    {
+                        "tenant_id": owner.tenant_id,
+                        "owner": owner.ai_user_id,
+                        "key": request.idempotency_key,
+                    },
+                )
+            ).mappings().one_or_none()
+            if existing is None:
+                await self._check_quota(session, owner, request.bound_session_id)
+                artifact_id, reference = await self._reserve(
+                    session,
+                    _ReservationRequest(
+                        tenant_id=owner.tenant_id,
+                        owner_ai_user_id=owner.ai_user_id,
+                        session_id=request.bound_session_id,
+                        purpose="chat_input",
+                        display_filename=filename,
+                        media_type=XLSX_MEDIA_TYPE,
+                        upload_idempotency_key=request.idempotency_key,
+                        request_fingerprint=fingerprint,
+                    ),
+                )
+            else:
+                # Every branch except a sealed candidate answers before reading the body.
+                if bytes(existing["request_fingerprint"]) != fingerprint:
+                    raise FileArtifactError("chat_upload_idempotency_conflict")
+                if existing["state"] == "pending":
+                    raise FileArtifactError("chat_upload_in_progress")
+                if existing["state"] != "available":
+                    raise FileArtifactError("file_artifact_expired")
+        if existing is not None:
+            return await self._replay(existing["artifact_id"], body)
+        return await self._ingest(
+            _Reservation(artifact_id=artifact_id, job=None), reference, request, filename, body
+        )
+
+    async def _check_quota(
+        self, session: AsyncSession, owner: FileArtifactOwner, session_id: str
+    ) -> None:
+        """Count live inputs under the owner lock; an expired, uncleaned row does not count."""
+
+        usage = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE session_id = :session_id) AS session_inputs, "
+                    "COALESCE(sum(CASE WHEN state = 'pending' THEN CAST(:pending_bytes AS BIGINT) "
+                    "ELSE size_bytes END), 0) AS owner_bytes "
+                    "FROM public.file_artifacts WHERE tenant_id = :tenant_id "
+                    "AND owner_ai_user_id = :owner AND purpose = 'chat_input' "
+                    "AND (state = 'pending' OR (state = 'available' AND expires_at > now()))"
+                ),
+                {
+                    "session_id": session_id,
+                    "pending_bytes": CHAT_UPLOAD_MAX_BYTES,
+                    "tenant_id": owner.tenant_id,
+                    "owner": owner.ai_user_id,
+                },
+            )
+        ).mappings().one()
+        if usage["session_inputs"] >= _SESSION_INPUT_LIMIT:
+            raise FileArtifactError("chat_upload_quota_session")
+        if int(usage["owner_bytes"]) + CHAT_UPLOAD_MAX_BYTES > _OWNER_INPUT_BYTES:
+            raise FileArtifactError("chat_upload_quota_owner")
+
+    async def _replay(self, artifact_id: UUID, body: ChunkSource) -> ChatUploadResult:
+        """Hash the body without writing anything, then compare with the sealed row."""
+
+        digest = hashlib.sha256()
+        async for chunk in body:
+            digest.update(chunk)
+        async with self._sessions() as session:
+            row = (
+                await session.execute(
+                    text(
+                        f"SELECT {_COLUMNS}, now() AS db_now FROM public.file_artifacts "
+                        "WHERE artifact_id = :artifact_id"
+                    ),
+                    {"artifact_id": artifact_id},
+                )
+            ).mappings().one_or_none()
+        if (
+            row is None
+            or row["state"] != "available"
+            or row["db_now"] >= row["expires_at"]
+            or row["storage_scope"] != self._storage.scope
+            or not self._mac_valid(row)
+        ):
+            raise FileArtifactError("file_artifact_expired")
+        if not hmac.compare_digest(bytes(row["sha256"]), digest.digest()):
+            raise FileArtifactError("chat_upload_idempotency_conflict")
+        return ChatUploadResult(
+            artifact_id=artifact_id,
+            filename=row["display_filename"],
+            size_bytes=row["size_bytes"],
+            sheets=_sheet_summaries(row["inspection"]),
+            expires_at=row["expires_at"],
+            replayed=True,
+        )
+
+    async def _ingest(
+        self,
+        reservation: _Reservation,
+        reference: str,
+        request: ChatUploadRequest,
+        filename: str,
+        body: ChunkSource,
+    ) -> ChatUploadResult:
+        async def writer(write: ChunkWriter) -> None:
+            async for chunk in body:
+                await write(chunk)
+
+        # Upload D2 boundary: produce, renew and inspect fail synchronously before sealing.
+        try:
+            size_bytes, digest = await self._produce_part(reservation, writer)
+            if not await self._renew(reservation.artifact_id):
+                raise FileArtifactError(_RESERVATION_LOST)
+            budget = request.deadline - time.monotonic() - _SEAL_MARGIN_SECONDS
+            if budget <= 0:
+                raise FileArtifactError(_UPLOAD_TIMEOUT)
+            timeout = min(INSPECTION_TIMEOUT_SECONDS, budget)
+            try:
+                inspection = await _in_thread(
+                    inspect_workbook, self._storage.staging_path(reference), timeout
+                )
+            except FileArtifactError as error:
+                if (
+                    error.code == "chat_upload_inspection_timeout"
+                    and timeout < INSPECTION_TIMEOUT_SECONDS
+                ):
+                    raise FileArtifactError(_UPLOAD_TIMEOUT) from None
+                raise
+        except Exception as error:
+            code = error.code if isinstance(error, FileArtifactError) else _PRODUCTION_FAILED
+            if code == _RESERVATION_LOST:
+                # No longer this request's to delete: the residue belongs to D1b.
+                if time.monotonic() >= request.deadline:
+                    raise FileArtifactError(_UPLOAD_TIMEOUT) from None
+                raise
+            if code == "file_artifact_output_empty":
+                code = "chat_upload_unreadable"
+            await self._fail_reservation(reservation, code)
+            if isinstance(error, FileArtifactError) and code != error.code:
+                raise FileArtifactError(code) from None
+            raise
+        expires_at = await self._seal(reservation, size_bytes, digest, inspection)
+        return ChatUploadResult(
+            artifact_id=reservation.artifact_id,
+            filename=filename,
+            size_bytes=size_bytes,
+            sheets=_sheet_summaries(json.dumps(inspection)),
+            expires_at=expires_at,
+            replayed=False,
+        )
+
+    async def resolve_chat_attachments(
+        self, owner: FileArtifactOwner, bound_session_id: str, artifact_ids: tuple[UUID, ...]
+    ) -> tuple[ChatAttachmentDescriptor, ...]:
+        """Recheck every referenced id; client ids are never proof of ownership."""
+
+        if not artifact_ids:
+            return ()
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ChatAttachmentError(_ATTACHMENT_INVALID)
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        f"SELECT {_COLUMNS}, now() AS db_now FROM public.file_artifacts "
+                        "WHERE artifact_id IN :artifact_ids"
+                    ).bindparams(bindparam("artifact_ids", expanding=True)),
+                    {"artifact_ids": list(artifact_ids)},
+                )
+            ).mappings().all()
+        by_id = {_uuid(row["artifact_id"]): row for row in rows}
+        descriptors: list[ChatAttachmentDescriptor] = []
+        for artifact_id in artifact_ids:
+            row = by_id.get(_uuid(artifact_id))
+            if (
+                row is None
+                or not self._mac_valid(row)
+                or row["tenant_id"] != owner.tenant_id
+                or row["owner_ai_user_id"] != owner.ai_user_id
+                or row["session_id"] != bound_session_id
+                or row["purpose"] != "chat_input"
+                or row["state"] != "available"
+                or row["db_now"] >= row["expires_at"]
+                or row["storage_scope"] != self._storage.scope
+            ):
+                _LOGGER.info("chat_attachment_resolve result=invalid count=%s", len(artifact_ids))
+                raise ChatAttachmentError(_ATTACHMENT_INVALID)
+            descriptors.append(
+                ChatAttachmentDescriptor(
+                    artifact_id=artifact_id,
+                    filename=row["display_filename"],
+                    sheets=_sheet_summaries(row["inspection"]),
+                )
+            )
+        return tuple(descriptors)
 
     # ---- Cleanup --------------------------------------------------------------
 

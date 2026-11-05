@@ -65,6 +65,15 @@ import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
+import { ChatAttachmentBar } from '../features/chat-upload/ChatAttachmentBar';
+import {
+  attachmentDownloadUrl,
+  CHAT_ATTACHMENT_LIMIT,
+  chatUploadMessage,
+  isChatAttachmentRejection,
+} from '../features/chat-upload/chatUploadApi';
+import { useChatAttachments } from '../features/chat-upload/useChatAttachments';
+import type { ChatAttachment } from '../stores/aiDockStore';
 import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
@@ -85,6 +94,8 @@ interface BrowserTarget {
 }
 
 interface ChatSubmission {
+  /** Frozen when the message is sent; retries never read the attachment bar again. */
+  readonly attachments: readonly ChatAttachment[];
   readonly collection: DFormCollectionReference | null;
   readonly boundSessionId: string | null;
   readonly requestId: string;
@@ -521,6 +532,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const requestMetadataReady = authStatus === 'authenticated' && identityQuery.isSuccess
     && me?.authenticated === true && (me.browser_skill_id == null || browserAvailable);
   const [browserOptIn, setBrowserOptIn] = useState(false);
+  const chatAttachments = useChatAttachments();
+  const [attachmentsToggled, setAttachmentsToggled] = useState(false);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
   // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
@@ -718,7 +731,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       return browser === null
         ? await submitOrdinaryBrowserCapableMessage(
           submission.message, submission.sessionId, submission.requestId, controller.signal,
-          submission.collection,
+          submission.collection, submission.attachments.map((item) => item.artifact_id),
         )
         : await submitBrowserMessage(
           submission.message, submission.sessionId, browser.skillId, browser.requestId,
@@ -748,6 +761,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             channel: 'web', session_id: sessionId, message, client_request_id: submission.requestId,
             client_capabilities: {},
             ...(submission.collection === null ? {} : { d_form_collection: submission.collection }),
+            ...(submission.attachments.length === 0 ? {} : {
+              attachment_ids: submission.attachments.map((item) => item.artifact_id),
+            }),
           })
           : await sendBrowserSubmission(submission);
         const boundSessionId = isRecord(response) && typeof response.session_id === 'string'
@@ -829,6 +845,19 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         return result;
       } catch (error) {
+        if (isChatAttachmentRejection(error)) {
+          // Refused before any work: the text goes back; the attachments are what was refused.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          const store = useAIDockStore.getState();
+          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          const notice = projectTextResponse(chatUploadMessage(error), 'validation');
+          store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
         if (isRuntimeSessionBusy(error)) {
           // Refused before any work: nothing was sent, so the input goes back to the box.
           if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -838,6 +867,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           if (!submissionIsCurrent(submission)) return null;
           const store = useAIDockStore.getState();
           store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          if (submission.attachments.length > 0) {
+            store.setDraftAttachments(
+              [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
+            );
+          }
           const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
@@ -859,17 +893,18 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           return notice;
         }
         const projectedError = projectRequestError(error);
-        if (projectedError === null && submission.owner === null) {
-          // Plain runtime handling authenticates before any work, so this send never happened.
-          // Browser-capable sends can fail authentication after admission and stay unconfirmed.
-          if (error instanceof ApiError && error.status === 401
-              && freshSubmissions.current.has(submission)) {
-            returnUnsentMessage({
-              generation: submission.authGeneration, sessionId, requestId: submission.requestId,
-            }, message);
-          }
-          throw error;
+        // Plain runtime handling authenticates before any work, so this send never happened. An
+        // ordinary browser-capable send that got a 401 instead of accepted or pending is treated
+        // the same (a login lapsing mid-turn looks identical); it only returns to the input and
+        // nothing is resent. Explicit browser-skill sends stay unconfirmed.
+        if (projectedError === null && submission.browser === null
+            && error instanceof ApiError && error.status === 401
+            && freshSubmissions.current.has(submission)) {
+          returnUnsentMessage({
+            generation: submission.authGeneration, sessionId, requestId: submission.requestId,
+          }, message, submission.attachments);
         }
+        if (projectedError === null && submission.owner === null) throw error;
         const result = submission.owner !== null ? unconfirmedSubmission()
           : projectedError ?? projectResponse(null);
         if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -917,6 +952,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         skillId: activeSkillId, requestId: crypto.randomUUID(), owner: browserOwner,
       } : null);
     const submission: ChatSubmission = retry ?? {
+      attachments: useAIDockStore.getState().draftAttachments,
       message, sessionId, authGeneration: useAuthStore.getState().generation, browser,
       requestId: browser?.requestId ?? crypto.randomUUID(),
       owner: browserAvailable ? browserOwner : null,
@@ -929,8 +965,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (retry === undefined) {
       setRetrySubmission(null);
       freshSubmissions.current.add(submission);
-      appendTranscript({ role: 'user', text: message, requestId: submission.requestId });
+      appendTranscript({
+        role: 'user', text: message, requestId: submission.requestId,
+        ...(submission.attachments.length === 0 ? {} : { attachments: submission.attachments }),
+      });
       setDraft('');
+      useAIDockStore.getState().setDraftAttachments([]);
     }
     activeSubmission.current = submission;
     mutation.mutate(message);
@@ -983,8 +1023,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     && (!browserIdentityReady || (browserTarget !== null && !browserTerminal && !browserHandoff)
       || pendingSubmission !== null);
 
+  // Browser-skill sends and collection replies cannot carry attachments (the backend answers 422).
+  const attachmentsAllowed = !browserOptIn && currentCollection === null;
+  const attachmentsOpen = (attachmentsToggled && attachmentsAllowed)
+    || chatAttachments.attachments.length > 0 || chatAttachments.uploads.length > 0;
   const canSend = Boolean(draft.trim()) && !mutation.isPending
-    && !browserSubmissionBlocked && requestMetadataReady;
+    && !browserSubmissionBlocked && requestMetadataReady && !chatAttachments.busy
+    && (attachmentsAllowed || chatAttachments.attachments.length === 0);
 
   /**
    * `Sender` 自带的 Enter 发送依赖其默认发送按钮回填的内部状态；这里用 `footer` 自绘按钮，该状态
@@ -1103,6 +1148,17 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                         ) : null}
                       </div>
                       <p className={styles.messageText}>{entry.text}</p>
+                      {entry.role === 'user' && entry.attachments?.length ? (
+                        <ul aria-label="附件" className={styles.messageAttachments}>
+                          {entry.attachments.map((attachment) => (
+                            <li key={attachment.artifact_id}>
+                              <a href={attachmentDownloadUrl(attachment.artifact_id)} download>
+                                {attachment.filename}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {entry.role === 'assistant' && entry.presentationKind === 'completed' && entry.text.trim() ? (
                         <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`} text={entry.text} />
                       ) : null}
@@ -1191,8 +1247,28 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               className={styles.sender}
               components={{ input: RequestTextArea }}
               disabled={mutation.isPending}
+              header={
+                <Sender.Header
+                  title="附件"
+                  open={attachmentsOpen}
+                  onOpenChange={setAttachmentsToggled}
+                  closable={chatAttachments.attachments.length === 0
+                    && chatAttachments.uploads.length === 0}
+                  forceRender
+                >
+                  <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
+                </Sender.Header>
+              }
               footer={
                 <div className={styles.composerActions}>
+                  <Button
+                    className={styles.composerAttachButton}
+                    disabled={!attachmentsAllowed || mutation.isPending}
+                    aria-pressed={attachmentsOpen}
+                    onClick={() => { setAttachmentsToggled((open) => !open); }}
+                  >
+                    添加表格
+                  </Button>
                   {browserAvailable && browserIdentityReady && activeSkillId !== 'd_form_fill_stop' ? (
                     <Checkbox checked={browserOptIn} onChange={(event) => {
                       setBrowserOptIn(event.target.checked);

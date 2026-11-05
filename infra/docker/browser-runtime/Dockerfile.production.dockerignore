@@ -94,6 +94,8 @@ app/infra/sdui/*
 app/infra/security/*
 !app/infra/security/noop_secret_provider/
 app/infra/security/noop_secret_provider/*
+!app/infra/spreadsheets/
+app/infra/spreadsheets/*
 !app/infra/workflow/
 app/infra/workflow/*
 !app/knowledge/
@@ -328,6 +330,9 @@ services/decision/*
 !app/infra/sdui/response_envelope_builder.py
 !app/infra/sdui/response_projection.py
 !app/infra/security/noop_secret_provider/noop_secret_provider.py
+!app/infra/spreadsheets/__init__.py
+!app/infra/spreadsheets/inspect_child.py
+!app/infra/spreadsheets/intake.py
 !app/infra/workflow/__init__.py
 !app/infra/workflow/catalog.py
 !app/infra/workflow/engine_adapter.py

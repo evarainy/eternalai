@@ -342,6 +342,15 @@
       "HandleRequest": {
         "additionalProperties": false,
         "properties": {
+          "attachment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
           "channel": {
             "enum": [
               "web",
