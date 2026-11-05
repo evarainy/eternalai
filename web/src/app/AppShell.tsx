@@ -345,6 +345,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const { logout, pending: logoutPending, failed: logoutFailed } = useLogout();
   const authGeneration = useAuthStore((state) => state.generation);
+  const dockMode = useAIDockStore((state) => state.mode);
   const openDock = useAIDockStore((state) => state.openDock);
   const clearPageContext = useAIDockStore((state) => state.clearPageContext);
   const collapsed = useNavigationStore((state) => state.collapsed);
@@ -353,7 +354,7 @@ export function AppShell() {
   const setBackground = useAppearanceStore((state) => state.setBackground);
   const [openPanel, setOpenPanel] = useState<TopbarPanel | null>(null);
   const [hasOpenedDock, setHasOpenedDock] = useState(
-    () => useAIDockStore.getState().mode !== 'closed',
+    dockMode !== 'closed',
   );
   const popoverRef = useRef<HTMLElement | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
@@ -425,10 +426,11 @@ export function AppShell() {
     });
   };
 
-  const openAIDock = () => {
-    setHasOpenedDock(true);
-    openDock();
-  };
+  useEffect(() => {
+    if (dockMode !== 'closed') {
+      setHasOpenedDock(true);
+    }
+  }, [dockMode]);
 
   const togglePanel = (panel: TopbarPanel) =>
     setOpenPanel((current) => (current === panel ? null : panel));
@@ -931,7 +933,7 @@ export function AppShell() {
           aria-label="打开 AI 助手"
           className={styles.floatingEntry}
           data-testid="ai-dock-launcher"
-          onClick={openAIDock}
+          onClick={openDock}
           type="button"
         >
           <Icon className={styles.floatingIcon} name="spark" size={21} strokeWidth={1.9} />

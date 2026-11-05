@@ -344,6 +344,11 @@ class RuntimeImpl:
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
         scope, handoff = browser_request_scope.get(), self._browser.handoff
+        from app.ports.im_context import IMContextError
+        from app.ports.runtime import im_source_context
+
+        if im_source_context.get() is not None:
+            raise IMContextError("im_source_runtime_unsupported")
         document_request = _DocumentRequest()
         if scope is None or handoff is None:
             try:

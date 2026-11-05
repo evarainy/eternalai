@@ -1,0 +1,112 @@
+diff --git a/web/src/host_bridge.ts b/web/src/host_bridge.ts
+--- a/web/src/host_bridge.ts
++++ b/web/src/host_bridge.ts
+@@ -1 +1 @@
+-import {current_user, realm} from "./state_data.ts";
++import {current_user} from "./state_data.ts";
+@@ -3,11 +3,8 @@
+-// Build-time deployment configuration. Empty disables the bridge.
+-// Set to the exact trusted HTTPS host origin, without a trailing slash.
+-const allowed_parents = new Set([
+-    "http://127.0.0.1:19010", "http://127.0.0.1:19014",
+-    "https://127.0.0.1:19410", "https://127.0.0.1:19414",
+-    "http://192.168.118.30:19010", "http://192.168.118.30:19014",
+-    "https://192.168.118.30:19410", "https://192.168.118.30:19414",
+-]);
+-const parent_hint = window.location.ancestorOrigins[0] || "";
+-const referrer_origin = URL.canParse(parent_hint) ? new URL(parent_hint).origin : "";
+-export const config = {parent_origin: allowed_parents.has(referrer_origin) ? referrer_origin : "", route_prefix: "/ai/"};
++// Build-time deployment values; copy the exact values used by EternalAI's IM configuration.
++// Empty values disable this existing bridge. Never obtain an origin from message content.
++export const config = {
++    parent_origin: "",
++    provider: "zulip",
++    im_instance_id: "",
++    realm_id: "",
++};
+@@ -14,0 +12 @@
++type Navigation = {route: "messages" | "work-object" | "delivery"; object_ref: string};
+@@ -23 +21 @@
+-    | {type: "eternalai:navigate"; path: string}
++    | {type: "eternalai:navigate"; payload: Navigation}
+@@ -27 +25,2 @@
+-    if (window.parent === window || config.parent_origin === "") {
++    if (window.parent === window || config.parent_origin === ""
++        || config.im_instance_id === "" || config.realm_id === "") {
+@@ -31 +30 @@
+-    if ((origin.protocol !== "https:" && !(origin.protocol === "http:" && ["127.0.0.1", "192.168.118.30"].includes(origin.hostname))) || origin.origin !== config.parent_origin) {
++    if (origin.protocol !== "https:" || origin.origin !== config.parent_origin) {
+@@ -38,6 +37,2 @@
+-    if (enabled()) {
+-        // References only: the host must authorize them using its own session.
+-        window.parent.postMessage(
+-            {...event, version: 1, realm_url: realm.realm_url, user_id: current_user.user_id},
+-            config.parent_origin,
+-        );
++    if (!enabled()) {
++        return;
+@@ -44,0 +40,32 @@
++    let payload: Record<string, unknown>;
++    if (event.type === "eternalai:message-selected") {
++        let conversation;
++        if (event.conversation.type === "stream") {
++            conversation = {
++                stream_id: event.conversation.stream_id,
++                topic: event.conversation.topic,
++                type: "stream",
++            };
++        } else {
++            const ids = event.conversation.to_user_ids.split(",").map(Number)
++                .filter((id) => id !== current_user.user_id).sort((a, b) => a - b);
++            conversation = {to_user_ids: ids.length > 0 ? ids : [current_user.user_id], type: "private"};
++        }
++        payload = {
++            realm_id: config.realm_id,
++            im_user_id: String(current_user.user_id),
++            message_id: String(event.message_id),
++            conversation_ref: JSON.stringify(conversation),
++        };
++    } else {
++        payload = event.type === "eternalai:navigate" ? event.payload : {};
++    }
++    // References only: the host still authorizes every read using its own session.
++    window.parent.postMessage({
++        protocol: "eternalai.im-bridge",
++        version: 2,
++        type: event.type,
++        provider: config.provider,
++        im_instance_id: config.im_instance_id,
++        payload,
++    }, config.parent_origin);
+@@ -48 +75 @@
+-    if (!enabled()) {
++    if (!enabled() || !URL.canParse(href, window.location.href)) {
+@@ -51,2 +78,2 @@
+-    const base = href.startsWith(config.route_prefix) ? config.parent_origin : window.location.href;
+-    if (!URL.canParse(href, base)) {
++    const url = new URL(href, window.location.href);
++    if (url.origin !== config.parent_origin || url.username || url.password || url.hash) {
+@@ -55,3 +82,17 @@
+-    const url = new URL(href, base);
+-    if (url.origin !== config.parent_origin || !url.pathname.startsWith(config.route_prefix)) {
+-        return false;
++    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++    let payload: Navigation;
++    if (url.pathname === "/messages") {
++        const delivery = url.searchParams.get("delivery");
++        if (delivery !== null && url.searchParams.size === 1 && uuid.test(delivery)) {
++            payload = {route: "delivery", object_ref: delivery};
++        } else if (url.search === "") {
++            payload = {route: "messages", object_ref: "messages"};
++        } else {
++            return false;
++        }
++    } else {
++        const object = /^\/work-objects\/([^/]+)$/.exec(url.pathname)?.[1];
++        if (object === undefined || url.search !== "" || !uuid.test(object)) {
++            return false;
++        }
++        payload = {route: "work-object", object_ref: object};
+@@ -59 +100 @@
+-    send({type: "eternalai:navigate", path: url.pathname + url.search + url.hash});
++    send({type: "eternalai:navigate", payload});

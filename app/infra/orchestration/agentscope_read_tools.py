@@ -19,7 +19,7 @@ from functools import partial
 from hashlib import sha256
 from hmac import compare_digest
 from time import monotonic
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from agentscope.message import TextBlock, ToolResultState
@@ -71,8 +71,9 @@ from app.ports.human_gate import (
     VersionBindingMismatchError,
     build_task_version_binding_manifest,
 )
+from app.ports.im_context import AuthorizedIMContext, IMContextError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
-from app.ports.request_context import RequestChannel, RequestOrgContext
+from app.ports.request_context import RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.response_projection_contract import (
     ApprovedResponseProjectionError,
@@ -145,9 +146,10 @@ class ReadToolScope:
     tenant_id: str
     ai_user_id: str
     session_id: str
-    channel: RequestChannel
+    channel: Literal["web", "cli", "api", "mock"]
     # Verified login-ticket fingerprint; compared, never logged.
     fingerprint: bytes = field(repr=False)
+    im_source: AuthorizedIMContext | None = field(default=None, repr=False)
 
     @classmethod
     def from_session(
@@ -155,7 +157,7 @@ class ReadToolScope:
         session: AuthenticatedSessionContext,
         *,
         bound_session_id: str,
-        channel: RequestChannel = "web",
+        channel: Literal["web", "cli", "api", "mock"] = "web",
     ) -> ReadToolScope:
         """Derive the scope from a verified session and a binder-bound session id."""
 
@@ -720,6 +722,17 @@ class ToolExecutor:
             device_domain_id=_optional_str_argument(arguments, "device_domain_id"),
         )
         try:
+            if scope.im_source is not None:
+                source_session = authenticated_session.get()
+                if source_session is None or not session_matches(scope):
+                    raise IMContextError("im_session_revoked", 401)
+                if (capability.capability_id != "oa.list_pending_workflows"
+                        or capability.type != "query" or capability.target_system != "oa"
+                        or capability.execution_identity != "user_delegated"):
+                    raise IMContextError("im_capability_not_read_only", 403)
+                await scope.im_source.authority.check_session(
+                    source_session.principal, scope.session_id,
+                )
             execution = await deps.orchestration.execute_capability(
                 task_id=task_id,
                 session_id=scope.session_id,

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+
 from app.db.config import get_database_url
 
 if TYPE_CHECKING:
@@ -34,6 +36,11 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _MAX_SELF_CHECK_HOLD_SECONDS = 600
+_FILE_ARTIFACT_ROOT_KEY = "FILE_ARTIFACT_ROOT"
+_FILE_ARTIFACT_MAC_KEY = "ETERNALAI_FILE_ARTIFACT_MAC_KEY_B64"
+_FILE_ARTIFACT_RETENTION_KEY = "FILE_ARTIFACT_RETENTION_SECONDS"
+_MIN_FILE_ARTIFACT_RETENTION_SECONDS = 300
+_MAX_FILE_ARTIFACT_RETENTION_SECONDS = 1209600
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
 _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS = 300
 _DEFAULT_OA_USER_PROFILE_PATH = "/api/hrm/resource/getResourceBaseTitle"
@@ -280,6 +287,170 @@ class FixedDocumentSettings:
         )
 
 
+class _DeliveryRecipientConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ai_user_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+
+
+@dataclass(frozen=True, slots=True)
+class IMDeliverySettings:
+    """Fixed trial instance and Bot; credentials stay inside its adapter."""
+
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    sender_bot_id: str
+    bot_email: str = field(repr=False)
+    bot_api_key: SecretStr = field(repr=False)
+    recipients: tuple[tuple[str, str], ...]
+    tls_ca_file: str | None = None
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> IMDeliverySettings | None:
+        if not source.get("IM_DELIVERY_BOT_ID", "").strip():
+            return None
+        if _required(source, "IM_PROVIDER") != "zulip":
+            raise RuntimeError("im_provider_unsupported")
+        origin = _canonical_http_origin(_required(source, "IM_ZULIP_ORIGIN"), "IM_ZULIP_ORIGIN")
+        host = _canonical_http_origin(_required(source, "IM_HOST_ORIGIN"), "IM_HOST_ORIGIN")
+        if not origin.startswith("https://") or not host.startswith("https://"):
+            raise RuntimeError("im_delivery_https_required")
+        try:
+            recipients = TypeAdapter(tuple[_DeliveryRecipientConfig, ...]).validate_json(
+                _required(source, "IM_DELIVERY_RECIPIENTS_JSON")
+            )
+        except ValidationError:
+            raise RuntimeError("im_delivery_recipients_invalid") from None
+        return cls(
+            origin=origin, host_origin=host,
+            im_instance_id=_required(source, "IM_INSTANCE_ID"),
+            realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+            sender_bot_id=_required(source, "IM_DELIVERY_BOT_ID"),
+            bot_email=_required(source, "IM_DELIVERY_BOT_EMAIL"),
+            bot_api_key=SecretStr(_required(source, "IM_DELIVERY_BOT_API_KEY")),
+            recipients=tuple((person.ai_user_id, person.display_name) for person in recipients),
+            tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ZulipSettings:
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    helper_url: str
+    jwt_secret: bytes = field(repr=False)
+    tls_ca_file: str | None = None
+
+    def __post_init__(self) -> None:
+        for origin in (self.origin, self.host_origin):
+            parsed = urlsplit(origin)
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or origin != f"https://{parsed.netloc}"):
+                raise ValueError("im_origin_invalid")
+        helper = urlsplit(self.helper_url)
+        if (self.origin == self.host_origin or self.helper_url != self.origin + helper.path
+                or not helper.path.startswith("/") or helper.path == "/"
+                or not self.im_instance_id or not self.realm_id or len(self.jwt_secret) < 32):
+            raise ValueError("im_configuration_invalid")
+
+
+def _zulip_settings(source: Mapping[str, str]) -> ZulipSettings | None:
+    provider = source.get("IM_PROVIDER", "").strip()
+    if not provider:
+        return None
+    if provider != "zulip":
+        raise RuntimeError("im_provider_unsupported")
+    return ZulipSettings(
+        origin=_required(source, "IM_ZULIP_ORIGIN"),
+        host_origin=_required(source, "IM_HOST_ORIGIN"),
+        im_instance_id=_required(source, "IM_INSTANCE_ID"),
+        realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+        helper_url=_required(source, "IM_SESSION_HELPER_URL"),
+        jwt_secret=_base64_key(source, "IM_ZULIP_JWT_SECRET_B64", minimum_bytes=32),
+        tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+    )
+
+
+class _PersonalAgentBotConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bot_id: str = Field(min_length=1)
+    bot_email_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    bot_api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    webhook_token_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def personal_agent_environment_keys(source: Mapping[str, str]) -> tuple[str, ...]:
+    """Only explicit Bot credential references may enter the worker environment."""
+
+    raw = source.get("IM_PERSONAL_AGENTS_JSON", "[]")
+    try:
+        bots = TypeAdapter(tuple[_PersonalAgentBotConfig, ...]).validate_json(raw)
+    except ValidationError:
+        raise RuntimeError("personal_agent_configuration_invalid") from None
+    if not bots:
+        return ()
+    credential_keys = tuple(dict.fromkeys(
+        key for bot in bots
+        for key in (bot.bot_email_env, bot.bot_api_key_env, bot.webhook_token_env)
+    ))
+    return (*credential_keys, "IM_SESSION_HELPER_URL", "IM_ZULIP_JWT_SECRET_B64",
+            "RUNTIME_ENGINE", "LLM_BASE_URL", "LLM_MODEL")
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalAgentBotSettings:
+    bot_id: str
+    bot_email: str = field(repr=False)
+    bot_api_key: SecretStr = field(repr=False)
+    webhook_token: SecretStr = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalAgentSettings:
+    zulip: ZulipSettings = field(repr=False)
+    bots: tuple[PersonalAgentBotSettings, ...] = field(repr=False)
+    llm_base_url: str
+    llm_model: str
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> PersonalAgentSettings | None:
+        try:
+            bots = TypeAdapter(tuple[_PersonalAgentBotConfig, ...]).validate_json(
+                source.get("IM_PERSONAL_AGENTS_JSON", "[]")
+            )
+        except ValidationError:
+            raise RuntimeError("personal_agent_configuration_invalid") from None
+        if not bots:
+            return None
+        if _runtime_engine(source) != "agentscope":
+            raise RuntimeError("personal_agent_runtime_unsupported")
+        if not source.get("IM_DELIVERY_BOT_ID", "").strip():
+            raise RuntimeError("personal_agent_delivery_required")
+        zulip = _zulip_settings(source)
+        if zulip is None or len({bot.bot_id for bot in bots}) != len(bots):
+            raise RuntimeError("personal_agent_configuration_invalid")
+        return cls(
+            zulip=zulip,
+            bots=tuple(PersonalAgentBotSettings(
+                bot_id=bot.bot_id,
+                bot_email=_required(source, bot.bot_email_env),
+                bot_api_key=SecretStr(_required(source, bot.bot_api_key_env)),
+                webhook_token=SecretStr(_required(source, bot.webhook_token_env)),
+            ) for bot in bots),
+            llm_base_url=_http_base_url(
+                source, "LLM_BASE_URL", default=_DEFAULT_LLM_BASE_URL,
+            ),
+            llm_model=_required(source, "LLM_MODEL", default=_DEFAULT_LLM_MODEL),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
@@ -358,13 +529,22 @@ class ProductionSettings:
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     # Upper bound for the self-check ``hold_seconds`` parameter; 0 forbids holding.
     background_self_check_max_hold_seconds: int = 0
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
+    personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
     browser: BrowserSettings = field(default_factory=BrowserSettings)
     fixed_document: FixedDocumentSettings | None = field(default=None, repr=False)
+    file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
+    zulip: ZulipSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.zulip is not None and (
+            self.source_tenant_id != "default" or not self.session_cookie_secure
+            or self.zulip.host_origin not in self.csrf_allowed_origins
+        ):
+            raise ValueError("im_host_configuration_invalid")
         ids = [profile.service_config_id for profile in self.mcp_services]
         if len(ids) != len(set(ids)) or any(
             p.tenant_id != self.source_tenant_id for p in self.mcp_services
@@ -537,8 +717,12 @@ class ProductionSettings:
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             background_self_check_max_hold_seconds=_self_check_max_hold(source),
+            file_artifacts=_file_artifact_settings(source),
+            im_delivery=IMDeliverySettings.from_env(source),
+            personal_agents=PersonalAgentSettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
+            zulip=_zulip_settings(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
@@ -1112,8 +1296,10 @@ def _base64_key(
 
 
 __all__ = (
+    "FileArtifactSettings",
     "OAReadAdapterMode",
     "ProductionSettings",
+    "PersonalAgentSettings",
     "RedisConnectionURL",
     "RuntimeEngine",
     "WORKER_ENVIRONMENT_KEYS",
@@ -1141,8 +1327,46 @@ def _self_check_max_hold(source: Mapping[str, str]) -> int:
 
 
 @dataclass(frozen=True)
+class FileArtifactSettings:
+    root: Path
+    mac_key: bytes = field(repr=False)
+    # Only a root marked ``acceptance_sample`` accepts a value other than 14 days.
+    retention_override_seconds: int | None = None
+
+
+def _file_artifact_settings(source: Mapping[str, str]) -> FileArtifactSettings | None:
+    """All three keys unset disables the feature; a partial configuration fails startup."""
+
+    root = source.get(_FILE_ARTIFACT_ROOT_KEY, "").strip()
+    key = source.get(_FILE_ARTIFACT_MAC_KEY, "").strip()
+    retention = source.get(_FILE_ARTIFACT_RETENTION_KEY, "").strip()
+    if not root and not key and not retention:
+        return None
+    if not root or not key:
+        raise RuntimeError("file_artifact_configuration_incomplete")
+    location = Path(root)
+    if not location.is_absolute():
+        raise RuntimeError(f"{_FILE_ARTIFACT_ROOT_KEY} must be an absolute path")
+    return FileArtifactSettings(
+        root=location,
+        mac_key=_base64_key(source, _FILE_ARTIFACT_MAC_KEY, exact_bytes=32),
+        retention_override_seconds=(
+            _integer_in_range(
+                source,
+                _FILE_ARTIFACT_RETENTION_KEY,
+                _MAX_FILE_ARTIFACT_RETENTION_SECONDS,
+                minimum=_MIN_FILE_ARTIFACT_RETENTION_SECONDS,
+                maximum=_MAX_FILE_ARTIFACT_RETENTION_SECONDS,
+            )
+            if retention
+            else None
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class WorkerSettings:
-    """Only the values the background worker needs; no OA, identity or LLM secrets."""
+    """Queue values plus optional IM Bot, reader and tool-free model settings."""
 
     database_url: str = field(repr=False)
     redis_url: RedisConnectionURL
@@ -1150,6 +1374,9 @@ class WorkerSettings:
     organization_directory_max_age_s: int
     concurrency: int
     self_check_max_hold_seconds: int
+    file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
+    personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1170,6 +1397,9 @@ class WorkerSettings:
                 source, "BACKGROUND_WORKER_CONCURRENCY", 2, minimum=1, maximum=8
             ),
             self_check_max_hold_seconds=_self_check_max_hold(source),
+            file_artifacts=_file_artifact_settings(source),
+            im_delivery=IMDeliverySettings.from_env(source),
+            personal_agents=PersonalAgentSettings.from_env(source),
         )
 
 
@@ -1180,6 +1410,20 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     "ORGANIZATION_DIRECTORY_MAX_AGE_S",
     "BACKGROUND_WORKER_CONCURRENCY",
     "BACKGROUND_SELF_CHECK_MAX_HOLD_SECONDS",
+    _FILE_ARTIFACT_ROOT_KEY,
+    _FILE_ARTIFACT_MAC_KEY,
+    _FILE_ARTIFACT_RETENTION_KEY,
+    "IM_PROVIDER",
+    "IM_ZULIP_ORIGIN",
+    "IM_HOST_ORIGIN",
+    "IM_INSTANCE_ID",
+    "IM_ZULIP_REALM_ID",
+    "IM_ZULIP_TLS_CA_FILE",
+    "IM_DELIVERY_BOT_ID",
+    "IM_DELIVERY_BOT_EMAIL",
+    "IM_DELIVERY_BOT_API_KEY",
+    "IM_DELIVERY_RECIPIENTS_JSON",
+    "IM_PERSONAL_AGENTS_JSON",
 )
 
 

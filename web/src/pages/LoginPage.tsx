@@ -5,11 +5,13 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/mutator';
 import { peekReauthPath, reauthLoginNotice } from '../app/reauthRestore';
 import { withAuthCookieLock } from '../app/sessionKeepalive';
+import { notifyIdentityRecheck, notifyIdentitySwitch } from '../app/identity';
 import { loginApiV1AuthLoginPost } from '../generated/auth/auth';
 import type { LoginApiV1AuthLoginPostBody } from '../generated/auth/auth.schemas';
 import { Icon } from '../shared/ui/Icon';
 import { useAuthStore } from '../stores/authStore';
 import { getReturnPath } from './loginNavigation';
+import { beginIMLogin, suspendIMIdentity } from '../features/messages/hostBridge';
 import styles from './LoginPage.module.css';
 
 const LOGIN_FAILED_MESSAGE = '登录失败，请检查登录信息后重试。';
@@ -30,16 +32,22 @@ export default function LoginPage() {
     setSubmitting(true);
     setErrorMessage(undefined);
     try {
-      const response = await withAuthCookieLock(() => loginApiV1AuthLoginPost(credential));
-      if (response.authenticated !== true) {
-        setErrorMessage(LOGIN_FAILED_MESSAGE);
-        return;
-      }
-      // History state survives a reload of this page; the sealed copy's route is the fallback.
-      const returnPath = getReturnPath(location.state ?? { from: peekReauthPath() });
-      queryClient.clear();
-      markAuthenticated();
-      navigate(returnPath, { replace: true });
+      suspendIMIdentity('unauthenticated');
+      await withAuthCookieLock(async () => {
+        notifyIdentitySwitch();
+        const response = await loginApiV1AuthLoginPost(credential);
+        if (response.authenticated !== true) {
+          setErrorMessage(LOGIN_FAILED_MESSAGE);
+          return;
+        }
+        // History state survives a reload of this page; the sealed copy's route is the fallback.
+        const returnPath = getReturnPath(location.state ?? { from: peekReauthPath() });
+        queryClient.clear();
+        markAuthenticated();
+        beginIMLogin();
+        notifyIdentityRecheck();
+        navigate(returnPath, { replace: true });
+      });
     } catch (error) {
       setErrorMessage(
         error instanceof ApiError && error.status === 401

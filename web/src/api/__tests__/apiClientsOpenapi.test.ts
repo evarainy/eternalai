@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import {
   copyFileSync,
   mkdirSync,
@@ -43,6 +43,14 @@ interface OpenApiDocument {
 }
 
 const PROJECTS = [
+  {
+    project: 'imContext', input: './openapi/im-context.openapi.json', target: './src/generated/im-context/im-context.ts',
+    operations: [
+      { path: '/api/v1/im-context/configuration', method: 'get', operationId: 'configuration_api_v1_im_context_configuration_get' },
+      { path: '/api/v1/im-context/login', method: 'post', operationId: 'login_api_v1_im_context_login_post' },
+      { path: '/api/v1/im-context/sources', method: 'post', operationId: 'select_api_v1_im_context_sources_post' },
+    ],
+  },
   {
     project: 'mcp', input: './openapi/mcp.openapi.json', target: './src/generated/mcp/mcp.ts',
     operations: [
@@ -186,6 +194,21 @@ const PROJECTS = [
       { path: '/api/v1/health', method: 'get', operationId: 'health_api_v1_health_get' },
     ],
   },
+  {
+    project: 'imDeliveries',
+    input: './openapi/im-deliveries.openapi.json',
+    target: './src/generated/im-deliveries/im-deliveries.ts',
+    operations: [
+      { path: '/api/v1/im-deliveries', method: 'post', operationId: 'prepareIMDelivery' },
+      { path: '/api/v1/im-deliveries', method: 'get', operationId: 'listIMDeliveries' },
+      { path: '/api/v1/im-deliveries/recipients', method: 'get', operationId: 'listIMDeliveryRecipients' },
+      { path: '/api/v1/im-deliveries/{delivery_id}', method: 'get', operationId: 'getIMDelivery' },
+      { path: '/api/v1/im-deliveries/{delivery_id}/cancel', method: 'post', operationId: 'cancelIMDelivery' },
+      { path: '/api/v1/im-deliveries/{delivery_id}/confirm', method: 'post', operationId: 'confirmIMDelivery' },
+      { path: '/api/v1/im-deliveries/{delivery_id}/reconcile', method: 'post', operationId: 'reconcileIMDelivery' },
+      { path: '/api/v1/im-deliveries/{delivery_id}/verify', method: 'post', operationId: 'verifyIMDelivery' },
+    ],
+  },
 ] as const;
 
 const ADMIN_PROJECT = {
@@ -219,9 +242,11 @@ from app.api.v1.background_jobs import make_router as background_jobs_router
 from app.api.v1.csrf import make_require_csrf, make_csrf_protected_principal
 from app.api.v1.credential_bindings import make_router as bindings_router
 from app.api.v1.health import make_router as health_router
+from app.api.v1.im_deliveries import make_router as im_deliveries_router
 from app.api.v1.mcp import make_router as mcp_router
 from app.api.v1.me import make_router as me_router
 from app.api.v1.runtime import make_router as runtime_router
+from app.api.v1.im_context import make_router as im_context_router
 from app.api.v1.work_objects import make_router as work_router
 from app.api.v1.work_object_series import make_router as series_router
 
@@ -240,6 +265,7 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
         session_revocations=session_revocations, session_cookie_ttl_seconds=session_cookie_ttl_seconds,
         session_cookie_secure=False), prefix="/api/v1/auth")
     app.include_router(runtime_router(None, protected, session_binder), prefix="/api/v1/runtime")
+    app.include_router(im_context_router(None, protected, session_binder), prefix="/api/v1/im-context")
     app.include_router(admin_router(None, protected), prefix="/api/v1/admin")
     app.include_router(work_router(work_object_service, protected), prefix="/api/v1/work-objects")
     app.include_router(series_router(None, protected), prefix="/api/v1/work-object-series")
@@ -247,6 +273,7 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
     app.include_router(bindings_router(None, protected), prefix="/api/v1/credential-bindings")
     app.include_router(health_router(), prefix="/api/v1")
     app.include_router(background_jobs_router(None, protected), prefix="/api/v1/background-jobs")
+    app.include_router(im_deliveries_router(None, protected), prefix="/api/v1/im-deliveries")
     return app
 
 
@@ -341,9 +368,7 @@ with TestClient(create_app(
     response = client.get("/api/v1/work-objects", params={"completion": "SYNTHETIC_UNKNOWN"})
     print(json.dumps({"status": response.status_code, "body": response.json()}))
 `;
-  const result = spawnSync(python,
-    ['-c', script],
-    { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
+  const result = await spawnCommand(python, ['-c', script], repositoryRoot);
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   const response: { status: number; body: unknown } = JSON.parse(result.stdout);
@@ -399,9 +424,7 @@ with TestClient(create_app(
     response = client.get("/api/v1/work-objects")
     print(json.dumps({"status": response.status_code, "body": response.json()}))
 `;
-  const result = spawnSync(python,
-    ['-c', script],
-    { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
+  const result = await spawnCommand(python, ['-c', script], repositoryRoot);
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   const response: { status: number; body: unknown } = JSON.parse(result.stdout);
@@ -424,13 +447,34 @@ with TestClient(create_app(
   }
 }, 60_000);
 
-function run(command: string, args: string[], cwd: string): void {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    env: process.env,
-    windowsHide: true,
+function spawnCommand(command: string, args: string[], cwd: string): Promise<{
+  error: Error | undefined;
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  // Let Vitest's worker service its RPC channel while exporters and Orval run.
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let error: Error | undefined;
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (data: string) => { stdout += data; });
+    child.stderr.on('data', (data: string) => { stderr += data; });
+    child.once('error', (failure) => { error = failure; });
+    child.once('close', (status) => { resolve({ error, status, stdout, stderr }); });
   });
+}
+
+async function run(command: string, args: string[], cwd: string): Promise<void> {
+  const result = await spawnCommand(command, args, cwd);
   if (result.error) {
     throw result.error;
   }
@@ -516,8 +560,8 @@ describe('FastAPI-derived Orval clients', () => {
     });
   });
   it(
-    're-exports eight FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
-    () => {
+    're-exports FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    async () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
       const temporaryOpenApi = join(temporaryWeb, 'openapi');
@@ -529,15 +573,15 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(10);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(10);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(13);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(13);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),
           operations: target.operations,
         }));
 
-        run(
+        await run(
           python,
           [
             '-c',
@@ -648,7 +692,7 @@ describe('FastAPI-derived Orval clients', () => {
           'utf8',
         );
 
-        run(
+        await run(
           process.execPath,
           [
             resolve(webRoot, 'node_modules/orval/dist/bin/orval.js'),
@@ -657,7 +701,7 @@ describe('FastAPI-derived Orval clients', () => {
           ],
           webRoot,
         );
-        run(process.execPath, [temporaryNormalizer], temporaryWeb);
+        await run(process.execPath, [temporaryNormalizer], temporaryWeb);
 
         for (const target of CLIENT_PROJECTS) {
           const trackedDirectory = dirname(resolve(webRoot, target.target));

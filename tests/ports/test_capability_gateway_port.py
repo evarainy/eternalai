@@ -36,7 +36,8 @@ EXPECTED_REQUEST_ORG_CONTEXT_FIELDS = {
     "resource_scope",
 }
 
-EXPECTED_REQUEST_CHANNEL_VALUES = ("web", "cli", "api", "mock")
+# V3 adds trusted IM execution metadata; ordinary Runtime/HTTP keep four channels.
+EXPECTED_REQUEST_CHANNEL_VALUES = ("web", "cli", "api", "mock", "im")
 
 EXPECTED_ERROR_CODE_VALUES = (
     "identity_unbound",

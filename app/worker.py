@@ -2,8 +2,10 @@
 
 A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
-hold limit): no OA, identity, session or LLM secrets. It does not import the production
-composition, runtime, MCP or browser stacks. The loop is psycopg + Selector.
+hold limit, file artifact root and MAC key), plus optional IM Bot and reader configuration.
+When personal agents are enabled it also loads the tool-free published-material model seam, without
+the production composition, ordinary chat, OA or browser stacks. The loop is
+psycopg + Selector.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import asyncio
 import logging
 import sys
 from datetime import datetime
+from functools import partial
 
 from sqlalchemy.engine import make_url
 
@@ -20,9 +23,13 @@ from app.config import WorkerSettings
 from app.db.session import make_async_engine, make_async_session_factory
 from app.dependency_checks import build_readonly_checks
 from app.event_loop import make_event_loop
+from app.infra.communication.composition import build_im_delivery, build_personal_agents
 from app.infra.jobs.execution import BackgroundJobRunner
 from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
 from app.infra.jobs.procrastinate_app import (
+    FILE_ARTIFACTS_CONTEXT_KEY,
+    IM_DELIVERY_CONTEXT_KEY,
+    PERSONAL_AGENT_CONTEXT_KEY,
     RUNNER_CONTEXT_KEY,
     SESSIONS_CONTEXT_KEY,
     build_procrastinate_app,
@@ -31,6 +38,7 @@ from app.infra.jobs.procrastinate_app import (
 from app.infra.jobs.queue_sql import GENERAL_QUEUE, MAINTENANCE_QUEUE
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.sync_state import PostgreSQLOrganizationDirectorySync
+from app.infra.persistence.file_artifacts import build_file_artifact_service
 from app.organization_directory_sync import OrganizationDirectorySyncService
 from app.ports.organization_directory import (
     OrganizationDirectorySnapshot,
@@ -59,7 +67,27 @@ async def run_worker(settings: WorkerSettings) -> None:
     database_url = psycopg_database_url(settings.database_url)
     engine = make_async_engine(database_url)
     sessions = make_async_session_factory(engine)
+    delivery_client = None
     try:
+        delivery_service, delivery_client = build_im_delivery(
+            settings.im_delivery, sessions, settings.personal_agents,
+        )
+        personal_runtime = None
+        if settings.personal_agents is not None:
+            from app.infra.llm.agentscope_chat import build_chat_model
+            from app.infra.orchestration.agentscope_runtime.personal_agent import (
+                AgentScopePersonalAgentRuntime,
+            )
+
+            personal_runtime = AgentScopePersonalAgentRuntime(partial(
+                build_chat_model, base_url=settings.personal_agents.llm_base_url,
+                model=settings.personal_agents.llm_model,
+            ))
+        personal_service = build_personal_agents(
+            settings.personal_agents, sessions, delivery_service.sender, personal_runtime,
+        ) if delivery_service is not None else None
+        if delivery_service is not None:
+            delivery_service.set_agent_replies(personal_service)
         checks = build_readonly_checks(
             database_url=database_url,
             redis_url=settings.redis_url,
@@ -73,6 +101,7 @@ async def run_worker(settings: WorkerSettings) -> None:
                 max_age_s=settings.organization_directory_max_age_s,
             ),
         )
+        file_artifacts = build_file_artifact_service(settings.file_artifacts, sessions)
         runner = BackgroundJobRunner(
             PostgreSQLBackgroundJobLedger(sessions),
             build_job_kinds(settings.self_check_max_hold_seconds),
@@ -80,6 +109,7 @@ async def run_worker(settings: WorkerSettings) -> None:
                 checks={**checks.health, **checks.diagnostics},
                 check_timeout_seconds=settings.health_timeout_seconds,
             ),
+            job_outputs=None if file_artifacts is None else file_artifacts.job_outputs,
         )
         app = build_procrastinate_app(psycopg_conninfo(database_url))
         async with app.open_async():
@@ -97,10 +127,20 @@ async def run_worker(settings: WorkerSettings) -> None:
                 # Windows: asyncio.Runner turns Ctrl+C into cancelling this task, which
                 # the official worker handles as a graceful stop.
                 install_signal_handlers=sys.platform != "win32",
-                additional_context={RUNNER_CONTEXT_KEY: runner, SESSIONS_CONTEXT_KEY: sessions},
+                additional_context={
+                    RUNNER_CONTEXT_KEY: runner,
+                    SESSIONS_CONTEXT_KEY: sessions,
+                    FILE_ARTIFACTS_CONTEXT_KEY: file_artifacts,
+                    IM_DELIVERY_CONTEXT_KEY: delivery_service,
+                    PERSONAL_AGENT_CONTEXT_KEY: personal_service,
+                },
             )
     finally:
-        await engine.dispose()
+        try:
+            if delivery_client is not None:
+                await delivery_client.aclose()
+        finally:
+            await engine.dispose()
         _LOGGER.info("background_worker_stopped")
 
 

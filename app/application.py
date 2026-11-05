@@ -26,11 +26,16 @@ from app.api.v1.csrf import (
     make_csrf_protected_principal,
     make_require_csrf,
 )
+from app.api.v1.file_artifacts import make_router as make_file_artifacts_router
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
+from app.api.v1.im_context import make_router as make_im_context_router
+from app.api.v1.im_deliveries import make_router as make_im_deliveries_router
+from app.api.v1.im_inbound import make_router as make_im_inbound_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
+from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
@@ -40,6 +45,9 @@ from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.file_artifacts import FileArtifactService
+from app.im_context import IMContextService
+from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
 from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.d_form_bootstrap import DFormManagement
@@ -55,6 +63,7 @@ from app.infra.browser.multi_installation import BrowserVerticalCollection
 from app.infra.persistence.browser.chat_handoff import PostgreSQLBrowserIntentHandoff
 from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
+from app.personal_agents import PersonalAgentService
 from app.ports.auth import (
     AuthenticationPort,
     Principal,
@@ -110,6 +119,11 @@ def create_app(
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
+    file_artifact_service: FileArtifactService | None = None,
+    im_delivery_service: IMDeliveryService | None = None,
+    personal_agent_service: PersonalAgentService | None = None,
+    close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
+    im_context: IMContextService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -169,8 +183,12 @@ def create_app(
                     if organization_started and organization_directory_scheduler is not None:
                         await organization_directory_scheduler.stop()
                 finally:
-                    if credential_started and credential_polling_scheduler is not None:
-                        await credential_polling_scheduler.stop()
+                    try:
+                        if credential_started and credential_polling_scheduler is not None:
+                            await credential_polling_scheduler.stop()
+                    finally:
+                        if close_im_deliveries is not None:
+                            await close_im_deliveries()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -219,6 +237,21 @@ def create_app(
         prefix="/api/v1/background-jobs",
     )
     application.include_router(
+        make_file_artifacts_router(file_artifact_service, csrf_protected_principal),
+        prefix="/api/v1/file-artifacts",
+    )
+    application.include_router(
+        make_im_deliveries_router(im_delivery_service, csrf_protected_principal),
+        prefix="/api/v1/im-deliveries",
+    )
+    application.include_router(
+        make_personal_agents_router(personal_agent_service, csrf_protected_principal),
+        prefix="/api/v1/personal-agents",
+    )
+    application.include_router(
+        make_im_inbound_router(personal_agent_service), prefix="/api/v1/im-inbound",
+    )
+    application.include_router(
         make_auth_router(
             authentication,
             session_tokens,
@@ -236,8 +269,13 @@ def create_app(
             csrf_protected_principal,
             session_binder,
             browser_chat=browser_chat,
+            im_context=im_context,
         ),
         prefix="/api/v1/runtime",
+    )
+    application.include_router(
+        make_im_context_router(im_context, csrf_protected_principal, session_binder),
+        prefix="/api/v1/im-context",
     )
     application.include_router(
         make_browser_runs_router(
@@ -505,6 +543,11 @@ def create_production_app(
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
         background_job_service=components.background_jobs,
+        file_artifact_service=components.file_artifacts,
+        im_delivery_service=components.im_deliveries,
+        close_im_deliveries=components.close_im_deliveries,
+        im_context=components.im_context,
+        personal_agent_service=components.personal_agents,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),
     )

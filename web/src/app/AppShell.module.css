@@ -968,3 +968,29 @@
 .floatingText {
   white-space: nowrap;
 }
+
+@media (max-width: 1200px) {
+  .stage {
+    --topbar-style-width: var(--workbench-target-size);
+    --topbar-system-status-width: calc(var(--workbench-target-size) + 24px);
+    --topbar-notifications-width: var(--workbench-target-size);
+  }
+
+  .topbarSearch {
+    min-width: 0;
+  }
+
+  .identity,
+  .signalText {
+    display: none;
+  }
+
+  .signalButton {
+    padding: 0 8px;
+  }
+
+  .popover[data-panel] {
+    right: 6px;
+    max-width: calc(100% - 12px);
+  }
+}

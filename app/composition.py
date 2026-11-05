@@ -50,6 +50,9 @@ from app.dependency_checks import build_readonly_checks
 from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.file_artifacts import FileArtifactService
+from app.im_context import IMContextService
+from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
 from app.infra.adapters.business_mcp.catalog import catalog as mcp_catalog
 from app.infra.adapters.business_mcp.catalog import workflow_definitions as mcp_definitions
@@ -91,6 +94,8 @@ from app.infra.auth.postgresql import (
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
+from app.infra.communication.composition import build_im_delivery, build_personal_agents
+from app.infra.communication.zulip import ZulipCommunicationAdapter
 from app.infra.fixed_txt import FixedTxtReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.human_gate import PostgreSQLHumanGate
@@ -116,6 +121,8 @@ from app.infra.organization_directory.validation import InvalidDirectorySnapshot
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
+from app.infra.persistence.file_artifacts import build_file_artifact_service
+from app.infra.persistence.im_context import PostgreSQLIMAccountBindingStore
 from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
 from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore
 from app.infra.persistence.task_store.postgresql import (
@@ -153,6 +160,7 @@ from app.organization_directory_sync import (
     OrganizationDirectoryScheduler,
     OrganizationDirectorySyncService,
 )
+from app.personal_agents import PersonalAgentService
 from app.ports.adapter import AdapterPort
 from app.ports.auth import (
     AuthenticationPort,
@@ -239,6 +247,11 @@ class ProductionComponents:
     # so AgentScope is otherwise never imported.
     agentscope_runtime: RuntimePort | None = None
     background_jobs: BackgroundJobService | None = None
+    file_artifacts: FileArtifactService | None = None
+    im_deliveries: IMDeliveryService | None = None
+    close_im_deliveries: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
+    im_context: IMContextService | None = None
+    personal_agents: PersonalAgentService | None = None
 
 
 def build_credential_store(
@@ -955,6 +968,16 @@ def build_production_components(
         ):
             raise RuntimeError("mcp_isolated_contract_boundary_invalid")
     session_revocations = PostgreSQLSessionRevocationStore(session_factory)
+    im_context = None
+    if settings.zulip is not None:
+        adapter = ZulipCommunicationAdapter(settings.zulip)
+        im_context = IMContextService(
+            PostgreSQLIMAccountBindingStore(session_factory), adapter, adapter, session_revocations,
+            provider="zulip", im_instance_id=settings.zulip.im_instance_id,
+            realm_id=settings.zulip.realm_id, im_origin=settings.zulip.origin,
+            helper_url=settings.zulip.helper_url,
+            host_origin=settings.zulip.host_origin,
+        )
     mcp_store = PostgreSQLMcpStore(
         session_factory, settings.credential_encryption_key, session_revocations
     )
@@ -1390,7 +1413,18 @@ def build_production_components(
         }
     else:
         resolved_health_checks = dict(health_checks)
+    im_deliveries, delivery_client = build_im_delivery(
+        settings.im_delivery, session_factory, settings.personal_agents,
+    )
+    personal_agents = build_personal_agents(
+        settings.personal_agents, session_factory, im_deliveries.sender,
+    ) if im_deliveries is not None else None
+    if im_deliveries is not None:
+        im_deliveries.set_agent_replies(personal_agents)
     return ProductionComponents(
+        personal_agents=personal_agents,
+        im_deliveries=im_deliveries,
+        close_im_deliveries=delivery_client.aclose if delivery_client is not None else None,
         agentscope_runtime=agentscope_runtime,
         browser_gateway=gateway,
         browser_session_factory=session_factory,
@@ -1487,6 +1521,8 @@ def build_production_components(
             PostgreSQLBackgroundJobLedger(session_factory),
             build_job_kinds(settings.background_self_check_max_hold_seconds),
         ),
+        file_artifacts=build_file_artifact_service(settings.file_artifacts, session_factory),
+        im_context=im_context,
     )
 
 

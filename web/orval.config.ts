@@ -1,6 +1,28 @@
 import { defineConfig } from 'orval';
 
 export default defineConfig({
+  personalAgents: {
+    input: './openapi/personal-agents.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/personal-agents/personal-agents.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
+  imContext: {
+    input: './openapi/im-context.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/im-context/im-context.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   mcp: {
     input: './openapi/mcp.openapi.json',
     output: {
@@ -130,6 +152,20 @@ export default defineConfig({
     output: {
       mode: 'split',
       target: './src/generated/credential-bindings/credential-bindings.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
+  imDeliveries: {
+    input: './openapi/im-deliveries.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/im-deliveries/im-deliveries.ts',
       mock: false,
       override: {
         mutator: {

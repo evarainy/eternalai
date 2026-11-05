@@ -771,6 +771,36 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 健康页提交后取消按钮未即时出现（一次观察） | 2026-11-03 验收第 6 项：worker 停止时第二次提交自检后，“取消本次自检”按钮未出现，刷新后出现并取消成功；未复现、未定位 | 无 | 待分配 | 复现并定位后修复，或多次操作确认不再出现 | `web/src/features/background-jobs/SelfCheckPanel.tsx::SelfCheckPanel` |
 | 开发库端口另在 IPv6 全地址发布 | `docker-compose.yml` 的 postgres `ports` 未写主机 IP，`eternalai-postgres-1` 除 `127.0.0.1:5432` 外另发布 `[::]:5432`（2026-08 建容器起即有）；方案 §4 只预期回环发布 | 雨爷决定是否收紧（改 compose 需重建容器） | 待分配 | compose 改为只绑回环并重建容器，或确认保留 | `docker-compose.yml` postgres `ports`；方案 §4 执行前目标识别第 2 项 |
 
+### 文件产物 `P2-FILE-ARTIFACTS-001` 新增欠债（2026-11-05）
+
+本棒（A 档、高风险，与 IM 机会层并行）按总体方案 v1.6 §2 及仓库外短 plan `E:/code/eternalai-reviews/new-foundation-20261103/FILE_ARTIFACTS_PLAN.md` v1.4 施工；R3 在 IM 两棒合入后接到 `20261104_130000` 之后。雨爷 2026-11-04 专项授权两库 upgrade 时一并执行 IM 两条迁移（只 upgrade）。[新功能基础总体方案批准登记](#新功能基础总体方案批准登记2026-11-03) 中“输出发布与产物棒正向链路”等行继续有效。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| Windows 下载与清理互斥未实测 | 本棒没有 available 产物；清理与下载互斥依赖 `os.open` 句柄无删除共享 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 样本根上限速下载跨越清理轮次：该轮记 `file_in_use` 失败、下载 sha256 一致、下一轮删除；不成立回评审 | 方案 §2.6、§8.3；`app/api/v1/file_artifacts.py::PinnedFileResponse` |
+| 封存协议与清理真实路径未验收（含 MAC 跨驱动） | 本棒无生产者，预留、续租、封存、D2、D1a/D1b 真删除只做静态取证与桩核对 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001`（输入）；首个输出生产者（输出） | 上传棒实测 API 封存、worker 删除 `removed=1`、再跑幂等；异常路径另获故障注入授权或维持静态取证 | 方案 §7.3、J7；`app/infra/persistence/file_artifacts.py` |
+| 他人产物 404 未真实验收 | 本棒没有可下载的他人产物，手工插行得不到合法 MAC | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 第二测试账号访问他人产物实测 404 | 方案 §7.3、§7.4 |
+| 发布 rename 持久化未实测 | Windows `MOVEFILE_WRITE_THROUGH`、POSIX 目录 `fsync` 的掉电窗口无法在本机实测，只按官方语义取证 | 服务器迁移授权 | 待分配 | Linux 部署时核对目录 fsync 实际执行；本机写穿调用在上传棒正向封存中确认返回成功 | `app/infra/files/local_store.py::durable_replace`；Win32 `MoveFileExW` 文档 |
+| 下载端点未导出 OpenAPI 文件 | 后端导出脚本只覆盖已有端点，本棒不改 `web/` | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 前端接入下载时补导出脚本与生成物 | `scripts/export_background_jobs_openapi.py` |
+| 下载 `no-store` 头未经浏览器取证 | 2026-11-05 验收时开发者工具取到的是另一条静态资源的响应头；本请求的头由真实路由进程内探针取证（404/503 均 `no-store`） | 无 | `P2-CHAT-UPLOAD-001` | 上传棒浏览器验收下载时一并核对 404 与 200 响应头 | `app/api/v1/file_artifacts.py::_fail` |
+
+### IM 机会层 V1/V2a 新增欠债（2026-11-05）
+
+`P2-IM-CONTEXT-READ-001`（PR #257）与 `P2-IM-FILE-DELIVERY-001`（PR #258）的 PR 正文欠债合并登记；两棒共有的一行合并为一行。表中引用的取证文件均在仓库外，路径见对应 PR 正文。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| OA 工具 internal_error 未复现 | 消息预览回合先前两次 internal_error，2026-11-05 本人待办查询正常，临时诊断未触发，根因未定位；不阻塞本次闭环 | 无（等待再次复现与获准脱敏运行取证） | 待分配（OA 定点定位） | 复现并取得脱敏根因证据、完成最小修复及受影响真实只读路径验证 | PR #257、#258 正文 |
+| V1 来源与确认隔离剩余验收（D5） | 在途退出已通过；当前读权变化与已有 pending 冲突未逐项实证 | 对应获准真实路径（待分配） | `P2-IM-CONTEXT-READ-001` 后续验收 | 读权变化与 pending 冲突分别获实证 | PR #257 正文 |
+| V1 试点身份桥接剩余边界（D8） | 本次登录/退出与复制库闭环已完成；正式组织目录、停用、第二租户、手机未覆盖 | `P2-ORGDIR-OA-SOURCE-001` 及现场专项授权 | `P2-IM-CONTEXT-READ-001`（试点）；其余待分配 | 剩余场景逐项实证，不以本次闭环批量核销 | PR #257 正文 |
+| V1 单进程前提 | 来源 ref 存于进程内；worker/replica 数量与重启失效未逐项实证 | 目标进程启停授权（待分配） | `P2-IM-CONTEXT-READ-001` 后续验收 | 实记 workers=1、replicas=1，并真实验证旧 ref 失效 | PR #257 正文 |
+| IM 身份映射保留与删除 | 保留期限及物理删除未定 | 保留/删除裁决（待分配） | 待分配（V5 试点前） | 精确对象与期限获准后验证 | `alembic/versions/20261104_120000_im_context.py` |
+| V2a 身份与代表关系剩余边界（D2） | 复制库与合成 Zulip 闭环已通过；正式组织授权关系未证明 | 正式试点身份与业务授权（待分配） | `P2-IM-FILE-DELIVERY-001` 后续验收 | 获准目标环境实证正确甲乙与 Bot 代表关系 | PR #258 正文 |
+| V2a 投递故障恢复（D4/Q4） | 正常闭环已通过；单次尝试、结果不明等异常恢复未逐项证明 | 故障取证授权（待分配） | `P2-IM-FILE-DELIVERY-001` 后续验收 | 剩余故障恢复路径逐项真实通过 | PR #258 正文 |
+| V2a 正式试点与同页安装（D8） | 合成环境同页闭环已通过；正式环境映射变化与 12.3 补丁安装未覆盖 | `P2-IM-CONTEXT-READ-001` 正式试点及现场授权 | 待分配 | 获准正式环境正确身份、同页导航与映射变化实证 | `infra/communication/zulip/12.3/README.md`；PR #258 正文 |
+| IM 复制库验收适用范围 | 15433 副本与合成 Zulip 闭环不等同正式迁移与全场景验收 | 正式环境范围与专项授权（待分配） | 待分配（正式试点） | 获准目标环境迁移与业务记账实测 | PR #258 正文 |
+| Windows 本机 mypy 既有浏览器平台诊断 | `uv run mypy app/` 在 Windows 本机报 6 条，均在 `app/infra/browser/{d_form_flow,d_form_cli,synthetic_vault}.py`（平台相关，CI 的 Linux 检查通过）；IM 两棒与文件产物均如实记录 | 归属待裁决 | 待分配 | 相应 Windows 功能棒修复并验证 | PR #258、#260 正文 |
+
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
 `P2-AUTH-RENEWAL-APP-001` 合并时登记；方案为仓库外 `RAPP_PLAN_v1.3.md`，验证与评审证据留 PR #241。
