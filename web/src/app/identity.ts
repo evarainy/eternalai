@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAuthStore } from '../stores/authStore';
+import {
+  beginIMLogin, imBridgeBlocked, imLogoutInProgress, suspendIMIdentity,
+} from '../features/messages/hostBridge';
 
 /**
  * 「我是谁」只问后端一次，三个消费点（顶栏、用户菜单、AI 助手问候语）读同一份缓存。
@@ -33,8 +36,10 @@ export function useIdentityQuery(): UseQueryResult<MeResponse> {
   return useQuery({
     queryKey: identityQueryKey(generation),
     queryFn: () => readMeApiV1MeGet(),
-    enabled: status !== 'unauthenticated',
+    enabled: status !== 'unauthenticated' && !imLogoutInProgress(),
     staleTime: IDENTITY_STALE_TIME_MS,
+    // Focus revalidation below compares the confirmed account before changing state.
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -63,7 +68,7 @@ export function useIdentityBootstrap(): void {
 
   useEffect(() => {
     // 只把 `unknown` 收敛掉。若已经明确退出登录，一个还在路上的启动确认**不得**把人重新标成已登录。
-    if (data !== undefined && status === 'unknown' &&
+    if (!imLogoutInProgress() && data !== undefined && status === 'unknown' &&
         useAuthStore.getState().status === 'unknown' &&
         useAuthStore.getState().generation === generation) {
       useAuthStore.getState().markAuthenticated();
@@ -73,56 +78,86 @@ export function useIdentityBootstrap(): void {
 
 const AUTH_CHANNEL = 'eternalai-auth';
 const RECHECK_MESSAGE = 'recheck-identity';
+const SWITCH_MESSAGE = 'switch-identity';
 
-export function notifyIdentityRecheck(): void {
+function notifyIdentityChange(message: string): void {
   try {
     if (typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel(AUTH_CHANNEL);
-    channel.postMessage(RECHECK_MESSAGE);
+    channel.postMessage(message);
     channel.close();
   } catch { /* Focus and protected requests still consult the server. */ }
 }
 
+export function notifyIdentityRecheck(): void { notifyIdentityChange(RECHECK_MESSAGE); }
+export function notifyIdentitySwitch(): void { notifyIdentityChange(SWITCH_MESSAGE); }
+
 export function useIdentityRevalidation(): boolean {
+  const queryClient = useQueryClient();
   const generation = useAuthStore((state) => state.generation);
   const status = useAuthStore((state) => state.status);
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => { setFailed(false); }, [generation]);
 
   useEffect(() => {
     let live = true;
     let sequence = 0;
     let channel: BroadcastChannel | null = null;
-    setFailed(false);
     const recheck = async () => {
       const current = useAuthStore.getState();
-      if (current.status !== 'authenticated' || current.generation !== generation) return;
+      if (imLogoutInProgress() || current.status !== 'authenticated') return;
       const requestSequence = ++sequence;
-      const isCurrent = () => live && requestSequence === sequence &&
-        useAuthStore.getState().generation === generation;
+      const previous = queryClient.getQueryData<MeResponse>(identityQueryKey(current.generation));
+      const isCurrent = () => live && !imLogoutInProgress() && requestSequence === sequence &&
+        useAuthStore.getState().generation === current.generation;
       try {
         // Bypass cache. The generated client cannot abort this HTTP request.
-        await readMeApiV1MeGet();
-        if (isCurrent()) setFailed(false);
+        const identity = await readMeApiV1MeGet();
+        if (!isCurrent()) return;
+        // The server's account scope survives cookie renewal and includes tenant/user/roles.
+        if (previous?.restore_scope == null || identity.restore_scope !== previous.restore_scope) {
+          // Reuse the synchronous unauthenticated cleanup before accepting the new account.
+          suspendIMIdentity('unauthenticated');
+          beginIMLogin();
+          useAuthStore.getState().markAuthenticated();
+          queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
+        }
+        setFailed(false);
       } catch {
         if (isCurrent()) setFailed(true);
       }
     };
-    const onFocus = () => { void recheck(); };
+    let wasHidden = document.visibilityState === 'hidden';
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') wasHidden = true;
+      else if (wasHidden) { wasHidden = false; void recheck(); }
+    };
+    const onFocus = () => { wasHidden = false; void recheck(); };
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.onmessage = (event: MessageEvent<unknown>) => {
-          if (event.data === RECHECK_MESSAGE) void recheck();
+          if (imLogoutInProgress()) return;
+          if (event.data === SWITCH_MESSAGE) void recheck();
+          if (event.data === RECHECK_MESSAGE) {
+            if (imBridgeBlocked() && useAuthStore.getState().status === 'unauthenticated') {
+              beginIMLogin();
+              useAuthStore.getState().invalidateIdentity();
+            } else { void recheck(); }
+          }
         };
       }
     } catch { /* Focus revalidation remains available. */ }
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       live = false;
       channel?.close();
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [generation]);
+  }, [queryClient]);
 
   return status === 'authenticated' && failed;
 }

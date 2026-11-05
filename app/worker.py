@@ -2,9 +2,9 @@
 
 A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
-hold limit, file artifact root and MAC key): no OA, identity, session or LLM secrets. It does
-not import the production composition, runtime, MCP or browser stacks. The loop is
-psycopg + Selector.
+hold limit, file artifact root and MAC key), plus the optional fixed IM Bot: no OA,
+session or LLM secrets. It does not import the production composition, runtime, MCP
+or browser stacks. The loop is psycopg + Selector.
 """
 
 from __future__ import annotations
@@ -21,10 +21,12 @@ from app.config import WorkerSettings
 from app.db.session import make_async_engine, make_async_session_factory
 from app.dependency_checks import build_readonly_checks
 from app.event_loop import make_event_loop
+from app.infra.communication.composition import build_im_delivery
 from app.infra.jobs.execution import BackgroundJobRunner
 from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
 from app.infra.jobs.procrastinate_app import (
     FILE_ARTIFACTS_CONTEXT_KEY,
+    IM_DELIVERY_CONTEXT_KEY,
     RUNNER_CONTEXT_KEY,
     SESSIONS_CONTEXT_KEY,
     build_procrastinate_app,
@@ -62,7 +64,9 @@ async def run_worker(settings: WorkerSettings) -> None:
     database_url = psycopg_database_url(settings.database_url)
     engine = make_async_engine(database_url)
     sessions = make_async_session_factory(engine)
+    delivery_client = None
     try:
+        delivery_service, delivery_client = build_im_delivery(settings.im_delivery, sessions)
         checks = build_readonly_checks(
             database_url=database_url,
             redis_url=settings.redis_url,
@@ -106,10 +110,15 @@ async def run_worker(settings: WorkerSettings) -> None:
                     RUNNER_CONTEXT_KEY: runner,
                     SESSIONS_CONTEXT_KEY: sessions,
                     FILE_ARTIFACTS_CONTEXT_KEY: file_artifacts,
+                    IM_DELIVERY_CONTEXT_KEY: delivery_service,
                 },
             )
     finally:
-        await engine.dispose()
+        try:
+            if delivery_client is not None:
+                await delivery_client.aclose()
+        finally:
+            await engine.dispose()
         _LOGGER.info("background_worker_stopped")
 
 

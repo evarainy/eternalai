@@ -387,6 +387,14 @@
           "session_id": {
             "title": "Session Id",
             "type": "string"
+          },
+          "source_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Source Refs",
+            "type": "array"
           }
         },
         "required": [

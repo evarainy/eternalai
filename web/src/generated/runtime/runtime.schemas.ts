@@ -159,6 +159,8 @@ export interface HandleRequest {
   d_form_collection?: HandleRequestDFormCollection;
   message: string;
   session_id: string;
+  /** @maxItems 1 */
+  source_refs?: string[];
 }
 
 /**

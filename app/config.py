@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+
 from app.db.config import get_database_url
 
 if TYPE_CHECKING:
@@ -285,6 +287,96 @@ class FixedDocumentSettings:
         )
 
 
+class _DeliveryRecipientConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ai_user_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+
+
+@dataclass(frozen=True, slots=True)
+class IMDeliverySettings:
+    """Fixed trial instance and Bot; credentials stay inside its adapter."""
+
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    sender_bot_id: str
+    bot_email: str = field(repr=False)
+    bot_api_key: SecretStr = field(repr=False)
+    recipients: tuple[tuple[str, str], ...]
+    tls_ca_file: str | None = None
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> IMDeliverySettings | None:
+        if not source.get("IM_DELIVERY_BOT_ID", "").strip():
+            return None
+        if _required(source, "IM_PROVIDER") != "zulip":
+            raise RuntimeError("im_provider_unsupported")
+        origin = _canonical_http_origin(_required(source, "IM_ZULIP_ORIGIN"), "IM_ZULIP_ORIGIN")
+        host = _canonical_http_origin(_required(source, "IM_HOST_ORIGIN"), "IM_HOST_ORIGIN")
+        if not origin.startswith("https://") or not host.startswith("https://"):
+            raise RuntimeError("im_delivery_https_required")
+        try:
+            recipients = TypeAdapter(tuple[_DeliveryRecipientConfig, ...]).validate_json(
+                _required(source, "IM_DELIVERY_RECIPIENTS_JSON")
+            )
+        except ValidationError:
+            raise RuntimeError("im_delivery_recipients_invalid") from None
+        return cls(
+            origin=origin, host_origin=host,
+            im_instance_id=_required(source, "IM_INSTANCE_ID"),
+            realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+            sender_bot_id=_required(source, "IM_DELIVERY_BOT_ID"),
+            bot_email=_required(source, "IM_DELIVERY_BOT_EMAIL"),
+            bot_api_key=SecretStr(_required(source, "IM_DELIVERY_BOT_API_KEY")),
+            recipients=tuple((person.ai_user_id, person.display_name) for person in recipients),
+            tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ZulipSettings:
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    helper_url: str
+    jwt_secret: bytes = field(repr=False)
+    tls_ca_file: str | None = None
+
+    def __post_init__(self) -> None:
+        for origin in (self.origin, self.host_origin):
+            parsed = urlsplit(origin)
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or origin != f"https://{parsed.netloc}"):
+                raise ValueError("im_origin_invalid")
+        helper = urlsplit(self.helper_url)
+        if (self.origin == self.host_origin or self.helper_url != self.origin + helper.path
+                or not helper.path.startswith("/") or helper.path == "/"
+                or not self.im_instance_id or not self.realm_id or len(self.jwt_secret) < 32):
+            raise ValueError("im_configuration_invalid")
+
+
+def _zulip_settings(source: Mapping[str, str]) -> ZulipSettings | None:
+    provider = source.get("IM_PROVIDER", "").strip()
+    if not provider:
+        return None
+    if provider != "zulip":
+        raise RuntimeError("im_provider_unsupported")
+    return ZulipSettings(
+        origin=_required(source, "IM_ZULIP_ORIGIN"),
+        host_origin=_required(source, "IM_HOST_ORIGIN"),
+        im_instance_id=_required(source, "IM_INSTANCE_ID"),
+        realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+        helper_url=_required(source, "IM_SESSION_HELPER_URL"),
+        jwt_secret=_base64_key(source, "IM_ZULIP_JWT_SECRET_B64", minimum_bytes=32),
+        tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
@@ -363,14 +455,21 @@ class ProductionSettings:
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     # Upper bound for the self-check ``hold_seconds`` parameter; 0 forbids holding.
     background_self_check_max_hold_seconds: int = 0
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
     browser: BrowserSettings = field(default_factory=BrowserSettings)
     fixed_document: FixedDocumentSettings | None = field(default=None, repr=False)
     file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
+    zulip: ZulipSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.zulip is not None and (
+            self.source_tenant_id != "default" or not self.session_cookie_secure
+            or self.zulip.host_origin not in self.csrf_allowed_origins
+        ):
+            raise ValueError("im_host_configuration_invalid")
         ids = [profile.service_config_id for profile in self.mcp_services]
         if len(ids) != len(set(ids)) or any(
             p.tenant_id != self.source_tenant_id for p in self.mcp_services
@@ -544,8 +643,10 @@ class ProductionSettings:
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             background_self_check_max_hold_seconds=_self_check_max_hold(source),
             file_artifacts=_file_artifact_settings(source),
+            im_delivery=IMDeliverySettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
+            zulip=_zulip_settings(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
@@ -1188,7 +1289,7 @@ def _file_artifact_settings(source: Mapping[str, str]) -> FileArtifactSettings |
 
 @dataclass(frozen=True)
 class WorkerSettings:
-    """Only the values the background worker needs; no OA, identity or LLM secrets."""
+    """Worker values, including an optional IM Bot; no OA, session or LLM secrets."""
 
     database_url: str = field(repr=False)
     redis_url: RedisConnectionURL
@@ -1197,6 +1298,7 @@ class WorkerSettings:
     concurrency: int
     self_check_max_hold_seconds: int
     file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1218,6 +1320,7 @@ class WorkerSettings:
             ),
             self_check_max_hold_seconds=_self_check_max_hold(source),
             file_artifacts=_file_artifact_settings(source),
+            im_delivery=IMDeliverySettings.from_env(source),
         )
 
 
@@ -1231,6 +1334,16 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     _FILE_ARTIFACT_ROOT_KEY,
     _FILE_ARTIFACT_MAC_KEY,
     _FILE_ARTIFACT_RETENTION_KEY,
+    "IM_PROVIDER",
+    "IM_ZULIP_ORIGIN",
+    "IM_HOST_ORIGIN",
+    "IM_INSTANCE_ID",
+    "IM_ZULIP_REALM_ID",
+    "IM_ZULIP_TLS_CA_FILE",
+    "IM_DELIVERY_BOT_ID",
+    "IM_DELIVERY_BOT_EMAIL",
+    "IM_DELIVERY_BOT_API_KEY",
+    "IM_DELIVERY_RECIPIENTS_JSON",
 )
 
 

@@ -1,8 +1,7 @@
 """File artifact metadata (FOUNDATION_PLAN v1.6 appendix B.2).
 
-Upgrade-only authorization: P2-FILE-ARTIFACTS-001 (DECISIONS 2026-11-03). Written but not
-executed yet: once #257/#258 are merged, ``down_revision`` moves to ``20261104_130000``
-(待 #257/#258 合入后改接 20261104_130000) so the chain keeps a single head. Like the other
+Upgrade-only authorization: P2-FILE-ARTIFACTS-001 (DECISIONS 2026-11-03). It follows the IM
+migrations (``20261104_130000``) so the chain keeps a single head. Like the other
 revisions the table and its foreign keys are unqualified, so they land in ``public`` on
 the authorized targets and inside an isolated schema when the chain is replayed there.
 Downgrade only drops an empty table.
@@ -15,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261104_140000"
-down_revision = "20261103_120100"
+down_revision = "20261104_130000"
 branch_labels = None
 depends_on = None
 
