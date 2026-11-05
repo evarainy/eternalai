@@ -2,8 +2,8 @@
 
 A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
-hold limit, file artifact root and MAC key), plus optional IM Bot and reader configuration. When personal agents
-are enabled it also loads the tool-free published-material model seam, without
+hold limit, file artifact root and MAC key), plus optional IM Bot and reader configuration.
+When personal agents are enabled it also loads the tool-free published-material model seam, without
 the production composition, ordinary chat, OA or browser stacks. The loop is
 psycopg + Selector.
 """
