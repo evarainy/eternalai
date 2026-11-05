@@ -50,6 +50,25 @@
         "title": "AgentView",
         "type": "object"
       },
+      "DelegationView": {
+        "properties": {
+          "target_agent_display_name": {
+            "title": "Target Agent Display Name",
+            "type": "string"
+          },
+          "target_agent_id": {
+            "format": "uuid",
+            "title": "Target Agent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_agent_id",
+          "target_agent_display_name"
+        ],
+        "title": "DelegationView",
+        "type": "object"
+      },
       "GrantList": {
         "properties": {
           "grants": {
@@ -398,6 +417,16 @@
           "agent_display_name": {
             "title": "Agent Display Name",
             "type": "string"
+          },
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelegationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "deliveries": {
             "items": {

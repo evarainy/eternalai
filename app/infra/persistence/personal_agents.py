@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import fields
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -21,6 +22,8 @@ from app.ports.im_deliveries import DeliveryBinding, DeliveryRecord
 from app.ports.personal_agents import (
     AgentView,
     AuthorizedMaterial,
+    DelegationContext,
+    DelegationView,
     GranteeView,
     GrantMaterial,
     GrantView,
@@ -269,7 +272,49 @@ class PostgreSQLPersonalAgentStore:
         return ReceiveResult(row["inbox_id"], "duplicate" if bytes(row["payload_fingerprint"])
                              == params["payload_fingerprint"] else "conflict")
 
-    async def accept(self, agent_id: UUID, event: InboundEvent) -> ReceiveResult:
+    async def _inbound_actor(
+        self, session: AsyncSession, agent: PersonalAgent, event: InboundEvent,
+    ) -> DeliveryBinding | None:
+        row = (await session.execute(text(
+            f"SELECT {_BINDING_COLUMNS} FROM public.im_account_bindings "
+            "WHERE tenant_id=:tenant_id AND provider=:provider "
+            "AND im_instance_id=:im_instance_id AND realm_id=:realm_id "
+            "AND im_user_id=:sender_id AND status='active'"
+        ), self._event_params(agent, event))).mappings().one_or_none()
+        return None if row is None else DeliveryBinding(**dict(row))
+
+    async def inbound_actor(
+        self, agent: PersonalAgent, event: InboundEvent,
+    ) -> DeliveryBinding | None:
+        async with self._session() as session:
+            return await self._inbound_actor(session, agent, event)
+
+    async def delegation_agents(
+        self, actor: DeliveryBinding, bot_ids: frozenset[str],
+    ) -> tuple[PersonalAgent, PersonalAgent] | None:
+        async with self._session() as session:
+            rows = (await session.execute(text(
+                "SELECT * FROM public.personal_agents WHERE tenant_id=:tenant "
+                "AND provider=:provider AND im_instance_id=:instance AND realm_id=:realm "
+                "AND status='active' AND bot_user_id=ANY(:bots)"
+            ), {"tenant": actor.tenant_id, "provider": actor.provider,
+                "instance": actor.im_instance_id, "realm": actor.realm_id,
+                "bots": list(bot_ids)})).mappings().all()
+            if len(rows) != 2:
+                return None
+            agents = [_agent(row) for row in rows]
+            own = [agent for agent in agents if agent.owner_binding_id == actor.binding_id]
+            if len(own) != 1:
+                return None
+            for agent in agents:
+                owner = await self._binding(session, agent.owner_binding_id)
+                if not self._agent_identity_valid(agent, owner):
+                    return None
+            return own[0], next(agent for agent in agents if agent.agent_id != own[0].agent_id)
+
+    async def accept(
+        self, agent_id: UUID, event: InboundEvent, *, delegate_agent_id: UUID | None = None,
+    ) -> ReceiveResult:
         agent = await self.agent(agent_id)
         params = self._event_params(agent, event)
         if (event.provider, event.im_instance_id, event.realm_id, event.target_bot_id) != (
@@ -286,22 +331,31 @@ class PostgreSQLPersonalAgentStore:
                 active = (await session.execute(text(
                     "SELECT agent_id FROM public.personal_agents WHERE agent_id=:id "
                     "AND status='active' FOR UPDATE"
-                ), {"id": agent_id})).scalar_one_or_none()
+                ), {"id": delegate_agent_id or agent_id})).scalar_one_or_none()
                 if active is None:
                     return ReceiveResult(None, "target_unavailable")
                 existing = await self._existing(session, params)
                 if existing is not None:
                     await session.commit()
                     return existing
-                row = (await session.execute(text(
-                    f"SELECT {_BINDING_COLUMNS} FROM public.im_account_bindings "
-                    "WHERE tenant_id=:tenant_id AND provider=:provider "
-                    "AND im_instance_id=:im_instance_id AND realm_id=:realm_id "
-                    "AND im_user_id=:sender_id AND status='active'"
-                ), params)).mappings().one_or_none()
-                if row is None:
+                actor = await self._inbound_actor(session, agent, event)
+                if actor is None:
                     return ReceiveResult(None, "actor_unavailable")
-                actor = DeliveryBinding(**dict(row))
+                if delegate_agent_id is not None:
+                    target_row = (await session.execute(text(
+                        "SELECT * FROM public.personal_agents WHERE agent_id=:id"
+                    ), {"id": delegate_agent_id})).mappings().one()
+                    target = _agent(target_row)
+                    owner = await self._binding(session, agent.owner_binding_id)
+                    target_owner = await self._binding(session, target.owner_binding_id)
+                    if (agent.owner_binding_id != actor.binding_id
+                            or target.agent_id == agent.agent_id
+                            or not self._agent_identity_valid(agent, owner)
+                            or not self._agent_identity_valid(target, target_owner)
+                            or (target.tenant_id, target.provider, target.im_instance_id,
+                                target.realm_id) != (actor.tenant_id, actor.provider,
+                                                     actor.im_instance_id, actor.realm_id)):
+                        return ReceiveResult(None, "target_unavailable")
                 grant_id = (await session.execute(text(
                     "SELECT g.grant_id FROM public.personal_agent_grants g "
                     "JOIN public.personal_agent_materials m ON m.agent_id=g.agent_id "
@@ -309,7 +363,7 @@ class PostgreSQLPersonalAgentStore:
                     "AND g.grantee_binding_id=:binding AND g.grantee_binding_version=:hash "
                     "AND g.revoked_at IS NULL AND m.withdrawn_at IS NULL "
                     "AND g.expires_at>clock_timestamp() AND m.expires_at>clock_timestamp()"
-                ), {"agent": agent_id, "binding": actor.binding_id,
+                ), {"agent": delegate_agent_id or agent_id, "binding": actor.binding_id,
                     "hash": actor.version})).scalar_one_or_none()
                 inbox_id = uuid4()
                 queue_id = await defer_job(session, queue_name=GENERAL_QUEUE,
@@ -320,13 +374,14 @@ class PostgreSQLPersonalAgentStore:
                     "(inbox_id,tenant_id,provider,im_instance_id,realm_id,"
                     "target_bot_id,agent_id,source_message_id,trigger_kind,payload_fingerprint,"
                     "actor_binding_id,actor_binding_version,conversation_ref,conversation_kind,"
-                    "received_at,queue_job_id,grant_id,state,updated_at) VALUES "
+                    "received_at,queue_job_id,grant_id,delegate_agent_id,state,updated_at) VALUES "
                     "(:id,:tenant_id,:provider,:im_instance_id,:realm_id,:target_bot_id,:agent,"
                     ":source_message_id,:trigger_kind,:payload_fingerprint,:actor,:hash,"
                     ":conversation_ref,:conversation_kind,clock_timestamp(),:queue,:grant,"
-                    "'queued',clock_timestamp())"
+                    ":delegate,'queued',clock_timestamp())"
                 ), {**params, "id": inbox_id, "agent": agent_id, "actor": actor.binding_id,
-                    "hash": actor.version, "queue": queue_id, "grant": grant_id})
+                    "hash": actor.version, "queue": queue_id, "grant": grant_id,
+                    "delegate": delegate_agent_id})
                 await session.commit()
                 return ReceiveResult(inbox_id, "queued")
         except (IntegrityError, SQLAlchemyError):
@@ -347,6 +402,15 @@ class PostgreSQLPersonalAgentStore:
         agent = _agent(agent_row)
         actor = await self._binding(session, row["actor_binding_id"])
         owner = await self._binding(session, agent.owner_binding_id)
+        delegation = None
+        if row["delegate_agent_id"] is not None:
+            target_row = (await session.execute(text(
+                "SELECT * FROM public.personal_agents WHERE agent_id=:id"
+            ), {"id": row["delegate_agent_id"]})).mappings().one()
+            target = _agent(target_row)
+            delegation = DelegationContext(
+                target, await self._binding(session, target.owner_binding_id),
+            )
         event = InboundEvent(
             **{name: row[name] for name in (
                 "provider", "im_instance_id", "realm_id", "target_bot_id", "source_message_id",
@@ -356,7 +420,17 @@ class PostgreSQLPersonalAgentStore:
         )
         return InboxContext(
             inbox_id, agent, actor, owner, bytes(row["actor_binding_version"]), event,
-            row["grant_id"], row["state"],
+            row["grant_id"], row["state"], delegation,
+        )
+
+    @staticmethod
+    def _agent_identity_valid(agent: PersonalAgent, owner: DeliveryBinding) -> bool:
+        return (
+            agent.tenant_id == owner.tenant_id == "default"
+            and agent.status == owner.status == "active"
+            and owner.version == agent.owner_binding_version
+            and (agent.provider, agent.im_instance_id, agent.realm_id)
+            == (owner.provider, owner.im_instance_id, owner.realm_id)
         )
 
     @staticmethod
@@ -373,6 +447,16 @@ class PostgreSQLPersonalAgentStore:
             and (context.event.provider, context.event.im_instance_id,
                  context.event.realm_id, context.event.target_bot_id)
             == (agent.provider, agent.im_instance_id, agent.realm_id, agent.bot_user_id)
+            and (context.delegation is None or (
+                agent.owner_binding_id == actor.binding_id
+                and context.execution_agent.agent_id != agent.agent_id
+                and PostgreSQLPersonalAgentStore._agent_identity_valid(
+                    context.execution_agent, context.execution_owner,
+                )
+                and (context.execution_agent.provider, context.execution_agent.im_instance_id,
+                     context.execution_agent.realm_id)
+                == (agent.provider, agent.im_instance_id, agent.realm_id)
+            ))
         )
 
     async def claim_inbox(self, inbox_id: UUID) -> InboxContext | None:
@@ -397,7 +481,7 @@ class PostgreSQLPersonalAgentStore:
     ) -> tuple[InboxContext, RowMapping | None]:
         await session.execute(text(
             "SELECT agent_id FROM public.personal_agents WHERE agent_id=:id FOR UPDATE"
-        ), {"id": context.agent.agent_id})
+        ), {"id": context.execution_agent.agent_id})
         grant = None
         if context.grant_id is not None:
             version = (await session.execute(text(
@@ -406,7 +490,7 @@ class PostgreSQLPersonalAgentStore:
             await session.execute(text(
                 "SELECT version FROM public.personal_agent_materials WHERE agent_id=:id "
                 "AND version=:version FOR UPDATE"
-            ), {"id": context.agent.agent_id, "version": version})
+            ), {"id": context.execution_agent.agent_id, "version": version})
             grant = (await session.execute(text(
                 "SELECT * FROM public.personal_agent_grants WHERE grant_id=:id FOR UPDATE"
             ), {"id": context.grant_id})).mappings().one()
@@ -417,30 +501,43 @@ class PostgreSQLPersonalAgentStore:
 
     async def _authorized(
         self, session: AsyncSession, context: InboxContext, grant: RowMapping | None,
+        now: datetime,
     ) -> AuthorizedMaterial | None:
         if not self._identities_valid(context) or grant is None:
             return None
-        if (grant["agent_id"] != context.agent.agent_id
+        if (grant["agent_id"] != context.execution_agent.agent_id
                 or grant["grantee_binding_id"] != context.actor.binding_id
                 or bytes(grant["grantee_binding_version"]) != context.actor.version
                 or grant["revoked_at"] is not None):
             return None
-        now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
         if grant["expires_at"] <= now:
             return None
         row = (await session.execute(text(
             "SELECT * FROM public.personal_agent_materials WHERE agent_id=:agent "
             "AND version=:version AND withdrawn_at IS NULL AND expires_at>:now"
-        ), {"agent": context.agent.agent_id, "version": grant["material_version"],
+        ), {"agent": context.execution_agent.agent_id, "version": grant["material_version"],
             "now": now})).mappings().one_or_none()
         return None if row is None else AuthorizedMaterial(grant["grant_id"], _material(row))
+
+    @staticmethod
+    async def _check_deadline(
+        session: AsyncSession, context: InboxContext, now: datetime,
+    ) -> None:
+        if context.delegation is not None:
+            received_at = (await session.execute(text(
+                "SELECT received_at FROM public.im_inbox WHERE inbox_id=:id"
+            ), {"id": context.inbox_id})).scalar_one()
+            if now >= received_at + timedelta(seconds=300):
+                raise PersonalAgentError("delegation_expired")
 
     async def material(self, context: InboxContext) -> AuthorizedMaterial | None:
         async with self._session() as session:
             current, grant = await self._locked(session, context)
             if current.state != "running":
                 return None
-            return await self._authorized(session, current, grant)
+            now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            await self._check_deadline(session, current, now)
+            return await self._authorized(session, current, grant, now)
 
     @staticmethod
     async def _enqueue(
@@ -492,7 +589,9 @@ class PostgreSQLPersonalAgentStore:
                     "updated_at=clock_timestamp() WHERE inbox_id=:id AND state='running'"
                 ), {"id": current.inbox_id})
                 return
-            authorized = await self._authorized(session, current, grant)
+            now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            await self._check_deadline(session, current, now)
+            authorized = await self._authorized(session, current, grant, now)
             allowed = answer is not None and authorized is not None
             await self._enqueue(session, current, delivery_id,
                                 answer if allowed and answer is not None else refusal, "private")
@@ -537,8 +636,26 @@ class PostgreSQLPersonalAgentStore:
                 ), {"id": delivery_id})
                 return None
             private = row["reply_slot"] == "private"
+            sender = current.execution_agent if private else current.agent
+            conversation = (refusal.target_conversation_ref if private
+                            else current.event.conversation_ref)
+            if ((row["provider"], row["im_instance_id"], row["realm_id"], row["sender_bot_id"],
+                 row["target_conversation_ref"])
+                    != (sender.provider, sender.im_instance_id, sender.realm_id,
+                        sender.bot_user_id, conversation)
+                    or (private and (
+                        row["recipient_binding_id"] != current.actor.binding_id
+                        or row["recipient_ai_user_id"] != current.actor.ai_user_id
+                        or bytes(row["recipient_mapping_version"]) != current.actor.version))):
+                await session.execute(text(
+                    "UPDATE public.im_deliveries SET state='cancelled',"
+                    "result_code='source_unavailable',updated_at=clock_timestamp() "
+                    "WHERE delivery_id=:id"
+                ), {"id": delivery_id})
+                return None
             if private and current.state == "completed":
-                if await self._authorized(session, current, grant) is None:
+                now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+                if await self._authorized(session, current, grant, now) is None:
                     await session.execute(text(
                         "UPDATE public.im_inbox SET state='refused',"
                         "result_code='authorization_unavailable',updated_at=clock_timestamp() "
@@ -569,9 +686,11 @@ class PostgreSQLPersonalAgentStore:
                 f"b.{item.name} AS binding_{item.name}" for item in fields(DeliveryBinding)
             )
             rows = (await session.execute(text(
-                f"SELECT i.*,a.display_name AS agent_display_name,{binding_columns} "
+                f"SELECT i.*,a.display_name AS agent_display_name,{binding_columns},"
+                "d.display_name AS delegate_display_name "
                 "FROM public.im_inbox i "
                 "JOIN public.personal_agents a ON a.agent_id=i.agent_id "
+                "LEFT JOIN public.personal_agents d ON d.agent_id=i.delegate_agent_id "
                 "JOIN public.im_account_bindings b ON b.binding_id=i.actor_binding_id "
                 "WHERE i.tenant_id=:tenant AND b.tenant_id=i.tenant_id "
                 "AND b.ai_user_id=:user AND b.directory_user_id=:directory AND b.status='active' "
@@ -592,8 +711,12 @@ class PostgreSQLPersonalAgentStore:
                 # Status-only surface deliberately returns no cached answer body.
                 result.append(RequestView(
                     **{name: row[name] for name in RequestView.model_fields
-                       if name != "deliveries"},
+                       if name not in ("deliveries", "delegation")},
                     deliveries=[ReplyView(**dict(reply)) for reply in replies],
+                    delegation=(DelegationView(
+                        target_agent_id=row["delegate_agent_id"],
+                        target_agent_display_name=row["delegate_display_name"],
+                    ) if row["delegate_agent_id"] is not None else None),
                 ))
             return result
 
