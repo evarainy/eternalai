@@ -935,6 +935,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         im_deliveries=None,
         close_im_deliveries=None,
         im_context=None,
+        personal_agents=None,
     )
     application = object()
     monkeypatch.setattr(

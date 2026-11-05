@@ -94,7 +94,7 @@ from app.infra.auth.postgresql import (
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
-from app.infra.communication.composition import build_im_delivery
+from app.infra.communication.composition import build_im_delivery, build_personal_agents
 from app.infra.communication.zulip import ZulipCommunicationAdapter
 from app.infra.fixed_txt import FixedTxtReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
@@ -160,6 +160,7 @@ from app.organization_directory_sync import (
     OrganizationDirectoryScheduler,
     OrganizationDirectorySyncService,
 )
+from app.personal_agents import PersonalAgentService
 from app.ports.adapter import AdapterPort
 from app.ports.auth import (
     AuthenticationPort,
@@ -250,6 +251,7 @@ class ProductionComponents:
     im_deliveries: IMDeliveryService | None = None
     close_im_deliveries: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     im_context: IMContextService | None = None
+    personal_agents: PersonalAgentService | None = None
 
 
 def build_credential_store(
@@ -1411,8 +1413,16 @@ def build_production_components(
         }
     else:
         resolved_health_checks = dict(health_checks)
-    im_deliveries, delivery_client = build_im_delivery(settings.im_delivery, session_factory)
+    im_deliveries, delivery_client = build_im_delivery(
+        settings.im_delivery, session_factory, settings.personal_agents,
+    )
+    personal_agents = build_personal_agents(
+        settings.personal_agents, session_factory, im_deliveries.sender,
+    ) if im_deliveries is not None else None
+    if im_deliveries is not None:
+        im_deliveries.set_agent_replies(personal_agents)
     return ProductionComponents(
+        personal_agents=personal_agents,
         im_deliveries=im_deliveries,
         close_im_deliveries=delivery_client.aclose if delivery_client is not None else None,
         agentscope_runtime=agentscope_runtime,

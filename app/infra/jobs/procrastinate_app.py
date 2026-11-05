@@ -32,6 +32,7 @@ FILE_ARTIFACTS_CLEANUP_CRON = "*/10 * * * *"
 FILE_ARTIFACTS_CONTEXT_KEY = "file_artifact_service"
 _FILE_ARTIFACT_LOGGER = logging.getLogger("uvicorn.error.file_artifacts")
 IM_DELIVERY_CONTEXT_KEY = "im_delivery_service"
+PERSONAL_AGENT_CONTEXT_KEY = "personal_agent_service"
 
 
 def psycopg_conninfo(database_url: str) -> str:
@@ -61,6 +62,13 @@ def build_procrastinate_app(conninfo: str) -> App:
             raise RuntimeError("im_delivery_unavailable")
         await service.send(UUID(delivery_id))
 
+    @app.task(name="personal_agents.answer", queue=GENERAL_QUEUE, pass_context=True, retry=False)
+    async def answer_personal_agent(context: JobContext, inbox_id: str) -> None:
+        service = context.additional_context[PERSONAL_AGENT_CONTEXT_KEY]
+        if service is None:
+            raise RuntimeError("personal_agent_unavailable")
+        await service.answer(UUID(inbox_id))
+
     @app.periodic(
         cron=RECONCILE_CRON, periodic_id="im_delivery_maintenance",
         queueing_lock="im_deliveries.maintain",
@@ -72,6 +80,9 @@ def build_procrastinate_app(conninfo: str) -> App:
         service = context.additional_context[IM_DELIVERY_CONTEXT_KEY]
         if service is not None:
             await service.maintain()
+        personal_agents = context.additional_context.get(PERSONAL_AGENT_CONTEXT_KEY)
+        if personal_agents is not None:
+            await personal_agents.maintain_inbox()
 
     @app.periodic(cron=RECONCILE_CRON, periodic_id="reconcile", queueing_lock=RECONCILE_TASK)
     @app.task(name=RECONCILE_TASK, queue=MAINTENANCE_QUEUE, pass_context=True, retry=False)
@@ -105,6 +116,7 @@ __all__ = (
     "RUNNER_CONTEXT_KEY",
     "SESSIONS_CONTEXT_KEY",
     "IM_DELIVERY_CONTEXT_KEY",
+    "PERSONAL_AGENT_CONTEXT_KEY",
     "build_procrastinate_app",
     "psycopg_conninfo",
 )

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infra.jobs.queue_sql import GENERAL_QUEUE, defer_job, read_job_state
 from app.ports.auth import Principal
-from app.ports.communication import DeliveryResult, PrivateCard
+from app.ports.communication import DeliveryMessage, DeliveryResult
 from app.ports.im_deliveries import (
     DeliveryBinding,
     DeliveryRecipient,
@@ -30,9 +30,9 @@ from app.ports.im_deliveries import (
 
 _COLUMNS = tuple(field.name for field in fields(DeliveryRecord))
 _BINDING_COLUMNS = ", ".join(field.name for field in fields(DeliveryBinding))
-_INITIATOR = "tenant_id=:tenant AND initiator_ai_user_id=:user"
+_INITIATOR = "origin_inbox_id IS NULL AND tenant_id=:tenant AND initiator_ai_user_id=:user"
 _PARTICIPANT = (
-    "tenant_id=:tenant AND (initiator_ai_user_id=:user OR "
+    "origin_inbox_id IS NULL AND tenant_id=:tenant AND (initiator_ai_user_id=:user OR "
     "(recipient_ai_user_id=:user AND confirmed_at IS NOT NULL "
     "AND state NOT IN ('cancelled','expired') "
     "AND (state <> 'ready' OR send_expires_at > now())))"
@@ -42,8 +42,9 @@ _SEND_TASK = "im_deliveries.send"
 
 def _record(row: RowMapping) -> DeliveryRecord:
     values = dict(row)
-    values["recipient_mapping_version"] = bytes(values["recipient_mapping_version"])
-    values["confirmation_sha256"] = bytes(values["confirmation_sha256"])
+    for name in ("recipient_mapping_version", "confirmation_sha256"):
+        if values[name] is not None:
+            values[name] = bytes(values[name])
     return DeliveryRecord(**values)
 
 
@@ -215,7 +216,7 @@ class PostgreSQLIMDeliveryStore:
                 raise IMDeliveryError("im_delivery_not_confirmable")
             if record.confirmed_at is not None:
                 return record
-            if record.send_expires_at <= datetime.now(UTC):
+            if cast(datetime, record.send_expires_at) <= datetime.now(UTC):
                 row = (
                     await session.execute(
                         text(
@@ -228,7 +229,7 @@ class PostgreSQLIMDeliveryStore:
                 return _record(row)
             initiator = await self._initiator(session, principal, record)
             recipient = await self._recipient(
-                session, record.tenant_id, record.recipient_ai_user_id, record
+                session, record.tenant_id, cast(str, record.recipient_ai_user_id), record
             )
             if confirmation_digest(record, initiator, recipient) != record.confirmation_sha256:
                 raise IMDeliveryError("im_delivery_mapping_changed")
@@ -266,11 +267,12 @@ class PostgreSQLIMDeliveryStore:
         values: dict[str, Any] = {
             name: source[name] for name in DeliveryView.model_fields if name in source
         }
-        values["confirmation_sha256"] = record.confirmation_sha256.hex()
+        values["confirmation_sha256"] = cast(bytes, record.confirmation_sha256).hex()
         values["viewer_role"] = (
             "initiator" if principal.ai_user_id == record.initiator_ai_user_id else "recipient"
         )
-        if record.state in ("prepared", "ready") and record.send_expires_at <= datetime.now(UTC):
+        if (record.state in ("prepared", "ready")
+                and cast(datetime, record.send_expires_at) <= datetime.now(UTC)):
             values["state"] = "expired"
         values["verifications"] = [VerificationView(**dict(row)) for row in receipts]
         return DeliveryView(**values)
@@ -334,6 +336,7 @@ class PostgreSQLIMDeliveryStore:
                     text(
                         "SELECT * FROM public.im_deliveries WHERE tenant_id=:tenant "
                         "AND recipient_ai_user_id=:user AND delivery_id=:id "
+                        "AND origin_inbox_id IS NULL "
                         "AND confirmed_at IS NOT NULL AND state NOT IN ('cancelled','expired') "
                         "AND (state <> 'ready' OR send_expires_at > now()) FOR UPDATE"
                     ),
@@ -369,21 +372,30 @@ class PostgreSQLIMDeliveryStore:
             )
 
     @staticmethod
-    def _card(record: DeliveryRecord) -> PrivateCard:
-        return PrivateCard(
+    def _card(record: DeliveryRecord) -> DeliveryMessage:
+        return DeliveryMessage(
             provider=record.provider, im_instance_id=record.im_instance_id,
             realm_id=record.realm_id, sender_bot_id=record.sender_bot_id,
             target_conversation_ref=record.target_conversation_ref,
             card_content=record.card_content,
+            kind="group_status" if record.reply_slot == "group_status" else "private",
         )
 
-    async def claim(self, delivery_id: UUID) -> tuple[DeliveryRecord, PrivateCard] | None:
+    async def origin_inbox(self, delivery_id: UUID) -> UUID | None:
+        async with self._session() as session:
+            return cast(UUID | None, (await session.execute(
+                text("SELECT origin_inbox_id FROM public.im_deliveries WHERE delivery_id=:id"),
+                {"id": delivery_id},
+            )).scalar_one_or_none())
+
+    async def claim(self, delivery_id: UUID) -> tuple[DeliveryRecord, DeliveryMessage] | None:
         async with self._session(write=True) as session:
             row = (
                 await session.execute(
                     text(
                         "SELECT * FROM public.im_deliveries "
-                        "WHERE delivery_id=:id AND state='ready' FOR UPDATE"
+                        "WHERE delivery_id=:id AND state='ready' "
+                        "AND origin_inbox_id IS NULL FOR UPDATE"
                     ),
                     {"id": delivery_id},
                 )
@@ -391,7 +403,7 @@ class PostgreSQLIMDeliveryStore:
             if row is None:
                 return None
             record = _record(row)
-            if record.send_expires_at <= datetime.now(UTC):
+            if cast(datetime, record.send_expires_at) <= datetime.now(UTC):
                 await session.execute(
                     text(
                         "UPDATE public.im_deliveries SET state='expired', updated_at=now() "
@@ -404,7 +416,7 @@ class PostgreSQLIMDeliveryStore:
                 session, record.tenant_id, record.initiator_ai_user_id, record
             )
             recipient = await self._binding(
-                session, record.tenant_id, record.recipient_ai_user_id, record
+                session, record.tenant_id, cast(str, record.recipient_ai_user_id), record
             )
             if (record.tenant_id != "default" or initiator is None or recipient is None
                     or record.recipient_ai_user_id not in self._recipients
@@ -450,7 +462,7 @@ class PostgreSQLIMDeliveryStore:
                 },
             )
 
-    async def uncertain(self, delivery_id: UUID) -> tuple[DeliveryRecord, PrivateCard] | None:
+    async def uncertain(self, delivery_id: UUID) -> tuple[DeliveryRecord, DeliveryMessage] | None:
         async with self._session(write=True) as session:
             row = (
                 await session.execute(
@@ -490,7 +502,8 @@ class PostgreSQLIMDeliveryStore:
             ).mappings().all()
             for row in rows:
                 record = _record(row)
-                if record.send_expires_at <= datetime.now(UTC):
+                if (record.origin_inbox_id is None
+                        and cast(datetime, record.send_expires_at) <= datetime.now(UTC)):
                     await session.execute(
                         text(
                             "UPDATE public.im_deliveries SET state='expired', updated_at=now() "

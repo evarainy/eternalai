@@ -372,6 +372,8 @@ services/decision/*
 !app/ports/file_artifacts.py
 !app/ports/fixed_document.py
 !app/ports/im_deliveries.py
+!app/ports/personal_agents.py
+!app/ports/personal_agent_runtime.py
 !app/ports/human_gate.py
 !app/ports/identity_mapping.py
 !app/ports/job_queue.py
@@ -411,10 +413,15 @@ services/decision/*
 !app/runtime/runtime.py
 !app/server.py
 !app/im_deliveries.py
+!app/personal_agents.py
 !app/api/v1/im_deliveries.py
+!app/api/v1/personal_agents.py
+!app/api/v1/im_inbound.py
 !app/infra/communication/__init__.py
 !app/infra/communication/composition.py
 !app/infra/persistence/im_deliveries.py
+!app/infra/persistence/personal_agents.py
+!app/infra/orchestration/agentscope_runtime/personal_agent.py
 !app/version_binding.py
 !app/work_dispatch/__init__.py
 !app/work_dispatch/attachments.py

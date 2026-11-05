@@ -125,6 +125,7 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
         "im_deliveries": None,
         "close_im_deliveries": None,
         "im_context": None,
+        "personal_agents": None,
     }
     components = SimpleNamespace(**values)
     vertical = SimpleNamespace(chat=None, submission=object())

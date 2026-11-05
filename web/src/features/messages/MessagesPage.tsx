@@ -15,6 +15,7 @@ import {
   safeIMLink, validateIMEvent,
 } from './hostBridge';
 import { DeliveryPanel } from './DeliveryPanel';
+import { PersonalAgentPanel } from './PersonalAgentPanel';
 import { DELIVERY_STATE_LABELS, deliveryError, deliveryTime, readDeliveries } from './deliveryApi';
 import type { DeliveryView } from './deliveryApi';
 import styles from './delivery.module.css';
@@ -248,5 +249,6 @@ export default function MessagesPage() {
       </section>
       <DeliveryWorkspace key={generation} />
     </div>
+    <PersonalAgentPanel key={generation} />
   </div>;
 }
