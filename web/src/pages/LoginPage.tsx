@@ -5,8 +5,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/mutator';
 import { peekReauthPath, reauthLoginNotice } from '../app/reauthRestore';
 import { withAuthCookieLock } from '../app/sessionKeepalive';
-import { notifyIdentityRecheck, notifyIdentitySwitch } from '../app/identity';
+import { identityQueryKey, notifyIdentityRecheck, notifyIdentitySwitch } from '../app/identity';
 import { loginApiV1AuthLoginPost } from '../generated/auth/auth';
+import { readMeApiV1MeGet } from '../generated/me/me';
 import type { LoginApiV1AuthLoginPostBody } from '../generated/auth/auth.schemas';
 import { Icon } from '../shared/ui/Icon';
 import { useAuthStore } from '../stores/authStore';
@@ -43,7 +44,10 @@ export default function LoginPage() {
         // History state survives a reload of this page; the sealed copy's route is the fallback.
         const returnPath = getReturnPath(location.state ?? { from: peekReauthPath() });
         queryClient.clear();
+        const identity = await readMeApiV1MeGet();
         markAuthenticated();
+        // Seed the confirmed account before recheck can mistake an empty cache for a switch.
+        queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
         beginIMLogin();
         notifyIdentityRecheck();
         navigate(returnPath, { replace: true });
