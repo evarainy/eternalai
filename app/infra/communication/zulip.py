@@ -168,14 +168,14 @@ class _DelegationMarkup(HTMLParser):
         return frozenset(self.mentions)
 
     def question(self, content: str, bot_ids: tuple[str, str]) -> str:
-        content = re.sub(r"^\s*委托(?:\s+|[:：]\s*)", "", content, count=1)
         for bot_id in bot_ids:
             name = self.mention_text[bot_id].removeprefix("@")
             content = re.sub(
                 r"@\*\*" + re.escape(name) + r"(?:\|" + bot_id + r")?\*\*",
                 "", content, count=1,
             )
-        return content.lstrip()
+        content = content.lstrip()
+        return re.sub(r"^委托(?:\s+|[:：]\s*)", "", content, count=1)
 
 
 class ZulipCommunicationAdapter:
