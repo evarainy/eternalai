@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+
 from app.db.config import get_database_url
 
 if TYPE_CHECKING:
@@ -280,6 +282,55 @@ class FixedDocumentSettings:
         )
 
 
+class _DeliveryRecipientConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ai_user_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+
+
+@dataclass(frozen=True, slots=True)
+class IMDeliverySettings:
+    """Fixed trial instance and Bot; credentials stay inside its adapter."""
+
+    origin: str
+    host_origin: str
+    im_instance_id: str
+    realm_id: str
+    sender_bot_id: str
+    bot_email: str = field(repr=False)
+    bot_api_key: SecretStr = field(repr=False)
+    recipients: tuple[tuple[str, str], ...]
+    tls_ca_file: str | None = None
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> IMDeliverySettings | None:
+        if not source.get("IM_DELIVERY_BOT_ID", "").strip():
+            return None
+        if _required(source, "IM_PROVIDER") != "zulip":
+            raise RuntimeError("im_provider_unsupported")
+        origin = _canonical_http_origin(_required(source, "IM_ZULIP_ORIGIN"), "IM_ZULIP_ORIGIN")
+        host = _canonical_http_origin(_required(source, "IM_HOST_ORIGIN"), "IM_HOST_ORIGIN")
+        if not origin.startswith("https://") or not host.startswith("https://"):
+            raise RuntimeError("im_delivery_https_required")
+        try:
+            recipients = TypeAdapter(tuple[_DeliveryRecipientConfig, ...]).validate_json(
+                _required(source, "IM_DELIVERY_RECIPIENTS_JSON")
+            )
+        except ValidationError:
+            raise RuntimeError("im_delivery_recipients_invalid") from None
+        return cls(
+            origin=origin, host_origin=host,
+            im_instance_id=_required(source, "IM_INSTANCE_ID"),
+            realm_id=_required(source, "IM_ZULIP_REALM_ID"),
+            sender_bot_id=_required(source, "IM_DELIVERY_BOT_ID"),
+            bot_email=_required(source, "IM_DELIVERY_BOT_EMAIL"),
+            bot_api_key=SecretStr(_required(source, "IM_DELIVERY_BOT_API_KEY")),
+            recipients=tuple((person.ai_user_id, person.display_name) for person in recipients),
+            tls_ca_file=source.get("IM_ZULIP_TLS_CA_FILE") or None,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ZulipSettings:
     origin: str
@@ -399,6 +450,7 @@ class ProductionSettings:
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     # Upper bound for the self-check ``hold_seconds`` parameter; 0 forbids holding.
     background_self_check_max_hold_seconds: int = 0
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -584,6 +636,7 @@ class ProductionSettings:
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             background_self_check_max_hold_seconds=_self_check_max_hold(source),
+            im_delivery=IMDeliverySettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
             zulip=_zulip_settings(source),
@@ -1190,7 +1243,7 @@ def _self_check_max_hold(source: Mapping[str, str]) -> int:
 
 @dataclass(frozen=True)
 class WorkerSettings:
-    """Only the values the background worker needs; no OA, identity or LLM secrets."""
+    """Worker values, including an optional IM Bot; no OA, session or LLM secrets."""
 
     database_url: str = field(repr=False)
     redis_url: RedisConnectionURL
@@ -1198,6 +1251,7 @@ class WorkerSettings:
     organization_directory_max_age_s: int
     concurrency: int
     self_check_max_hold_seconds: int
+    im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1218,6 +1272,7 @@ class WorkerSettings:
                 source, "BACKGROUND_WORKER_CONCURRENCY", 2, minimum=1, maximum=8
             ),
             self_check_max_hold_seconds=_self_check_max_hold(source),
+            im_delivery=IMDeliverySettings.from_env(source),
         )
 
 
@@ -1228,6 +1283,16 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     "ORGANIZATION_DIRECTORY_MAX_AGE_S",
     "BACKGROUND_WORKER_CONCURRENCY",
     "BACKGROUND_SELF_CHECK_MAX_HOLD_SECONDS",
+    "IM_PROVIDER",
+    "IM_ZULIP_ORIGIN",
+    "IM_HOST_ORIGIN",
+    "IM_INSTANCE_ID",
+    "IM_ZULIP_REALM_ID",
+    "IM_ZULIP_TLS_CA_FILE",
+    "IM_DELIVERY_BOT_ID",
+    "IM_DELIVERY_BOT_EMAIL",
+    "IM_DELIVERY_BOT_API_KEY",
+    "IM_DELIVERY_RECIPIENTS_JSON",
 )
 
 

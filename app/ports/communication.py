@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncContextManager, Protocol
+from typing import AsyncContextManager, Literal, Protocol
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -79,3 +80,37 @@ class CommunicationReaderPort(Protocol):
 
 class CommunicationLoginPort(Protocol):
     def build_login_form(self, binding: IMAccountBinding) -> IMLoginForm: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateCard:
+    provider: str
+    im_instance_id: str
+    realm_id: str
+    sender_bot_id: str
+    target_conversation_ref: str = field(repr=False)
+    card_content: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryResult:
+    state: Literal["accepted", "known_rejected", "unknown"]
+    remote_message_id: str | None
+    result_code: str
+
+
+class CommunicationDeliveryPort(Protocol):
+    def prepare_private_card(
+        self,
+        *,
+        delivery_id: UUID,
+        initiator_label: str,
+        recipient_im_user_id: str,
+        note: str,
+    ) -> PrivateCard: ...
+
+    async def send_private_card(self, card: PrivateCard) -> DeliveryResult: ...
+
+    async def reconcile_private_card(
+        self, card: PrivateCard, delivery_id: UUID
+    ) -> DeliveryResult: ...

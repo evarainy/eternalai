@@ -51,6 +51,7 @@ from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.im_context import IMContextService
+from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
 from app.infra.adapters.business_mcp.catalog import catalog as mcp_catalog
 from app.infra.adapters.business_mcp.catalog import workflow_definitions as mcp_definitions
@@ -92,6 +93,7 @@ from app.infra.auth.postgresql import (
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
+from app.infra.communication.composition import build_im_delivery
 from app.infra.communication.zulip import ZulipCommunicationAdapter
 from app.infra.fixed_txt import FixedTxtReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
@@ -242,6 +244,8 @@ class ProductionComponents:
     # so AgentScope is otherwise never imported.
     agentscope_runtime: RuntimePort | None = None
     background_jobs: BackgroundJobService | None = None
+    im_deliveries: IMDeliveryService | None = None
+    close_im_deliveries: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     im_context: IMContextService | None = None
 
 
@@ -1404,7 +1408,10 @@ def build_production_components(
         }
     else:
         resolved_health_checks = dict(health_checks)
+    im_deliveries, delivery_client = build_im_delivery(settings.im_delivery, session_factory)
     return ProductionComponents(
+        im_deliveries=im_deliveries,
+        close_im_deliveries=delivery_client.aclose if delivery_client is not None else None,
         agentscope_runtime=agentscope_runtime,
         browser_gateway=gateway,
         browser_session_factory=session_factory,

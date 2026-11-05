@@ -150,4 +150,18 @@ export default defineConfig({
       },
     },
   },
+  imDeliveries: {
+    input: './openapi/im-deliveries.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/im-deliveries/im-deliveries.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
 });

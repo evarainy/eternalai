@@ -692,13 +692,9 @@ describe('application authentication boundary', () => {
     expect(screen.queryByText('开始新工作', { selector: 'strong' })).toBeNull();
   });
 
-  /*
-   * 落地页返修后是「一句标题 + 一句原因 + 一句下一步 + 一排按钮」，不再是三个 `region` 分段，所以这里
-   * 钉的是**为什么为空这句话真的显示出来了**（2026-08-27「空状态统一规范」的实质），而不是原来的分段
-   * 结构。
-   */
+  /* 消息页现已承载文字送核，核对实际入口仍挂在同一个工作区外壳中。 */
   it.each([
-    ['/messages', '消息', '消息尚未启用，或当前登录状态还未确认。'],
+    ['/messages', '消息', '从 AI 助手的文字结果选择“发给同事核实”，在这里查看原发送结果与本人回执。'],
   ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
@@ -708,6 +704,9 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
     ).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '刷新送核记录' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '文字送核记录' })).toBeInTheDocument();
     expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });

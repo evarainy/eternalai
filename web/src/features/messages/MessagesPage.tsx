@@ -1,19 +1,64 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import Alert from 'antd/es/alert';
+import { Alert, Button } from 'antd';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   configurationApiV1ImContextConfigurationGet, loginApiV1ImContextLoginPost,
   selectApiV1ImContextSourcesPost,
 } from '../../generated/im-context/im-context';
+import { PlaceholderPage } from '../../shared/ui/PlaceholderPage';
 import { useAuthStore } from '../../stores/authStore';
 import { useAIDockStore } from '../../stores/aiDockStore';
-import { PlaceholderPage } from '../../shared/ui/PlaceholderPage';
 import { useLogout } from '../../app/logout';
 import { withAuthCookieLock } from '../../app/sessionKeepalive';
 import {
   blockIMBridge, configureIM, imBridgeBlocked, imLogoutInProgress, imSessionOperation, registerIMView,
   safeIMLink, validateIMEvent,
 } from './hostBridge';
+import { DeliveryPanel } from './DeliveryPanel';
+import { DELIVERY_STATE_LABELS, deliveryError, deliveryTime, readDeliveries } from './deliveryApi';
+import type { DeliveryView } from './deliveryApi';
+import styles from './delivery.module.css';
+
+function DeliveryWorkspace() {
+  const generation = useAuthStore((state) => state.generation);
+  const [params] = useSearchParams();
+  const selected = params.get('delivery');
+  const [items, setItems] = useState<DeliveryView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setBusy(true);
+    setError(null);
+    void readDeliveries().then((result) => {
+      if (live && useAuthStore.getState().generation === generation) setItems(result.items);
+    }).catch((failure: unknown) => {
+      if (live && useAuthStore.getState().generation === generation) setError(deliveryError(failure));
+    }).finally(() => {
+      if (live && useAuthStore.getState().generation === generation) setBusy(false);
+    });
+    return () => { live = false; };
+  }, [generation, revision]);
+
+  return <section className={styles.workspace}>
+    <Button loading={busy} onClick={() => setRevision((value) => value + 1)}>刷新送核记录</Button>
+    <p>从 AI 助手的文字结果选择“发给同事核实”，在这里查看原发送结果与本人回执。</p>
+    {error ? <Alert type="warning" showIcon title={error} /> : null}
+    <div className={styles.columns}>
+      <nav aria-label="文字送核记录">
+        {items.length === 0 && error === null ? <p>{busy ? '正在读取送核记录。' : '还没有可查看的文字送核记录。'}</p> : null}
+        <ul className={styles.list}>{items.map((item) => <li key={item.delivery_id}>
+          <Link to={`/messages?delivery=${encodeURIComponent(item.delivery_id)}`} aria-current={selected === item.delivery_id ? 'true' : undefined}>
+            {item.viewer_role === 'initiator' ? `发给 ${item.recipient_ai_user_id}` : `来自 ${item.initiator_ai_user_id}`}
+            <small>{DELIVERY_STATE_LABELS[item.state]} · {deliveryTime(item.created_at)}</small>
+          </Link>
+        </li>)}</ul>
+      </nav>
+      {selected ? <DeliveryPanel key={`${generation}/${selected}`} deliveryId={selected} /> : <p>选择一条记录查看文字卡与核实结果。</p>}
+    </div>
+  </section>;
+}
 
 export default function MessagesPage() {
   const status = useAuthStore((state) => state.status);
@@ -86,7 +131,8 @@ export default function MessagesPage() {
             if (full.hidden) return;
             if (data.type === 'eternalai:navigate') {
               navigate(data.payload.route === 'messages' ? '/messages'
-                : `/work-objects/${encodeURIComponent(data.payload.object_ref)}`);
+                : data.payload.route === 'delivery' ? `/messages?delivery=${encodeURIComponent(data.payload.object_ref)}`
+                  : `/work-objects/${encodeURIComponent(data.payload.object_ref)}`);
             } else if (data.type === 'eternalai:message-selected') {
               if (data.payload.realm_id !== config.realm_id || data.payload.im_user_id !== config.im_user_id) {
                 failIdentity(); return;
@@ -185,13 +231,19 @@ export default function MessagesPage() {
     />
   );
   if (status !== 'authenticated') return placeholder;
-  return <div>
-    {phase === 'disabled' ? placeholder : <h1>消息</h1>}
-    {phase === 'loading' && <p role="status">正在核验消息账号，请稍候。</p>}
-    {phase === 'failed' && <Alert type="error" showIcon message="消息身份或来源未能确认，请重新登录后重试。" />}
-    {sourceError && <Alert type="error" showIcon message="无法读取这条消息，请重新选择你有权查看的消息。" />}
-    {!imBridgeBlocked() && (phase !== 'failed' || phaseGeneration !== generation) && <iframe key={generation} ref={frame}
-      name={`eternalai-im-${generation}`} title="单位消息" hidden={phase !== 'ready' || phaseGeneration !== generation}
-      style={{ width: '100%', height: 'calc(100vh - 180px)', border: 0 }} />}
+  return <div className={styles.messagePage}>
+    <h1>消息</h1>
+    <div className={styles.messageLayout}>
+      <section className={styles.imHost} aria-label="单位消息">
+        {phase === 'disabled' && <p>单位消息尚未启用，请联系维护人员核对连接配置。</p>}
+        {phase === 'loading' && <p role="status">正在核验消息账号，请稍候。</p>}
+        {phase === 'failed' && <Alert type="error" showIcon message="消息身份或来源未能确认，请重新登录后重试。" />}
+        {sourceError && <Alert type="error" showIcon message="无法读取这条消息，请重新选择你有权查看的消息。" />}
+        {!imBridgeBlocked() && (phase !== 'failed' || phaseGeneration !== generation) && <iframe key={generation} ref={frame}
+          name={`eternalai-im-${generation}`} title="单位消息" hidden={phase !== 'ready' || phaseGeneration !== generation}
+          className={styles.imFrame} />}
+      </section>
+      <DeliveryWorkspace key={generation} />
+    </div>
   </div>;
 }

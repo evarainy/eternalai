@@ -29,6 +29,7 @@ from app.api.v1.csrf import (
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.im_context import make_router as make_im_context_router
+from app.api.v1.im_deliveries import make_router as make_im_deliveries_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
@@ -42,6 +43,7 @@ from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
 from app.im_context import IMContextService
+from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
 from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.d_form_bootstrap import DFormManagement
@@ -112,6 +114,8 @@ def create_app(
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
+    im_delivery_service: IMDeliveryService | None = None,
+    close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
     im_context: IMContextService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
@@ -172,8 +176,12 @@ def create_app(
                     if organization_started and organization_directory_scheduler is not None:
                         await organization_directory_scheduler.stop()
                 finally:
-                    if credential_started and credential_polling_scheduler is not None:
-                        await credential_polling_scheduler.stop()
+                    try:
+                        if credential_started and credential_polling_scheduler is not None:
+                            await credential_polling_scheduler.stop()
+                    finally:
+                        if close_im_deliveries is not None:
+                            await close_im_deliveries()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -220,6 +228,10 @@ def create_app(
     application.include_router(
         make_background_jobs_router(background_job_service, csrf_protected_principal),
         prefix="/api/v1/background-jobs",
+    )
+    application.include_router(
+        make_im_deliveries_router(im_delivery_service, csrf_protected_principal),
+        prefix="/api/v1/im-deliveries",
     )
     application.include_router(
         make_auth_router(
@@ -513,6 +525,8 @@ def create_production_app(
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
         background_job_service=components.background_jobs,
+        im_delivery_service=components.im_deliveries,
+        close_im_deliveries=components.close_im_deliveries,
         im_context=components.im_context,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),

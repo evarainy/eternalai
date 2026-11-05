@@ -8,6 +8,7 @@ import { Alert, Button, Checkbox, Input, Space, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
+import { DeliveryComposerButton } from '../features/messages/DeliveryComposer';
 import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
 import {
@@ -1102,6 +1103,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                         ) : null}
                       </div>
                       <p className={styles.messageText}>{entry.text}</p>
+                      {entry.role === 'assistant' && entry.presentationKind === 'completed' && entry.text.trim() ? (
+                        <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`} text={entry.text} />
+                      ) : null}
                       {entry.role === 'assistant' ? (
                         <AssistantDetails
                           entry={entry}

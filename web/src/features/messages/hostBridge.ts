@@ -14,7 +14,7 @@ export type IMEvent = {
   protocol: 'eternalai.im-bridge'; version: 2; provider: string; im_instance_id: string;
 } & (
   | { type: 'eternalai:message-selected'; payload: Selection }
-  | { type: 'eternalai:navigate'; payload: { route: 'messages' | 'work-object'; object_ref: string } }
+  | { type: 'eternalai:navigate'; payload: { route: 'messages' | 'work-object' | 'delivery'; object_ref: string } }
   | { type: 'eternalai:logout-requested'; payload: Record<string, never> }
   | { type: 'eternalai:session-state'; payload: SessionState }
 );
@@ -41,7 +41,7 @@ export function validateIMEvent(value: unknown, config: IMConfiguration): IMEven
           || !text(p.message_id) || !text(p.conversation_ref)) return null;
       break;
     case 'eternalai:navigate':
-      if (!exact(p, ['route', 'object_ref']) || (p.route !== 'messages' && p.route !== 'work-object')
+      if (!exact(p, ['route', 'object_ref']) || (p.route !== 'messages' && p.route !== 'work-object' && p.route !== 'delivery')
           || !text(p.object_ref)) return null;
       break;
     case 'eternalai:logout-requested':
