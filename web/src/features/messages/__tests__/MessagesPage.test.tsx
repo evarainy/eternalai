@@ -33,7 +33,7 @@ describe('MessagesPage placeholder', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { level: 1, name: '消息' })).toBeInTheDocument();
-    expect(screen.getByText('消息功能还没有开发，这里收不到也发不出消息。')).toBeInTheDocument();
+    expect(screen.getByText('消息尚未启用，或当前登录状态还未确认。')).toBeInTheDocument();
     expect(
       screen.getByText('OA 里的通知和待办，请照原来的方式直接去 OA 查看。'),
     ).toBeInTheDocument();

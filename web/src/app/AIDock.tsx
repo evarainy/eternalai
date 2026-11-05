@@ -9,8 +9,10 @@ import { useMutation } from '@tanstack/react-query';
 import Button from 'antd/es/button';
 import TextArea from 'antd/es/input/TextArea';
 import { ApiError } from '../api/mutator';
+import { IMSourcePreview } from '../features/messages/IMSourcePreview';
+import { returnToIMSource } from '../features/messages/hostBridge';
 import type { PageContextDeclaration } from '../contracts/pageContext';
-import { projectResponse } from '../contracts/runtimeProjection';
+import { projectResponse, projectTextResponse } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
@@ -73,6 +75,7 @@ function clampToViewport(
 }
 
 export function AIDock({ suppressed = false }: AIDockProps) {
+  const imSource = useAIDockStore((state) => state.imSource);
   const contextNotice = useAIDockStore((state) => state.contextNotice);
   const draft = useAIDockStore((state) => state.draft);
   const mode = useAIDockStore((state) => state.mode);
@@ -89,13 +92,16 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const requestInFlight = useRef(false);
+  const analyzedIMSource = useRef<string | null>(null);
   const dockRef = useRef<HTMLElement | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
   const [position, setPosition] = useState<DockPosition | null>(null);
   const [dragging, setDragging] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: async ({ message, identity }: { message: string; identity: UnsentIdentity }) => {
+    mutationFn: async ({ message, identity, sourceRef }: {
+      message: string; identity: UnsentIdentity; sourceRef?: string;
+    }) => {
       try {
         return projectResponse(
           await handleApiV1RuntimeHandlePost({
@@ -103,9 +109,18 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             session_id: identity.sessionId,
             message,
             client_capabilities: {},
+            ...(sourceRef === undefined ? {} : { source_refs: [sourceRef] }),
           }),
         );
       } catch (error) {
+        if (sourceRef !== undefined && error instanceof ApiError && error.status !== 401) {
+          return projectTextResponse(
+            error.status === 409 || error.status === 404
+              ? '消息来源已失效或权限已变化，请重新选择消息后再查询。'
+              : '这次消息来源查询未能完成，请稍后重新选择消息。',
+            'request_error',
+          );
+        }
         const projectedError = projectRequestError(error);
         if (projectedError === null) {
           throw error;
@@ -113,15 +128,37 @@ export function AIDock({ suppressed = false }: AIDockProps) {
         return projectedError;
       }
     },
-    onSuccess: (response) => appendTranscript(response),
+    onSuccess: (response, { identity, sourceRef }) => {
+      if (sourceRef !== undefined && (useAuthStore.getState().generation !== identity.generation
+          || useAIDockStore.getState().sessionId !== identity.sessionId
+          || useAIDockStore.getState().imSource?.source.ref_id !== sourceRef)) return;
+      appendTranscript(response);
+    },
     // Authentication runs before the handler, so a 401 means the message was never processed.
-    onError: (error, { message, identity }) => {
-      if (error instanceof ApiError && error.status === 401) returnUnsentMessage(identity, message);
+    onError: (error, { message, identity, sourceRef }) => {
+      if (sourceRef === undefined && error instanceof ApiError && error.status === 401) returnUnsentMessage(identity, message);
     },
     onSettled: () => {
       requestInFlight.current = false;
     },
   });
+
+  const { mutate, isPending } = mutation;
+  useEffect(() => {
+    if (imSource === null || analyzedIMSource.current === imSource.source.ref_id
+        || requestInFlight.current || isPending) return;
+    const auth = useAuthStore.getState();
+    if (auth.status !== 'authenticated' || auth.generation !== imSource.authGeneration
+        || useAIDockStore.getState().sessionId !== imSource.sessionId) return;
+    analyzedIMSource.current = imSource.source.ref_id;
+    requestInFlight.current = true;
+    const identity: UnsentIdentity = {
+      generation: auth.generation, sessionId: imSource.sessionId, requestId: crypto.randomUUID(),
+    };
+    const message = '请分析我选中的消息及其上下文，概括主要内容和需要处理的事项。只做只读分析，不保存或提交任何业务。';
+    appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
+    mutate({ message, identity, sourceRef: imSource.source.ref_id });
+  }, [imSource, isPending, mutate, appendTranscript]);
 
   useEffect(() => {
     if (!dragging) {
@@ -164,9 +201,16 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       sessionId: useAIDockStore.getState().ensureSession(),
       requestId: crypto.randomUUID(),
     };
+    const selected = useAIDockStore.getState().imSource;
+    if (selected !== null && (selected.authGeneration !== identity.generation
+        || selected.sessionId !== identity.sessionId)) {
+      useAIDockStore.getState().setIMSource(null);
+      requestInFlight.current = false;
+      return;
+    }
     appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
     setDraft('');
-    mutation.mutate({ message, identity });
+    mutation.mutate({ message, identity, sourceRef: selected?.source.ref_id });
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -324,6 +368,9 @@ export function AIDock({ suppressed = false }: AIDockProps) {
           <p className={styles.context} role="status">
             正在协助：{contextLabel}
           </p>
+          {imSource !== null && <IMSourcePreview source={imSource.source}
+            onReturn={() => returnToIMSource(imSource.source.deep_link)}
+            onClear={() => useAIDockStore.getState().setIMSource(null)} />}
           {contextNotice === null ? null : (
             <div className={styles.notice} role="status">
               <span>{contextNotice}</span>

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { SourceResponse } from '../generated/im-context/im-context.schemas';
 import {
   createGeneralPageContext,
   PageContextValidationError,
@@ -56,6 +57,8 @@ export type TranscriptEntry =
   | ProjectedResponse;
 
 interface AIDockState {
+  imSource: { source: SourceResponse; authGeneration: number; sessionId: string } | null;
+  setIMSource: (source: AIDockState['imSource']) => void;
   contextNotice: string | null;
   draft: string;
   lastOpenMode: OpenAIDockMode;
@@ -119,6 +122,8 @@ function pageBindingChanged(
 }
 
 export const useAIDockStore = create<AIDockState>((set, get) => ({
+  imSource: null,
+  setIMSource: (imSource) => set({ imSource }),
   contextNotice: null,
   draft: '',
   lastOpenMode: 'drawer',
@@ -149,6 +154,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     set((state) => ({ transcript: [...state.transcript, entry] })),
   clearSession: () =>
     set({
+      imSource: null,
       draft: '',
       lastOpenMode: 'drawer',
       mode: 'closed',
@@ -300,6 +306,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     })),
   startNewSession: () =>
     set((state) => ({
+      imSource: null,
       contextNotice: '已新建通用会话；当前上下文不带工作事项引用。',
       draft: '',
       pageContextDeclaration:

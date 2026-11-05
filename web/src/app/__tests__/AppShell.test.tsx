@@ -46,6 +46,7 @@ function readSource(relativePath: string): string {
 }
 
 const apiMocks = vi.hoisted(() => ({
+  imConfiguration: vi.fn(),
   getBinding: vi.fn(),
   readMe: vi.fn(),
 }));
@@ -56,6 +57,10 @@ vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
 
 vi.mock('../../generated/me/me', () => ({
   readMeApiV1MeGet: apiMocks.readMe,
+}));
+
+vi.mock('../../generated/im-context/im-context', () => ({
+  configurationApiV1ImContextConfigurationGet: apiMocks.imConfiguration,
 }));
 
 const DISPLAY_NAME = '甲用户';
@@ -188,6 +193,8 @@ function shellElement(): HTMLElement {
 }
 
 function resetStores(): void {
+  apiMocks.imConfiguration.mockReset();
+  apiMocks.imConfiguration.mockResolvedValue(null);
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
   apiMocks.readMe.mockReset();
@@ -976,7 +983,7 @@ describe('server confirmed logout', () => {
     const mounted = renderShell();
     try {
       fireEvent.click(screen.getByTestId('topbar-avatar'));
-      fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
       expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
       act(() => useAuthStore.getState().markAuthenticated());
       const newGeneration = useAuthStore.getState().generation;
@@ -1018,7 +1025,7 @@ describe('server confirmed logout', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise((done) => { resolve = done; }));
     renderShell();
     fireEvent.click(screen.getByTestId('topbar-avatar'));
-    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
     expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
     expect(useAuthStore.getState().status).toBe('authenticated');
     expect(fetchSpy).toHaveBeenCalledWith('/api/v1/auth/logout', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-EternalAI-CSRF': '1' }) }));

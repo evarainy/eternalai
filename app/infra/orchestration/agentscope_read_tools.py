@@ -71,6 +71,7 @@ from app.ports.human_gate import (
     VersionBindingMismatchError,
     build_task_version_binding_manifest,
 )
+from app.ports.im_context import AuthorizedIMContext, IMContextError
 from app.ports.policy_guard import CapabilityCandidatePolicyPort
 from app.ports.request_context import RequestChannel, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
@@ -148,6 +149,7 @@ class ReadToolScope:
     channel: RequestChannel
     # Verified login-ticket fingerprint; compared, never logged.
     fingerprint: bytes = field(repr=False)
+    im_source: AuthorizedIMContext | None = field(default=None, repr=False)
 
     @classmethod
     def from_session(
@@ -720,6 +722,17 @@ class ToolExecutor:
             device_domain_id=_optional_str_argument(arguments, "device_domain_id"),
         )
         try:
+            if scope.im_source is not None:
+                source_session = authenticated_session.get()
+                if source_session is None or not session_matches(scope):
+                    raise IMContextError("im_session_revoked", 401)
+                if (capability.capability_id != "oa.list_pending_workflows"
+                        or capability.type != "query" or capability.target_system != "oa"
+                        or capability.execution_identity != "user_delegated"):
+                    raise IMContextError("im_capability_not_read_only", 403)
+                await scope.im_source.authority.check_session(
+                    source_session.principal, scope.session_id,
+                )
             execution = await deps.orchestration.execute_capability(
                 task_id=task_id,
                 session_id=scope.session_id,

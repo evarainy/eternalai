@@ -28,6 +28,7 @@ import WorkDispatchPage from '../features/work-dispatch/WorkDispatchPage';
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
   readMe: vi.fn(),
+  imConfiguration: vi.fn(),
 }));
 
 vi.mock('../generated/credential-bindings/credential-bindings', () => ({
@@ -36,6 +37,11 @@ vi.mock('../generated/credential-bindings/credential-bindings', () => ({
 
 vi.mock('../generated/me/me', () => ({
   readMeApiV1MeGet: apiMocks.readMe,
+}));
+
+vi.mock('../generated/im-context/im-context', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../generated/im-context/im-context')>(),
+  configurationApiV1ImContextConfigurationGet: apiMocks.imConfiguration,
 }));
 
 const DISPLAY_NAME = '甲用户';
@@ -98,6 +104,8 @@ describe('application authentication boundary', () => {
     useNavigationStore.setState({ collapsed: false });
     apiMocks.readMe.mockReset();
     apiMocks.readMe.mockResolvedValue(meResponse());
+    apiMocks.imConfiguration.mockReset();
+    apiMocks.imConfiguration.mockResolvedValue(null);
     apiMocks.getBinding.mockReset();
     apiMocks.getBinding.mockResolvedValue({
       bound: true,
@@ -690,16 +698,16 @@ describe('application authentication boundary', () => {
    * 结构。
    */
   it.each([
-    ['/messages', '消息', '消息功能还没有开发，这里收不到也发不出消息。'],
+    ['/messages', '消息', '消息尚未启用，或当前登录状态还未确认。'],
   ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
     render(<App routes={staticAppRoutes({ LazyMessagesPage: MessagesPage })} />);
 
+    expect(await screen.findByText(reason)).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
     ).toBeInTheDocument();
-    expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });

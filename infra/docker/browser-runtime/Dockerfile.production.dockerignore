@@ -40,6 +40,8 @@ app/infra/adapters/business_mcp/*
 app/infra/adapters/oa/*
 !app/infra/auth/
 app/infra/auth/*
+!app/infra/communication/
+app/infra/communication/*
 !app/infra/browser/
 app/infra/browser/*
 !app/infra/gateway/
@@ -132,6 +134,7 @@ services/decision/*
 !app/api/v1/credential_bindings.py
 !app/api/v1/csrf.py
 !app/api/v1/health.py
+!app/api/v1/im_context.py
 !app/api/v1/mcp.py
 !app/api/v1/me.py
 !app/api/v1/mock_control.py
@@ -161,6 +164,11 @@ services/decision/*
 !app/browser_skill/write_workflow.py
 !app/composition.py
 !app/config.py
+!app/im_context.py
+!app/infra/communication/zulip.py
+!app/infra/persistence/im_context.py
+!app/ports/communication.py
+!app/ports/im_context.py
 !app/contracts/sdui/models.py
 !app/credential_polling.py
 !app/dependency_checks.py
