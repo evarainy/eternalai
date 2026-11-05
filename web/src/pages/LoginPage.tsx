@@ -32,9 +32,8 @@ export default function LoginPage() {
     setSubmitting(true);
     setErrorMessage(undefined);
     try {
-      const generation = suspendIMIdentity('unauthenticated');
+      suspendIMIdentity('unauthenticated');
       await withAuthCookieLock(async () => {
-        if (useAuthStore.getState().generation !== generation) throw new Error('identity_changed');
         notifyIdentitySwitch();
         const response = await loginApiV1AuthLoginPost(credential);
         if (response.authenticated !== true) {

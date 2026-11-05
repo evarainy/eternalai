@@ -92,6 +92,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const requestInFlight = useRef(false);
+  const analyzedIMSource = useRef<string | null>(null);
   const dockRef = useRef<HTMLElement | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
   const [position, setPosition] = useState<DockPosition | null>(null);
@@ -141,6 +142,23 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       requestInFlight.current = false;
     },
   });
+
+  const { mutate, isPending } = mutation;
+  useEffect(() => {
+    if (imSource === null || analyzedIMSource.current === imSource.source.ref_id
+        || requestInFlight.current || isPending) return;
+    const auth = useAuthStore.getState();
+    if (auth.status !== 'authenticated' || auth.generation !== imSource.authGeneration
+        || useAIDockStore.getState().sessionId !== imSource.sessionId) return;
+    analyzedIMSource.current = imSource.source.ref_id;
+    requestInFlight.current = true;
+    const identity: UnsentIdentity = {
+      generation: auth.generation, sessionId: imSource.sessionId, requestId: crypto.randomUUID(),
+    };
+    const message = '请分析我选中的消息及其上下文，概括主要内容和需要处理的事项。只做只读分析，不保存或提交任何业务。';
+    appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
+    mutate({ message, identity, sourceRef: imSource.source.ref_id });
+  }, [imSource, isPending, mutate, appendTranscript]);
 
   useEffect(() => {
     if (!dragging) {

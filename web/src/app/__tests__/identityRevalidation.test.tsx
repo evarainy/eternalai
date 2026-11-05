@@ -1,5 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState, type PropsWithChildren } from 'react';
 import type { MeResponse } from '../../generated/me/me.schemas';
 import { useAuthStore } from '../../stores/authStore';
 import { useIdentityRevalidation } from '../identity';
@@ -25,6 +27,11 @@ class SyntheticAuthChannel {
   }
 }
 
+function Wrapper({ children }: PropsWithChildren) {
+  const [client] = useState(() => new QueryClient());
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
 beforeEach(() => {
   useAuthStore.setState({ status: 'authenticated', generation: 40 });
   SyntheticAuthChannel.instances = [];
@@ -45,7 +52,7 @@ it('late_successful_revalidation_cannot_clear_new_generation_failure', async () 
       detail: { code: 'authentication_unavailable', message: 'Synthetic current failure' },
     }), { status: 503 }))
     .mockResolvedValueOnce(new Response(JSON.stringify(identity)));
-  const { result } = renderHook(useIdentityRevalidation);
+  const { result } = renderHook(useIdentityRevalidation, { wrapper: Wrapper });
   expect(result.current).toBe(false);
   act(() => SyntheticAuthChannel.notify());
   expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -82,7 +89,7 @@ it.each([200, 401, 503])('mounted_focus_without_channel_rechecks_server %s', asy
       detail: { code: 'authentication_unavailable', message: 'Synthetic focus failure' },
     }), { status },
   ));
-  const { result, unmount } = renderHook(useIdentityRevalidation);
+  const { result, unmount } = renderHook(useIdentityRevalidation, { wrapper: Wrapper });
   expect(fetchSpy).not.toHaveBeenCalled();
   await act(async () => { window.dispatchEvent(new Event('focus')); });
 
