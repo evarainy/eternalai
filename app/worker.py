@@ -2,9 +2,9 @@
 
 A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
-hold limit), plus the optional fixed IM Bot: no OA, session or LLM secrets. It does not
-import the production
-composition, runtime, MCP or browser stacks. The loop is psycopg + Selector.
+hold limit, file artifact root and MAC key), plus the optional fixed IM Bot: no OA,
+session or LLM secrets. It does not import the production composition, runtime, MCP
+or browser stacks. The loop is psycopg + Selector.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from app.infra.communication.composition import build_im_delivery
 from app.infra.jobs.execution import BackgroundJobRunner
 from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
 from app.infra.jobs.procrastinate_app import (
+    FILE_ARTIFACTS_CONTEXT_KEY,
     IM_DELIVERY_CONTEXT_KEY,
     RUNNER_CONTEXT_KEY,
     SESSIONS_CONTEXT_KEY,
@@ -34,6 +35,7 @@ from app.infra.jobs.procrastinate_app import (
 from app.infra.jobs.queue_sql import GENERAL_QUEUE, MAINTENANCE_QUEUE
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.sync_state import PostgreSQLOrganizationDirectorySync
+from app.infra.persistence.file_artifacts import build_file_artifact_service
 from app.organization_directory_sync import OrganizationDirectorySyncService
 from app.ports.organization_directory import (
     OrganizationDirectorySnapshot,
@@ -78,6 +80,7 @@ async def run_worker(settings: WorkerSettings) -> None:
                 max_age_s=settings.organization_directory_max_age_s,
             ),
         )
+        file_artifacts = build_file_artifact_service(settings.file_artifacts, sessions)
         runner = BackgroundJobRunner(
             PostgreSQLBackgroundJobLedger(sessions),
             build_job_kinds(settings.self_check_max_hold_seconds),
@@ -85,6 +88,7 @@ async def run_worker(settings: WorkerSettings) -> None:
                 checks={**checks.health, **checks.diagnostics},
                 check_timeout_seconds=settings.health_timeout_seconds,
             ),
+            job_outputs=None if file_artifacts is None else file_artifacts.job_outputs,
         )
         app = build_procrastinate_app(psycopg_conninfo(database_url))
         async with app.open_async():
@@ -103,7 +107,9 @@ async def run_worker(settings: WorkerSettings) -> None:
                 # the official worker handles as a graceful stop.
                 install_signal_handlers=sys.platform != "win32",
                 additional_context={
-                    RUNNER_CONTEXT_KEY: runner, SESSIONS_CONTEXT_KEY: sessions,
+                    RUNNER_CONTEXT_KEY: runner,
+                    SESSIONS_CONTEXT_KEY: sessions,
+                    FILE_ARTIFACTS_CONTEXT_KEY: file_artifacts,
                     IM_DELIVERY_CONTEXT_KEY: delivery_service,
                 },
             )

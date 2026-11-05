@@ -36,6 +36,11 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _MAX_SELF_CHECK_HOLD_SECONDS = 600
+_FILE_ARTIFACT_ROOT_KEY = "FILE_ARTIFACT_ROOT"
+_FILE_ARTIFACT_MAC_KEY = "ETERNALAI_FILE_ARTIFACT_MAC_KEY_B64"
+_FILE_ARTIFACT_RETENTION_KEY = "FILE_ARTIFACT_RETENTION_SECONDS"
+_MIN_FILE_ARTIFACT_RETENTION_SECONDS = 300
+_MAX_FILE_ARTIFACT_RETENTION_SECONDS = 1209600
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
 _DEFAULT_SESSION_RENEW_MIN_INTERVAL_SECONDS = 300
 _DEFAULT_OA_USER_PROFILE_PATH = "/api/hrm/resource/getResourceBaseTitle"
@@ -456,6 +461,7 @@ class ProductionSettings:
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
     browser: BrowserSettings = field(default_factory=BrowserSettings)
     fixed_document: FixedDocumentSettings | None = field(default=None, repr=False)
+    file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
     zulip: ZulipSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -636,6 +642,7 @@ class ProductionSettings:
             organization_directory_max_age_s=_directory_max_age(source),
             organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             background_self_check_max_hold_seconds=_self_check_max_hold(source),
+            file_artifacts=_file_artifact_settings(source),
             im_delivery=IMDeliverySettings.from_env(source),
             csrf_allowed_origins=csrf_allowed_origins,
             runtime_engine=_runtime_engine(source),
@@ -1213,6 +1220,7 @@ def _base64_key(
 
 
 __all__ = (
+    "FileArtifactSettings",
     "OAReadAdapterMode",
     "ProductionSettings",
     "RedisConnectionURL",
@@ -1242,6 +1250,44 @@ def _self_check_max_hold(source: Mapping[str, str]) -> int:
 
 
 @dataclass(frozen=True)
+class FileArtifactSettings:
+    root: Path
+    mac_key: bytes = field(repr=False)
+    # Only a root marked ``acceptance_sample`` accepts a value other than 14 days.
+    retention_override_seconds: int | None = None
+
+
+def _file_artifact_settings(source: Mapping[str, str]) -> FileArtifactSettings | None:
+    """All three keys unset disables the feature; a partial configuration fails startup."""
+
+    root = source.get(_FILE_ARTIFACT_ROOT_KEY, "").strip()
+    key = source.get(_FILE_ARTIFACT_MAC_KEY, "").strip()
+    retention = source.get(_FILE_ARTIFACT_RETENTION_KEY, "").strip()
+    if not root and not key and not retention:
+        return None
+    if not root or not key:
+        raise RuntimeError("file_artifact_configuration_incomplete")
+    location = Path(root)
+    if not location.is_absolute():
+        raise RuntimeError(f"{_FILE_ARTIFACT_ROOT_KEY} must be an absolute path")
+    return FileArtifactSettings(
+        root=location,
+        mac_key=_base64_key(source, _FILE_ARTIFACT_MAC_KEY, exact_bytes=32),
+        retention_override_seconds=(
+            _integer_in_range(
+                source,
+                _FILE_ARTIFACT_RETENTION_KEY,
+                _MAX_FILE_ARTIFACT_RETENTION_SECONDS,
+                minimum=_MIN_FILE_ARTIFACT_RETENTION_SECONDS,
+                maximum=_MAX_FILE_ARTIFACT_RETENTION_SECONDS,
+            )
+            if retention
+            else None
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class WorkerSettings:
     """Worker values, including an optional IM Bot; no OA, session or LLM secrets."""
 
@@ -1251,6 +1297,7 @@ class WorkerSettings:
     organization_directory_max_age_s: int
     concurrency: int
     self_check_max_hold_seconds: int
+    file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
     im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
 
     @classmethod
@@ -1272,6 +1319,7 @@ class WorkerSettings:
                 source, "BACKGROUND_WORKER_CONCURRENCY", 2, minimum=1, maximum=8
             ),
             self_check_max_hold_seconds=_self_check_max_hold(source),
+            file_artifacts=_file_artifact_settings(source),
             im_delivery=IMDeliverySettings.from_env(source),
         )
 
@@ -1283,6 +1331,9 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     "ORGANIZATION_DIRECTORY_MAX_AGE_S",
     "BACKGROUND_WORKER_CONCURRENCY",
     "BACKGROUND_SELF_CHECK_MAX_HOLD_SECONDS",
+    _FILE_ARTIFACT_ROOT_KEY,
+    _FILE_ARTIFACT_MAC_KEY,
+    _FILE_ARTIFACT_RETENTION_KEY,
     "IM_PROVIDER",
     "IM_ZULIP_ORIGIN",
     "IM_HOST_ORIGIN",

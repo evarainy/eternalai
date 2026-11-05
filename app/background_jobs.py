@@ -30,6 +30,7 @@ from app.ports.background_jobs import (
     BackgroundJobView,
     ExternalEffect,
 )
+from app.ports.file_artifacts import JobOutputPublisher
 
 SELF_CHECK_KIND = "system.worker_self_check"
 SELF_CHECK_NAMES = (
@@ -55,6 +56,8 @@ class JobExecution:
 
     checks: Mapping[str, ReadonlyCheck]
     check_timeout_seconds: float
+    # Bound by the runner to this execution's claim; None when file artifacts are off.
+    outputs: JobOutputPublisher | None = None
 
 
 JobHandler = Callable[[BaseModel, JobExecution], Awaitable[JobOutcome]]
