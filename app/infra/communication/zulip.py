@@ -422,11 +422,12 @@ class ZulipInboundAdapter:
                 params={"apply_markdown": "true", "allow_empty_topic_name": "true"},
             )
             raw = result.get("message")
-            if (not isinstance(raw, dict) or not isinstance(raw.get("raw_content"), str)
+            raw_content = result.get("raw_content")
+            if (not isinstance(raw, dict) or not isinstance(raw_content, str)
                     or not isinstance(raw.get("content"), str)
                     or raw.get("content_type") != "text/html"):
                 raise IMContextError("im_source_changed")
-            original = {**raw, "content": raw["raw_content"], "content_type": "text/x-markdown"}
+            original = {**raw, "content": raw_content, "content_type": "text/x-markdown"}
             if _inbound_event(
                 original, instance=event.im_instance_id, realm=event.realm_id,
                 target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
