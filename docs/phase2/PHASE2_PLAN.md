@@ -754,7 +754,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | write 类后台作业协议 | 首棒注册即拒绝 write 类 kind | 首个写入类后台 kind | 待分配（自动提交等） | 以业务账本作为副作用权威、unknown 不重放经真实验证；所需 DDL 另行授权 | 方案 §1.3；DECISIONS 2026-11-02 第 1、4 条 |
 | 已完成作业行与队列历史保留（含换代遗留的无主 doing 队列行） | 首版不清理 | 无 | 待分配 | 保留策略与删除授权完成，或确认数据量没有影响 | 方案 §1.3、§8.2 |
 | Linux worker 优雅停止与部署 | 部署推后 | 服务器迁移授权 | 待分配 | 目标环境 SIGTERM 优雅停止、账本心跳判停换代与 reconcile 经实测；POSIX 下载重开与清理互斥方案确定并验证 | DECISIONS 2026-11-02 第 7 条；方案 §2.6 |
-| 输出发布与产物棒正向链路 | 产物棒没有真实生产者 | `P2-CHAT-UPLOAD-001`；首个输出生产者 | `P2-CHAT-UPLOAD-001`（输入）；待分配（输出） | 输入链路在上传棒验收，输出链路在首个生产者棒验收 | 方案 J7 |
+| 输出发布与产物棒正向链路（输入链路已验收） | 产物棒没有真实生产者；输入链路已于 2026-11-05 在上传棒验收 | `P2-CHAT-UPLOAD-001`；首个输出生产者 | `P2-CHAT-UPLOAD-001`（输入）；待分配（输出） | 输入链路在上传棒验收，输出链路在首个生产者棒验收 | 方案 J7 |
 | 产物 HMAC 密钥轮换 | 首版只有 `v1` | 无 | 待分配 | 有轮换需求时实现密钥环并验证 | 方案 J9 |
 | 本人跨会话文件入口 | J10 只在当前会话可见 | 无 | 待分配 | 有需求时设计“我的文件”列表并经隔离验收 | 方案 §2.4 |
 
@@ -777,12 +777,12 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| Windows 下载与清理互斥未实测 | 本棒没有 available 产物；清理与下载互斥依赖 `os.open` 句柄无删除共享 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 样本根上限速下载跨越清理轮次：该轮记 `file_in_use` 失败、下载 sha256 一致、下一轮删除；不成立回评审 | 方案 §2.6、§8.3；`app/api/v1/file_artifacts.py::PinnedFileResponse` |
-| 封存协议与清理真实路径未验收（含 MAC 跨驱动） | 本棒无生产者，预留、续租、封存、D2、D1a/D1b 真删除只做静态取证与桩核对 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001`（输入）；首个输出生产者（输出） | 上传棒实测 API 封存、worker 删除 `removed=1`、再跑幂等；异常路径另获故障注入授权或维持静态取证 | 方案 §7.3、J7；`app/infra/persistence/file_artifacts.py` |
-| 他人产物 404 未真实验收 | 本棒没有可下载的他人产物，手工插行得不到合法 MAC | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 第二测试账号访问他人产物实测 404 | 方案 §7.3、§7.4 |
+| Windows 下载与清理互斥未实测（已关闭） | 本棒没有 available 产物；清理与下载互斥依赖 `os.open` 句柄无删除共享。2026-11-05 上传棒 C9：页面读首块后暂停形成真实背压，该轮清理记 `file_in_use`、`failed=1`，下载 sha256 一致，下一轮 `removed`，本行关闭 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 样本根上限速下载跨越清理轮次：该轮记 `file_in_use` 失败、下载 sha256 一致、下一轮删除；不成立回评审 | 方案 §2.6、§8.3；`app/api/v1/file_artifacts.py::PinnedFileResponse` |
+| 封存协议与清理真实路径未验收（含 MAC 跨驱动）（输入链路已关闭） | 本棒无生产者，预留、续租、封存、D2、D1a/D1b 真删除只做静态取证与桩核对。2026-11-05 上传棒验收：API 封存、续租、过期 410、worker `removed` 与再跑 `scanned=0` 通过；异常路径转 [聊天上传新增欠债](#聊天上传-p2-chat-upload-001-新增欠债2026-11-06) 故障注入行；输出链路仍待首个输出生产者 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001`（输入）；首个输出生产者（输出） | 上传棒实测 API 封存、worker 删除 `removed=1`、再跑幂等；异常路径另获故障注入授权或维持静态取证 | 方案 §7.3、J7；`app/infra/persistence/file_artifacts.py` |
+| 他人产物 404 未真实验收 | 本棒没有可下载的他人产物，手工插行得不到合法 MAC；上传棒只实测了不存在 id 404，缺第二测试账号 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 第二测试账号访问他人产物实测 404 | 方案 §7.3、§7.4 |
 | 发布 rename 持久化未实测 | Windows `MOVEFILE_WRITE_THROUGH`、POSIX 目录 `fsync` 的掉电窗口无法在本机实测，只按官方语义取证 | 服务器迁移授权 | 待分配 | Linux 部署时核对目录 fsync 实际执行；本机写穿调用在上传棒正向封存中确认返回成功 | `app/infra/files/local_store.py::durable_replace`；Win32 `MoveFileExW` 文档 |
-| 下载端点未导出 OpenAPI 文件 | 后端导出脚本只覆盖已有端点，本棒不改 `web/` | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 前端接入下载时补导出脚本与生成物 | `scripts/export_background_jobs_openapi.py` |
-| 下载 `no-store` 头未经浏览器取证 | 2026-11-05 验收时开发者工具取到的是另一条静态资源的响应头；本请求的头由真实路由进程内探针取证（404/503 均 `no-store`） | 无 | `P2-CHAT-UPLOAD-001` | 上传棒浏览器验收下载时一并核对 404 与 200 响应头 | `app/api/v1/file_artifacts.py::_fail` |
+| 下载端点未导出 OpenAPI 文件（已关闭） | 后端导出脚本只覆盖已有端点，本棒不改 `web/`。`web/openapi/file-artifacts.openapi.json` 已随 PR #263 提交（前端上传调用为手写 `chatUploadApi.ts`），本行关闭 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 前端接入下载时补导出脚本与生成物 | `scripts/export_background_jobs_openapi.py` |
+| 下载 `no-store` 头未经浏览器取证（200/410 已关闭） | 2026-11-05 验收时开发者工具取到的是另一条静态资源的响应头；本请求的头由真实路由进程内探针取证（404/503 均 `no-store`）。上传棒浏览器 fetch 取证 200 `private, no-store` 与 410 `no-store`；404 头仍只有进程内探针 | 无 | `P2-CHAT-UPLOAD-001` | 上传棒浏览器验收下载时一并核对 404 与 200 响应头 | `app/api/v1/file_artifacts.py::_fail` |
 
 ### IM 机会层 V1/V2a 新增欠债（2026-11-05）
 
@@ -803,7 +803,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### IM 机会层 V3/布局新增欠债（2026-11-05）
 
-来源为已合并 PR #259/#261 正文；重复欠债合并登记，不以布局修复核销 V3 业务限制。证据路径均相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`；中文/浅色配置一项来自 laneG4 交接，不冒称 PR 正文已有记录。V2b（同版文件分享）的文件产物前置已解除，与 V4 均待分配，不指定新 task_id。旧 D8 业务账号停用联动、第二租户、正式试点及 V1/V2a 其他未完成项保留，不由 A1–A9 批量核销。
+来源为已合并 PR #259/#261 正文；重复欠债合并登记，不以布局修复核销 V3 业务限制。证据路径均相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`；中文/浅色配置一项来自 laneG4 交接，不冒称 PR 正文已有记录。V2b（同版文件分享）的文件产物前置已解除，仍待分配；V4 已由 `P2-IM-AGENT-DELEGATION-001`（PR #264）承担，状态见 [STATUS](STATUS.md)。旧 D8 业务账号停用联动、第二租户、正式试点及 V1/V2a 其他未完成项保留，不由 A1–A9 批量核销。
 
 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|
@@ -811,6 +811,21 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | A5 多人私聊与 A6 来源编辑拒绝仅沿用既有合成 API 证据，本人窗口未重跑；原生撰写框操作也未覆盖 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（后续验收） | 获准在本人窗口完成相应真实路径并登记结果 | PR #259/#261；acc/V3RUN4.md；acc/v3-auto.json |
 | Zulip 中文/浅色配置未进入正式部署脚本，验收现场配置不等于正式部署交付 | 正式部署范围与专项授权（待分配） | 待分配 | 获准后纳入正式部署配置并在目标环境核对 | laneG4.md 第 4 项交接；本棒不部署、不修改配置 |
 | 已关闭：760px 顶栏横向溢出；旧 scrollWidth=1115，现 745=clientWidth | P2-IM-MESSAGES-LAYOUT-001 | P2-IM-MESSAGES-LAYOUT-001 | 已满足：真实登录 760px 无横溢，两宽度折叠/深链/换记录保持 PASS | PR #259/#261；acc/LAYOUTFIX.md；acc/layout-fix-browser.json；acc/layout-fix-760-expanded.png |
+
+### 聊天上传 `P2-CHAT-UPLOAD-001` 新增欠债（2026-11-06）
+
+`P2-GOV-SYNC-20261106` 合并登记 PR #263 与 #265 正文欠债；验收证据在仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/_impl_scripts/cu/acc/`。文件产物移交项的关闭情况见 [文件产物新增欠债](#文件产物-p2-file-artifacts-001-新增欠债2026-11-05)。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 无 `Content-Length` 的流式超限计数未真实实测 | Chrome 101 不支持流式请求体，现场浏览器无法构造，只做假 store 接线核对 | 无 | 待分配（随 Q3 容器或新浏览器） | 以支持流式请求体的客户端实测 413 且 `.part` 被 D2 删除 | PR #263；`app/api/v1/file_artifacts.py::_bounded_stream` |
+| 检查子进程超时终止未实测 | 正常文件触发不了 20 秒超时；venv 启动器下孙进程是否随之结束为推断 | 目标 Linux 容器（Q3） | 待分配 | 容器内慢解析样本触发超时，无残留进程、422 `chat_upload_inspection_timeout` | `app/infra/spreadsheets/intake.py` |
+| 封存异常路径仍为静态取证 | D1b 接管、行锁交错、提交结果不明需故障注入，K4 未授权 | 故障注入授权（K4） | 待分配 | 获授权后在样本根实测，或维持静态结论 | 方案 §7.4；PR #263 |
+| 加密 xlsx 未用真实加密文件实测 | 依赖库不生成加密文件 | 无 | 待分配 | Excel/WPS 设密码文件上传得 422 `chat_upload_encrypted` | `app/infra/spreadsheets/inspect_child.py::_check_container` |
+| Chrome 101 兼容未实测 | 本机只有 Chrome 157 | 目标机或 Docker 阶段 | 待分配 | Chrome 101 实测附件栏、拖拽、移除与带参 GET | `web/src/features/chat-upload/ChatAttachmentBar.tsx`；`web/src/api/mutator.ts` |
+| 附件与浏览器技能组合拒绝未实测 | 验收账号没有浏览器技能开关 | 无 | 待分配 | 有开关的账号实测前端禁用与后端 422 `chat_attachment_unsupported` | `web/src/pages/ChatPage.tsx::attachmentsAllowed`；`app/api/v1/runtime.py::_attachment_error` |
+| 超大文件前端提示文案未逐字核对 | 验收以后端日志与目录计数确认拒绝 | 无 | 待分配 | 浏览器选择超限文件核对中文提示 | `web/src/features/chat-upload/chatUploadApi.ts` |
+| 重登换账号清空未实测 | 测试浏览器各只保存一个账号，不读取或输入凭据；雨爷 2026-11-06 决定 `P2-IM-REAUTH-FIX-001` 以 astra 静态审查与既有测试为准 | 第二测试账号 | 待分配 | 第二账号实测换人后 Dock 清空、IM 恢复 | PR #265；`web/src/app/identity.ts::useIdentityRevalidation` |
 
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
