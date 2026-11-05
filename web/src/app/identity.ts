@@ -116,9 +116,12 @@ export function useIdentityRevalidation(): boolean {
         const identity = await readMeApiV1MeGet();
         if (!isCurrent()) return;
         // The server's account scope survives cookie renewal and includes tenant/user/roles.
-        if (previous?.restore_scope != null && identity.restore_scope !== previous.restore_scope) {
-          suspendIMIdentity('unknown');
-          return;
+        if (previous?.restore_scope == null || identity.restore_scope !== previous.restore_scope) {
+          // Reuse the synchronous unauthenticated cleanup before accepting the new account.
+          suspendIMIdentity('unauthenticated');
+          beginIMLogin();
+          useAuthStore.getState().markAuthenticated();
+          queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
         }
         setFailed(false);
       } catch {

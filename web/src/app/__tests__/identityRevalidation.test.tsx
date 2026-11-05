@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type PropsWithChildren } from 'react';
 import type { MeResponse } from '../../generated/me/me.schemas';
 import { useAuthStore } from '../../stores/authStore';
-import { useIdentityRevalidation } from '../identity';
+import { identityQueryKey, useIdentityRevalidation } from '../identity';
 
 const identity: MeResponse = {
   authenticated: true,
@@ -12,6 +12,7 @@ const identity: MeResponse = {
   org: null,
   org_status: 'unavailable',
   avatar_path: null,
+  restore_scope: 'synthetic-revalidation-scope',
 };
 
 class SyntheticAuthChannel {
@@ -28,7 +29,11 @@ class SyntheticAuthChannel {
 }
 
 function Wrapper({ children }: PropsWithChildren) {
-  const [client] = useState(() => new QueryClient());
+  const [client] = useState(() => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
+    return queryClient;
+  });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
