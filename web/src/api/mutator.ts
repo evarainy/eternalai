@@ -104,7 +104,9 @@ export const requestWithResponse = async <T>(
   }
   const binary = responseType === 'blob';
   const payload: unknown = response.status === 204 ? null : binary ? await response.blob() : await response.json();
-  if (useAuthStore.getState().generation !== authGeneration) {
+  // Login establishes the new identity; a tab recheck must not discard its success.
+  const isLogin = method.toUpperCase() === 'POST' && url === '/api/v1/auth/login';
+  if (!isLogin && useAuthStore.getState().generation !== authGeneration) {
     throw new ApiError(409, 'identity_changed', '身份已变化，请重新读取。');
   }
   return { data: payload as T, etag: response.headers.get('ETag') };
