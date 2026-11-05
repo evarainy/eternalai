@@ -237,7 +237,9 @@ def create_app(
         prefix="/api/v1/background-jobs",
     )
     application.include_router(
-        make_file_artifacts_router(file_artifact_service, csrf_protected_principal),
+        make_file_artifacts_router(
+            file_artifact_service, csrf_protected_principal, session_binder=session_binder
+        ),
         prefix="/api/v1/file-artifacts",
     )
     application.include_router(
@@ -270,6 +272,7 @@ def create_app(
             session_binder,
             browser_chat=browser_chat,
             im_context=im_context,
+            chat_attachments=file_artifact_service,
         ),
         prefix="/api/v1/runtime",
     )

@@ -324,13 +324,15 @@ function runPath(taskId: string, runId: string): string {
 export async function submitOrdinaryBrowserCapableMessage(
   message: string, sessionId: string, clientRequestId: string, signal?: AbortSignal,
   collection?: { readonly task_id: string; readonly version: number } | null,
+  attachmentIds: readonly string[] = [],
 ): Promise<unknown> {
   if (!isClientConversationId(sessionId) || !isClientConversationId(clientRequestId)
       || !message.trim()) throw new Error('browser_request_invalid');
   return customInstance<unknown>({
     url: '/api/v1/runtime/handle', method: 'POST', signal,
     data: { channel: 'web', session_id: sessionId, message, client_request_id: clientRequestId,
-      client_capabilities: {}, ...(collection == null ? {} : { d_form_collection: collection }) },
+      client_capabilities: {}, ...(collection == null ? {} : { d_form_collection: collection }),
+      ...(attachmentIds.length === 0 ? {} : { attachment_ids: [...attachmentIds] }) },
   });
 }
 
