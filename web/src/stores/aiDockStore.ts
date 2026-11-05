@@ -32,6 +32,16 @@ export interface PendingCollection {
 /** Fixed notice when a restored conversation's pending collection can no longer continue. */
 export const COLLECTION_LOST_NOTICE = '原追问已失效，请重新发起报修。';
 
+/**
+ * A sealed chat upload of this conversation. Only a reference: the backend re-checks owner,
+ * session, state and expiry whenever a message names it. ``sheetNames`` are display only.
+ */
+export interface ChatAttachment {
+  readonly artifact_id: string;
+  readonly filename: string;
+  readonly sheetNames: readonly string[];
+}
+
 /** A conversation brought back by a same-account re-login (see app/reauthRestore.ts). */
 export interface RestoredDockSession {
   draft: string;
@@ -45,6 +55,8 @@ export interface RestoredDockSession {
   collection: PendingCollection | null;
   /** The transcript ends on a collection card whose reference was not kept (older copy). */
   collectionLost: boolean;
+  /** Finished uploads waiting to be sent; they belong to the restored conversation only. */
+  draftAttachments?: ChatAttachment[];
 }
 
 export type TranscriptEntry =
@@ -53,6 +65,8 @@ export type TranscriptEntry =
       text: string;
       /** Local-only submission id, so a 401 can withdraw exactly this echo. */
       requestId?: string;
+      /** Attachments frozen with this message, shown as download links. */
+      attachments?: readonly ChatAttachment[];
     }
   | ProjectedResponse;
 
@@ -61,6 +75,8 @@ interface AIDockState {
   setIMSource: (source: AIDockState['imSource']) => void;
   contextNotice: string | null;
   draft: string;
+  /** Finished uploads of the current conversation that the next message will carry. */
+  draftAttachments: ChatAttachment[];
   lastOpenMode: OpenAIDockMode;
   mode: AIDockMode;
   pageContextDeclaration: PageContextDeclaration | null;
@@ -83,6 +99,7 @@ interface AIDockState {
   restoreSession: (restored: RestoredDockSession) => void;
   setCollection: (collection: PendingCollection | null) => void;
   setDraft: (draft: string) => void;
+  setDraftAttachments: (attachments: ChatAttachment[]) => void;
   setMode: (mode: AIDockMode) => void;
   startNewSession: () => void;
 }
@@ -126,6 +143,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   setIMSource: (imSource) => set({ imSource }),
   contextNotice: null,
   draft: '',
+  draftAttachments: [],
   lastOpenMode: 'drawer',
   mode: 'closed',
   pageContextDeclaration: null,
@@ -156,6 +174,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     set({
       imSource: null,
       draft: '',
+      draftAttachments: [],
       lastOpenMode: 'drawer',
       mode: 'closed',
       contextNotice: null,
@@ -235,6 +254,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           return {
             contextNotice: '页面上下文已重新建立；已默认开始新的临时对话。',
             draft: '',
+            draftAttachments: [],
             pageContextDeclaration: next,
             sessionId: null,
             transcript: [],
@@ -248,6 +268,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         return {
           contextNotice: '权限或数据范围已切换；已默认开始新的临时对话。',
           draft: '',
+          draftAttachments: [],
           pageContextDeclaration: next,
           restoredPageContext: null,
           sessionId: null,
@@ -260,6 +281,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         return {
           contextNotice: '页面对象或筛选已切换；已默认开始新的临时对话。',
           draft: '',
+          draftAttachments: [],
           pageContextDeclaration: next,
           restoredPageContext: null,
           sessionId: null,
@@ -295,10 +317,12 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         confirmationResults: restored.confirmationResults,
         restoredPageContext: current === null ? restored.pageContext : null,
         collection,
+        draftAttachments: restored.draftAttachments ?? [],
       };
     }),
   setCollection: (collection) => set({ collection }),
   setDraft: (draft) => set({ draft }),
+  setDraftAttachments: (draftAttachments) => set({ draftAttachments }),
   setMode: (mode) =>
     set((state) => ({
       lastOpenMode: mode === 'closed' ? state.lastOpenMode : mode,
@@ -309,6 +333,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       imSource: null,
       contextNotice: '已新建通用会话；当前上下文不带工作事项引用。',
       draft: '',
+      draftAttachments: [],
       pageContextDeclaration:
         state.pageContextDeclaration === null
           ? null

@@ -19,6 +19,8 @@ dependencies = [
     "asyncpg==0.32.0",
     "agentscope==2.0.11",
     "procrastinate==3.10.0",
+    "defusedxml==0.7.1",
+    "openpyxl==3.1.5",
 ]
 
 [dependency-groups]

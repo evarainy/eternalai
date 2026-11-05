@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
 from app.ports.auth import Principal
 from app.ports.file_artifacts import (
+    ChatAttachmentDescriptor,
+    ChatUploadRequest,
+    ChatUploadResult,
+    ChunkSource,
     FileArtifactCleanupResult,
     FileArtifactDownload,
     FileArtifactOwner,
@@ -15,6 +20,12 @@ from app.ports.file_artifacts import (
     JobOutputPublisher,
     OutputWriter,
 )
+
+
+def _owner(principal: Principal) -> FileArtifactOwner:
+    return FileArtifactOwner(
+        tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
+    )
 
 
 @dataclass(frozen=True)
@@ -33,11 +44,34 @@ class FileArtifactService:
     async def authorize_download(
         self, principal: Principal, artifact_id: UUID
     ) -> FileArtifactDownload:
-        return await self._store.open_download(
-            FileArtifactOwner(
-                tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
+        return await self._store.open_download(_owner(principal), artifact_id)
+
+    async def upload_chat_input(
+        self,
+        principal: Principal,
+        bound_session_id: str,
+        idempotency_key: UUID,
+        filename: str,
+        body: ChunkSource,
+        *,
+        deadline: float,
+    ) -> ChatUploadResult:
+        return await self._store.upload_chat_input(
+            ChatUploadRequest(
+                owner=_owner(principal),
+                bound_session_id=bound_session_id,
+                idempotency_key=idempotency_key,
+                filename=filename,
+                deadline=deadline,
             ),
-            artifact_id,
+            body,
+        )
+
+    async def resolve_chat_attachments(
+        self, principal: Principal, bound_session_id: str, artifact_ids: Sequence[UUID]
+    ) -> tuple[ChatAttachmentDescriptor, ...]:
+        return await self._store.resolve_chat_attachments(
+            _owner(principal), bound_session_id, tuple(artifact_ids)
         )
 
     async def publish_output(

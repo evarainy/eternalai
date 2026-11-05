@@ -323,6 +323,13 @@
   line-height: var(--workbench-line-height);
 }
 
+.messageAttachments {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
 .guidance,
 .outcomeNotice {
   display: block;
@@ -439,6 +446,10 @@
   border-radius: 999px;
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
+}
+
+.composerActions .composerAttachButton:global(.ant-btn) {
+  margin-left: 0;
 }
 
 @keyframes pulse {

@@ -153,6 +153,8 @@ export type HandleRequestClientRequestId = string | null;
 export type HandleRequestDFormCollection = DFormCollectionReference | null;
 
 export interface HandleRequest {
+  /** @maxItems 5 */
+  attachment_ids?: string[];
   channel: HandleRequestChannel;
   client_capabilities?: HandleRequestClientCapabilities;
   client_request_id?: HandleRequestClientRequestId;
@@ -216,6 +218,20 @@ export interface ResponseEnvelope {
   trace_id: string;
   trace_summary?: ResponseEnvelopeTraceSummary;
   ui: ResponseEnvelopeUi;
+}
+
+export type RuntimeRequestErrorDetailMessage = string | null;
+
+export interface RuntimeRequestErrorDetail {
+  code: string;
+  message?: RuntimeRequestErrorDetailMessage;
+}
+
+/**
+ * /handle converts framework validation failures too, so 422 always has this shape.
+ */
+export interface RuntimeRequestErrorResponse {
+  detail: RuntimeRequestErrorDetail;
 }
 
 export type UIComponentAction = 'confirm' | 'bind_required' | 'clarify_scope' | 'none' | null;

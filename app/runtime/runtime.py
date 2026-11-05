@@ -344,11 +344,15 @@ class RuntimeImpl:
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
         scope, handoff = browser_request_scope.get(), self._browser.handoff
+        from app.ports.file_artifacts import ChatAttachmentError
         from app.ports.im_context import IMContextError
-        from app.ports.runtime import im_source_context
+        from app.ports.runtime import chat_attachment_context, im_source_context
 
         if im_source_context.get() is not None:
             raise IMContextError("im_source_runtime_unsupported")
+        if chat_attachment_context.get():
+            # Never silently ignored: the legacy engine cannot show attachments to a model.
+            raise ChatAttachmentError("chat_attachment_unsupported")
         document_request = _DocumentRequest()
         if scope is None or handoff is None:
             try:
