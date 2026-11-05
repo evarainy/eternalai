@@ -3,16 +3,27 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
+import { identityQueryKey } from '../../app/identity';
 import { useAuthStore } from '../../stores/authStore';
 import LoginPage from '../LoginPage';
 
 const authMocks = vi.hoisted(() => ({
   login: vi.fn(),
+  me: vi.fn(),
 }));
 
 vi.mock('../../generated/auth/auth', () => ({
   loginApiV1AuthLoginPost: authMocks.login,
 }));
+
+vi.mock('../../generated/me/me', () => ({
+  readMeApiV1MeGet: authMocks.me,
+}));
+
+const identity = {
+  authenticated: true, display_name: 'Synthetic login identity',
+  org_status: 'unavailable', restore_scope: 'synthetic-login-scope',
+};
 
 function renderLogin(state?: { from: string }) {
   const client = new QueryClient({
@@ -51,6 +62,7 @@ describe('LoginPage', () => {
 
   beforeEach(() => {
     authMocks.login.mockReset();
+    authMocks.me.mockReset().mockResolvedValue(identity);
     localStorage.clear();
     sessionStorage.clear();
     useAuthStore.setState({ generation: 0, status: 'unauthenticated' });
@@ -100,7 +112,9 @@ describe('LoginPage', () => {
       act(() => resolveLogin({ authenticated: true }));
       expect(await screen.findByText('受保护目标')).toBeInTheDocument();
       expect(useAuthStore.getState().status).toBe('authenticated');
-      expect(client.getQueryCache().getAll()).toHaveLength(0);
+      const key = identityQueryKey(useAuthStore.getState().generation);
+      expect(client.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([key]);
+      expect(client.getQueryData(key)).toEqual(identity);
     },
     30_000,
   );
