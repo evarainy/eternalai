@@ -754,6 +754,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         throw new Error('chat_submission_invalid');
       }
       const { sessionId } = submission;
+      // Consumed here: checking the original request reuses this object after an outcome that
+      // may already have been accepted, and that attempt must never withdraw the message.
+      const firstAttempt = freshSubmissions.current.delete(submission);
       const reference = /^(?:确认|confirm)\s+(\S+)$/i.exec(message)?.[1] ?? null;
       try {
         const response = submission.owner === null
@@ -893,13 +896,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           return notice;
         }
         const projectedError = projectRequestError(error);
-        // Plain runtime handling authenticates before any work, so this send never happened. An
-        // ordinary browser-capable send that got a 401 instead of accepted or pending is treated
-        // the same (a login lapsing mid-turn looks identical); it only returns to the input and
+        // Ordinary runtime handling authenticates before any work, and the browser request shell
+        // turns later browser failures into an unconfirmed reply rather than an HTTP 401, so a 401
+        // on the first attempt means this send never happened. It only returns to the input and
         // nothing is resent. Explicit browser-skill sends stay unconfirmed.
         if (projectedError === null && submission.browser === null
-            && error instanceof ApiError && error.status === 401
-            && freshSubmissions.current.has(submission)) {
+            && error instanceof ApiError && error.status === 401 && firstAttempt) {
           returnUnsentMessage({
             generation: submission.authGeneration, sessionId, requestId: submission.requestId,
           }, message, submission.attachments);

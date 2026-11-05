@@ -260,6 +260,16 @@ function storedAttachments(value: unknown): ChatAttachment[] {
   return attachments;
 }
 
+/** Only the optional attachments field is checked; an invalid one is dropped from its entry. */
+function transcriptWithCheckedAttachments(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  return transcript.map((entry) => {
+    if (entry?.role !== 'user' || entry.attachments === undefined) return entry;
+    const { attachments, ...rest } = entry;
+    const checked = storedAttachments(attachments);
+    return checked.length === 0 ? rest : { ...rest, attachments: checked };
+  });
+}
+
 function parsedPageContext(value: unknown): PageContextDeclaration | null {
   if (value === null || value === undefined) return null;
   try {
@@ -304,7 +314,7 @@ function consumeSnapshot(scope: string | null, generation: number): void {
     draft: snapshot.dock.draft,
     sessionId: snapshot.dock.sessionId,
     sessionContextMode: snapshot.dock.sessionContextMode === 'general' ? 'general' : 'page',
-    transcript: snapshot.dock.transcript,
+    transcript: transcriptWithCheckedAttachments(snapshot.dock.transcript),
     confirmationResults: snapshot.dock.confirmationResults,
     pageContext: parsedPageContext(snapshot.dock.pageContext),
     // Bound to the generation whose fresh /me just proved the same account scope.

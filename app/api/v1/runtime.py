@@ -76,6 +76,17 @@ class HandleRequest(BaseModel):
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=5)
 
 
+class RuntimeRequestErrorDetail(BaseModel):
+    code: str
+    message: str | None = None
+
+
+class RuntimeRequestErrorResponse(BaseModel):
+    """/handle converts framework validation failures too, so 422 always has this shape."""
+
+    detail: RuntimeRequestErrorDetail
+
+
 class ActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -213,7 +224,11 @@ def make_router(
     router = APIRouter()
     handle_router = APIRouter(route_class=_PrivateHandleRoute)
 
-    @handle_router.post("/handle", response_model=ResponseEnvelope)
+    @handle_router.post(
+        "/handle",
+        response_model=ResponseEnvelope,
+        responses={422: {"model": RuntimeRequestErrorResponse}},
+    )
     async def handle(
         body: HandleRequest,
         response: Response,

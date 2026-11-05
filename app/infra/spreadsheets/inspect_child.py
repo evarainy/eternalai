@@ -21,9 +21,6 @@ MAX_ENTRIES = 2000
 MAX_TOTAL_BYTES = 100 * 1024 * 1024
 MAX_ENTRY_BYTES = 50 * 1024 * 1024
 MAX_RATIO = 100
-# Same idea as Apache POI's ZipSecureFile grace size: tiny parts compress far beyond any
-# sane ratio, so the ratio only applies once an entry has inflated past this many bytes.
-RATIO_GRACE_BYTES = 100 * 1024
 MAX_SHEETS = 64
 READ_CHUNK = 64 * 1024
 _CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -37,6 +34,54 @@ _HYPERLINK = "/hyperlink"
 _REQUIRED = ("[Content_Types].xml", "_rels/.rels", "xl/workbook.xml")
 _FORBIDDEN_PREFIXES = ("xl/externallinks/", "xl/embeddings/", "xl/activex/", "customui/")
 _FORBIDDEN_NAMES = ("xl/connections.xml",)
+# A part is forbidden for what it declares to be, wherever in the package it is stored.
+# Relationship types are compared by last segment: Transitional and Strict differ in the prefix.
+_FORBIDDEN_RELATIONSHIPS = frozenset(
+    {
+        "oleobject",
+        "package",
+        "externallink",
+        "externallinklong",
+        "externallinkpath",
+        "xlexternallinkpath",
+        "xlpathmissing",
+        "xlstartup",
+        "xlalternatestartup",
+        "xllibrary",
+        "control",
+        "ctrlprop",
+        "activexcontrol",
+        "activexcontrolbinary",
+        "vbaproject",
+        "vbaprojectsignature",
+        "xlmacrosheet",
+        "xlintlmacrosheet",
+        "connections",
+        "extensibility",
+    }
+)
+_FORBIDDEN_TYPE_MARKERS = (
+    "macroenabled",
+    "macrosheet",
+    "vbaproject",
+    "oleobject",
+    "activex",
+    "externallink",
+    "controlproperties",
+    "spreadsheetml.connections",
+    "customui",
+)
+# Whole documents embedded as package parts; the workbook's own main type is a different value.
+_FORBIDDEN_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-excel",
+        "application/msword",
+        "application/vnd.ms-powerpoint",
+    }
+)
 
 
 class Rejected(Exception):
@@ -80,9 +125,7 @@ def _check_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
         declared_total += info.file_size
         if info.file_size > MAX_ENTRY_BYTES or declared_total > MAX_TOTAL_BYTES:
             raise Rejected("chat_upload_zip_limit")
-        if info.file_size > RATIO_GRACE_BYTES and info.file_size > MAX_RATIO * max(
-            info.compress_size, 1
-        ):
+        if info.file_size > MAX_RATIO * max(info.compress_size, 1):
             raise Rejected("chat_upload_zip_limit")
         entries[name] = info
     for required in _REQUIRED:
@@ -112,9 +155,7 @@ def _inflate_all(archive: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) 
                 total += len(chunk)
                 if produced > MAX_ENTRY_BYTES or total > MAX_TOTAL_BYTES:
                     raise Rejected("chat_upload_zip_limit")
-                if produced > RATIO_GRACE_BYTES and produced > MAX_RATIO * max(
-                    info.compress_size, 1
-                ):
+                if produced > MAX_RATIO * max(info.compress_size, 1):
                     raise Rejected("chat_upload_zip_limit")
 
 
@@ -133,8 +174,10 @@ def _check_parts(archive: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) 
     defaults: dict[str, str] = {}
     for element in _parse(archive, "[Content_Types].xml"):
         content_type = element.get("ContentType", "")
-        lowered = content_type.lower()
-        if "macroenabled" in lowered or "vbaproject" in lowered:
+        lowered = content_type.strip().lower()
+        if lowered in _FORBIDDEN_TYPES or any(
+            marker in lowered for marker in _FORBIDDEN_TYPE_MARKERS
+        ):
             raise Rejected("chat_upload_macro_or_external")
         if element.tag == _CT_NS + "Override":
             overrides[element.get("PartName", "").lstrip("/")] = content_type
@@ -142,12 +185,14 @@ def _check_parts(archive: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) 
             defaults[element.get("Extension", "").lower()] = content_type
 
     main_part = None
-    for rels_name in [name for name in entries if name.endswith(".rels")]:
+    for rels_name in [name for name in entries if name.lower().endswith(".rels")]:
         # "xl/_rels/workbook.xml.rels" describes targets relative to "xl".
         source_dir = posixpath.dirname(posixpath.dirname(rels_name))
         for relationship in _parse(archive, rels_name).iter(_REL_NS + "Relationship"):
-            kind = relationship.get("Type", "")
-            if relationship.get("TargetMode") == "External":
+            kind = relationship.get("Type", "").strip()
+            if kind.rstrip("/").rsplit("/", 1)[-1].lower() in _FORBIDDEN_RELATIONSHIPS:
+                raise Rejected("chat_upload_macro_or_external")
+            if relationship.get("TargetMode", "").strip().lower() == "external":
                 if not kind.endswith(_HYPERLINK):
                     raise Rejected("chat_upload_macro_or_external")
                 continue

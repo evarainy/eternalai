@@ -543,6 +543,43 @@
         "title": "ResponseEnvelope",
         "type": "object"
       },
+      "RuntimeRequestErrorDetail": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RuntimeRequestErrorDetail",
+        "type": "object"
+      },
+      "RuntimeRequestErrorResponse": {
+        "description": "/handle converts framework validation failures too, so 422 always has this shape.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/RuntimeRequestErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "RuntimeRequestErrorResponse",
+        "type": "object"
+      },
       "UIComponent": {
         "additionalProperties": false,
         "properties": {
@@ -763,11 +800,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/RuntimeRequestErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           }
         },
         "summary": "Handle"

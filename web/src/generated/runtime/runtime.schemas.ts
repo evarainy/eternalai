@@ -220,6 +220,20 @@ export interface ResponseEnvelope {
   ui: ResponseEnvelopeUi;
 }
 
+export type RuntimeRequestErrorDetailMessage = string | null;
+
+export interface RuntimeRequestErrorDetail {
+  code: string;
+  message?: RuntimeRequestErrorDetailMessage;
+}
+
+/**
+ * /handle converts framework validation failures too, so 422 always has this shape.
+ */
+export interface RuntimeRequestErrorResponse {
+  detail: RuntimeRequestErrorDetail;
+}
+
 export type UIComponentAction = 'confirm' | 'bind_required' | 'clarify_scope' | 'none' | null;
 
 export type UIComponentComponentType = typeof UIComponentComponentType[keyof typeof UIComponentComponentType];

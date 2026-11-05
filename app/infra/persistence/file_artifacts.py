@@ -156,6 +156,25 @@ def _request_fingerprint(session_id: str, display_filename: str) -> bytes:
     ).digest()
 
 
+def _inspect_within_budget(path: Path, deadline: float) -> dict[str, object]:
+    """Runs in the worker thread: the budget is read when it starts, after any queueing."""
+
+    budget = deadline - time.monotonic() - _SEAL_MARGIN_SECONDS
+    if budget <= 0:
+        raise FileArtifactError(_UPLOAD_TIMEOUT)
+    timeout = min(INSPECTION_TIMEOUT_SECONDS, budget)
+    try:
+        return inspect_workbook(path, timeout)
+    except FileArtifactError as error:
+        if (
+            error.code == "chat_upload_inspection_timeout"
+            and timeout < INSPECTION_TIMEOUT_SECONDS
+        ):
+            # The budget ran out, not the inspection limit.
+            raise FileArtifactError(_UPLOAD_TIMEOUT) from None
+        raise
+
+
 def _sheet_summaries(inspection: str | None) -> tuple[SheetSummary, ...]:
     if inspection is None:
         return ()
@@ -812,21 +831,11 @@ class PostgreSQLFileArtifactStore:
             size_bytes, digest = await self._produce_part(reservation, writer)
             if not await self._renew(reservation.artifact_id):
                 raise FileArtifactError(_RESERVATION_LOST)
-            budget = request.deadline - time.monotonic() - _SEAL_MARGIN_SECONDS
-            if budget <= 0:
+            inspection = await _in_thread(
+                _inspect_within_budget, self._storage.staging_path(reference), request.deadline
+            )
+            if time.monotonic() >= request.deadline:
                 raise FileArtifactError(_UPLOAD_TIMEOUT)
-            timeout = min(INSPECTION_TIMEOUT_SECONDS, budget)
-            try:
-                inspection = await _in_thread(
-                    inspect_workbook, self._storage.staging_path(reference), timeout
-                )
-            except FileArtifactError as error:
-                if (
-                    error.code == "chat_upload_inspection_timeout"
-                    and timeout < INSPECTION_TIMEOUT_SECONDS
-                ):
-                    raise FileArtifactError(_UPLOAD_TIMEOUT) from None
-                raise
         except Exception as error:
             code = error.code if isinstance(error, FileArtifactError) else _PRODUCTION_FAILED
             if code == _RESERVATION_LOST:
@@ -840,7 +849,14 @@ class PostgreSQLFileArtifactStore:
             if isinstance(error, FileArtifactError) and code != error.code:
                 raise FileArtifactError(code) from None
             raise
-        expires_at = await self._seal(reservation, size_bytes, digest, inspection)
+        try:
+            expires_at = await self._seal(reservation, size_bytes, digest, inspection)
+        except FileArtifactError as error:
+            if error.code != _RESERVATION_LOST:
+                raise  # An unknown commit outcome keeps its read-back and 503 protocol.
+            # The lease of this request's own row ran out while sealing: nothing is deleted
+            # here, the residue belongs to D1b.
+            raise FileArtifactError(_UPLOAD_TIMEOUT) from None
         return ChatUploadResult(
             artifact_id=reservation.artifact_id,
             filename=filename,
