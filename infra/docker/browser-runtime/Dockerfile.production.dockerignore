@@ -48,6 +48,8 @@ app/infra/browser/*
 app/infra/gateway/*
 !app/infra/health/
 app/infra/health/*
+!app/infra/files/
+app/infra/files/*
 !app/infra/human_gate/
 app/infra/human_gate/*
 !app/infra/identity/
@@ -125,11 +127,13 @@ services/decision/*
 !app/admin/registry.py
 !app/application.py
 !app/background_jobs.py
+!app/file_artifacts.py
 !app/api/__init__.py
 !app/api/v1/__init__.py
 !app/api/v1/admin.py
 !app/api/v1/auth.py
 !app/api/v1/background_jobs.py
+!app/api/v1/file_artifacts.py
 !app/api/v1/browser_runs.py
 !app/api/v1/credential_bindings.py
 !app/api/v1/csrf.py
@@ -252,6 +256,8 @@ services/decision/*
 !app/infra/identity/mock_identity_mapping.py
 !app/infra/identity/postgresql.py
 !app/infra/identity/unconfigured.py
+!app/infra/files/__init__.py
+!app/infra/files/local_store.py
 !app/infra/fixed_txt.py
 !app/infra/job_queue/__init__.py
 !app/infra/job_queue/in_memory.py
@@ -305,6 +311,7 @@ services/decision/*
 !app/infra/persistence/capability_registry/schema.py
 !app/infra/persistence/mcp/__init__.py
 !app/infra/persistence/mcp/repository.py
+!app/infra/persistence/file_artifacts.py
 !app/infra/persistence/mcp/schema.py
 !app/infra/persistence/mcp/workflow_repository.py
 !app/infra/persistence/task_store/errors.py
@@ -362,6 +369,7 @@ services/decision/*
 !app/ports/dispatch_leader_roster.py
 !app/ports/error_codes.py
 !app/ports/evaluation.py
+!app/ports/file_artifacts.py
 !app/ports/fixed_document.py
 !app/ports/im_deliveries.py
 !app/ports/personal_agents.py

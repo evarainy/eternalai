@@ -8,6 +8,7 @@ worker-side dependencies through the official ``additional_context`` mechanism.
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from procrastinate import App, PsycopgConnector
@@ -26,6 +27,10 @@ RECONCILE_TASK = "background_jobs.reconcile"
 RECONCILE_CRON = "*/1 * * * *"
 RUNNER_CONTEXT_KEY = "background_job_runner"
 SESSIONS_CONTEXT_KEY = "background_job_sessions"
+FILE_ARTIFACTS_CLEANUP_TASK = "file_artifacts.cleanup"
+FILE_ARTIFACTS_CLEANUP_CRON = "*/10 * * * *"
+FILE_ARTIFACTS_CONTEXT_KEY = "file_artifact_service"
+_FILE_ARTIFACT_LOGGER = logging.getLogger("uvicorn.error.file_artifacts")
 IM_DELIVERY_CONTEXT_KEY = "im_delivery_service"
 PERSONAL_AGENT_CONTEXT_KEY = "personal_agent_service"
 
@@ -85,10 +90,28 @@ def build_procrastinate_app(conninfo: str) -> App:
         del timestamp
         await reconcile_once(context.additional_context[SESSIONS_CONTEXT_KEY])
 
+    @app.periodic(
+        cron=FILE_ARTIFACTS_CLEANUP_CRON,
+        periodic_id="file_artifacts_cleanup",
+        queueing_lock=FILE_ARTIFACTS_CLEANUP_TASK,
+    )
+    @app.task(
+        name=FILE_ARTIFACTS_CLEANUP_TASK, queue=MAINTENANCE_QUEUE, pass_context=True, retry=False
+    )
+    async def cleanup_file_artifacts(context: JobContext, timestamp: int) -> None:
+        del timestamp
+        service = context.additional_context[FILE_ARTIFACTS_CONTEXT_KEY]
+        if service is None:
+            _FILE_ARTIFACT_LOGGER.info("file_artifact_cleanup_disabled")
+            return
+        await service.cleanup()
+
     return app
 
 
 __all__ = (
+    "FILE_ARTIFACTS_CLEANUP_TASK",
+    "FILE_ARTIFACTS_CONTEXT_KEY",
     "RECONCILE_TASK",
     "RUNNER_CONTEXT_KEY",
     "SESSIONS_CONTEXT_KEY",

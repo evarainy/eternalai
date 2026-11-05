@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAuthStore } from '../stores/authStore';
-import { useAIDockStore } from '../stores/aiDockStore';
 import {
-  beginIMLogin, hasIMConfiguration, imBridgeBlocked, imLogoutInProgress, suspendIMIdentity,
+  beginIMLogin, imBridgeBlocked, imLogoutInProgress, suspendIMIdentity,
 } from '../features/messages/hostBridge';
 
 /**
@@ -39,6 +38,8 @@ export function useIdentityQuery(): UseQueryResult<MeResponse> {
     queryFn: () => readMeApiV1MeGet(),
     enabled: status !== 'unauthenticated' && !imLogoutInProgress(),
     staleTime: IDENTITY_STALE_TIME_MS,
+    // Focus revalidation below compares the confirmed account before changing state.
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -92,6 +93,7 @@ export function notifyIdentityRecheck(): void { notifyIdentityChange(RECHECK_MES
 export function notifyIdentitySwitch(): void { notifyIdentityChange(SWITCH_MESSAGE); }
 
 export function useIdentityRevalidation(): boolean {
+  const queryClient = useQueryClient();
   const generation = useAuthStore((state) => state.generation);
   const status = useAuthStore((state) => state.status);
   const [failed, setFailed] = useState(false);
@@ -106,38 +108,43 @@ export function useIdentityRevalidation(): boolean {
       const current = useAuthStore.getState();
       if (imLogoutInProgress() || current.status !== 'authenticated') return;
       const requestSequence = ++sequence;
+      const previous = queryClient.getQueryData<MeResponse>(identityQueryKey(current.generation));
       const isCurrent = () => live && !imLogoutInProgress() && requestSequence === sequence &&
         useAuthStore.getState().generation === current.generation;
       try {
         // Bypass cache. The generated client cannot abort this HTTP request.
-        await readMeApiV1MeGet();
-        if (isCurrent()) setFailed(false);
+        const identity = await readMeApiV1MeGet();
+        if (!isCurrent()) return;
+        // The server's account scope survives cookie renewal and includes tenant/user/roles.
+        if (previous?.restore_scope == null || identity.restore_scope !== previous.restore_scope) {
+          // Reuse the synchronous unauthenticated cleanup before accepting the new account.
+          suspendIMIdentity('unauthenticated');
+          beginIMLogin();
+          useAuthStore.getState().markAuthenticated();
+          queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
+        }
+        setFailed(false);
       } catch {
         if (isCurrent()) setFailed(true);
       }
     };
-    const invalidate = () => {
-      if (imLogoutInProgress() || !hasIMConfiguration() || useAuthStore.getState().status !== 'authenticated') return;
-      useAIDockStore.getState().clearSession();
-      useAuthStore.getState().invalidateIdentity();
-    };
     let wasHidden = document.visibilityState === 'hidden';
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') wasHidden = true;
-      else if (wasHidden) { wasHidden = false; invalidate(); void recheck(); }
+      else if (wasHidden) { wasHidden = false; void recheck(); }
     };
-    const onFocus = () => { if (wasHidden) { wasHidden = false; invalidate(); } void recheck(); };
+    const onFocus = () => { wasHidden = false; void recheck(); };
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.onmessage = (event: MessageEvent<unknown>) => {
           if (imLogoutInProgress()) return;
-          if (event.data === SWITCH_MESSAGE) suspendIMIdentity('unauthenticated');
+          if (event.data === SWITCH_MESSAGE) void recheck();
           if (event.data === RECHECK_MESSAGE) {
             if (imBridgeBlocked() && useAuthStore.getState().status === 'unauthenticated') {
               beginIMLogin();
               useAuthStore.getState().invalidateIdentity();
-            } else { invalidate(); void recheck(); }
+            } else { void recheck(); }
           }
         };
       }
@@ -150,7 +157,7 @@ export function useIdentityRevalidation(): boolean {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []);
+  }, [queryClient]);
 
   return status === 'authenticated' && failed;
 }

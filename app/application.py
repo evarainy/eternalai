@@ -26,6 +26,7 @@ from app.api.v1.csrf import (
     make_csrf_protected_principal,
     make_require_csrf,
 )
+from app.api.v1.file_artifacts import make_router as make_file_artifacts_router
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.im_context import make_router as make_im_context_router
@@ -44,6 +45,7 @@ from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.file_artifacts import FileArtifactService
 from app.im_context import IMContextService
 from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
@@ -117,6 +119,7 @@ def create_app(
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
+    file_artifact_service: FileArtifactService | None = None,
     im_delivery_service: IMDeliveryService | None = None,
     personal_agent_service: PersonalAgentService | None = None,
     close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
@@ -232,6 +235,10 @@ def create_app(
     application.include_router(
         make_background_jobs_router(background_job_service, csrf_protected_principal),
         prefix="/api/v1/background-jobs",
+    )
+    application.include_router(
+        make_file_artifacts_router(file_artifact_service, csrf_protected_principal),
+        prefix="/api/v1/file-artifacts",
     )
     application.include_router(
         make_im_deliveries_router(im_delivery_service, csrf_protected_principal),
@@ -536,6 +543,7 @@ def create_production_app(
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
         background_job_service=components.background_jobs,
+        file_artifact_service=components.file_artifacts,
         im_delivery_service=components.im_deliveries,
         close_im_deliveries=components.close_im_deliveries,
         im_context=components.im_context,
