@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import ssl
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -120,6 +121,8 @@ class _DelegationMarkup(HTMLParser):
         self._paragraph_done = False
         self._text: list[str] = []
         self.mentions: set[str] = set()
+        self.mention_text: dict[str, str] = {}
+        self._mention_id: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
@@ -131,6 +134,8 @@ class _DelegationMarkup(HTMLParser):
             uid = attributes.get("data-user-id")
             if uid is not None and uid.isascii() and uid.isdecimal() and int(uid) > 0:
                 self.mentions.add(uid)
+                self._mention_id = uid
+                self.mention_text[uid] = ""
         if tag == "p" and not self._stack and not self._paragraph_done:
             self._first_paragraph = True
         if tag == "br" and self._first_paragraph and not excluded:
@@ -140,6 +145,8 @@ class _DelegationMarkup(HTMLParser):
             self._stack.append((tag, excluded or mention))
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "span":
+            self._mention_id = None
         if self._stack and self._stack[-1][0] == tag:
             self._stack.pop()
             if tag == "p" and not self._stack and self._first_paragraph:
@@ -147,6 +154,8 @@ class _DelegationMarkup(HTMLParser):
                 self._paragraph_done = True
 
     def handle_data(self, data: str) -> None:
+        if self._mention_id is not None:
+            self.mention_text[self._mention_id] += data
         if self._first_paragraph and not any(hidden for _, hidden in self._stack):
             self._text.append(data)
 
@@ -157,6 +166,16 @@ class _DelegationMarkup(HTMLParser):
                 or not text[3:].strip()):
             return None
         return frozenset(self.mentions)
+
+    def question(self, content: str, bot_ids: tuple[str, str]) -> str:
+        content = re.sub(r"^\s*委托(?:\s+|[:：]\s*)", "", content, count=1)
+        for bot_id in bot_ids:
+            name = self.mention_text[bot_id].removeprefix("@")
+            content = re.sub(
+                r"@\*\*" + re.escape(name) + r"(?:\|" + bot_id + r")?\*\*",
+                "", content, count=1,
+            )
+        return content.lstrip()
 
 
 class ZulipCommunicationAdapter:
@@ -416,6 +435,11 @@ class ZulipInboundAdapter:
     async def delegation_mentions(
         self, binding: IMAccountBinding, event: InboundEvent,
     ) -> frozenset[str] | None:
+        return (await self._delegation_markup(binding, event)).delegation_mentions()
+
+    async def _delegation_markup(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> _DelegationMarkup:
         async with self._reader_message(binding, event) as (batch, _):
             result = await self._reader._request(
                 batch.client, "GET", f"/api/v1/messages/{event.source_message_id}",
@@ -435,7 +459,7 @@ class ZulipInboundAdapter:
                 raise IMContextError("im_source_changed")
             parser = _DelegationMarkup()
             parser.feed(raw["content"])
-            return parser.delegation_mentions()
+            return parser
 
     async def _verify_bot(
         self, batch: _Batch, event: InboundEvent, bot_id: str,
@@ -475,9 +499,13 @@ class ZulipInboundAdapter:
             await self._verify_bot(batch, event, event.target_bot_id)
             if delegate_bot_id is not None:
                 await self._verify_bot(batch, event, delegate_bot_id)
+            question = raw["content"].replace("\r\n", "\n").replace("\r", "\n")
+            if delegate_bot_id is not None:
+                parser = await self._delegation_markup(binding, event)
+                question = parser.question(question, (event.target_bot_id, delegate_bot_id))
             return VerifiedInboundMessage(
                 event,
-                raw["content"].replace("\r\n", "\n").replace("\r", "\n"),
+                question,
             )
 
 
