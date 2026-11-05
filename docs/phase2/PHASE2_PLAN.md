@@ -801,6 +801,17 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | IM 复制库验收适用范围 | 15433 副本与合成 Zulip 闭环不等同正式迁移与全场景验收 | 正式环境范围与专项授权（待分配） | 待分配（正式试点） | 获准目标环境迁移与业务记账实测 | PR #258 正文 |
 | Windows 本机 mypy 既有浏览器平台诊断 | `uv run mypy app/` 在 Windows 本机报 6 条，均在 `app/infra/browser/{d_form_flow,d_form_cli,synthetic_vault}.py`（平台相关，CI 的 Linux 检查通过）；IM 两棒与文件产物均如实记录 | 归属待裁决 | 待分配 | 相应 Windows 功能棒修复并验证 | PR #258、#260 正文 |
 
+### IM 机会层 V3/布局新增欠债（2026-11-05）
+
+来源为已合并 PR #259/#261 正文；重复欠债合并登记，不以布局修复核销 V3 业务限制。证据路径均相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`；中文/浅色配置一项来自 laneG4 交接，不冒称 PR 正文已有记录。V2b（同版文件分享）的文件产物前置已解除，与 V4 均待分配，不指定新 task_id。旧 D8 业务账号停用联动、第二租户、正式试点及 V1/V2a 其他未完成项保留，不由 A1–A9 批量核销。
+
+| reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|
+| 真实模型对等价问法敏感；旧问“地点”曾答资料不足，明确问“集合地点代号”后答对，不宣称所有问法可靠 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（待安排后续） | 获准后验证典型等价问法并形成可复核结论 | PR #259/#261；acc/V3RUN4.md 的旧 A4/A9 根因及新结果 |
+| A5 多人私聊与 A6 来源编辑拒绝仅沿用既有合成 API 证据，本人窗口未重跑；原生撰写框操作也未覆盖 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（后续验收） | 获准在本人窗口完成相应真实路径并登记结果 | PR #259/#261；acc/V3RUN4.md；acc/v3-auto.json |
+| Zulip 中文/浅色配置未进入正式部署脚本，验收现场配置不等于正式部署交付 | 正式部署范围与专项授权（待分配） | 待分配 | 获准后纳入正式部署配置并在目标环境核对 | laneG4.md 第 4 项交接；本棒不部署、不修改配置 |
+| 已关闭：760px 顶栏横向溢出；旧 scrollWidth=1115，现 745=clientWidth | P2-IM-MESSAGES-LAYOUT-001 | P2-IM-MESSAGES-LAYOUT-001 | 已满足：真实登录 760px 无横溢，两宽度折叠/深链/换记录保持 PASS | PR #259/#261；acc/LAYOUTFIX.md；acc/layout-fix-browser.json；acc/layout-fix-760-expanded.png |
+
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
 `P2-AUTH-RENEWAL-APP-001` 合并时登记；方案为仓库外 `RAPP_PLAN_v1.3.md`，验证与评审证据留 PR #241。
