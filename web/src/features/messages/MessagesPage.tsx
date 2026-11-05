@@ -41,7 +41,7 @@ function DeliveryWorkspace() {
     return () => { live = false; };
   }, [generation, revision]);
 
-  return <details className={styles.deliveryDetails} open={selected !== null}>
+  return <details key={selected} className={styles.deliveryDetails} open={selected !== null}>
     <summary>送核记录<span>查看发送结果与本人回执</span></summary>
     <section className={styles.workspace}>
       <Button loading={busy} onClick={() => setRevision((value) => value + 1)}>刷新送核记录</Button>
