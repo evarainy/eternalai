@@ -272,6 +272,12 @@ class PostgreSQLPersonalAgentStore:
         return ReceiveResult(row["inbox_id"], "duplicate" if bytes(row["payload_fingerprint"])
                              == params["payload_fingerprint"] else "conflict")
 
+    async def existing(
+        self, agent: PersonalAgent, event: InboundEvent,
+    ) -> ReceiveResult | None:
+        async with self._session() as session:
+            return await self._existing(session, self._event_params(agent, event))
+
     async def _inbound_actor(
         self, session: AsyncSession, agent: PersonalAgent, event: InboundEvent,
     ) -> DeliveryBinding | None:

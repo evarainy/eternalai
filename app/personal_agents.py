@@ -56,6 +56,9 @@ class PersonalAgentService:
             target_bot_id=agent.bot_user_id, payload=payload,
         )
         event = authenticated.event
+        existing = await self.store.existing(agent, event)
+        if existing is not None:
+            return existing
         delegate_agent_id = None
         if (event.conversation_kind == "group" and event.trigger_kind == "mention"
                 and "委托" in authenticated.text):
@@ -105,6 +108,7 @@ class PersonalAgentService:
             verified = await self._inbound.reread_trigger(
                 _reader_binding(context.actor), context.event,
             )
+            await self._inbound.check_identity(_reader_binding(context.owner))
         else:
             agents = await self._delegation(context.actor, context.event)
             if (agents is None or agents[0].agent_id != context.agent.agent_id
@@ -115,7 +119,6 @@ class PersonalAgentService:
                 delegate_bot_id=context.execution_agent.bot_user_id,
             )
             await self._inbound.check_identity(_reader_binding(context.execution_owner))
-        await self._inbound.check_identity(_reader_binding(context.owner))
         return verified.question
 
     async def answer(self, inbox_id: UUID) -> None:
