@@ -284,7 +284,7 @@ class _RunScreen:
                 raise LookupError("target_missing")
             self.browser, self.target_id = browser, target_id
             self._listen(*found)
-            await self.page.screencast.start(
+            await found[1].screencast.start(
                 on_frame=self.on_frame, quality=_FRAME_QUALITY, size=_FRAME_SIZE
             )
         except Exception as error:
@@ -313,7 +313,7 @@ class _RunScreen:
             self.dialog = self.dialog_id = None
             self.target_id = target_id
             self._listen(*found)
-            await self.page.screencast.start(
+            await found[1].screencast.start(
                 on_frame=self.on_frame, quality=_FRAME_QUALITY, size=_FRAME_SIZE
             )
             _log("follow", "ok", "OK", len(self.viewers))
