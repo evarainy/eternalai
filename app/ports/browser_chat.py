@@ -13,7 +13,7 @@ from pydantic import Field
 from app.browser_skill.models import BrowserOwner, Contract, Digest, OpaqueId
 from app.browser_skill.run_contracts import BrowserRunView
 from app.ports.auth import Principal
-from app.ports.browser_fill_stop import FillStopReport
+from app.ports.browser_fill_stop import FillStopField, FillStopReport
 from app.ports.browser_run_store import ProtectedRunEnvelope, RunAdmission, RunSnapshot
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.credential_vault import BrowserBindingFact
@@ -116,6 +116,9 @@ class BrowserHandoffView(Contract):
     sealed_at: datetime
     deadline: datetime
     fields: BrowserHandoffFields | None = None
+    # The owner took over mid-fill; completed_fields lists only finished fields.
+    takeover: bool = False
+    completed_fields: tuple[FillStopField, ...] = ()
 
 
 class BrowserRunResponse(Contract):

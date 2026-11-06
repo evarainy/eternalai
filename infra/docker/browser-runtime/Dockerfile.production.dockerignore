@@ -137,6 +137,7 @@ services/decision/*
 !app/api/v1/background_jobs.py
 !app/api/v1/file_artifacts.py
 !app/api/v1/browser_runs.py
+!app/api/v1/browser_screen.py
 !app/api/v1/credential_bindings.py
 !app/api/v1/csrf.py
 !app/api/v1/health.py
@@ -243,6 +244,7 @@ services/decision/*
 !app/infra/browser/profile_codec.py
 !app/infra/browser/provider_shared.py
 !app/infra/browser/read_execution.py
+!app/infra/browser/remote_screen.py
 !app/infra/browser/resource_lifecycle.py
 !app/infra/browser/runtime_exploration.py
 !app/infra/browser/systemone_http.py
@@ -364,6 +366,7 @@ services/decision/*
 !app/ports/browser_profile_store.py
 !app/ports/browser_publication_store.py
 !app/ports/browser_read_execution.py
+!app/ports/browser_screen.py
 !app/ports/browser_run_store.py
 !app/ports/browser_store.py
 !app/ports/browser.py

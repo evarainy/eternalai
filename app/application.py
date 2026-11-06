@@ -14,12 +14,14 @@ from app.api.v1.admin import make_router as make_admin_router
 from app.api.v1.auth import (
     PrincipalRoleLister,
     make_require_principal,
+    make_require_session,
 )
 from app.api.v1.auth import (
     make_router as make_auth_router,
 )
 from app.api.v1.background_jobs import make_router as make_background_jobs_router
 from app.api.v1.browser_runs import make_router as make_browser_runs_router
+from app.api.v1.browser_screen import make_router as make_browser_screen_router
 from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.credential_bindings import make_router as make_credential_binding_router
 from app.api.v1.csrf import (
@@ -78,6 +80,7 @@ from app.ports.browser_chat import (
 )
 from app.ports.browser_fill_stop import DFormManagementPort
 from app.ports.browser_gateway import BrowserGatewayRegistration
+from app.ports.browser_screen import BrowserScreenPort
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
@@ -116,6 +119,7 @@ def create_app(
     browser_worker_supervisor: BrowserWorkerSupervisor | None = None,
     browser_submission: BrowserSubmissionPort | None = None,
     browser_management: DFormManagementPort | None = None,
+    browser_screen: BrowserScreenPort | None = None,
     background_sync_disabled_receipt: bool = False,
     d_form_execution_without_sync: bool = False,
     background_job_service: BackgroundJobService | None = None,
@@ -176,8 +180,13 @@ def create_app(
                     if series_started and work_object_series_scheduler is not None:
                         await work_object_series_scheduler.stop()
                 finally:
-                    if browser_started and browser_worker_supervisor is not None:
-                        await browser_worker_supervisor.stop()
+                    try:
+                        # Viewers and observer drivers end before Run workers stop.
+                        if browser_screen is not None:
+                            await browser_screen.aclose()
+                    finally:
+                        if browser_started and browser_worker_supervisor is not None:
+                            await browser_worker_supervisor.stop()
             finally:
                 try:
                     if organization_started and organization_directory_scheduler is not None:
@@ -286,6 +295,15 @@ def create_app(
             csrf_protected_principal,
             session_binder,
             submission=browser_submission,
+        ),
+        prefix="/api/v1",
+    )
+    application.include_router(
+        make_browser_screen_router(
+            browser_screen,
+            make_require_session(session_tokens, session_revocations),
+            session_binder,
+            csrf_allowed_origins,
         ),
         prefix="/api/v1",
     )
@@ -545,6 +563,11 @@ def create_production_app(
         browser_submission=(browser_vertical.submission if browser_vertical is not None else None),
         browser_worker_supervisor=browser_supervisor,
         browser_management=browser_management,
+        browser_screen=(
+            browser_vertical.screen
+            if isinstance(browser_vertical, BrowserVerticalComponents)
+            else None
+        ),
         background_job_service=components.background_jobs,
         file_artifact_service=components.file_artifacts,
         im_delivery_service=components.im_deliveries,

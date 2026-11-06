@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from app.browser_skill.models import BrowserOwner
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
-from app.infra.browser.d_form_cli import CODES, cancel_run, validate
+from app.infra.browser.d_form_cli import CODES, cancel_run, request_takeover, validate
 from app.infra.browser.d_form_manifest import FIELDS
 from app.infra.browser.d_form_owned_browser import (
     OwnedDFormBrowser,
@@ -36,7 +36,12 @@ from app.infra.browser.d_form_owned_browser import (
 from app.infra.browser.oa_browser_login import RunBoundOACredentialVault
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
 from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
-from app.ports.browser_fill_stop import FillStopChecks, FillStopCode, FillStopReport
+from app.ports.browser_fill_stop import (
+    FillStopChecks,
+    FillStopCode,
+    FillStopField,
+    FillStopReport,
+)
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
     BrowserHandoffCheck,
@@ -58,6 +63,24 @@ from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
 # verified EternalAI session expiry, so a start needs this window plus settlement.
 _D_WINDOW_SECONDS = 300
 _D_SETTLE_SECONDS = 30
+# Receipt action -> the form field it completes; CATEGORY_OPEN only opens the list.
+_ACTION_FIELDS: tuple[tuple[str, FillStopField], ...] = (
+    ("CATEGORY_SELECT", "category"),
+    ("POSITION_INPUT", "position"),
+    ("DESCRIPTION_INPUT", "description"),
+)
+ScreenPhase = Literal["preparing", "filling", "handoff"]
+
+
+@dataclass(frozen=True, slots=True)
+class DFormScreenTarget:
+    """In-process facts the remote screen may use; never derived from a client."""
+
+    # None while this process has not started the Run's window yet (queued or
+    # browser starting): the screen waits for it; the access port judges the Run.
+    task_id: str | None
+    browser: OwnedDFormBrowser | None
+    phase: ScreenPhase
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -97,6 +120,7 @@ class _State:
     resource_ref: bytes | None
     receipt_path: Path
     event_name: str
+    takeover_event_name: str = ""
     began: float = field(default_factory=time.monotonic)
     target: DFormTarget | None = None
     claim: BrowserLeaseClaim | None = None
@@ -126,6 +150,12 @@ class _State:
     initial_outcome: BrowserReadOutcome | None = None
     # Ordinary handoff only: a verified read-only business readback.
     readback: BrowserHandoffCheck | None = None
+    # Set synchronously only after the takeover event was really signalled.
+    takeover_requested: bool = False
+    # The worker holds a sealed handoff (set by hold_handoff, never by the screen).
+    handoff_open: bool = False
+    # Set before the first stop/cleanup step; the screen never reattaches after it.
+    screen_closed: bool = False
 
 
 class DFormRuntime:
@@ -150,6 +180,63 @@ class DFormRuntime:
         self._assert_publication: Callable[[RunSnapshot], Awaitable[bool]] | None = None
         self._cleanup_authorize: Callable[[RunSnapshot], Awaitable[None]] | None = None
         self._login_vault: Callable[[RunSnapshot], RunBoundOACredentialVault] | None = None
+        self._screen_closer: Callable[[str], Awaitable[None]] | None = None
+
+    def install_screen_closer(self, closer: Callable[[str], Awaitable[None]]) -> None:
+        """Remote screen teardown; called before stop proofs and before cleanup."""
+        self._screen_closer = closer
+
+    async def _close_screen(self, state: _State) -> None:
+        state.screen_closed = True
+        if self._screen_closer is not None:
+            await self._screen_closer(state.run.run_id)
+
+    def screen_target(self, run_id: str) -> DFormScreenTarget | None:
+        """Current phase of this process's live owned browser; None once ending."""
+        state = self._states.get(run_id)
+        if state is None:
+            return DFormScreenTarget(None, None, "preparing")
+        if (
+            state.screen_closed
+            or state.cancelled
+            or state.released
+            or state.owned_resource_cleanup_proven
+        ):
+            return None
+        if state.owned_browser is None:
+            return DFormScreenTarget(state.run.task_id, None, "preparing")
+        phase: ScreenPhase = "preparing"
+        if state.handoff_open:
+            phase = "handoff"
+        elif (
+            state.input_sent
+            and not state.initial_validation
+            and state.process is not None
+            and state.process.returncode is None
+        ):
+            phase = "filling"
+        return DFormScreenTarget(state.run.task_id, state.owned_browser, phase)
+
+    def request_takeover(self, run_id: str) -> bool:
+        """Ask the running fill worker to stop at its next action boundary.
+
+        False when there is no running ordinary fill or the supervisor has not
+        created the event yet; nothing is recorded then.
+        """
+        state = self._states.get(run_id)
+        if (
+            state is None
+            or state.initial_validation
+            or not state.input_sent
+            or state.cancelled
+            or state.process is None
+            or state.process.returncode is not None
+            or not request_takeover(state.takeover_event_name)
+        ):
+            return False
+        state.takeover_requested = True
+        log_d_form_stage("takeover", "started", "OK", state.began)
+        return True
 
     def install_login_vault(
         self,
@@ -290,6 +377,8 @@ class DFormRuntime:
             state.process.send_signal(signal.SIGINT)
 
     async def _stop(self, state: _State) -> None:
+        # The remote screen stops taking input and detaches before any stop proof.
+        await self._close_screen(state)
         if state.process is not None and state.process.stdin is not None and not state.input_sent:
             state.process.stdin.close()
         await self._signal(state)
@@ -319,8 +408,11 @@ class DFormRuntime:
         attempts = completed = 0
         submit_actions = 0
         verification: Literal["verified", "mismatch", "incomplete", "unknown"] = "unknown"
-        status: Literal["filled_stopped", "failed", "cancelled", "unknown"] = "unknown"
+        status: Literal["filled_stopped", "takeover_stopped", "failed", "cancelled", "unknown"] = (
+            "unknown"
+        )
         error: FillStopCode = code or "RECEIPT_INVALID"
+        completed_fields: tuple[FillStopField, ...] = ()
         try:
             path = state.receipt_path
             if path.is_symlink() or path.stat().st_size > 16384:
@@ -396,6 +488,28 @@ class DFormRuntime:
                 and attempts == completed
             ):
                 verification, status = "verified", "filled_stopped"
+            elif (
+                code is None
+                and error == "HUMAN_TAKEOVER"
+                and state.takeover_requested
+                and submit_actions == 0
+                and raw["passed"] is False
+                and state.process is not None
+                and state.process.returncode == 2
+                and not state.output_invalid
+                and state.connected
+                and state.acquired_evidence is not None
+                and state.attachment_cleanup_proven
+                and all(state.stages.get(i, {}).get("status") == "PASS" for i in (1, 3, 4, 7))
+                and state.stages.get(8, {}).get("error_code") == "HUMAN_TAKEOVER"
+                and attempts == completed
+                and not values
+            ):
+                # Stopped at an action boundary for the owner; nothing is verified.
+                status = "takeover_stopped"
+                completed_fields = tuple(
+                    name for action, name in _ACTION_FIELDS if action in executed
+                )
             elif error == "OK":
                 error = "RECEIPT_INVALID"
         except (OSError, ValueError, KeyError, TypeError):
@@ -413,6 +527,8 @@ class DFormRuntime:
             # A blocked save/submit is a failed fill-stop, never a successful receipt.
             # Preserve the observed attempts even if another receipt check failed.
             verification, status, error = "unknown", "unknown", "FORM_SUBMIT_BLOCKED"
+        if status != "takeover_stopped":
+            completed_fields = ()
         return FillStopReport(
             execution_status=status,
             verification=verification,
@@ -425,6 +541,7 @@ class DFormRuntime:
             cleanup_confirmed=(
                 state.attachment_cleanup_proven and state.owned_resource_cleanup_proven
             ),
+            completed_fields=completed_fields,
         )
 
     async def execute(
@@ -458,6 +575,7 @@ class DFormRuntime:
             None,
             self.options.receipts_root / (uuid4().hex + ".json"),
             "Local\\EAI_D_CANCEL_" + uuid4().hex,
+            "Local\\EAI_D_TAKEOVER_" + uuid4().hex,
         )
         self._states[run.run_id] = state
         output: asyncio.Task[None] | None = None
@@ -589,6 +707,8 @@ class DFormRuntime:
                 str(state.receipt_path),
                 "--cancel-event",
                 state.event_name,
+                "--takeover-event",
+                state.takeover_event_name,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -647,6 +767,8 @@ class DFormRuntime:
             )
             await checkpoint.record_fill_stop(state.report)
             state.run = await checkpoint.refresh(allow_cancel=True)
+            if state.report.execution_status == "takeover_stopped":
+                return self._takeover_outcome(state)
             if state.report.verification != "verified":
                 effect: Literal["not_sent", "acknowledged", "unknown"] = (
                     "unknown"
@@ -672,26 +794,7 @@ class DFormRuntime:
                 "model_requests": 0,
                 "seconds": state.report.seconds,
             }
-            evidence = self.options.proof_context.digest(
-                "d-form-verification.v1",
-                canonical_json(
-                    {
-                        "resource": hashlib.sha256(state.resource_ref).hexdigest(),
-                        "report": state.report.model_dump(mode="json"),
-                        "stages": state.stages,
-                        "worker_epoch": state.run.worker_epoch,
-                        "lease_epoch": state.run.lease_epoch,
-                    }
-                ).encode(),
-            )
-            digest = hmac.digest(
-                self._result_key,
-                b"d-form-result-v1\x00"
-                + run.run_id.encode()
-                + b"\x00"
-                + canonical_json(value).encode(),
-                hashlib.sha256,
-            )
+            evidence, digest = self._fill_digests(state, value)
             return self._filled_outcome(state, value, evidence, digest)
         except asyncio.CancelledError:
             log_d_form_stage("cancel", "cancelled", "CANCELLED", began)
@@ -777,6 +880,57 @@ class DFormRuntime:
                 output.cancel()
                 await asyncio.gather(output, return_exceptions=True)
 
+    def _fill_digests(self, state: _State, value: Mapping[str, object]) -> tuple[bytes, bytes]:
+        assert self._result_key is not None and state.report is not None
+        assert state.resource_ref is not None
+        evidence = self.options.proof_context.digest(
+            "d-form-verification.v1",
+            canonical_json(
+                {
+                    "resource": hashlib.sha256(state.resource_ref).hexdigest(),
+                    "report": state.report.model_dump(mode="json"),
+                    "stages": state.stages,
+                    "worker_epoch": state.run.worker_epoch,
+                    "lease_epoch": state.run.lease_epoch,
+                }
+            ).encode(),
+        )
+        digest = hmac.digest(
+            self._result_key,
+            b"d-form-result-v1\x00"
+            + state.run.run_id.encode()
+            + b"\x00"
+            + canonical_json(value).encode(),
+            hashlib.sha256,
+        )
+        return evidence, digest
+
+    def _takeover_outcome(self, state: _State) -> BrowserReadOutcome:
+        """The owner took over mid-fill: hand the window over without any verification."""
+        assert state.report is not None
+        value = {
+            "mode": "FILL_STOP",
+            "execution_status": "takeover_stopped",
+            "completed_fields": list(state.report.completed_fields),
+            "actions_completed": state.report.actions_completed,
+            "submit_actions": 0,
+            "model_requests": 0,
+            "seconds": state.report.seconds,
+        }
+        evidence, digest = self._fill_digests(state, value)
+        return BrowserReadOutcome(
+            "acknowledged",
+            None,
+            handoff=HandoffSeal(
+                automation_evidence_digest=evidence,
+                automation_result_digest=digest,
+                actions_completed=state.report.actions_completed,
+                field_checks=state.report.field_checks,
+                takeover=True,
+                completed_fields=state.report.completed_fields,
+            ),
+        )
+
     def _filled_outcome(
         self,
         state: _State,
@@ -855,6 +1009,8 @@ class DFormRuntime:
             await self._renew_login_claim(state, run)
         if state.owned_browser is None or state.owned_browser.job is None:
             raise BrowserReadExecutionError("stale")
+        # Reached only after the worker sealed this handoff and saw no cancel request.
+        state.handoff_open = True
         return "open" if state.owned_browser.job.poll() is None else "closed"
 
     async def check_handoff(
@@ -886,6 +1042,7 @@ class DFormRuntime:
         async with state.cleanup_lock:
             if state.run.admission != run.admission:
                 raise BrowserReadExecutionError("stale")
+            await self._close_screen(state)
             if (
                 run.status in {"completed", "failed", "cancelled"}
                 and state.owned_browser is not None
@@ -937,7 +1094,11 @@ class DFormRuntime:
         return (
             self._exited(state)
             and not state.output_invalid
-            and (state.owned_browser is None or state.owned_browser.attachment_cleanup_proven)
+            and (
+                state.owned_browser is None
+                or state.owned_browser.attachment_cleanup_proven
+                and state.owned_browser.observer_exited
+            )
             and (
                 state.process is None
                 or not state.input_sent
@@ -975,6 +1136,8 @@ class DFormRuntime:
         stage = "cleanup_owned"
         try:
             await self._cleanup_authorize(run)
+            # Idempotent: the screen normally closed already in stop.
+            await self._close_screen(state)
             if not state.owned_resource_cleanup_proven:
                 await state.owned_browser.close_owned()
                 state.owned_resource_cleanup_proven = (
@@ -1032,9 +1195,13 @@ class DFormRuntime:
             not state.cancelled
             or not self._exited(state)
             or state.owned_browser is not None
-            and not state.owned_browser.attachment_cleanup_proven
+            and not (
+                state.owned_browser.attachment_cleanup_proven
+                and state.owned_browser.observer_exited
+            )
         ):
             raise BrowserReadExecutionError("denied")
+        log_d_form_stage("cancel_check", "success", "OK", state.began)
 
     def _claim_state(self, claim: BrowserLeaseClaim, resource: bytes | None) -> _State:
         state = self._states.get(claim.auth.authorization_run_id or "")

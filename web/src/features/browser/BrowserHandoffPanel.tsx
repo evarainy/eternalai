@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button } from 'antd';
 import type { BrowserResultView, ParsedBrowserRunView } from '../../contracts/browserRunProjection';
-import type { BrowserHandoff } from './api';
+import type { BrowserHandoff, FillField } from './api';
+import { RemoteScreen } from './RemoteScreen';
 
 export interface BrowserHandoffPanelProps {
   /** The owner-checked run the handoff belongs to; `result`/`cleanup` drive the §9.1 rows. */
@@ -20,6 +21,23 @@ export interface BrowserHandoffPanelProps {
    * request was handed off; a rejection means it was not delivered. Acknowledgement comes from a later read.
    */
   readonly onEndAssist: () => Promise<void>;
+  /** Present when the page can open the live OA window view for this run. */
+  readonly screen?: { readonly taskId: string; readonly runId: string; readonly sessionId: string };
+}
+
+const FIELD_LABELS: Record<FillField, string> = {
+  category: '类别', position: '故障位置', description: '故障描述',
+};
+const FIELD_ORDER: readonly FillField[] = ['category', 'position', 'description'];
+
+/** "已填写：…；未填写：…" for a takeover handoff; values only when the server provided them. */
+function takeoverLine(handoff: BrowserHandoff): string {
+  const done = FIELD_ORDER.filter((name) => handoff.completed_fields.includes(name));
+  const missing = FIELD_ORDER.filter((name) => !handoff.completed_fields.includes(name));
+  const shown = done.map((name) => (handoff.fields === null
+    ? FIELD_LABELS[name] : `${FIELD_LABELS[name]} ${handoff.fields[name]}`));
+  return `${done.length ? `已填写：${shown.join('；')}。` : '机器还没有填写任何一项。'}`
+    + `${missing.length ? `未填写：${missing.map((name) => FIELD_LABELS[name]).join('、')}。` : ''}`;
 }
 
 function clock(deadline: string): string {
@@ -37,9 +55,10 @@ function cleanupLine(cleanup: BrowserResultView['cleanup']): string {
  * Sealed run: replaces the technical fill notice and the run card's own cancel button.
  * Pre-seal (handoff null): only running and cancelled have copy; other failures keep the card as is.
  */
-export function BrowserHandoffPanel({ run, handoff, onEndAssist }: BrowserHandoffPanelProps) {
+export function BrowserHandoffPanel({ run, handoff, onEndAssist, screen }: BrowserHandoffPanelProps) {
   const [ending, setEnding] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [viewing, setViewing] = useState(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -50,7 +69,16 @@ export function BrowserHandoffPanel({ run, handoff, onEndAssist }: BrowserHandof
   let body: React.ReactNode = null;
   let action: string | null = null;
   if (handoff !== null) {
-    if (!terminal) {
+    if (!terminal && handoff.takeover) {
+      body = (
+        <p>
+          <strong>您已接管，机器已停止填写。</strong>{' '}
+          {takeoverLine(handoff)}
+          {`请在 OA 窗口中核对并补全，确认无误后由您本人提交；已提交的请勿重复提交。处理完后点"结束协助"关闭窗口。窗口最晚保留到 ${clock(handoff.deadline)}。`}
+        </p>
+      );
+      action = '结束协助';
+    } else if (!terminal) {
       const fields = handoff.fields;
       body = (
         <p>
@@ -79,10 +107,20 @@ export function BrowserHandoffPanel({ run, handoff, onEndAssist }: BrowserHandof
   if (body === null) return null;
 
   const canAct = action !== null && !terminal && !run.cancel.requested;
+  // The live window is offered while it exists: during login, filling and the handoff.
+  const canView = screen !== undefined && canAct;
   return (
     <section aria-label="报修协助">
       {body}
       {run.result !== null ? <p>{cleanupLine(run.result.cleanup)}</p> : null}
+      {canView ? (
+        <Button type="link" onClick={() => setViewing((value) => !value)}>
+          {viewing ? '收起 OA 窗口' : '查看 OA 窗口'}
+        </Button>
+      ) : null}
+      {canView && viewing ? (
+        <RemoteScreen taskId={screen.taskId} runId={screen.runId} sessionId={screen.sessionId} />
+      ) : null}
       {canAct ? (
         <Button loading={ending} disabled={ending} onClick={() => {
           setEnding(true);

@@ -44,6 +44,7 @@ _D_FORM_LOG_STAGES = frozenset(
         "fill",
         "receipt",
         "cancel",
+        "cancel_check",
         "failure",
         "browser_start",
         "credential",
@@ -70,6 +71,7 @@ _D_FORM_LOG_STAGES = frozenset(
         "publication_activate",
         "publication_read",
         "chat_confirmation",
+        "takeover",
         "cleanup_owned",
         "cleanup_release",
         "cleanup_profile",
@@ -373,6 +375,26 @@ def log_d_form_browser_failure(step: str, error: BaseException, began: float, jo
 
 
 Fence = Callable[[], Awaitable[None]]
+
+
+async def find_target_page(
+    browser: Any, target_id: str, skip: Any = None
+) -> tuple[Any, Any] | None:
+    """One pass over attached pages: the (context, page) whose CDP target is target_id."""
+    for wrapper in browser.contexts:
+        for page in wrapper.pages:
+            if page is skip:
+                continue
+            session = await wrapper.new_cdp_session(page)
+            try:
+                info = (await session.send("Target.getTargetInfo"))["targetInfo"]
+            finally:
+                await session.detach()
+            if info.get("targetId") == target_id:
+                return wrapper, page
+    return None
+
+
 BLOCK_SERVICE_WORKERS = """(() => {
  if (!navigator.serviceWorker) return;
  Object.defineProperty(ServiceWorkerContainer.prototype, 'register', {
@@ -482,6 +504,12 @@ class OwnedDFormBrowser:
         self.page: Any = None
         self.native: dict[str, object] | None = None
         self.attachment_cleanup_proven = False
+        # Separate proof for the remote screen's observer driver; only its real
+        # stop sets it back. Never covers an automation-driver failure.
+        self.observer_exited = True
+        # A remote-screen button release failed in this window: no observer reattaches
+        # for the rest of this Run (CDP disconnect does not release a held button).
+        self.observer_input_fault = False
         # Set synchronously before the first driver start; never cleared afterwards.
         self.driver_start_attempted = False
         self.owned_resource_cleanup_proven = False
@@ -636,6 +664,12 @@ class OwnedDFormBrowser:
                     "--disable-extensions",
                     "--disable-breakpad",
                     "--disable-crash-reporter",
+                    # Keep rendering when another window covers this one (Playwright's own
+                    # launch defaults): an occluded window turns hidden and stops painting,
+                    # which froze the remote screen and its mouse input (2026-11-06 probe).
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-features=CalculateNativeWinOcclusion",
                     "--start-maximized",
                     "about:blank",
                 ],
@@ -692,17 +726,9 @@ class OwnedDFormBrowser:
             await root.detach()
             deadline = time.monotonic() + 10
             while self.page is None:
-                for wrapper in self.browser.contexts:
-                    for page in wrapper.pages:
-                        if page is startup:
-                            continue
-                        session = await wrapper.new_cdp_session(page)
-                        try:
-                            info = (await session.send("Target.getTargetInfo"))["targetInfo"]
-                        finally:
-                            await session.detach()
-                        if info.get("targetId") == self.target_id:
-                            self.page, self.context = page, wrapper
+                found = await find_target_page(self.browser, self.target_id, startup)
+                if found is not None:
+                    self.context, self.page = found
                 if self.page is None:
                     if time.monotonic() >= deadline:
                         self._stage("browser_start", "failed", "CDP_TARGET_TIMEOUT")

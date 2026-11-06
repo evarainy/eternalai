@@ -65,7 +65,7 @@ from app.infra.persistence.task_store.transactional import (
     lock_owned_task,
     transition_owned_task,
 )
-from app.ports.browser_fill_stop import FillStopReport
+from app.ports.browser_fill_stop import FillStopField, FillStopReport
 from app.ports.browser_run_store import (
     MAX_RUN_REVISION,
     BrowserRunAuthorityPort,
@@ -3667,7 +3667,25 @@ class PostgreSQLBrowserRunStore:
             or payload.get("submit_actions") != 0
         ):
             raise BrowserRunStoreError("browser_write_audit_invalid")
-        return HandoffRecord(current.run_id, revision, sealed_at, deadline)
+        # Absent on every seal written before human takeover existed.
+        takeover = payload.get("takeover", False)
+        completed = payload.get("completed_fields", [])
+        if (
+            type(takeover) is not bool
+            or type(completed) is not list
+            or len(set(completed)) != len(completed)
+            or not set(completed) <= {"category", "position", "description"}
+            or completed and not takeover
+        ):
+            raise BrowserRunStoreError("browser_write_audit_invalid")
+        return HandoffRecord(
+            current.run_id,
+            revision,
+            sealed_at,
+            deadline,
+            takeover=takeover,
+            completed_fields=cast(tuple[FillStopField, ...], tuple(completed)),
+        )
 
     async def _fill_stop_publication(self, session: AsyncSession, current: RunSnapshot) -> bool:
         manifest = await self._frozen_publication(session, current)
@@ -3701,11 +3719,14 @@ class PostgreSQLBrowserRunStore:
             # The seal may only restate the durable worker receipt, never replace it.
             if (
                 report is None
-                or report.execution_status != "filled_stopped"
-                or report.verification != "verified"
+                or report.execution_status
+                != ("takeover_stopped" if seal.takeover else "filled_stopped")
+                or report.verification != ("incomplete" if seal.takeover else "verified")
+                or report.error_code != ("HUMAN_TAKEOVER" if seal.takeover else "OK")
                 or report.submit_actions != 0
                 or report.actions_completed != seal.actions_completed
                 or report.field_checks != seal.field_checks
+                or report.completed_fields != seal.completed_fields
             ):
                 raise BrowserRunStoreError("browser_handoff_seal_mismatch")
             sealed_id = self._write_event_id("handoff-sealed", current.run_id)
@@ -3738,9 +3759,21 @@ class PostgreSQLBrowserRunStore:
                     "field_checks": seal.field_checks.model_dump(mode="json"),
                     "submit_actions": 0,
                     "fill_stop_receipt_event_id": receipt_id,
+                    **(
+                        {"takeover": True, "completed_fields": list(seal.completed_fields)}
+                        if seal.takeover
+                        else {}
+                    ),
                 },
             )
-        return updated, HandoffRecord(updated.run_id, updated.state_revision, now, deadline)
+        return updated, HandoffRecord(
+            updated.run_id,
+            updated.state_revision,
+            now,
+            deadline,
+            takeover=seal.takeover,
+            completed_fields=seal.completed_fields,
+        )
 
     async def request_handoff_check(
         self,

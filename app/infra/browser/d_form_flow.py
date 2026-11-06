@@ -64,6 +64,7 @@ CODES = {
     "REPORTER_AMBIGUOUS",
     "REPORTER_INVALID",
     "CANCELLED",
+    "HUMAN_TAKEOVER",
     "CLEANUP_FAILED",
     "REQUEST_GUARD_FAILED",
     "PREP_FAILED",
@@ -506,8 +507,16 @@ def origin(value: str) -> Origin:
 
 
 class Flow:
-    def __init__(self, request: object, emit: FlowEmit, cancel: asyncio.Event) -> None:
+    def __init__(
+        self,
+        request: object,
+        emit: FlowEmit,
+        cancel: asyncio.Event,
+        takeover: asyncio.Event | None = None,
+    ) -> None:
         request = cast(FlowRequest, request)  # Built and validated by the host.
+        # Host asked to hand the page to a person: stop before the next action.
+        self.takeover = takeover
         need(request["mode"] in MODES, "CONFIG_FAILED")
         self.binding = Binding.parse(request["binding"])
         self.mode = request["mode"]
@@ -764,17 +773,9 @@ class Flow:
                 self.summary["timings"]["observe"] += time.perf_counter() - stamp
 
     async def connect(self) -> None:
-        import psutil
-
         b = self.binding
-        connections = psutil.Process(b.pid).net_connections(kind="tcp")
-        need(
-            not any(
-                c.status == psutil.CONN_ESTABLISHED and c.laddr.port == b.port for c in connections
-            ),
-            "SESSION_BUSY",
-        )
-        # A process-local named lease prevents two new workers racing attachment.
+        # Other CDP clients (the remote screen viewer) may stay attached. A
+        # process-local named lease prevents two new workers racing attachment.
         if sys.platform == "win32":
             import ctypes
             import hashlib
@@ -1037,6 +1038,11 @@ class Flow:
         self.probes.append((node, key, event))
         return key
 
+    def yield_to_human(self) -> None:
+        """Cooperative takeover boundary; an action already running is never interrupted."""
+        if self.takeover is not None and self.takeover.is_set():
+            raise Stop("HUMAN_TAKEOVER")
+
     async def action(
         self,
         code: str,
@@ -1046,6 +1052,7 @@ class Flow:
     ) -> None:
         # All in-tree callers reach action() from run()'s validated FILL_STOP path.
         inputs = cast(Mapping[str, str], self.inputs)
+        self.yield_to_human()
         await self.bounded(self.observation(self.check()), 15, "OBSERVE_TIMEOUT")
         stamp = time.perf_counter()
         before = cast(IdentityInfo, await node.evaluate(IDENTITY))
@@ -1398,6 +1405,7 @@ class Flow:
                 stage = 5
                 stamp = time.perf_counter()
                 self.phase = "EXECUTE"
+                self.yield_to_human()
                 await self.bounded(self.select_category(fields[FIELDS[0]]), 100, "ACTION_TIMEOUT")
                 for field, key, code in zip(
                     FIELDS[1:], ("position", "description"), ("POSITION_INPUT", "DESCRIPTION_INPUT")
@@ -1416,6 +1424,8 @@ class Flow:
                         70,
                         "ACTION_TIMEOUT",
                     )
+                # A request after the last action stops before verification too.
+                self.yield_to_human()
                 self.emit(5, "PASS", time.perf_counter() - stamp, "OK")
                 stage = 6
                 stamp = time.perf_counter()

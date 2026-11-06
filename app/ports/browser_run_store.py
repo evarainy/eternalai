@@ -28,7 +28,7 @@ from app.browser_skill.repair import (
     RepairFailureReason,
 )
 from app.browser_skill.run_contracts import CommitFact
-from app.ports.browser_fill_stop import FillStopChecks, FillStopReport
+from app.ports.browser_fill_stop import FillStopChecks, FillStopField, FillStopReport
 
 if TYPE_CHECKING:
     from app.browser_skill.site_rules import SiteStepRule
@@ -217,16 +217,34 @@ class HandoffSeal:
     actions_completed: int
     field_checks: FillStopChecks
     submit_actions: Literal[0] = 0
+    # Owner took over mid-fill: zero or more finished fields, never field-verified.
+    takeover: bool = False
+    completed_fields: tuple[FillStopField, ...] = ()
 
     def __post_init__(self) -> None:
         checked_run_digest(self.automation_evidence_digest)
         checked_run_digest(self.automation_result_digest)
         if (
             type(self.actions_completed) is not int
-            or not 3 <= self.actions_completed <= 4
+            or type(self.takeover) is not bool
             or not isinstance(self.field_checks, FillStopChecks)
-            or any(value is not True for value in self.field_checks.model_dump().values())
             or self.submit_actions != 0
+            or type(self.completed_fields) is not tuple
+            or len(set(self.completed_fields)) != len(self.completed_fields)
+            or not set(self.completed_fields) <= {"category", "position", "description"}
+        ):
+            raise BrowserRunStoreError("browser_handoff_seal_invalid")
+        if self.takeover:
+            if (
+                not 0 <= self.actions_completed <= 4
+                or len(self.completed_fields) > self.actions_completed
+                or any(value is not None for value in self.field_checks.model_dump().values())
+            ):
+                raise BrowserRunStoreError("browser_handoff_seal_invalid")
+        elif (
+            not 3 <= self.actions_completed <= 4
+            or self.completed_fields
+            or any(value is not True for value in self.field_checks.model_dump().values())
         ):
             raise BrowserRunStoreError("browser_handoff_seal_invalid")
 
@@ -239,6 +257,8 @@ class HandoffRecord:
     sealed_revision: int
     sealed_at: datetime
     deadline: datetime
+    takeover: bool = False
+    completed_fields: tuple[FillStopField, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
