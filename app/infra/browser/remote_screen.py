@@ -12,6 +12,7 @@ page-screencast idea. No code is copied from either project.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 from collections import deque
@@ -65,7 +66,7 @@ _DRAIN_SECONDS = 5.0
 _TAKEOVER_SECONDS = 90.0
 _ATTACH_ATTEMPTS = 3
 _FRAME_QUALITY = 60
-_FRAME_SIZE: Any = {"width": 1280, "height": 800}
+_FRAME_SIZE = {"maxWidth": 1280, "maxHeight": 800}
 _WHEEL_LIMIT = 2000.0
 
 
@@ -170,6 +171,7 @@ class _RunScreen:
         # Kept until it settles: a timed-out start may still bring up a driver.
         self.driver_start: asyncio.Task[Any] | None = None
         self.driver_stop: asyncio.Task[None] | None = None
+        self.cast_session: Any = None
         self.browser: Any = None
         self.context: Any = None
         self.page: Any = None
@@ -237,6 +239,48 @@ class _RunScreen:
         for viewer in self.viewers.values():
             viewer.wake.set()
 
+    async def _start_cast(self, context: Any, page: Any) -> None:
+        # Playwright 1.63 page.screencast yields no frames for a page this driver
+        # attached to over CDP (2026-11-06 probe: 0 frames; raw CDP: 18 in 5 s), so
+        # the cast runs on the documented CDP session API instead.
+        session = await context.new_cdp_session(page)
+        session.on("Page.screencastFrame", self._on_cast_frame)
+        self.cast_session = session
+        await session.send(
+            "Page.startScreencast", {"format": "jpeg", "quality": _FRAME_QUALITY, **_FRAME_SIZE}
+        )
+
+    def _on_cast_frame(self, params: Mapping[str, Any]) -> None:
+        session = self.cast_session
+        if session is None:
+            return
+        metadata = params.get("metadata") or {}
+        self.on_frame(
+            {
+                "data": base64.b64decode(params["data"]),
+                "viewportWidth": metadata.get("deviceWidth"),
+                "viewportHeight": metadata.get("deviceHeight"),
+            }
+        )
+        # Acked after the slot holds it: Chromium sends the next frame only then.
+        self.service.spawn(self._ack_cast(session, params["sessionId"]))
+
+    async def _ack_cast(self, session: Any, cast_id: int) -> None:
+        try:
+            await session.send("Page.screencastFrameAck", {"sessionId": cast_id})
+        except Exception:
+            pass  # A stopped cast or driver has nothing left to acknowledge.
+
+    async def _stop_cast(self) -> None:
+        session, self.cast_session = self.cast_session, None
+        if session is None:
+            return
+        try:
+            await asyncio.wait_for(session.send("Page.stopScreencast"), 2)
+            await asyncio.wait_for(session.detach(), 2)
+        except Exception:
+            pass  # The driver stop ends the cast and the session in any case.
+
     def on_dialog(self, dialog: Any) -> None:
         # Listening keeps the observer's own driver from auto-dismissing it.
         if dialog.page is not self.page:
@@ -270,7 +314,8 @@ class _RunScreen:
 
         owned = target.browser
         if (
-            self.closed
+            owned is None
+            or self.closed
             or self.page is not None
             or owned.created_dir is None
             or owned.port == 0
@@ -309,9 +354,7 @@ class _RunScreen:
                 raise LookupError("target_missing")
             self.browser, self.target_id = browser, target_id
             self._listen(*found)
-            await found[1].screencast.start(
-                on_frame=self.on_frame, quality=_FRAME_QUALITY, size=_FRAME_SIZE
-            )
+            await self._start_cast(*found)
         except Exception as error:
             self.attach_failures += 1
             code = "target_missing" if isinstance(error, LookupError) else "driver_failed"
@@ -327,20 +370,18 @@ class _RunScreen:
 
     async def follow(self, target: DFormScreenTarget) -> None:
         """Under self.lock: the portal confirmed a new form target; recast that page."""
-        target_id = target.browser.target_id
+        target_id = None if target.browser is None else target.browser.target_id
         if self.page is None or target_id is None or target_id == self.target_id:
             return
         try:
-            await asyncio.wait_for(self.page.screencast.stop(), 2)
+            await self._stop_cast()
             found = await find_target_page(self.browser, target_id)
             if found is None:
                 raise LookupError("target_missing")
             self.dialog = self.dialog_id = None
             self.target_id = target_id
             self._listen(*found)
-            await found[1].screencast.start(
-                on_frame=self.on_frame, quality=_FRAME_QUALITY, size=_FRAME_SIZE
-            )
+            await self._start_cast(*found)
             _log("follow", "ok", "OK", len(self.viewers))
         except Exception as error:
             _log(
@@ -354,7 +395,7 @@ class _RunScreen:
     async def _stop_driver(self) -> bool:
         owned = self.browser_owned
         self.browser = self.context = self.page = self.target_id = None
-        self.dialog = self.dialog_id = None
+        self.dialog = self.dialog_id = self.cast_session = None
         if self.driver_start is not None:
             # A start that outlived its wait may still produce a running driver.
             try:
@@ -411,11 +452,7 @@ class _RunScreen:
                 self.input_task.cancel()
                 await asyncio.gather(self.input_task, return_exceptions=True)
                 self.input_task = None
-            if self.page is not None:
-                try:
-                    await asyncio.wait_for(self.page.screencast.stop(), 2)
-                except Exception:
-                    pass  # The driver stop below ends the cast in any case.
+            await self._stop_cast()  # The driver stop below ends the cast in any case.
             attached = self.playwright is not None
             stopped = await self._stop_driver()
             if attached:
@@ -463,7 +500,7 @@ class _RunScreen:
                         return
                     continue
                 target = self.service.runtime.screen_target(self.run_id)
-                if target is None or target.task_id != self.task_id:
+                if target is None or target.task_id not in (None, self.task_id):
                     await self.service.close_run(self.run_id)
                     return
                 if target.phase != self.phase:
@@ -737,7 +774,7 @@ class DFormRemoteScreen:
         if run.result is not None or run.cancel.requested or run.run_id != run_id:
             raise BrowserScreenError("closed")
         target = self.runtime.screen_target(run_id)
-        if target is None or target.task_id != task_id:
+        if target is None or target.task_id not in (None, task_id):
             raise BrowserScreenError("closed")
 
     async def open(

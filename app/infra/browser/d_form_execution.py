@@ -76,8 +76,10 @@ ScreenPhase = Literal["preparing", "filling", "handoff"]
 class DFormScreenTarget:
     """In-process facts the remote screen may use; never derived from a client."""
 
-    task_id: str
-    browser: OwnedDFormBrowser
+    # None while this process has not started the Run's window yet (queued or
+    # browser starting): the screen waits for it; the access port judges the Run.
+    task_id: str | None
+    browser: OwnedDFormBrowser | None
     phase: ScreenPhase
 
 
@@ -192,15 +194,17 @@ class DFormRuntime:
     def screen_target(self, run_id: str) -> DFormScreenTarget | None:
         """Current phase of this process's live owned browser; None once ending."""
         state = self._states.get(run_id)
+        if state is None:
+            return DFormScreenTarget(None, None, "preparing")
         if (
-            state is None
-            or state.owned_browser is None
-            or state.screen_closed
+            state.screen_closed
             or state.cancelled
             or state.released
             or state.owned_resource_cleanup_proven
         ):
             return None
+        if state.owned_browser is None:
+            return DFormScreenTarget(state.run.task_id, None, "preparing")
         phase: ScreenPhase = "preparing"
         if state.handoff_open:
             phase = "handoff"
