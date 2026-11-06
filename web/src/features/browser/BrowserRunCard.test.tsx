@@ -137,10 +137,15 @@ describe('unwired BrowserRunCard', () => {
       .mockRejectedValueOnce(new Error('synthetic_private_message'))
       .mockResolvedValueOnce(undefined);
     renderCard(view(running()), { onCancel });
-    fireEvent.click(screen.getByRole('button', { name: /请求取消$/ }));
+    // Flush the rejected callback and Button's loading effect before clicking again.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /请求取消$/ }));
+    });
     expect(await screen.findByText('取消请求未送达，请稍后重试')).toBeInTheDocument();
     expect(screen.queryByText('synthetic_private_message')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /请求取消$/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /请求取消$/ }));
+    });
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(2));
   });
 
