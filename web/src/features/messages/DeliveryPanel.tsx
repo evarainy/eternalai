@@ -2,10 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, Radio, Space, Tag } from 'antd';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
-import { attachmentDownloadUrl } from '../chat-upload/chatUploadApi';
 import {
   cancelDelivery, confirmDelivery, DELIVERY_STATE_LABELS, deliveryError, deliveryResultReason, deliveryTime,
-  readDelivery, reconcileDelivery, verifyDelivery,
+  deliveryFileDownloadUrl, readDelivery, reconcileDelivery, verifyDelivery,
 } from './deliveryApi';
 import type { DeliveryView, VerificationResult, VerifyDelivery } from './deliveryApi';
 import styles from './delivery.module.css';
@@ -99,7 +98,7 @@ export function DeliveryPanel({ deliveryId, initial = null }: {
         {file == null ? null : <>
           {isInitiator || view.confirmed_at !== null && grantActive
             && view.state !== 'cancelled' && view.state !== 'expired' ? (
-              <a href={attachmentDownloadUrl(file.artifact_id)} download>下载此版本文件</a>
+              <a href={deliveryFileDownloadUrl(file.artifact_id)} download>下载此版本文件</a>
             ) : null}
           <p>仅撤销本记录授权；若另有有效授权，仍可下载。转发无效，已下载文件无法召回；本记录撤销或到期后不能新增核实。</p>
           {file.grant_revoked_at !== null && (view.state === 'sending' || view.state === 'unknown')

@@ -22,6 +22,9 @@ export const cancelDelivery = cancelIMDelivery;
 export const reconcileDelivery = reconcileIMDelivery;
 export const verifyDelivery = verifyIMDelivery;
 
+export const deliveryFileDownloadUrl = (artifactId: string) =>
+  `/api/v1/file-artifacts/${encodeURIComponent(artifactId)}/content`;
+
 export const DELIVERY_STATE_LABELS: Record<DeliveryState, string> = {
   prepared: '等待本人确认', ready: '已受理，等待发送', sending: '发送结果待核实',
   accepted: 'IM 已接受', known_rejected: 'IM 未接受', unknown: '发送结果待核实',
