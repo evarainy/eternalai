@@ -206,9 +206,12 @@ class _RunScreen:
 
     def on_frame(self, frame: Mapping[str, Any]) -> None:
         data, width, height = frame["data"], frame["viewportWidth"], frame["viewportHeight"]
-        if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1e5
+            for value in (width, height)
+        ):
             return
-        self.frame = ScreenFrame(bytes(data), width, height)
+        self.frame = ScreenFrame(bytes(data), round(width), round(height))
         self.frame_seq += 1
         for viewer in self.viewers.values():
             viewer.wake.set()
