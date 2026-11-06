@@ -664,6 +664,12 @@ class OwnedDFormBrowser:
                     "--disable-extensions",
                     "--disable-breakpad",
                     "--disable-crash-reporter",
+                    # Keep rendering when another window covers this one (Playwright's own
+                    # launch defaults): an occluded window turns hidden and stops painting,
+                    # which froze the remote screen and its mouse input (2026-11-06 probe).
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-features=CalculateNativeWinOcclusion",
                     "--start-maximized",
                     "about:blank",
                 ],
