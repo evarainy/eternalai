@@ -73,6 +73,7 @@ from app.infra.browser.read_execution import (
     BrowserReadLifecycle,
     VerifiedBrowserReadExecution,
 )
+from app.infra.browser.remote_screen import DFormRemoteScreen
 from app.infra.human_gate.postgresql import PostgreSQLHumanGate
 from app.infra.persistence.browser.authorization import (
     CleanupAuthorize,
@@ -116,6 +117,7 @@ from app.ports.browser_run_store import (
     RunSnapshot,
     checked_run_id,
 )
+from app.ports.browser_screen import BrowserScreenPort
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
 from app.ports.policy_guard import PolicyGuardPort
@@ -457,6 +459,8 @@ class BrowserVerticalComponents:
     )
     # Present only when a D installation wires the bounded handoff closure.
     installed_binding_revision: int | None = field(default=None, compare=False)
+    # D fill-stop only: remote view/takeover of the Run's own window in this process.
+    screen: BrowserScreenPort | None = field(default=None, compare=False, repr=False)
 
     async def start_resources(self) -> None:
         if self._start_resources is not None:
@@ -2262,4 +2266,9 @@ def build_browser_vertical(
             for step_id, values in deps.locator_repair_hints.items()
         ),
         installed_binding_revision=deps.installed_binding_revision,
+        screen=(
+            DFormRemoteScreen(execution, submission)
+            if isinstance(execution, DFormRuntime)
+            else None
+        ),
     )

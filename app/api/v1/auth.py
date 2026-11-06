@@ -11,6 +11,7 @@ from typing import Literal, NoReturn, Protocol
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.requests import HTTPConnection
 from pydantic import BaseModel, ConfigDict
 
 from app.api.v1.csrf import CSRFDependency
@@ -93,8 +94,9 @@ class RenewResponse(BaseModel):
 def make_require_session(
     session_tokens: SessionTokenPort | None,
     session_revocations: SessionRevocationStorePort | None = None,
-) -> Callable[[Request], Awaitable[AuthenticatedSessionContext]]:
-    async def require_session(request: Request) -> AuthenticatedSessionContext:
+) -> Callable[[HTTPConnection], Awaitable[AuthenticatedSessionContext]]:
+    # HTTPConnection: the same cookie check serves HTTP routes and WebSocket handshakes.
+    async def require_session(request: HTTPConnection) -> AuthenticatedSessionContext:
         authenticated_session.set(None)
         token = request.cookies.get(SESSION_COOKIE_NAME)
         token_port = session_tokens

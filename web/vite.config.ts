@@ -19,6 +19,8 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api/v1': {
           target: backendUrl,
+          // The remote OA window view is a WebSocket under the same prefix.
+          ws: true,
         },
       },
     },

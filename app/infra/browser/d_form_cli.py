@@ -43,6 +43,8 @@ class _StageMessage(TypedDict):
 WALL_LIMIT = 1800
 CANCEL_GRACE = 30
 EVENT_PATTERN = re.compile(r"Local\\EAI_D_CANCEL_[0-9a-f]{32}\Z")
+# Host-requested human takeover: the worker stops at its next action boundary.
+TAKEOVER_PATTERN = re.compile(r"Local\\EAI_D_TAKEOVER_[0-9a-f]{32}\Z")
 
 
 def windows_events() -> _WindowsKernel:
@@ -65,7 +67,16 @@ def windows_events() -> _WindowsKernel:
 def cancel_run(event_name: str) -> bool:
     # Windows TerminateProcess does not deliver Python SIGTERM. A caller must
     # set this transient, task-scoped event for graceful cancellation instead.
-    if sys.platform != "win32" or not EVENT_PATTERN.fullmatch(event_name):
+    return _set_named_event(event_name, EVENT_PATTERN)
+
+
+def request_takeover(event_name: str) -> bool:
+    """False until the supervisor has created the exact event; never creates it."""
+    return _set_named_event(event_name, TAKEOVER_PATTERN)
+
+
+def _set_named_event(event_name: str, pattern: re.Pattern[str]) -> bool:
+    if sys.platform != "win32" or not pattern.fullmatch(event_name):
         return False
     kernel = windows_events()
     handle = kernel.OpenEventW(0x2, False, event_name)
@@ -109,6 +120,7 @@ CODES = {
     "REPORTER_AMBIGUOUS",
     "REPORTER_INVALID",
     "CANCELLED",
+    "HUMAN_TAKEOVER",
     "CLEANUP_FAILED",
     "REQUEST_GUARD_FAILED",
     "PREP_FAILED",
@@ -178,7 +190,7 @@ def guard_environment() -> None:
     sys.stderr = cast(TextIO, Sink())
 
 
-async def worker(request_path: str, event_name: str) -> int:
+async def worker(request_path: str, event_name: str, takeover_name: str = "") -> int:
     # This file name is a local receipt destination; the request itself arrives
     # on stdin. Never persist parameters, bindings, names or exception details.
     guard_environment()
@@ -188,14 +200,18 @@ async def worker(request_path: str, event_name: str) -> int:
         from d_form_flow import Flow, Stop
 
     cancel = asyncio.Event()
+    takeover = asyncio.Event()
     loop = asyncio.get_running_loop()
     watcher = None
     event_handle = None
+    takeover_handle = None
     kernel = None
     if sys.platform == "win32":
         kernel = windows_events()
         event_handle = kernel.OpenEventW(0x100000, False, event_name)
-        if not event_handle:
+        if takeover_name:
+            takeover_handle = kernel.OpenEventW(0x100000, False, takeover_name)
+        if not event_handle or takeover_name and not takeover_handle:
             emit(1, "FAIL", 0, "CONFIG_FAILED")
             return 2
 
@@ -208,6 +224,10 @@ async def worker(request_path: str, event_name: str) -> int:
                 if state != 258:
                     cancel.set()
                     return
+                if takeover_handle and not takeover.is_set():
+                    # Only a cooperative stop request; never interrupts an action.
+                    if kernel.WaitForSingleObject(takeover_handle, 0) == 0:
+                        takeover.set()
                 await asyncio.sleep(0.1)
 
         watcher = asyncio.create_task(watch())
@@ -219,7 +239,7 @@ async def worker(request_path: str, event_name: str) -> int:
         signal.signal(code, stop)
     try:
         request = json.loads(sys.stdin.buffer.read())
-        flow = Flow(request, emit, cancel)
+        flow = Flow(request, emit, cancel, takeover)
         # Python worker sockets can only reach its task-owned loopback CDP or
         # its own asyncio listener. No model service is on this allowance.
         import psutil
@@ -260,16 +280,23 @@ async def worker(request_path: str, event_name: str) -> int:
             await asyncio.gather(watcher, return_exceptions=True)
         if event_handle:
             kernel.CloseHandle(event_handle)
+        if takeover_handle:
+            kernel.CloseHandle(takeover_handle)
 
 
 def supervisor(
-    receipt_path: str | Path, request_bytes: bytes, cancel_event_name: str | None = None
+    receipt_path: str | Path,
+    request_bytes: bytes,
+    cancel_event_name: str | None = None,
+    takeover_event_name: str | None = None,
 ) -> int:
     receipt_path = Path(receipt_path)
     child: subprocess.Popen[bytes] | None = None
     kernel = None
     event_handle = None
+    takeover_handle = None
     event_name = ""
+    takeover_name = ""
     owned: dict[int, tuple[float, Path]] = {}
     cancelled_at: float | None = None
 
@@ -352,6 +379,13 @@ def supervisor(
             if not event_handle or ctypes.get_last_error() == 183:
                 emit(1, "FAIL", 0, "CONFIG_FAILED")
                 return 2
+            if takeover_event_name is not None:
+                # Created before the worker exists; the host can set it only afterwards.
+                takeover_name = takeover_event_name
+                takeover_handle = kernel.CreateEventW(None, True, False, takeover_name)
+                if not takeover_handle or ctypes.get_last_error() == 183:
+                    emit(1, "FAIL", 0, "CONFIG_FAILED")
+                    return 2
 
         def signal_cancel(_signum: int, _frame: FrameType | None) -> NoReturn:
             raise KeyboardInterrupt()
@@ -367,6 +401,7 @@ def supervisor(
                 "--worker",
                 str(receipt_path),
                 event_name,
+                takeover_name,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -454,22 +489,26 @@ def supervisor(
     finally:
         if event_handle:
             kernel.CloseHandle(event_handle)
+        if takeover_handle:
+            kernel.CloseHandle(takeover_handle)
         for code, handler in locals().get("previous", {}).items():
             signal.signal(code, handler)
 
 
 def main() -> int:
-    if len(sys.argv) == 4 and sys.argv[1] == "--worker":
-        return asyncio.run(worker(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) == 5 and sys.argv[1] == "--worker":
+        return asyncio.run(worker(sys.argv[2], sys.argv[3], sys.argv[4]))
     if len(sys.argv) == 3 and sys.argv[1] == "--cancel":
         result = cancel_run(sys.argv[2])
         emit(7, "PASS" if result else "FAIL", 0, "OK" if result else "CONFIG_FAILED")
         return 0 if result else 2
     if (
-        len(sys.argv) not in (3, 5)
+        len(sys.argv) not in (3, 5, 7)
         or sys.argv[1] != "--receipt"
-        or len(sys.argv) == 5
+        or len(sys.argv) >= 5
         and sys.argv[3] != "--cancel-event"
+        or len(sys.argv) == 7
+        and (sys.argv[5] != "--takeover-event" or not TAKEOVER_PATTERN.fullmatch(sys.argv[6]))
     ):
         emit(1, "FAIL", 0, "CONFIG_FAILED")
         return 2
@@ -477,7 +516,8 @@ def main() -> int:
         return supervisor(
             Path(sys.argv[2]).resolve(),
             sys.stdin.buffer.read(),
-            sys.argv[4] if len(sys.argv) == 5 else None,
+            sys.argv[4] if len(sys.argv) >= 5 else None,
+            sys.argv[6] if len(sys.argv) == 7 else None,
         )
     except BaseException:
         emit(1, "FAIL", 0, "PREP_FAILED")

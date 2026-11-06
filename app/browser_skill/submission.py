@@ -1486,6 +1486,8 @@ class BrowserSubmissionService:
                 position=arguments["position"],
                 description=arguments["description"],
             ),
+            takeover=record.takeover,
+            completed_fields=record.completed_fields,
         )
 
     async def find_active_handoffs(
