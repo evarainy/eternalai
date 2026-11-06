@@ -393,6 +393,8 @@ async def find_target_page(
             if info.get("targetId") == target_id:
                 return wrapper, page
     return None
+
+
 BLOCK_SERVICE_WORKERS = """(() => {
  if (!navigator.serviceWorker) return;
  Object.defineProperty(ServiceWorkerContainer.prototype, 'register', {
@@ -505,6 +507,9 @@ class OwnedDFormBrowser:
         # Separate proof for the remote screen's observer driver; only its real
         # stop sets it back. Never covers an automation-driver failure.
         self.observer_exited = True
+        # A remote-screen button release failed in this window: no observer reattaches
+        # for the rest of this Run (CDP disconnect does not release a held button).
+        self.observer_input_fault = False
         # Set synchronously before the first driver start; never cleared afterwards.
         self.driver_start_attempted = False
         self.owned_resource_cleanup_proven = False

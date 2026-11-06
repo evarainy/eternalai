@@ -167,6 +167,8 @@ class _RunScreen:
         self.frame_seq = 0
         self.browser_owned: OwnedDFormBrowser | None = None
         self.playwright: Any = None
+        # Kept until it settles: a timed-out start may still bring up a driver.
+        self.driver_start: asyncio.Task[Any] | None = None
         self.driver_stop: asyncio.Task[None] | None = None
         self.browser: Any = None
         self.context: Any = None
@@ -276,20 +278,26 @@ class _RunScreen:
             or owned.page is None
         ):
             return  # Window or real target not ready yet (startup page may still be open).
-        if not owned.observer_exited:
-            # An earlier driver of this Run is not proven gone. A second one would
-            # overwrite that missing proof when it stops, so none is started.
+        if not owned.observer_exited or owned.observer_input_fault:
+            # An earlier driver of this Run is not proven gone (a second one would
+            # overwrite that missing proof when it stops), or a mouse button may still
+            # be held in this window: none is started for the rest of this Run.
             self.attach_failures = _ATTACH_ATTEMPTS
             self.broadcast({"type": "notice", "code": "unavailable"})
             return
         self.browser_owned = owned
         try:
-            lines = (owned.created_dir / "profile" / "DevToolsActivePort").read_text(
-                encoding="ascii"
-            ).splitlines()
-            self.playwright = await asyncio.wait_for(async_playwright().start(), 15)
-            # From here only a real stop of this driver proves the observer gone.
+            lines = (
+                (owned.created_dir / "profile" / "DevToolsActivePort")
+                .read_text(encoding="ascii")
+                .splitlines()
+            )
+            # Revoked before the start attempt: from here only a real stop of this
+            # driver proves the observer gone, even if the start wait times out.
             owned.observer_exited = False
+            self.driver_start = asyncio.create_task(async_playwright().start())
+            self.playwright = await asyncio.wait_for(asyncio.shield(self.driver_start), 15)
+            self.driver_start = None
             browser = await self.playwright.chromium.connect_over_cdp(
                 f"ws://127.0.0.1:{owned.port}{lines[1]}",
                 timeout=10000,
@@ -347,6 +355,21 @@ class _RunScreen:
         owned = self.browser_owned
         self.browser = self.context = self.page = self.target_id = None
         self.dialog = self.dialog_id = None
+        if self.driver_start is not None:
+            # A start that outlived its wait may still produce a running driver.
+            try:
+                self.playwright = await asyncio.wait_for(asyncio.shield(self.driver_start), 10)
+            except TimeoutError:
+                _log("close", "failed", "driver_stop_failed", len(self.viewers))
+                return False
+            except Exception:
+                # The start itself failed: this attempt yields no driver, so the proof
+                # it revoked is restored (attach only starts when it was proven).
+                self.driver_start = None
+                if owned is not None:
+                    owned.observer_exited = True
+                return True
+            self.driver_start = None
         if self.playwright is None:
             return True
         # Started once and shielded: a timed-out wait would cancel Playwright's own
@@ -381,6 +404,10 @@ class _RunScreen:
                 clean = False
             if not clean:
                 _log("close", "failed", "input_stuck", len(self.viewers))
+                # Disconnecting CDP does not release a held button in the page: never
+                # reattach to this window (survives this screen object being forgotten).
+                if self.browser_owned is not None:
+                    self.browser_owned.observer_input_fault = True
             if self.input_task is not None:
                 self.input_task.cancel()
                 await asyncio.gather(self.input_task, return_exceptions=True)
