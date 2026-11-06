@@ -13,7 +13,8 @@ from zerver.models import Realm, RealmUserDefault, Stream, Subscription, UserPro
 
 
 def ids(name):
-    return list(dict.fromkeys(int(value) for value in os.environ.get(name, "").split(",") if value.strip()))
+    values = os.environ.get(name, "").split(",")
+    return list(dict.fromkeys(int(value) for value in values if value.strip()))
 
 
 realm = Realm.objects.get(id=int(os.environ["REALM_ID"]))
@@ -52,7 +53,9 @@ elif action == "subscribe":
         if missing:
             changed, _ = bulk_add_subscriptions(realm, [channel], missing, acting_user=actor)
             result["changed"] += len(changed)
-    result.update(bot_ids=[bot.id for bot in bots], channel_ids=[channel.id for channel in channels])
+    result.update(
+        bot_ids=[bot.id for bot in bots], channel_ids=[channel.id for channel in channels]
+    )
 else:
     raise ValueError(action)
 
