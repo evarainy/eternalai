@@ -20,3 +20,5 @@
 V1 的 IM-origin 身份/注销辅助页及其代理安装仍是现场前置；本补丁不替代该辅助页，也不把补丁可应用性检查当成 Zulip 构建、已安装、真实同页导航或真实送核验收。应用后需在获准环境验证：甲乙正确身份、嵌入消息卡点击仍在宿主同页打开原 delivery、退出/切号后旧窗口不推进动作。
 
 协议依据为 `EXECUTION_PLAN.md` §3.4 与 `v2plan/V2_PLAN.md` §5.1；浏览器消息使用固定 targetOrigin，参见 [Window.postMessage](https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage)。
+
+中文、浅色与助手频道订阅的部署步骤见 [DEPLOY_CONFIG.md](DEPLOY_CONFIG.md)。
