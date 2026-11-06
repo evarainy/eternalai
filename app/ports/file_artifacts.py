@@ -1,9 +1,9 @@
 """File artifact port: owner-scoped downloads, chat uploads and worker-side outputs.
 
 ``public.file_artifacts`` is the authority for ownership and lifecycle; physical files
-are only reachable through a verified row. Another user's artifact needs an explicit confirmed delivery grant; without it,
-the artifact is indistinguishable from a missing one. Only the standard library is imported here: the worker reaches this
-module through the persistence layer.
+are only reachable through a verified row. Another user's artifact needs an explicit confirmed
+delivery grant; without it, the artifact is indistinguishable from a missing one. Only the standard
+library is imported here: the worker reaches this module through the persistence layer.
 """
 
 from __future__ import annotations

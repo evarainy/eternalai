@@ -694,7 +694,7 @@ describe('application authentication boundary', () => {
 
   /* 消息页现已承载文字送核，核对实际入口仍挂在同一个工作区外壳中。 */
   it.each([
-    ['/messages', '消息', '从 AI 助手的文字结果选择“发给同事核实”，在这里查看原发送结果与本人回执。'],
+    ['/messages', '消息', '从 Chat 的附件区或 AI 助手结果选择“发给同事核实”，在这里查看原发送结果与本人回执。'],
   ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
