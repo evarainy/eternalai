@@ -396,7 +396,8 @@ export async function readBrowserRun(
   const abort = () => { controller.abort(); };
   if (signal?.aborted) controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(abort, 5000);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; abort(); }, 5000);
   try {
     const response = await customInstance<unknown>({
       url: runPath(taskId, runId), method: 'GET', params: { session_id: sessionId }, signal: controller.signal,
@@ -406,6 +407,10 @@ export async function readBrowserRun(
       throw new Error('browser_run_response_invalid');
     }
     return parsed;
+  } catch (error) {
+    // Only this read's own 5-second limit: the caller may keep its last state and read again.
+    if (timedOut && !signal?.aborted) throw new Error('browser_read_timeout');
+    throw error;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', abort);

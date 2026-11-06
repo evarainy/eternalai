@@ -163,6 +163,7 @@ function BrowserRunMonitor({
     live.current = true;
     setReadFailure({ status: null, code: 'browser_read_failed' });
     let attempts = 0;
+    let timeouts = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const controller = new AbortController();
     // D: 15-minute confirmation window + 1800-second supervisor and cleanup.
@@ -190,6 +191,7 @@ function BrowserRunMonitor({
           target.conversationId, controller.signal,
         );
         if (!live.current || controller.signal.aborted) return;
+        timeouts = 0;
         if (applyRead(response) !== false) {
           clearTimeout(deadlineTimer);
           return;
@@ -206,6 +208,12 @@ function BrowserRunMonitor({
         }
         timer = setTimeout(() => { void poll(); }, 2000);
       } catch (error) {
+        if (live.current && !controller.signal.aborted && error instanceof Error
+            && error.message === 'browser_read_timeout' && ++timeouts <= 3) {
+          // A slow read keeps the last state (and an open remote screen) and reads again.
+          timer = setTimeout(() => { void poll(); }, 2000);
+          return;
+        }
         if (live.current && !controller.signal.aborted) {
           clearTimeout(deadlineTimer);
           setRead(null);
@@ -215,7 +223,8 @@ function BrowserRunMonitor({
             'browser_chat_unavailable', 'session_not_found', 'browser_run_not_found',
             'authentication_required', 'browser_target_stale',
           ].includes(error.code) ? error.code
-            : error instanceof DOMException && error.name === 'AbortError' ? 'browser_read_aborted'
+            : (error instanceof DOMException && error.name === 'AbortError')
+              || (error instanceof Error && error.message === 'browser_read_timeout') ? 'browser_read_aborted'
               : error instanceof Error && error.message === 'browser_run_response_invalid'
                 ? 'browser_run_response_invalid' : 'browser_read_failed';
           setReadFailure({ status: error instanceof ApiError ? error.status : null, code });

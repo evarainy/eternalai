@@ -247,7 +247,10 @@ class _RunScreen:
         session.on("Page.screencastFrame", self._on_cast_frame)
         self.cast_session = session
         await session.send(
-            "Page.startScreencast", {"format": "jpeg", "quality": _FRAME_QUALITY, **_FRAME_SIZE}
+            "Page.startScreencast",
+            # Every second frame: halves the per-frame work in this process (2026-11-06:
+            # run reads slowed to seconds while casting at full rate).
+            {"format": "jpeg", "quality": _FRAME_QUALITY, "everyNthFrame": 2, **_FRAME_SIZE},
         )
 
     def _on_cast_frame(self, params: Mapping[str, Any]) -> None:
