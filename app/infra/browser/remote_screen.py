@@ -363,12 +363,11 @@ class _RunScreen:
                 _log("close", "failed", "driver_stop_failed", len(self.viewers))
                 return False
             except Exception:
-                # The start itself failed: this attempt yields no driver, so the proof
-                # it revoked is restored (attach only starts when it was proven).
+                # A failed start does not prove its driver process gone: the proof stays
+                # revoked, so this Run's cleanup quarantines instead of releasing.
                 self.driver_start = None
-                if owned is not None:
-                    owned.observer_exited = True
-                return True
+                _log("close", "failed", "driver_stop_failed", len(self.viewers))
+                return False
             self.driver_start = None
         if self.playwright is None:
             return True
@@ -722,6 +721,7 @@ class DFormRemoteScreen:
             self._screens.get(screen.run_id) is screen
             and not screen.viewers
             and screen.playwright is None
+            and screen.driver_start is None
         ):
             self._screens.pop(screen.run_id, None)
 
@@ -781,7 +781,11 @@ class DFormRemoteScreen:
                 viewer.closed = True
                 viewer.wake.set()
             # Kept until proven stopped, so the runtime's next close can still prove it.
-            if screen.playwright is None and self._screens.get(run_id) is screen:
+            if (
+                screen.playwright is None
+                and screen.driver_start is None
+                and self._screens.get(run_id) is screen
+            ):
                 self._screens.pop(run_id, None)
 
     async def aclose(self) -> None:
