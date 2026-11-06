@@ -1,4 +1,4 @@
-"""A person's explicit text preview, one IM attempt, and the recipient's receipts."""
+"""A person's explicit preview, one IM attempt, and the recipient's receipts."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from app.ports.auth import Principal
 from app.ports.communication import CommunicationDeliveryPort, DeliveryResult
+from app.ports.file_artifacts import FileArtifactError, FileArtifactSharePort
 from app.ports.im_deliveries import (
     DeliveryPrepare,
     DeliveryRecipient,
@@ -27,9 +28,13 @@ _LOGGER = logging.getLogger("uvicorn.error.im_deliveries")
 
 
 class IMDeliveryService:
-    def __init__(self, store: IMDeliveryStorePort, sender: CommunicationDeliveryPort) -> None:
+    def __init__(
+        self, store: IMDeliveryStorePort, sender: CommunicationDeliveryPort,
+        files: FileArtifactSharePort | None = None,
+    ) -> None:
         self._store = store
         self._sender = sender
+        self._files = files
         self._agent_replies: AgentReplyPort | None = None
 
     @property
@@ -44,12 +49,29 @@ class IMDeliveryService:
 
     @staticmethod
     def _same_request(record: DeliveryRecord, request: DeliveryPrepare) -> None:
-        if (record.recipient_ai_user_id, record.note, record.send_expires_at) != (
+        if (record.recipient_ai_user_id, record.note, record.send_expires_at,
+                record.artifact_id, record.grant_expires_at) != (
             request.recipient_ai_user_id, request.note, request.send_expires_at,
+            request.artifact_id, request.grant_expires_at,
         ):
             raise IMDeliveryError("im_delivery_idempotency_conflict")
 
     async def prepare(self, principal: Principal, request: DeliveryPrepare) -> DeliveryView:
+        file = None
+        if request.artifact_id is not None:
+            if self._files is None:
+                raise IMDeliveryError("file_artifact_unavailable", 503)
+            try:
+                file = await self._files.share_metadata(principal, request.artifact_id)
+            except FileArtifactError as error:
+                status = {"file_artifact_not_found": 404, "file_artifact_expired": 410}
+                raise IMDeliveryError(error.code, status.get(error.code, 503)) from None
+            grant = request.grant_expires_at or file.expires_at
+            if not request.send_expires_at <= grant <= file.expires_at:
+                raise IMDeliveryError("im_delivery_expiry_invalid", 422)
+            request = request.model_copy(update={"grant_expires_at": grant.astimezone(UTC)})
+        elif request.grant_expires_at is not None:
+            raise IMDeliveryError("im_delivery_expiry_invalid", 422)
         existing = await self._store.find_request(principal, request.idempotency_key)
         if existing is not None:
             self._same_request(existing, request)
@@ -68,6 +90,12 @@ class IMDeliveryService:
             )
         except ValueError:
             raise IMDeliveryError("im_delivery_mapping_invalid") from None
+        if file is not None:
+            card = replace(card, card_content=(
+                f"{card.card_content}\n\n文件：{file.filename}（{file.size_bytes} 字节）\n"
+                f"SHA256：{file.sha256.hex()[:12]}\n"
+                f"授权截止：{cast(datetime, request.grant_expires_at).isoformat()}"
+            ))
         record = DeliveryRecord(
             delivery_id=delivery_id, tenant_id=principal.org_ctx.tenant_id,
             initiator_ai_user_id=principal.ai_user_id,
@@ -80,12 +108,16 @@ class IMDeliveryService:
             confirmed_at=None, send_expires_at=request.send_expires_at.astimezone(UTC),
             queue_job_id=None, send_attempt_id=None, attempt_started_at=None,
             remote_message_id=None, accepted_at=None, result_code=None, updated_at=now,
+            artifact_id=request.artifact_id,
+            artifact_sha256=None if file is None else file.sha256,
+            grant_expires_at=request.grant_expires_at,
         )
         saved = await self._store.prepare(replace(
             record, confirmation_sha256=confirmation_digest(record, initiator, recipient),
         ))
         self._same_request(saved, request)
-        _LOGGER.info("im_delivery_prepared delivery_id=%s", saved.delivery_id)
+        _LOGGER.info("im_delivery_prepared delivery_id=%s artifact_id=%s",
+                     str(saved.delivery_id)[:12], str(saved.artifact_id)[:12])
         return await self.get(principal, saved.delivery_id)
 
     async def get(self, principal: Principal, delivery_id: UUID) -> DeliveryView:
@@ -100,13 +132,14 @@ class IMDeliveryService:
         fingerprint = bytes.fromhex(confirmation_sha256)
         record = await self._store.confirm(principal, delivery_id, fingerprint)
         _LOGGER.info(
-            "im_delivery_confirmed delivery_id=%s queue_job_id=%s state=%s",
-            record.delivery_id, record.queue_job_id, record.state,
+            "im_delivery_confirmed delivery_id=%s",
+            str(record.delivery_id)[:12],
         )
         return await self.get(principal, delivery_id)
 
     async def cancel(self, principal: Principal, delivery_id: UUID) -> DeliveryView:
         await self._store.cancel(principal, delivery_id)
+        _LOGGER.info("im_delivery_cancelled_or_revoked delivery_id=%s", str(delivery_id)[:12])
         return await self.get(principal, delivery_id)
 
     async def verify(

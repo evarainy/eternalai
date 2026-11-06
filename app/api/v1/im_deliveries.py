@@ -1,4 +1,4 @@
-"""Authenticated text preview, explicit confirmation and recipient verification routes."""
+"""Authenticated preview, explicit confirmation and recipient verification routes."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def make_router(
     """The application supplies its existing Cookie/CSRF protected principal dependency."""
     router = APIRouter(route_class=_IMDeliveryRoute)
     errors: dict[int | str, dict[str, Any]] = {
-        code: {"model": IMDeliveryErrorResponse} for code in (404, 409, 422, 503)
+        code: {"model": IMDeliveryErrorResponse} for code in (404, 409, 410, 422, 503)
     }
 
     def configured() -> IMDeliveryService:

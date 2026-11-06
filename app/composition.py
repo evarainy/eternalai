@@ -1413,8 +1413,9 @@ def build_production_components(
         }
     else:
         resolved_health_checks = dict(health_checks)
+    file_artifacts = build_file_artifact_service(settings.file_artifacts, session_factory)
     im_deliveries, delivery_client = build_im_delivery(
-        settings.im_delivery, session_factory, settings.personal_agents,
+        settings.im_delivery, session_factory, settings.personal_agents, files=file_artifacts,
     )
     personal_agents = build_personal_agents(
         settings.personal_agents, session_factory, im_deliveries.sender,
@@ -1521,7 +1522,7 @@ def build_production_components(
             PostgreSQLBackgroundJobLedger(session_factory),
             build_job_kinds(settings.background_self_check_max_hold_seconds),
         ),
-        file_artifacts=build_file_artifact_service(settings.file_artifacts, session_factory),
+        file_artifacts=file_artifacts,
         im_context=im_context,
     )
 

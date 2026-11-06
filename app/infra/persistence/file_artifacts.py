@@ -57,6 +57,7 @@ from app.ports.file_artifacts import (
     FileArtifactDownload,
     FileArtifactError,
     FileArtifactOwner,
+    FileShareMetadata,
     JobOutputOwner,
     OutputWriter,
     SheetSummary,
@@ -292,31 +293,69 @@ class PostgreSQLFileArtifactStore:
 
     # ---- Download -------------------------------------------------------------
 
+    def _check_download_metadata(
+        self, row: RowMapping | None, owner: FileArtifactOwner
+    ) -> RowMapping:
+        if (row is None or not self._mac_valid(row)
+                or row["tenant_id"] != owner.tenant_id
+                or row["storage_scope"] != self._storage.scope):
+            raise FileArtifactError("file_artifact_not_found")
+        return row
+
+    @staticmethod
+    def _check_available(row: RowMapping) -> None:
+        if row["state"] != "available" or row["db_now"] >= row["expires_at"]:
+            raise FileArtifactError("file_artifact_expired")
+
+    async def share_metadata(
+        self, owner: FileArtifactOwner, artifact_id: UUID
+    ) -> FileShareMetadata:
+        async with self._sessions() as session:
+            row = (await session.execute(text(
+                f"SELECT {_COLUMNS}, now() AS db_now FROM public.file_artifacts "
+                "WHERE artifact_id=:artifact_id"
+            ), {"artifact_id": artifact_id})).mappings().one_or_none()
+        row = self._check_download_metadata(row, owner)
+        if row["owner_ai_user_id"] != owner.ai_user_id:
+            raise FileArtifactError("file_artifact_not_found")
+        self._check_available(row)
+        return FileShareMetadata(
+            filename=row["display_filename"], size_bytes=row["size_bytes"],
+            sha256=bytes(row["sha256"]), expires_at=row["expires_at"],
+        )
+
     async def open_download(
         self, owner: FileArtifactOwner, artifact_id: UUID
     ) -> FileArtifactDownload:
-        async with self._sessions() as session:
-            row = (
-                await session.execute(
-                    text(
-                        f"SELECT {_COLUMNS}, now() AS db_now FROM public.file_artifacts "
-                        "WHERE artifact_id = :artifact_id"
-                    ),
-                    {"artifact_id": artifact_id},
-                )
-            ).mappings().one_or_none()
-        if (
-            row is None
-            or not self._mac_valid(row)
-            or row["tenant_id"] != owner.tenant_id
-            or row["owner_ai_user_id"] != owner.ai_user_id
-            or row["storage_scope"] != self._storage.scope
-        ):
-            _LOGGER.info("file_artifact_download artifact=%s result=not_found", artifact_id)
-            raise FileArtifactError("file_artifact_not_found")
-        if row["state"] != "available" or row["db_now"] >= row["expires_at"]:
-            _LOGGER.info("file_artifact_download artifact=%s result=expired", artifact_id)
-            raise FileArtifactError("file_artifact_expired")
+        try:
+            async with self._sessions() as session:
+                row = (await session.execute(text(
+                    f"SELECT {_COLUMNS}, now() AS db_now FROM public.file_artifacts "
+                    "WHERE artifact_id=:artifact_id"
+                ), {"artifact_id": artifact_id})).mappings().one_or_none()
+                row = self._check_download_metadata(row, owner)
+                if row["owner_ai_user_id"] != owner.ai_user_id:
+                    grant = (await session.execute(text(
+                        "SELECT d.delivery_id FROM public.im_deliveries d "
+                        "WHERE d.origin_inbox_id IS NULL AND d.tenant_id=:tenant "
+                        "AND d.recipient_ai_user_id=:user "
+                        "AND d.initiator_ai_user_id=:file_owner "
+                        "AND d.artifact_id=:artifact_id AND d.artifact_sha256=:sha256 "
+                        "AND d.confirmed_at IS NOT NULL "
+                        "AND d.state NOT IN ('cancelled','expired') "
+                        "AND (d.state <> 'ready' OR d.send_expires_at > now()) "
+                        "AND d.grant_revoked_at IS NULL AND d.grant_expires_at > now() "
+                        "LIMIT 1"
+                    ), {"tenant": owner.tenant_id, "user": owner.ai_user_id,
+                        "file_owner": row["owner_ai_user_id"], "artifact_id": artifact_id,
+                        "sha256": row["sha256"]})).scalar_one_or_none()
+                    if grant is None:
+                        raise FileArtifactError("file_artifact_not_found")
+                self._check_available(row)
+        except FileArtifactError as error:
+            _LOGGER.info("file_artifact_download artifact=%s result=%s",
+                         str(artifact_id)[:12], error.code)
+            raise
         path = self._storage.object_path(row["storage_reference"])
         try:
             fd, metadata = await _in_thread(
@@ -328,10 +367,10 @@ class PostgreSQLFileArtifactStore:
             )
         except (OSError, FileArtifactError):
             _LOGGER.warning(
-                "file_artifact_download artifact=%s result=file_unavailable", artifact_id
+                "file_artifact_download artifact=%s result=file_unavailable", str(artifact_id)[:12]
             )
             raise FileArtifactError("file_artifact_expired") from None
-        _LOGGER.info("file_artifact_download artifact=%s result=ok", artifact_id)
+        _LOGGER.info("file_artifact_download artifact=%s result=ok", str(artifact_id)[:12])
         return FileArtifactDownload(
             artifact_id=artifact_id,
             path=path,

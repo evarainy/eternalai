@@ -563,7 +563,7 @@ class ZulipDeliveryAdapter:
         content = (
             f"EternalAI 助手，受{initiator_label}委托\n\n{note}\n\n"
             f"投递编号：{delivery_id}\n"
-            f"[回到 EternalAI 核实文字]({self._host_origin}/messages?delivery={delivery_id})"
+            f"[回到 EternalAI 核实]({self._host_origin}/messages?delivery={delivery_id})"
         )
         return DeliveryMessage(
             provider=self._provider,

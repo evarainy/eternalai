@@ -22,6 +22,9 @@ export const cancelDelivery = cancelIMDelivery;
 export const reconcileDelivery = reconcileIMDelivery;
 export const verifyDelivery = verifyIMDelivery;
 
+export const deliveryFileDownloadUrl = (artifactId: string) =>
+  `/api/v1/file-artifacts/${encodeURIComponent(artifactId)}/content`;
+
 export const DELIVERY_STATE_LABELS: Record<DeliveryState, string> = {
   prepared: '等待本人确认', ready: '已受理，等待发送', sending: '发送结果待核实',
   accepted: 'IM 已接受', known_rejected: 'IM 未接受', unknown: '发送结果待核实',
@@ -44,11 +47,14 @@ export function deliveryResultReason(code: string | null): string | null {
 }
 
 const PREVIEW_ERRORS: Record<string, string> = {
-  im_delivery_expiry_invalid: '最迟发送时间已过，请调整时间后重新预览。',
+  im_delivery_expiry_invalid: '请核对期限：最迟发送须在未来，且不晚于文件授权截止；授权截止不能晚于文件到期。',
   im_delivery_recipient_invalid: '请选择另一位同事作为收件人。',
   im_delivery_mapping_invalid: '收件人的 IM 身份配置无效，请联系维护人员核对。',
   im_delivery_mapping_unavailable: '当前身份没有可用的 IM 映射，请联系维护人员核对。',
   im_delivery_recipient_unavailable: '该收件人目前不可用，请重新选择或联系维护人员核对。',
+  file_artifact_not_found: '该文件不存在或当前无权使用，请重新选择。',
+  file_artifact_expired: '文件已过期，请重新上传。',
+  file_artifact_unavailable: '文件服务暂时不可用，请稍后再试。',
 };
 
 export function deliveryError(error: unknown): string {
