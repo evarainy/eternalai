@@ -24,6 +24,11 @@ export interface AgentView {
   status: AgentViewStatus;
 }
 
+export interface DelegationView {
+  target_agent_display_name: string;
+  target_agent_id: string;
+}
+
 export interface GrantList {
   grants: GrantView[];
 }
@@ -132,6 +137,8 @@ export interface RequestList {
   requests: RequestView[];
 }
 
+export type RequestViewDelegation = DelegationView | null;
+
 export type RequestViewResultCode = string | null;
 
 export type RequestViewState = typeof RequestViewState[keyof typeof RequestViewState];
@@ -148,6 +155,7 @@ export const RequestViewState = {
 
 export interface RequestView {
   agent_display_name: string;
+  delegation?: RequestViewDelegation;
   deliveries: ReplyView[];
   inbox_id: string;
   received_at: string;

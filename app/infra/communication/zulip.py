@@ -6,11 +6,13 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import ssl
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
 from typing import Any, Literal, cast
 from urllib.parse import quote
 from uuid import UUID
@@ -20,6 +22,7 @@ from pydantic import SecretStr
 
 from app.config import ZulipSettings
 from app.ports.communication import (
+    AuthenticatedInboundMessage,
     DeliveryMessage,
     DeliveryResult,
     IMAccountBinding,
@@ -106,6 +109,75 @@ class _Batch:
     client: httpx2.AsyncClient = field(repr=False)
     user_id: int
     human_active: bool
+
+
+class _DelegationMarkup(HTMLParser):
+    """Read executable text and real user mentions from Zulip-rendered HTML."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._stack: list[tuple[str, bool]] = []
+        self._first_paragraph = False
+        self._paragraph_done = False
+        self._text: list[str] = []
+        self.mentions: set[str] = set()
+        self.mention_text: dict[str, str] = {}
+        self._mention_id: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        excluded = (any(hidden for _, hidden in self._stack)
+                    or tag in ("blockquote", "pre", "code"))
+        mention = tag == "span" and "user-mention" in classes
+        if mention and not excluded and "silent" not in classes:
+            uid = attributes.get("data-user-id")
+            if uid is not None and uid.isascii() and uid.isdecimal() and int(uid) > 0:
+                self.mentions.add(uid)
+                self._mention_id = uid
+                self.mention_text[uid] = ""
+        if tag == "p" and not self._stack and not self._paragraph_done:
+            self._first_paragraph = True
+        if tag == "br" and self._first_paragraph and not excluded:
+            self._text.append("\n")
+        if tag not in ("area", "base", "br", "col", "embed", "hr", "img", "input",
+                       "link", "meta", "param", "source", "track", "wbr"):
+            self._stack.append((tag, excluded or mention))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "span":
+            self._mention_id = None
+        if self._stack and self._stack[-1][0] == tag:
+            self._stack.pop()
+            if tag == "p" and not self._stack and self._first_paragraph:
+                self._first_paragraph = False
+                self._paragraph_done = True
+
+    def handle_data(self, data: str) -> None:
+        if self._mention_id is not None:
+            self.mention_text[self._mention_id] += data
+        if self._first_paragraph and not any(hidden for _, hidden in self._stack):
+            self._text.append(data)
+
+    def delegation_mentions(self) -> frozenset[str] | None:
+        text = "".join(self._text).strip()
+        if (not text.startswith("委托") or len(text) < 3
+                or not (text[2].isspace() or text[2] in (":", "："))
+                or not text[3:].strip()):
+            return None
+        return frozenset(self.mentions)
+
+    def question(self, content: str, bot_ids: tuple[str, str]) -> str:
+        routes = "|".join(
+            r"@\*\*" + re.escape(self.mention_text[bot_id].removeprefix("@"))
+            + r"(?:\|" + bot_id + r")?\*\*" for bot_id in bot_ids
+        )
+        route = "(?:" + routes + ")"
+        prefix = (
+            rf"^\s*(?:{route}\s*)*"
+            rf"(?:委托(?=\s|[:：]|{route})[:：]?\s*(?:{route}\s*)*)?"
+        )
+        return re.sub(prefix, "", content, count=1)
 
 
 class ZulipCommunicationAdapter:
@@ -316,21 +388,25 @@ class ZulipInboundAdapter:
 
     def authenticate_callback(
         self, *, target_bot_id: str, payload: dict[str, object],
-    ) -> InboundEvent:
+    ) -> AuthenticatedInboundMessage:
         token = payload.get("token")
         expected = self._tokens.get(target_bot_id)
         if (expected is None or not isinstance(token, str)
                 or not hmac.compare_digest(token.encode(), expected.get_secret_value().encode())):
             raise IMContextError("im_inbound_authentication_failed", 401)
         settings = self._reader._settings
-        return _inbound_event(
+        event = _inbound_event(
             payload.get("message"), instance=settings.im_instance_id,
             realm=settings.realm_id, target_bot_id=target_bot_id, trigger=payload.get("trigger"),
         )
+        return AuthenticatedInboundMessage(
+            event, cast(dict[str, Any], payload["message"])["content"],
+        )
 
-    async def reread_trigger(
+    @asynccontextmanager
+    async def _reader_message(
         self, binding: IMAccountBinding, event: InboundEvent,
-    ) -> VerifiedInboundMessage:
+    ) -> AsyncIterator[tuple[_Batch, dict[str, Any]]]:
         settings = self._reader._settings
         if (binding.status != "active" or (
             binding.provider, binding.im_instance_id, binding.realm_id, binding.im_user_id,
@@ -338,9 +414,6 @@ class ZulipInboundAdapter:
                 or (event.provider, event.im_instance_id, event.realm_id)
                 != ("zulip", settings.im_instance_id, settings.realm_id)):
             raise IMContextError("im_identity_changed")
-        credentials = self._bots.get(event.target_bot_id)
-        if credentials is None:
-            raise IMContextError("im_bot_identity_unavailable", 503)
         mid = self._reader._number(event.source_message_id)
         params = {"apply_markdown": "false", "allow_empty_topic_name": "true"}
         async with self._reader.current_identity(binding) as identity:
@@ -359,33 +432,82 @@ class ZulipInboundAdapter:
             )
             if current != event:
                 raise IMContextError("im_source_changed")
+            yield batch, cast(dict[str, Any], raw)
+
+    async def delegation_mentions(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> frozenset[str] | None:
+        return (await self._delegation_markup(binding, event)).delegation_mentions()
+
+    async def _delegation_markup(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> _DelegationMarkup:
+        async with self._reader_message(binding, event) as (batch, _):
+            result = await self._reader._request(
+                batch.client, "GET", f"/api/v1/messages/{event.source_message_id}",
+                params={"apply_markdown": "true", "allow_empty_topic_name": "true"},
+            )
+            raw = result.get("message")
+            raw_content = result.get("raw_content")
+            if (not isinstance(raw, dict) or not isinstance(raw_content, str)
+                    or not isinstance(raw.get("content"), str)
+                    or raw.get("content_type") != "text/html"):
+                raise IMContextError("im_source_changed")
+            original = {**raw, "content": raw_content, "content_type": "text/x-markdown"}
+            if _inbound_event(
+                original, instance=event.im_instance_id, realm=event.realm_id,
+                target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
+            ) != event:
+                raise IMContextError("im_source_changed")
+            parser = _DelegationMarkup()
+            parser.feed(raw["content"])
+            return parser
+
+    async def _verify_bot(
+        self, batch: _Batch, event: InboundEvent, bot_id: str,
+    ) -> None:
+        credentials = self._bots.get(bot_id)
+        if credentials is None:
+            raise IMContextError("im_bot_identity_unavailable", 503)
+        email, api_key = credentials
+        auth = httpx2.BasicAuth(email, api_key.get_secret_value())
+        bot = await self._reader._request(batch.client, "GET", "/api/v1/users/me", auth=auth)
+        if (str(bot.get("user_id")) != bot_id
+                or bot.get("is_bot") is not True or bot.get("is_active") is not True):
+            raise IMContextError("im_bot_identity_changed")
+        bot_result = await self._reader._request(
+            batch.client, "GET", f"/api/v1/messages/{event.source_message_id}", auth=auth,
+            params={"apply_markdown": "false", "allow_empty_topic_name": "true"},
+        )
+        bot_raw = bot_result.get("message")
+        target_event = _inbound_event(
+            bot_raw, instance=event.im_instance_id, realm=event.realm_id,
+            target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
+        )
+        if target_event != event:
+            raise IMContextError("im_source_changed")
+        if event.conversation_kind == "group":
+            flags = cast(dict[str, Any], bot_raw).get("flags")
+            if not isinstance(flags, list) or "mentioned" not in flags:
+                raise IMContextError("im_inbound_target_invalid")
+
+    async def reread_trigger(
+        self, binding: IMAccountBinding, event: InboundEvent,
+        *, delegate_bot_id: str | None = None,
+    ) -> VerifiedInboundMessage:
+        async with self._reader_message(binding, event) as (batch, raw):
             # The reader established visibility. The Bot read only verifies its own
             # real recipient/mention flags; it cannot substitute for that reader.
-            email, api_key = credentials
-            auth = httpx2.BasicAuth(email, api_key.get_secret_value())
-            bot = await self._reader._request(
-                batch.client, "GET", "/api/v1/users/me", auth=auth,
-            )
-            if (str(bot.get("user_id")) != event.target_bot_id
-                    or bot.get("is_bot") is not True or bot.get("is_active") is not True):
-                raise IMContextError("im_bot_identity_changed")
-            bot_result = await self._reader._request(
-                batch.client, "GET", f"/api/v1/messages/{mid}", auth=auth, params=params,
-            )
-            bot_raw = bot_result.get("message")
-            target_event = _inbound_event(
-                bot_raw, instance=settings.im_instance_id, realm=settings.realm_id,
-                target_bot_id=event.target_bot_id, trigger=event.trigger_kind,
-            )
-            if target_event != event:
-                raise IMContextError("im_source_changed")
-            if event.conversation_kind == "group":
-                flags = cast(dict[str, Any], bot_raw).get("flags")
-                if not isinstance(flags, list) or "mentioned" not in flags:
-                    raise IMContextError("im_inbound_target_invalid")
+            await self._verify_bot(batch, event, event.target_bot_id)
+            if delegate_bot_id is not None:
+                await self._verify_bot(batch, event, delegate_bot_id)
+            question = raw["content"].replace("\r\n", "\n").replace("\r", "\n")
+            if delegate_bot_id is not None:
+                parser = await self._delegation_markup(binding, event)
+                question = parser.question(question, (event.target_bot_id, delegate_bot_id))
             return VerifiedInboundMessage(
                 event,
-                cast(dict[str, Any], raw)["content"].replace("\r\n", "\n").replace("\r", "\n"),
+                question,
             )
 
 
@@ -464,11 +586,14 @@ class ZulipDeliveryAdapter:
 
     def prepare_group_status(
         self, *, delivery_id: UUID, sender_bot_id: str, conversation_ref: str,
+        delegate_display_name: str | None = None,
     ) -> DeliveryMessage:
+        text = ("请求已接收，请查看与助手的私聊。" if delegate_display_name is None else
+                f"已转交{delegate_display_name}，结果将私回提问人，处理情况可在‘我的提问’查看")
         return DeliveryMessage(
             provider=self._provider, im_instance_id=self._instance, realm_id=self._realm,
             sender_bot_id=sender_bot_id, target_conversation_ref=conversation_ref,
-            card_content=f"请求已接收，请查看与助手的私聊。\n投递编号：{delivery_id}",
+            card_content=f"{text}\n投递编号：{delivery_id}",
             kind="group_status",
         )
 

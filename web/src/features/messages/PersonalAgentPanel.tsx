@@ -216,13 +216,22 @@ function AgentRequests() {
     {error ? <Alert type="warning" showIcon title={error} /> : null}
     {!busy && requests.length === 0 && error === null ? <p>还没有提问记录。请在单位消息中私聊同事的助手，或在群中明确点名该助手。</p> : null}
     <ul className={styles.records}>{requests.map((request) => <li key={request.inbox_id} className={styles.record}>
-      <Space wrap><strong>{request.agent_display_name}</strong><Tag>{REQUEST_STATE_LABELS[request.state]}</Tag></Space>
+      <Space wrap><strong>{request.delegation
+        ? `经 ${request.agent_display_name} 转 ${request.delegation.target_agent_display_name}`
+        : request.agent_display_name}</strong><Tag>{REQUEST_STATE_LABELS[request.state]}</Tag></Space>
       <p>提问于 {deliveryTime(request.received_at)} · 更新于 {deliveryTime(request.updated_at)}</p>
       {request.result_code === 'worker_interrupted' ? <Alert type="warning" showIcon
         title="处理已中断，请在 IM 中发一条新消息重新提问。原请求不会自动重跑。" /> : null}
+      {request.result_code === 'delegation_expired' ? <Alert type="warning" showIcon
+        title="委托已到期，请在 IM 中发一条新消息重新提问。原请求不会自动重跑。" /> : null}
+      {request.state === 'failed' && request.result_code !== 'worker_interrupted'
+        && request.result_code !== 'delegation_expired' ? <Alert type="warning" showIcon
+          title={`处理失败（${request.result_code ?? '未知原因'}），请在 IM 中重新提问。`} /> : null}
       {request.state === 'completed' ? <p>AI 根据对方发布的授权资料代答，未经对方本人核实。处理完成不代表 IM 已接受回复。</p> : null}
       {request.deliveries.map((delivery) => <p key={delivery.delivery_id}>
         {delivery.reply_slot === 'private' ? '私聊回复' : '群内固定状态'}：{DELIVERY_STATE_LABELS[delivery.state]}
+        {request.delegation ? ` · 发送者 ${delivery.reply_slot === 'private'
+          ? request.delegation.target_agent_display_name : request.agent_display_name}` : ''}
         {delivery.remote_message_id ? ` · 消息编号 ${delivery.remote_message_id}` : ''}
         <span className={styles.hash}> · 投递编号 {delivery.delivery_id}</span>
       </p>)}

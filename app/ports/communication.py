@@ -110,6 +110,12 @@ class InboundEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthenticatedInboundMessage:
+    event: InboundEvent
+    text: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedInboundMessage:
     event: InboundEvent
     question: str = field(repr=False)
@@ -120,10 +126,15 @@ class CommunicationInboundPort(Protocol):
 
     def authenticate_callback(
         self, *, target_bot_id: str, payload: dict[str, object],
-    ) -> InboundEvent: ...
+    ) -> AuthenticatedInboundMessage: ...
+
+    async def delegation_mentions(
+        self, binding: IMAccountBinding, event: InboundEvent,
+    ) -> frozenset[str] | None: ...
 
     async def reread_trigger(
         self, binding: IMAccountBinding, event: InboundEvent,
+        *, delegate_bot_id: str | None = None,
     ) -> VerifiedInboundMessage: ...
 
 
@@ -150,6 +161,7 @@ class CommunicationDeliveryPort(Protocol):
 
     def prepare_group_status(
         self, *, delivery_id: UUID, sender_bot_id: str, conversation_ref: str,
+        delegate_display_name: str | None = None,
     ) -> DeliveryMessage: ...
 
     async def send_message_once(self, message: DeliveryMessage) -> DeliveryResult: ...

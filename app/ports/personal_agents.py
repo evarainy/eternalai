@@ -76,6 +76,11 @@ class ReplyView(BaseModel):
     remote_message_id: str | None
 
 
+class DelegationView(BaseModel):
+    target_agent_id: UUID
+    target_agent_display_name: str
+
+
 class RequestView(BaseModel):
     inbox_id: UUID
     agent_display_name: str
@@ -84,6 +89,7 @@ class RequestView(BaseModel):
     received_at: datetime
     updated_at: datetime
     deliveries: list[ReplyView]
+    delegation: DelegationView | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,12 @@ class PersonalAgent:
 
 
 @dataclass(frozen=True)
+class DelegationContext:
+    target_agent: PersonalAgent
+    target_owner: DeliveryBinding
+
+
+@dataclass(frozen=True)
 class InboxContext:
     inbox_id: UUID
     agent: PersonalAgent
@@ -110,6 +122,15 @@ class InboxContext:
     event: InboundEvent
     grant_id: UUID | None
     state: str
+    delegation: DelegationContext | None = None
+
+    @property
+    def execution_agent(self) -> PersonalAgent:
+        return self.agent if self.delegation is None else self.delegation.target_agent
+
+    @property
+    def execution_owner(self) -> DeliveryBinding:
+        return self.owner if self.delegation is None else self.delegation.target_owner
 
 
 @dataclass(frozen=True)
@@ -149,7 +170,18 @@ class PersonalAgentStorePort(Protocol):
         self, principal: Principal, agent_id: UUID, version: int,
     ) -> MaterialView: ...
     async def requests(self, principal: Principal) -> list[RequestView]: ...
-    async def accept(self, agent_id: UUID, event: InboundEvent) -> ReceiveResult: ...
+    async def existing(
+        self, agent: PersonalAgent, event: InboundEvent,
+    ) -> ReceiveResult | None: ...
+    async def inbound_actor(
+        self, agent: PersonalAgent, event: InboundEvent,
+    ) -> DeliveryBinding | None: ...
+    async def delegation_agents(
+        self, actor: DeliveryBinding, bot_ids: frozenset[str],
+    ) -> tuple[PersonalAgent, PersonalAgent] | None: ...
+    async def accept(
+        self, agent_id: UUID, event: InboundEvent, *, delegate_agent_id: UUID | None = None,
+    ) -> ReceiveResult: ...
     async def claim_inbox(self, inbox_id: UUID) -> InboxContext | None: ...
     async def material(self, context: InboxContext) -> AuthorizedMaterial | None: ...
     async def enqueue_status(
