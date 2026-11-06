@@ -244,18 +244,15 @@ class _RunScreen:
         # attached to over CDP (2026-11-06 probe: 0 frames; raw CDP: 18 in 5 s), so
         # the cast runs on the documented CDP session API instead.
         session = await context.new_cdp_session(page)
-        session.on("Page.screencastFrame", self._on_cast_frame)
+        # Bound to its own session: a late frame of a replaced cast is ignored.
+        session.on("Page.screencastFrame", lambda params: self._on_cast_frame(session, params))
         self.cast_session = session
         await session.send(
-            "Page.startScreencast",
-            # Every second frame: halves the per-frame work in this process (2026-11-06:
-            # run reads slowed to seconds while casting at full rate).
-            {"format": "jpeg", "quality": _FRAME_QUALITY, "everyNthFrame": 2, **_FRAME_SIZE},
+            "Page.startScreencast", {"format": "jpeg", "quality": _FRAME_QUALITY, **_FRAME_SIZE}
         )
 
-    def _on_cast_frame(self, params: Mapping[str, Any]) -> None:
-        session = self.cast_session
-        if session is None:
+    def _on_cast_frame(self, session: Any, params: Mapping[str, Any]) -> None:
+        if session is not self.cast_session:
             return
         metadata = params.get("metadata") or {}
         self.on_frame(
@@ -280,9 +277,12 @@ class _RunScreen:
             return
         try:
             await asyncio.wait_for(session.send("Page.stopScreencast"), 2)
+        except Exception:
+            pass  # Detach below (or the driver stop) still ends this cast.
+        try:
             await asyncio.wait_for(session.detach(), 2)
         except Exception:
-            pass  # The driver stop ends the cast and the session in any case.
+            pass  # Its late frames are ignored; the driver stop ends the session.
 
     def on_dialog(self, dialog: Any) -> None:
         # Listening keeps the observer's own driver from auto-dismissing it.
