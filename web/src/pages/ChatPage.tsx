@@ -324,6 +324,8 @@ function BrowserRunMonitor({
       {panelShown ? (
         // Sealed or pre-seal D card (§9.1); the panel decides what a null handoff shows.
         <BrowserHandoffPanel run={read.run} handoff={handoff}
+          screen={{ taskId: target.accepted.task_id, runId: target.accepted.run_id,
+            sessionId: target.conversationId }}
           onEndAssist={() => onCancel(target.accepted.task_id, target.accepted.run_id)} />
       ) : null}
       {panelCopy ? null : fillStopHistory ? <BrowserFillStopHistoryNotice /> : read.fillStop != null ? (

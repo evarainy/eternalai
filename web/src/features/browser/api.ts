@@ -61,6 +61,9 @@ export function writePreviewFields(read: BrowserRunRead): BrowserFillFields | nu
   return fields === null || fields === undefined ? null : fields as BrowserFillFields;
 }
 
+export type FillField = 'category' | 'position' | 'description';
+const FILL_FIELDS: readonly FillField[] = ['category', 'position', 'description'];
+
 export interface BrowserHandoff {
   readonly schema_version: 'browser.handoff.v1';
   readonly sealed_at: string;
@@ -71,6 +74,9 @@ export interface BrowserHandoff {
     readonly position: string;
     readonly description: string;
   } | null;
+  /** The owner took over mid-fill; only `completed_fields` were filled by the machine. */
+  readonly takeover: boolean;
+  readonly completed_fields: readonly FillField[];
 }
 
 /** A sealed run that has not reached a terminal result yet. */
@@ -79,13 +85,29 @@ export function isActiveHandoff(read: BrowserRunRead): boolean {
 }
 
 export interface FillStopReport {
-  readonly execution_status: 'filled_stopped' | 'failed' | 'cancelled' | 'unknown';
+  readonly execution_status: 'filled_stopped' | 'takeover_stopped' | 'failed' | 'cancelled' | 'unknown';
   readonly verification: 'verified' | 'mismatch' | 'incomplete' | 'unknown';
   readonly field_checks: Record<'category' | 'position' | 'description', boolean | null>;
   readonly submit_actions: number;
   readonly seconds: number;
   readonly error_code: string;
   readonly cleanup_confirmed: boolean;
+  readonly completed_fields: readonly FillField[];
+}
+
+/** Optional keys the server added later; absent means the contract default. */
+function withOptional(value: unknown, keys: readonly string[], optional: readonly string[]): string[] {
+  const present = typeof value === 'object' && value !== null
+    ? optional.filter((key) => Object.prototype.hasOwnProperty.call(value, key)) : [];
+  return [...keys, ...present];
+}
+
+function parseFillFieldList(value: unknown): FillField[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 3
+      || value.some((item) => !FILL_FIELDS.includes(item as FillField))
+      || new Set(value).size !== value.length) return null;
+  return value as FillField[];
 }
 
 const fillStopCodes = new Set([
@@ -94,7 +116,8 @@ const fillStopCodes = new Set([
   'SOURCE_URL_SCHEME', 'SOURCE_URL_HOST', 'SOURCE_URL_PORT', 'SOURCE_ORIGIN_MISMATCH',
   'SOURCE_SET_CHANGED', 'CONTROL_MISSING', 'CONTROL_AMBIGUOUS', 'CONTROL_CHANGED',
   'PAGE_STATE_MISMATCH', 'ACTION_TIMEOUT', 'OBSERVE_TIMEOUT', 'CONNECT_TIMEOUT', 'RESULT_MISMATCH',
-  'REPORTER_MISSING', 'REPORTER_AMBIGUOUS', 'REPORTER_INVALID', 'CANCELLED', 'CLEANUP_FAILED',
+  'REPORTER_MISSING', 'REPORTER_AMBIGUOUS', 'REPORTER_INVALID', 'CANCELLED', 'HUMAN_TAKEOVER',
+  'CLEANUP_FAILED',
   'REQUEST_GUARD_FAILED', 'PREP_FAILED', 'PAGE_CONTEXT_EVENT', 'PAGE_MAIN_FRAME_NAV',
   'PAGE_CHILD_FRAME_NAV', 'PAGE_TARGET_CLOSED', 'PAGE_CONTEXT_SET_CHANGED', 'PAGE_FRAME_SET_CHANGED',
   'WINDOW_PREP_FAILED', 'WINDOW_LOOKUP_FAILED', 'WINDOW_SET_FAILED', 'WINDOW_VERIFY_FAILED',
@@ -102,11 +125,13 @@ const fillStopCodes = new Set([
 ]);
 
 function parseFillStop(value: unknown): FillStopReport | null {
-  const item = exactRecord(value, ['mode', 'execution_status', 'verification', 'field_checks',
-    'actions_attempted', 'actions_completed', 'submit_actions', 'model_requests', 'seconds',
-    'error_code', 'cleanup_confirmed']);
-  if (item === null || item.mode !== 'FILL_STOP'
-      || !['filled_stopped', 'failed', 'cancelled', 'unknown'].includes(String(item.execution_status))
+  const item = exactRecord(value, withOptional(value, ['mode', 'execution_status', 'verification',
+    'field_checks', 'actions_attempted', 'actions_completed', 'submit_actions', 'model_requests',
+    'seconds', 'error_code', 'cleanup_confirmed'], ['completed_fields']));
+  const completedFields = item === null ? null : parseFillFieldList(item.completed_fields);
+  if (item === null || item.mode !== 'FILL_STOP' || completedFields === null
+      || !['filled_stopped', 'takeover_stopped', 'failed', 'cancelled', 'unknown']
+        .includes(String(item.execution_status))
       || !['verified', 'mismatch', 'incomplete', 'unknown'].includes(String(item.verification))
       || typeof item.submit_actions !== 'number' || !Number.isSafeInteger(item.submit_actions)
       || item.submit_actions < 0 || item.model_requests !== 0
@@ -123,11 +148,15 @@ function parseFillStop(value: unknown): FillStopReport | null {
       || item.verification !== 'verified'
       || item.error_code !== 'OK' || !item.cleanup_confirmed || item.actions_completed < 3
       || Object.values(checks).some((v) => v !== true))) return null;
+  if (item.execution_status === 'takeover_stopped' && (item.submit_actions !== 0
+      || item.verification !== 'incomplete' || item.error_code !== 'HUMAN_TAKEOVER')) return null;
+  if (item.execution_status !== 'takeover_stopped' && completedFields.length > 0) return null;
   return { execution_status: item.execution_status as FillStopReport['execution_status'],
     verification: item.verification as FillStopReport['verification'],
     field_checks: checks as FillStopReport['field_checks'], seconds: item.seconds,
     submit_actions: item.submit_actions,
-    error_code: item.error_code, cleanup_confirmed: item.cleanup_confirmed };
+    error_code: item.error_code, cleanup_confirmed: item.cleanup_confirmed,
+    completed_fields: completedFields };
 }
 
 function boundedText(value: unknown, maxLength: number): value is string {
@@ -136,18 +165,21 @@ function boundedText(value: unknown, maxLength: number): value is string {
 }
 
 function parseHandoff(value: unknown): BrowserHandoff | null {
-  const item = exactRecord(value, ['schema_version', 'sealed_at', 'deadline', 'fields']);
+  const item = exactRecord(value, withOptional(value,
+    ['schema_version', 'sealed_at', 'deadline', 'fields'], ['takeover', 'completed_fields']));
   if (item === null || item.schema_version !== 'browser.handoff.v1'
       || typeof item.sealed_at !== 'string' || !Number.isFinite(Date.parse(item.sealed_at))
       || typeof item.deadline !== 'string' || !Number.isFinite(Date.parse(item.deadline))) return null;
-  if (item.fields === null) {
-    return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at,
-      deadline: item.deadline, fields: null };
-  }
+  const takeover = item.takeover === undefined ? false : item.takeover;
+  const completedFields = parseFillFieldList(item.completed_fields);
+  if (typeof takeover !== 'boolean' || completedFields === null
+      || (!takeover && completedFields.length > 0)) return null;
+  const base = { schema_version: 'browser.handoff.v1' as const, sealed_at: item.sealed_at,
+    deadline: item.deadline, takeover, completed_fields: completedFields };
+  if (item.fields === null) return { ...base, fields: null };
   const fields = parseFillFields(item.fields);
   if (fields === null) return null;
-  return { schema_version: 'browser.handoff.v1', sealed_at: item.sealed_at, deadline: item.deadline,
-    fields };
+  return { ...base, fields };
 }
 
 function parseFillFields(value: unknown): BrowserFillFields | null {
