@@ -807,10 +807,22 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|
-| 真实模型对等价问法敏感；旧问“地点”曾答资料不足，明确问“集合地点代号”后答对，不宣称所有问法可靠 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（待安排后续） | 获准后验证典型等价问法并形成可复核结论 | PR #259/#261；acc/V3RUN4.md 的旧 A4/A9 根因及新结果 |
+| 真实模型对等价问法敏感且有非确定性；旧问“地点”曾答资料不足，明确问“集合地点代号”后答对；V4 同一输入 5 次中有 1 次拒答（2026-11-06 由 V4 并入本行），固定问法通过不代表任意说法可靠 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（待安排后续） | 获准后验证典型等价问法并形成可复核结论 | PR #259/#261；acc/V3RUN4.md 的旧 A4/A9 根因及新结果；PR #264 |
 | A5 多人私聊与 A6 来源编辑拒绝仅沿用既有合成 API 证据，本人窗口未重跑；原生撰写框操作也未覆盖 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（后续验收） | 获准在本人窗口完成相应真实路径并登记结果 | PR #259/#261；acc/V3RUN4.md；acc/v3-auto.json |
 | Zulip 中文/浅色配置未进入正式部署脚本，验收现场配置不等于正式部署交付 | 正式部署范围与专项授权（待分配） | 待分配 | 获准后纳入正式部署配置并在目标环境核对 | laneG4.md 第 4 项交接；本棒不部署、不修改配置 |
 | 已关闭：760px 顶栏横向溢出；旧 scrollWidth=1115，现 745=clientWidth | P2-IM-MESSAGES-LAYOUT-001 | P2-IM-MESSAGES-LAYOUT-001 | 已满足：真实登录 760px 无横溢，两宽度折叠/深链/换记录保持 PASS | PR #259/#261；acc/LAYOUTFIX.md；acc/layout-fix-browser.json；acc/layout-fix-760-expanded.png |
+
+### IM 机会层 V4 `P2-IM-AGENT-DELEGATION-001` 新增欠债（2026-11-06）
+
+`P2-GOV-SYNC-20261106-2` 登记已合并 PR #264 正文欠债与 IM 窗口交接；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。模型非确定性已并入上节“问法敏感”行；V1–V3 及正式部署、手机、第二租户等历史欠债保留，不由 V4 六项复核核销。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 路由提及不在开头时的拒答 | 路由 @ 不写在消息开头时原样留给模型，拒答概率高于标准写法；已选择保留正文、不清洗后段提及 | 无 | 待分配 | 获授权的典型实际问法验证形成稳定性结论，或经批准调整交互规则 | PR #264；acc/V4FIX5-final-results.json |
+| 正式环境频道订阅未进部署脚本 | A、B 两个助手 Bot 都须订阅所在频道，否则委托不触发；正式部署脚本尚未包含此步 | 正式部署范围与专项授权（待分配） | 待分配 | 获准后纳入正式部署配置并在目标环境核对委托触发 | PR #264；IM 窗口交接 |
+| 合成 Zulip 误建的空频道 7 未删除 | 删除需专项授权；仅存在于合成 Zulip，不影响正式环境 | 删除授权 | 待分配 | 获授权删除，或确认随合成环境整体回收 | IM 窗口交接 |
+
+测试环境事实：为甲在合成 Zulip 上开通了合成助手 Bot 16（只在合成环境），不等同正式组织账号。
 
 ### 聊天上传 `P2-CHAT-UPLOAD-001` 新增欠债（2026-11-06）
 
