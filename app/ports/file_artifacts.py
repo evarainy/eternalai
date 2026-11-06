@@ -1,8 +1,8 @@
 """File artifact port: owner-scoped downloads, chat uploads and worker-side outputs.
 
 ``public.file_artifacts`` is the authority for ownership and lifecycle; physical files
-are only reachable through a verified row. Another user's artifact is indistinguishable
-from a missing one. Only the standard library is imported here: the worker reaches this
+are only reachable through a verified row. Another user's artifact needs an explicit confirmed delivery grant; without it,
+the artifact is indistinguishable from a missing one. Only the standard library is imported here: the worker reaches this
 module through the persistence layer.
 """
 
@@ -13,8 +13,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.ports.auth import Principal
 
 CHAT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -56,6 +59,20 @@ class FileArtifactDownload:
     stat_result: os.stat_result = field(repr=False)
     display_filename: str = field(repr=False)
     media_type: str
+
+
+@dataclass(frozen=True)
+class FileShareMetadata:
+    filename: str
+    size_bytes: int
+    sha256: bytes
+    expires_at: datetime
+
+
+class FileArtifactSharePort(Protocol):
+    async def share_metadata(
+        self, principal: Principal, artifact_id: UUID
+    ) -> FileShareMetadata: ...
 
 
 @dataclass(frozen=True)
@@ -111,6 +128,10 @@ ChunkSource = AsyncIterator[bytes]
 
 
 class FileArtifactStorePort(Protocol):
+    async def share_metadata(
+        self, owner: FileArtifactOwner, artifact_id: UUID
+    ) -> FileShareMetadata: ...
+
     async def open_download(
         self, owner: FileArtifactOwner, artifact_id: UUID
     ) -> FileArtifactDownload: ...
@@ -150,6 +171,8 @@ __all__ = (
     "FileArtifactError",
     "FileArtifactOwner",
     "FileArtifactStorePort",
+    "FileArtifactSharePort",
+    "FileShareMetadata",
     "JobOutputOwner",
     "JobOutputPublisher",
     "OutputWriter",

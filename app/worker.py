@@ -69,8 +69,9 @@ async def run_worker(settings: WorkerSettings) -> None:
     sessions = make_async_session_factory(engine)
     delivery_client = None
     try:
+        file_artifacts = build_file_artifact_service(settings.file_artifacts, sessions)
         delivery_service, delivery_client = build_im_delivery(
-            settings.im_delivery, sessions, settings.personal_agents,
+            settings.im_delivery, sessions, settings.personal_agents, files=file_artifacts,
         )
         personal_runtime = None
         if settings.personal_agents is not None:
@@ -101,7 +102,6 @@ async def run_worker(settings: WorkerSettings) -> None:
                 max_age_s=settings.organization_directory_max_age_s,
             ),
         )
-        file_artifacts = build_file_artifact_service(settings.file_artifacts, sessions)
         runner = BackgroundJobRunner(
             PostgreSQLBackgroundJobLedger(sessions),
             build_job_kinds(settings.self_check_max_hold_seconds),

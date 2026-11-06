@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, Radio, Space, Tag } from 'antd';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { attachmentDownloadUrl } from '../chat-upload/chatUploadApi';
 import {
   cancelDelivery, confirmDelivery, DELIVERY_STATE_LABELS, deliveryError, deliveryResultReason, deliveryTime,
   readDelivery, reconcileDelivery, verifyDelivery,
@@ -64,12 +65,15 @@ export function DeliveryPanel({ deliveryId, initial = null }: {
     void run(() => verifyDelivery(deliveryId, request));
   };
   const isInitiator = view?.viewer_role === 'initiator';
+  const file = view?.file;
+  const grantExpired = file != null && Date.parse(file.grant_expires_at) <= Date.now();
+  const grantActive = file == null || file.grant_revoked_at === null && !grantExpired;
   const canVerify = view !== null && !isInitiator && view.confirmed_at !== null
-    && view.state !== 'cancelled' && view.state !== 'expired';
+    && view.state !== 'cancelled' && view.state !== 'expired' && grantActive;
   const resultReason = view === null ? null : deliveryResultReason(view.result_code);
 
   return (
-    <section className={styles.panel} aria-label="文字送核记录">
+    <section className={styles.panel} aria-label={file == null ? '文字送核记录' : '文件送核记录'}>
       {error ? <Alert type="warning" showIcon title={error} /> : null}
       <Space wrap>
         <Button loading={busy} onClick={() => { void run(() => readDelivery(deliveryId), true); }}>读取原记录</Button>
@@ -84,24 +88,44 @@ export function DeliveryPanel({ deliveryId, initial = null }: {
           <div><dt>最迟发送</dt><dd>{deliveryTime(view.send_expires_at)}</dd></div>
           <div><dt>发送结果</dt><dd><Tag>{DELIVERY_STATE_LABELS[view.state]}</Tag>{view.remote_message_id ? `消息编号 ${view.remote_message_id}` : ''}</dd></div>
           <div><dt>本人核实</dt><dd>{view.verifications.length === 0 ? '乙尚未明确核实' : '已有乙本人回执，见下方记录'}</dd></div>
+          {file == null ? null : <>
+            <div><dt>文件</dt><dd>{file.filename} · {file.size_bytes.toLocaleString('zh-CN')} 字节</dd></div>
+            <div><dt>文件版本</dt><dd>SHA256 {file.sha256}</dd></div>
+            <div><dt>授权截止</dt><dd>{deliveryTime(file.grant_expires_at)}
+              {file.grant_revoked_at !== null ? ` · 已撤销（${deliveryTime(file.grant_revoked_at)}）`
+                : grantExpired ? ' · 已到期' : view.confirmed_at === null ? ' · 本人确认后生效' : ''}</dd></div>
+          </>}
         </dl>
+        {file == null ? null : <>
+          {isInitiator || view.confirmed_at !== null && grantActive
+            && view.state !== 'cancelled' && view.state !== 'expired' ? (
+              <a href={attachmentDownloadUrl(file.artifact_id)} download>下载此版本文件</a>
+            ) : null}
+          <p>仅撤销本记录授权；若另有有效授权，仍可下载。转发无效，已下载文件无法召回；本记录撤销或到期后不能新增核实。</p>
+          {file.grant_revoked_at !== null && (view.state === 'sending' || view.state === 'unknown')
+            ? <p>文件授权已撤销，发送结果仍待核实。</p> : null}
+        </>}
         {resultReason === null ? null : <p>{resultReason}</p>}
-        <p className={styles.label}>实际文字卡与留言</p>
+        <p className={styles.label}>{file == null ? '实际文字卡与留言' : '实际文件卡与留言'}</p>
         <pre className={styles.card}>{view.card_content}</pre>
         {view.state === 'unknown' || view.state === 'sending' ? (
           <Alert type="warning" showIcon title="这条消息可能已经发送。只核对原结果，不会自动重发。" />
         ) : null}
         {uncertain ? <p role="status">本次操作结果未确认，请先读取原记录。</p> : null}
         {isInitiator ? <Space wrap>
-          {view.state === 'prepared' ? <Button type="primary" disabled={busy || uncertain}
+          {view.state === 'prepared' ? <Button type="primary" disabled={busy || uncertain || !grantActive}
             onClick={() => { void run(() => confirmDelivery(view)); }}>确认以上内容并私发</Button> : null}
-          {view.state === 'prepared' || view.state === 'ready' ? <Button disabled={busy}
+          {view.state === 'prepared' || file == null && view.state === 'ready' ? <Button disabled={busy}
             onClick={() => { void run(() => cancelDelivery(deliveryId)); }}>取消尚未开始的发送</Button> : null}
+          {file != null && view.confirmed_at !== null && file.grant_revoked_at === null
+            ? <Button disabled={busy} onClick={() => { void run(() => cancelDelivery(deliveryId)); }}>
+              撤销文件授权
+            </Button> : null}
           {view.state === 'unknown' || view.state === 'sending' ? <Button disabled={busy}
             onClick={() => { void run(() => reconcileDelivery(deliveryId)); }}>核对发送结果</Button> : null}
         </Space> : null}
         {canVerify ? <div className={styles.form}>
-          <p className={styles.label}>我已核对以上文字卡与留言</p>
+          <p className={styles.label}>{file == null ? '我已核对以上文字卡与留言' : '我已核对以上文件版本与留言'}</p>
           <Radio.Group value={result} disabled={busy || pendingVerification !== null}
             onChange={(event) => setResult(event.target.value as VerificationResult)}>
             <Radio value="verified">已核实</Radio><Radio value="needs_changes">需修改</Radio>

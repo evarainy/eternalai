@@ -1,4 +1,4 @@
-"""PostgreSQL text-delivery snapshots, one-attempt Outbox and recipient receipts."""
+"""PostgreSQL manual delivery snapshots, one-attempt Outbox and recipient receipts."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from app.ports.auth import Principal
 from app.ports.communication import DeliveryMessage, DeliveryResult
 from app.ports.im_deliveries import (
     DeliveryBinding,
+    DeliveryFileView,
     DeliveryRecipient,
     DeliveryRecord,
     DeliveryVerification,
@@ -42,7 +43,7 @@ _SEND_TASK = "im_deliveries.send"
 
 def _record(row: RowMapping) -> DeliveryRecord:
     values = dict(row)
-    for name in ("recipient_mapping_version", "confirmation_sha256"):
+    for name in ("recipient_mapping_version", "confirmation_sha256", "artifact_sha256"):
         if values[name] is not None:
             values[name] = bytes(values[name])
     return DeliveryRecord(**values)
@@ -210,6 +211,11 @@ class PostgreSQLIMDeliveryStore:
             if row is None:
                 raise IMDeliveryError("im_delivery_not_found", 404)
             record = _record(row)
+            if record.artifact_id is not None and (
+                record.grant_revoked_at is not None
+                or cast(datetime, record.grant_expires_at) <= datetime.now(UTC)
+            ):
+                raise IMDeliveryError("im_delivery_not_confirmable")
             if record.confirmation_sha256 != confirmation_sha256:
                 raise IMDeliveryError("im_delivery_preview_changed")
             if record.state in ("cancelled", "expired"):
@@ -274,6 +280,20 @@ class PostgreSQLIMDeliveryStore:
         if (record.state in ("prepared", "ready")
                 and cast(datetime, record.send_expires_at) <= datetime.now(UTC)):
             values["state"] = "expired"
+        values["file"] = None
+        if record.artifact_id is not None:
+            file = (await session.execute(text(
+                "SELECT f.display_filename, f.size_bytes FROM public.im_deliveries d "
+                "JOIN public.file_artifacts f ON f.artifact_id=d.artifact_id "
+                "WHERE d.delivery_id=:id"
+            ), {"id": record.delivery_id})).mappings().one()
+            values["file"] = DeliveryFileView(
+                artifact_id=record.artifact_id,
+                sha256=cast(bytes, record.artifact_sha256).hex(),
+                filename=file["display_filename"], size_bytes=file["size_bytes"],
+                grant_expires_at=cast(datetime, record.grant_expires_at),
+                grant_revoked_at=record.grant_revoked_at,
+            )
         values["verifications"] = [VerificationView(**dict(row)) for row in receipts]
         return DeliveryView(**values)
 
@@ -318,7 +338,14 @@ class PostgreSQLIMDeliveryStore:
             ).mappings().one_or_none()
             if row is None:
                 raise IMDeliveryError("im_delivery_not_found", 404)
-            if row["state"] in ("prepared", "ready"):
+            if row["artifact_id"] is not None and row["confirmed_at"] is not None:
+                await session.execute(text(
+                    "UPDATE public.im_deliveries SET "
+                    "grant_revoked_at=COALESCE(grant_revoked_at, now()), "
+                    "state=CASE WHEN state='ready' THEN 'cancelled' ELSE state END, "
+                    "updated_at=now() WHERE delivery_id=:id"
+                ), {"id": delivery_id})
+            elif row["state"] in ("prepared", "ready"):
                 await session.execute(
                     text(
                         "UPDATE public.im_deliveries SET state='cancelled', updated_at=now() "
@@ -338,7 +365,9 @@ class PostgreSQLIMDeliveryStore:
                         "AND recipient_ai_user_id=:user AND delivery_id=:id "
                         "AND origin_inbox_id IS NULL "
                         "AND confirmed_at IS NOT NULL AND state NOT IN ('cancelled','expired') "
-                        "AND (state <> 'ready' OR send_expires_at > now()) FOR UPDATE"
+                        "AND (state <> 'ready' OR send_expires_at > now()) "
+                        "AND (artifact_id IS NULL OR (grant_revoked_at IS NULL "
+                        "AND grant_expires_at > now())) FOR UPDATE"
                     ),
                     {**_owner(principal), "id": delivery_id},
                 )
