@@ -161,10 +161,13 @@ class _RunScreen:
         self.epoch = 0
         self.inputs: asyncio.Queue[tuple[int, str, ScreenInput]] = asyncio.Queue(_QUEUE_LIMIT)
         self.mouse_down = False
+        # Releases and detaches in progress: no input, answer or new control meanwhile.
+        self.draining = 0
         self.frame: ScreenFrame | None = None
         self.frame_seq = 0
         self.browser_owned: OwnedDFormBrowser | None = None
         self.playwright: Any = None
+        self.driver_stop: asyncio.Task[None] | None = None
         self.browser: Any = None
         self.context: Any = None
         self.page: Any = None
@@ -187,16 +190,32 @@ class _RunScreen:
             return "other"
         return "pending" if self.pending is not None else "none"
 
+    def _state_message(self, viewer: _Viewer) -> Mapping[str, object]:
+        return {
+            "type": "state",
+            "phase": self.phase or "preparing",
+            "control": self._control_for(viewer),
+            "attached": self.page is not None,
+        }
+
+    def _dialog_message(self, dialog: Any) -> Mapping[str, object]:
+        return {
+            "type": "dialog",
+            "id": self.dialog_id,
+            "kind": dialog.type,
+            "message": dialog.message[:SCREEN_PROMPT_MAX],
+            "default": (dialog.default_value or "")[:SCREEN_PROMPT_MAX],
+        }
+
+    def sync(self, viewer: _Viewer) -> None:
+        """Everything a new connection cannot have heard: current state and open dialog."""
+        viewer.push(self._state_message(viewer))
+        if self.dialog is not None:
+            viewer.push(self._dialog_message(self.dialog))
+
     def broadcast_state(self) -> None:
         for viewer in list(self.viewers.values()):
-            viewer.push(
-                {
-                    "type": "state",
-                    "phase": self.phase or "preparing",
-                    "control": self._control_for(viewer),
-                    "attached": self.page is not None,
-                }
-            )
+            viewer.push(self._state_message(viewer))
 
     def broadcast(self, payload: Mapping[str, object]) -> None:
         for viewer in list(self.viewers.values()):
@@ -221,15 +240,7 @@ class _RunScreen:
         if dialog.page is not self.page:
             return
         self.dialog, self.dialog_id = dialog, uuid4().hex
-        self.broadcast(
-            {
-                "type": "dialog",
-                "id": self.dialog_id,
-                "kind": dialog.type,
-                "message": dialog.message[:SCREEN_PROMPT_MAX],
-                "default": (dialog.default_value or "")[:SCREEN_PROMPT_MAX],
-            }
-        )
+        self.broadcast(self._dialog_message(dialog))
 
     def on_dialog_closed(self, dialog: Any) -> None:
         if dialog is self.dialog:
@@ -265,6 +276,12 @@ class _RunScreen:
             or owned.page is None
         ):
             return  # Window or real target not ready yet (startup page may still be open).
+        if not owned.observer_exited:
+            # An earlier driver of this Run is not proven gone. A second one would
+            # overwrite that missing proof when it stops, so none is started.
+            self.attach_failures = _ATTACH_ATTEMPTS
+            self.broadcast({"type": "notice", "code": "unavailable"})
+            return
         self.browser_owned = owned
         try:
             lines = (owned.created_dir / "profile" / "DevToolsActivePort").read_text(
@@ -328,72 +345,97 @@ class _RunScreen:
 
     async def _stop_driver(self) -> bool:
         owned = self.browser_owned
-        playwright, self.playwright = self.playwright, None
         self.browser = self.context = self.page = self.target_id = None
         self.dialog = self.dialog_id = None
-        if playwright is None:
+        if self.playwright is None:
             return True
+        # Started once and shielded: a timed-out wait would cancel Playwright's own
+        # stop future and a second stop() returns at once, which proves nothing.
+        if self.driver_stop is None:
+            self.driver_stop = asyncio.create_task(self.playwright.stop())
         try:
-            await asyncio.wait_for(playwright.stop(), 10)
+            await asyncio.wait_for(asyncio.shield(self.driver_stop), 10)
         except Exception:
-            # Proof stays False: Run cleanup then quarantines instead of releasing.
+            # Proof stays False and the driver stays referenced: Run cleanup waits on
+            # this same stop again, then quarantines instead of releasing.
             _log("close", "failed", "driver_stop_failed", len(self.viewers))
             return False
+        self.playwright = self.driver_stop = None
+        self.mouse_down = False
         if owned is not None:
             owned.observer_exited = True
         return True
 
     async def detach(self) -> bool:
         """Under self.lock: stop input, release held buttons, stop frames, stop the driver."""
-        self.epoch += 1
-        self.controller = None
-        self._drain()
-        clean = True
+        self.draining += 1
         try:
-            async with asyncio.timeout(_DRAIN_SECONDS):
-                async with self.op_lock:
-                    await self._release_buttons()
-        except TimeoutError:
-            clean = False
-            _log("close", "failed", "input_stuck", len(self.viewers))
-        if self.input_task is not None:
-            self.input_task.cancel()
-            await asyncio.gather(self.input_task, return_exceptions=True)
-            self.input_task = None
-        if self.page is not None:
+            self.epoch += 1
+            self.controller = None
+            self._drain()
             try:
-                await asyncio.wait_for(self.page.screencast.stop(), 2)
-            except Exception:
-                pass  # The driver stop below ends the cast in any case.
-        attached = self.playwright is not None
-        stopped = await self._stop_driver()
-        if attached:
-            _log(
-                "close",
-                "ok" if stopped and clean else "failed",
-                "OK" if stopped and clean else "driver_stop_failed",
-                len(self.viewers),
-                frames_sent=self.frames_sent,
-                inputs_applied=self.inputs_applied,
-                inputs_rejected=self.inputs_rejected,
-            )
-        self.frame = None
-        self.broadcast_state()
-        return stopped and clean
+                async with asyncio.timeout(_DRAIN_SECONDS):
+                    async with self.op_lock:
+                        clean = await self._release_buttons()
+            except TimeoutError:
+                clean = False
+            if not clean:
+                _log("close", "failed", "input_stuck", len(self.viewers))
+            if self.input_task is not None:
+                self.input_task.cancel()
+                await asyncio.gather(self.input_task, return_exceptions=True)
+                self.input_task = None
+            if self.page is not None:
+                try:
+                    await asyncio.wait_for(self.page.screencast.stop(), 2)
+                except Exception:
+                    pass  # The driver stop below ends the cast in any case.
+            attached = self.playwright is not None
+            stopped = await self._stop_driver()
+            if attached:
+                code = "driver_stop_failed" if not stopped else "OK" if clean else "input_stuck"
+                _log(
+                    "close",
+                    "ok" if code == "OK" else "failed",
+                    code,
+                    len(self.viewers),
+                    frames_sent=self.frames_sent,
+                    inputs_applied=self.inputs_applied,
+                    inputs_rejected=self.inputs_rejected,
+                )
+            self.frame = None
+            self.broadcast_state()
+            return stopped and clean
+        finally:
+            self.draining -= 1
 
-    async def _release_buttons(self) -> None:
-        if self.mouse_down and self.page is not None:
-            self.mouse_down = False
-            try:
-                await asyncio.wait_for(self.page.mouse.up(), 2)
-            except Exception:
-                pass  # The page may be gone; nothing else is held (keys are press-only).
+    async def _release_buttons(self) -> bool:
+        """True once no button is held (keys are press-only); a failed up stays recorded."""
+        if not self.mouse_down or self.page is None:
+            return True
+        try:
+            await asyncio.wait_for(self.page.mouse.up(), 2)
+        except Exception:
+            return False
+        self.mouse_down = False
+        return True
 
     # ----- watch loop ------------------------------------------------------
 
     async def watch(self) -> None:
         try:
-            while not self.closed and self.viewers:
+            while not self.closed:
+                if not self.viewers:
+                    async with self.lock:
+                        if not self.viewers and not self.closed:
+                            await self.detach()
+                            self.attach_failures = 0
+                    # No await from this check to clearing self.watcher: a viewer
+                    # that joined during detach keeps this loop, any later one
+                    # finds no watcher and starts its own.
+                    if not self.viewers:
+                        return
+                    continue
                 target = self.service.runtime.screen_target(self.run_id)
                 if target is None or target.task_id != self.task_id:
                     await self.service.close_run(self.run_id)
@@ -409,13 +451,11 @@ class _RunScreen:
                     elif self.page is not None:
                         await self.follow(target)
                 await asyncio.sleep(_POLL_SECONDS)
-            async with self.lock:
-                if not self.viewers and not self.closed:
-                    await self.detach()
         except Exception:
             _log("close", "failed", "error", len(self.viewers))
             async with self.lock:
                 await self.detach()
+            self.broadcast({"type": "notice", "code": "unavailable"})
         finally:
             self.watcher = None
             if not self.viewers:
@@ -424,7 +464,7 @@ class _RunScreen:
     # ----- control ---------------------------------------------------------
 
     async def take(self, viewer: _Viewer) -> None:
-        if self.controller is not None or self.pending is not None:
+        if self.controller is not None or self.pending is not None or self.draining:
             viewer.push({"type": "take_result", "ok": False, "reason": "busy"})
             _log("take", "failed", "busy", len(self.viewers))
             return
@@ -459,7 +499,7 @@ class _RunScreen:
                 await viewer.recheck()
             except BrowserScreenError:
                 return
-            if viewer.closed or self.closed or self.page is None:
+            if viewer.closed or self.closed or self.page is None or self.draining:
                 return
             self.epoch += 1
             self.controller = viewer.id
@@ -482,23 +522,39 @@ class _RunScreen:
             self.broadcast_state()
 
     async def release(self, viewer: _Viewer) -> None:
-        if self.controller != viewer.id:
+        if self.controller != viewer.id or self.draining:
             return
-        # Stop accepting first; queued but unexecuted input is discarded.
-        self.epoch += 1
-        self.controller = None
-        self._drain()
+        # Stop accepting first; queued but unexecuted input is discarded. The controller
+        # stays set so nobody can take over until the action drained and the button is up.
+        self.draining += 1
         try:
-            async with asyncio.timeout(_DRAIN_SECONDS):
-                async with self.op_lock:
-                    await self._release_buttons()
-        except TimeoutError:
+            self.epoch += 1
+            self._drain()
+            try:
+                async with asyncio.timeout(_DRAIN_SECONDS):
+                    async with self.op_lock:
+                        released = await self._release_buttons()
+            except TimeoutError:
+                released = False
+            if not released:
+                _log("release", "failed", "input_stuck", len(self.viewers))
+                async with self.lock:
+                    await self.detach()
+                return
+            self.controller = None
+        finally:
+            self.draining -= 1
+        _log("release", "ok", "OK", len(self.viewers))
+        self.broadcast_state()
+
+    async def _stop_stuck_input(self) -> None:
+        """Spawned by the input loop after a failed button release; detach cancels that loop."""
+        try:
             _log("release", "failed", "input_stuck", len(self.viewers))
             async with self.lock:
                 await self.detach()
-            return
-        _log("release", "ok", "OK", len(self.viewers))
-        self.broadcast_state()
+        finally:
+            self.draining -= 1
 
     def _drain(self) -> None:
         while not self.inputs.empty():
@@ -506,7 +562,7 @@ class _RunScreen:
             self.inputs_rejected += 1
 
     def enqueue(self, viewer: _Viewer, item: ScreenInput) -> None:
-        if self.controller != viewer.id or self.page is None or self.closed:
+        if self.controller != viewer.id or self.page is None or self.closed or self.draining:
             self.inputs_rejected += 1
             return
         try:
@@ -527,8 +583,13 @@ class _RunScreen:
                     applied = False
             if applied:
                 self.inputs_applied += 1
-            else:
-                self.inputs_rejected += 1
+                continue
+            self.inputs_rejected += 1
+            if isinstance(item, ScreenMouse) and item.action == "up" and self.mouse_down:
+                # The button may still be down and later moves would drag: stop the channel.
+                self.draining += 1
+                self.service.spawn(self._stop_stuck_input())
+                return
 
     async def _apply(self, item: ScreenInput) -> bool:
         page, frame = self.page, self.frame
@@ -542,9 +603,9 @@ class _RunScreen:
                 # Dragged out of the picture: release at the edge, never keep it held.
                 x = min(max(item.x, 0), frame.width)
                 y = min(max(item.y, 0), frame.height)
-                self.mouse_down = False
                 await page.mouse.move(x, y)
                 await page.mouse.up()
+                self.mouse_down = False
                 return True
             if not inside:
                 return False
@@ -579,6 +640,7 @@ class _RunScreen:
             dialog is None
             or self.controller != viewer.id
             or self.phase != "handoff"
+            or self.draining
             or dialog_id != self.dialog_id
             or prompt is not None
             and len(prompt) > SCREEN_PROMPT_MAX
@@ -628,7 +690,12 @@ class DFormRemoteScreen:
         task.add_done_callback(self._tasks.discard)
 
     def forget(self, screen: _RunScreen) -> None:
-        if self._screens.get(screen.run_id) is screen and not screen.viewers:
+        # A driver not proven stopped stays registered: the Run's close waits on it again.
+        if (
+            self._screens.get(screen.run_id) is screen
+            and not screen.viewers
+            and screen.playwright is None
+        ):
             self._screens.pop(screen.run_id, None)
 
     async def check_access(
@@ -665,15 +732,14 @@ class DFormRemoteScreen:
         viewer = _Viewer(screen, principal, bound_session)
         screen.viewers[viewer.id] = viewer
         _log("open", "ok", "OK", len(screen.viewers))
+        screen.sync(viewer)
         if screen.watcher is None:
             screen.watcher = asyncio.create_task(screen.watch())
-        else:
-            screen.broadcast_state()
         return viewer
 
     async def close_run(self, run_id: str) -> None:
         """Runtime hook before stop proofs and cleanup; idempotent and never raises."""
-        screen = self._screens.pop(run_id, None)
+        screen = self._screens.get(run_id)
         if screen is None:
             return
         try:
@@ -687,6 +753,9 @@ class DFormRemoteScreen:
             for viewer in list(screen.viewers.values()):
                 viewer.closed = True
                 viewer.wake.set()
+            # Kept until proven stopped, so the runtime's next close can still prove it.
+            if screen.playwright is None and self._screens.get(run_id) is screen:
+                self._screens.pop(run_id, None)
 
     async def aclose(self) -> None:
         for run_id in list(self._screens):

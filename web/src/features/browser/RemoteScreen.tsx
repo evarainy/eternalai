@@ -30,6 +30,8 @@ const NAMED_KEYS = new Set(['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'Ar
 const TEXT_CHUNK = 2000;
 const RECONNECT_MS = 2000;
 const MAX_RECONNECTS = 5;
+/** The server refused this connection; retrying cannot change that. */
+const CLOSE_DENIED = 4403;
 /** Pointer moves and wheel deltas are coalesced so the server's bounded input queue never fills. */
 const MOVE_INTERVAL_MS = 50;
 
@@ -134,6 +136,9 @@ export function RemoteScreen({ taskId, runId, sessionId }: RemoteScreenProps) {
       const item = data as Record<string, unknown>;
       if (item.type === 'state') {
         if (item.phase === 'preparing' || item.phase === 'filling' || item.phase === 'handoff') {
+          // Only a state from the server proves the connection was really admitted.
+          reconnects = 0;
+          setLost(false);
           setPhase(item.phase);
         }
         if (item.control === 'self' || item.control === 'other' || item.control === 'none'
@@ -160,22 +165,20 @@ export function RemoteScreen({ taskId, runId, sessionId }: RemoteScreenProps) {
       socket.binaryType = 'arraybuffer';
       socketRef.current = socket;
       socket.onopen = () => {
-        reconnects = 0;
-        setLost(false);
         socket.send(JSON.stringify({ type: 'init', session_id: sessionId }));
       };
       socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
         if (typeof event.data === 'string') onMessage(event.data);
         else draw(event.data);
       };
-      socket.onclose = () => {
+      socket.onclose = (event: CloseEvent) => {
         if (socketRef.current === socket) socketRef.current = null;
         // A new connection always starts view-only; nothing typed earlier is replayed.
         setControl('none');
         setDialog(null);
         pressedRef.current = false;
         if (disposed) return;
-        if (reconnects < MAX_RECONNECTS) {
+        if (event.code !== CLOSE_DENIED && reconnects < MAX_RECONNECTS) {
           reconnects += 1;
           timer = window.setTimeout(connect, RECONNECT_MS);
         } else {

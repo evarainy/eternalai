@@ -44,6 +44,7 @@ _D_FORM_LOG_STAGES = frozenset(
         "fill",
         "receipt",
         "cancel",
+        "cancel_check",
         "failure",
         "browser_start",
         "credential",

@@ -1197,6 +1197,7 @@ class DFormRuntime:
             )
         ):
             raise BrowserReadExecutionError("denied")
+        log_d_form_stage("cancel_check", "success", "OK", state.began)
 
     def _claim_state(self, claim: BrowserLeaseClaim, resource: bytes | None) -> _State:
         state = self._states.get(claim.auth.authorization_run_id or "")
