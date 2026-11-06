@@ -90,7 +90,8 @@ FillStopCode = Literal[
     "SOURCE_ORIGIN_MISMATCH", "SOURCE_SET_CHANGED", "CONTROL_MISSING", "CONTROL_AMBIGUOUS",
     "CONTROL_CHANGED", "PAGE_STATE_MISMATCH", "ACTION_TIMEOUT", "OBSERVE_TIMEOUT",
     "CONNECT_TIMEOUT", "RESULT_MISMATCH", "REPORTER_MISSING", "REPORTER_AMBIGUOUS",
-    "REPORTER_INVALID", "CANCELLED", "CLEANUP_FAILED", "REQUEST_GUARD_FAILED", "PREP_FAILED",
+    "REPORTER_INVALID", "CANCELLED", "HUMAN_TAKEOVER", "CLEANUP_FAILED",
+    "REQUEST_GUARD_FAILED", "PREP_FAILED",
     "PAGE_CONTEXT_EVENT", "PAGE_MAIN_FRAME_NAV", "PAGE_CHILD_FRAME_NAV",
     "PAGE_TARGET_CLOSED", "PAGE_CONTEXT_SET_CHANGED", "PAGE_FRAME_SET_CHANGED",
     "WINDOW_PREP_FAILED",
@@ -106,9 +107,16 @@ class FillStopChecks(Contract):
     description: bool | None = None
 
 
+FillStopField = Literal["category", "position", "description"]
+
+
 class FillStopReport(Contract):
     mode: Literal["FILL_STOP"] = "FILL_STOP"
-    execution_status: Literal["filled_stopped", "failed", "cancelled", "unknown"]
+    # takeover_stopped: the owner took over mid-fill; the machine stopped at an
+    # action boundary. Never verified; completed_fields lists only finished fields.
+    execution_status: Literal[
+        "filled_stopped", "takeover_stopped", "failed", "cancelled", "unknown"
+    ]
     verification: Literal["verified", "mismatch", "incomplete", "unknown"]
     field_checks: FillStopChecks
     actions_attempted: Annotated[int, Field(ge=0, le=4)]
@@ -118,3 +126,5 @@ class FillStopReport(Contract):
     seconds: Annotated[float, Field(ge=0, le=7200, allow_inf_nan=False)]
     error_code: FillStopCode
     cleanup_confirmed: bool
+    # Set only for takeover_stopped, from the receipt's executed action set.
+    completed_fields: tuple[FillStopField, ...] = ()

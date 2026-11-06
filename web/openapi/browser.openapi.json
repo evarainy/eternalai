@@ -275,6 +275,19 @@
       "BrowserHandoffView": {
         "additionalProperties": false,
         "properties": {
+          "completed_fields": {
+            "default": [],
+            "items": {
+              "enum": [
+                "category",
+                "position",
+                "description"
+              ],
+              "type": "string"
+            },
+            "title": "Completed Fields",
+            "type": "array"
+          },
           "deadline": {
             "format": "date-time",
             "title": "Deadline",
@@ -300,6 +313,11 @@
             "format": "date-time",
             "title": "Sealed At",
             "type": "string"
+          },
+          "takeover": {
+            "default": false,
+            "title": "Takeover",
+            "type": "boolean"
           }
         },
         "required": [
@@ -936,6 +954,19 @@
             "title": "Cleanup Confirmed",
             "type": "boolean"
           },
+          "completed_fields": {
+            "default": [],
+            "items": {
+              "enum": [
+                "category",
+                "position",
+                "description"
+              ],
+              "type": "string"
+            },
+            "title": "Completed Fields",
+            "type": "array"
+          },
           "error_code": {
             "enum": [
               "OK",
@@ -965,6 +996,7 @@
               "REPORTER_AMBIGUOUS",
               "REPORTER_INVALID",
               "CANCELLED",
+              "HUMAN_TAKEOVER",
               "CLEANUP_FAILED",
               "REQUEST_GUARD_FAILED",
               "PREP_FAILED",
@@ -989,6 +1021,7 @@
           "execution_status": {
             "enum": [
               "filled_stopped",
+              "takeover_stopped",
               "failed",
               "cancelled",
               "unknown"

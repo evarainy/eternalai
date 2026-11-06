@@ -124,6 +124,8 @@ def state_runtime(tmp_path):
     state.claim = claim
     state.owned_browser = SimpleNamespace(
         attachment_cleanup_proven=True,
+        # No remote screen observer was ever attached in these fixtures.
+        observer_exited=True,
         owned_resource_cleanup_proven=False,
         close_owned=AsyncMock(),
         closed_job_identity={"job": "synthetic-job"},
@@ -132,6 +134,7 @@ def state_runtime(tmp_path):
     )
     runtime = object.__new__(DFormRuntime)
     runtime._states = {run.run_id: state}
+    runtime._screen_closer = None
     runtime._exited = Mock(return_value=True)
     runtime._cleanup_authorize = AsyncMock()
     runtime.options = SimpleNamespace(proof_context=Mock())
