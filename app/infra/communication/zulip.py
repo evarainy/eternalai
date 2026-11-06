@@ -168,25 +168,16 @@ class _DelegationMarkup(HTMLParser):
         return frozenset(self.mentions)
 
     def question(self, content: str, bot_ids: tuple[str, str]) -> str:
-        boundary = re.search(r"\n[ \t]*\n", content)
-        end = boundary.start() if boundary is not None else len(content)
-        paragraph = content[:end]
-        code_spans = [match.span() for match in re.finditer(
-            r"(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", paragraph,
-        )]
-        routes: list[tuple[int, int]] = []
-        for bot_id in bot_ids:
-            name = self.mention_text[bot_id].removeprefix("@")
-            route = next((match for match in re.finditer(
-                r"@\*\*" + re.escape(name) + r"(?:\|" + bot_id + r")?\*\*", paragraph,
-            ) if not any(start <= match.start() < stop for start, stop in code_spans)), None)
-            if route is None:
-                raise IMContextError("im_source_changed")
-            routes.append(route.span())
-        for start, stop in sorted(routes, reverse=True):
-            paragraph = paragraph[:start] + paragraph[stop:]
-        content = (paragraph + content[end:]).lstrip()
-        return re.sub(r"^委托(?:\s+|[:：]\s*)", "", content, count=1)
+        routes = "|".join(
+            r"@\*\*" + re.escape(self.mention_text[bot_id].removeprefix("@"))
+            + r"(?:\|" + bot_id + r")?\*\*" for bot_id in bot_ids
+        )
+        route = "(?:" + routes + ")"
+        prefix = (
+            rf"^\s*(?:{route}\s*)*"
+            rf"(?:委托(?=\s|[:：]|{route})[:：]?\s*(?:{route}\s*)*)?"
+        )
+        return re.sub(prefix, "", content, count=1)
 
 
 class ZulipCommunicationAdapter:
