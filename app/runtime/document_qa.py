@@ -55,6 +55,10 @@ class DocumentQAResult:
     error_code: ErrorCode | None = None
     reason: str = ""
     version: str = ""
+    # answered only: the referenced document lines, cut from the same snapshot after the
+    # references were verified (one entry per reference, lines joined with a newline).
+    # Never the model's answer or quote text.
+    verbatim: tuple[str, ...] = field(default=(), repr=False)
 
 
 def document_failure(reason: str, error_code: ErrorCode = "adapter_error") -> DocumentQAResult:
@@ -196,4 +200,7 @@ class DocumentQAService:
         return DocumentQAResult(
             "answered", result.answer.strip() + "\n\n文档依据：\n" + citations,
             version=snapshot.version,
+            verbatim=tuple(
+                "\n".join(lines[ref.start_line - 1:ref.end_line]) for ref in result.references
+            ),
         )

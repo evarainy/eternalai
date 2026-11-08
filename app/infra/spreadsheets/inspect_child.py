@@ -5,6 +5,11 @@ the standard library, defusedxml and openpyxl (never the ``app`` package) and wr
 ASCII JSON object to stdout: ``{"result": "ok", "sheets": [...]}`` or
 ``{"result": "<chat_upload_* code>"}``. openpyxl 3.1.5 switches its ``fromstring`` and
 ``iterparse`` to defusedxml when defusedxml is installed.
+
+``python -I inspect_child.py --headers <path>`` reads an already inspected upload: row 1
+of every worksheet (first 50 columns, each text cut to 64 characters plus "…") and
+whether the package holds DrawingML, charts, pivots or media that an openpyxl round trip
+would drop: ``{"result": "ok", "headers": [{"name", "cells"}], "objects": bool}``.
 """
 
 from __future__ import annotations
@@ -267,6 +272,79 @@ def _read_sheets(path: str) -> list[dict[str, object]]:
     return sheets
 
 
+HEADER_COLUMNS = 50
+HEADER_CELL_CHARACTERS = 64
+TRUNCATION_MARK = "…"
+# Parts an openpyxl load/save would drop or rewrite. Legacy VML drawings only carry cell
+# comments here (controls are refused at upload) and openpyxl rewrites those itself.
+_UNSUPPORTED_OBJECT_PREFIXES = (
+    "xl/drawings/",
+    "xl/charts/",
+    "xl/pivottables/",
+    "xl/pivotcache/",
+    "xl/media/",
+    "xl/ctrlprops/",
+)
+
+
+def unsupported_objects(names: list[str]) -> bool:
+    for name in names:
+        lowered = name.lower()
+        if lowered.startswith(_UNSUPPORTED_OBJECT_PREFIXES) and not (
+            lowered.startswith("xl/drawings/")
+            and (lowered.endswith(".vml") or lowered.endswith(".vml.rels"))
+        ):
+            return True
+    return False
+
+
+def cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _header_text(value: object) -> str:
+    text = cell_text(value)
+    if len(text) > HEADER_CELL_CHARACTERS:
+        return text[:HEADER_CELL_CHARACTERS] + TRUNCATION_MARK
+    return text
+
+
+def read_headers(path: str) -> dict[str, object]:
+    from openpyxl import load_workbook
+    from openpyxl.reader import excel
+
+    class HeadSizedWorksheet(excel.ReadOnlyWorksheet):  # type: ignore[misc]
+        _get_size = _sheet_head_size
+
+    excel.ReadOnlyWorksheet = HeadSizedWorksheet
+    try:
+        with zipfile.ZipFile(path) as archive:
+            objects = unsupported_objects(archive.namelist())
+        headers: list[dict[str, object]] = []
+        with open(path, "rb") as handle:
+            workbook = load_workbook(handle, read_only=True, data_only=False)
+            try:
+                for name in workbook.sheetnames[:MAX_SHEETS]:
+                    sheet = workbook[name]
+                    cells: list[str] = []
+                    if hasattr(sheet, "iter_rows"):
+                        for row in sheet.iter_rows(
+                            min_row=1, max_row=1, min_col=1, max_col=HEADER_COLUMNS,
+                            values_only=True,
+                        ):
+                            cells = [_header_text(value) for value in row]
+                    while cells and not cells[-1].strip():
+                        cells.pop()
+                    headers.append({"name": name, "cells": cells})
+            finally:
+                workbook.close()
+        return {"result": "ok", "headers": headers, "objects": objects}
+    except Exception:
+        return {"result": "chat_upload_unreadable"}
+
+
 def inspect(path: str) -> dict[str, object]:
     try:
         _check_container(path)
@@ -285,9 +363,13 @@ def inspect(path: str) -> dict[str, object]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) == 3 and sys.argv[1] == "--headers":
+        result = read_headers(sys.argv[2])
+    elif len(sys.argv) == 2:
+        result = inspect(sys.argv[1])
+    else:
         return 2
-    sys.stdout.write(json.dumps(inspect(sys.argv[1]), ensure_ascii=True))
+    sys.stdout.write(json.dumps(result, ensure_ascii=True))
     sys.stdout.flush()
     return 0
 
