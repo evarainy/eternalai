@@ -14,6 +14,9 @@ after construction and checked (uv.lock pins the version; re-check on upgrade).
 When the turn has a trusted client request id and the job service is configured, a
 fixed ``export_oa_pending_report`` control tool accepts the requester's OA pending report
 as a background job on the verified bound session; the model sees only fixed text.
+A turn that also carries chat attachments gets the fixed ``propose_sheet_fill`` tool: a
+valid mapping proposal ends the turn on a confirmation card (no job until the user
+confirms); an invalid one returns a fixed, recoverable text (at most three attempts).
 
 An MCP authorization placeholder has no executor. A model response that calls
 one is replaced, before any of its tool calls is dispatched, by the terminal
@@ -29,6 +32,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from agentscope.message import TextBlock, ToolCallBlock, ToolResultState
 from agentscope.middleware import MiddlewareBase
@@ -49,6 +53,7 @@ from agentscope.tool import (
     Toolkit,
 )
 from jinja2 import Template
+from pydantic import ValidationError
 
 from app.background_jobs import (
     OA_PENDING_REPORT_KIND,
@@ -74,6 +79,7 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     CallSnapshot,
     Clarify,
     ReportJobSettled,
+    SheetFillProposed,
     TurnLedger,
     Unsupported,
     current_tool_call_id,
@@ -82,7 +88,13 @@ from app.knowledge.bounded import KNOWLEDGE_SYSTEM_PROMPT
 from app.knowledge.capability_selection import canonical_json
 from app.ports.auth import authenticated_session
 from app.ports.background_jobs import BackgroundJobError
-from app.ports.runtime import chat_client_request_id
+from app.ports.runtime import chat_attachment_context, chat_client_request_id
+from app.sheet_fill import (
+    PROPOSAL_INPUT_SCHEMA,
+    SheetFillAdmission,
+    SheetFillProposal,
+    SheetFillRejected,
+)
 from app.version_binding import prompt_version_binding
 
 if TYPE_CHECKING:
@@ -93,7 +105,11 @@ AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
 REPORT_UNSUPPORTED = "report_unsupported"
 ASK_USER = "ask_user"
 EXPORT_OA_PENDING_REPORT = "export_oa_pending_report"
-CONTROL_TOOLS = frozenset({REPORT_UNSUPPORTED, ASK_USER, EXPORT_OA_PENDING_REPORT})
+PROPOSE_SHEET_FILL = "propose_sheet_fill"
+CONTROL_TOOLS = frozenset(
+    {REPORT_UNSUPPORTED, ASK_USER, EXPORT_OA_PENDING_REPORT, PROPOSE_SHEET_FILL}
+)
+SHEET_FILL_MAX_ATTEMPTS = 3
 RESET_TOOLS = "reset_tools"
 # Reset results name the activated groups only; usage rules reach the model
 # through the system prompt while their group is active.
@@ -116,6 +132,8 @@ DISCOVERY_CODES = frozenset(
         "control_call_conflict",
         "duplicate_success_call",
         "write_proposal_conflict",
+        # A rejected sheet fill proposal: the model may correct it and call again.
+        "sheet_fill_proposal_rejected",
     }
 )
 _RESET_COUNT_KEY = "eternalai_reset_count"
@@ -228,6 +246,19 @@ async def build_turn_toolkit(
     ):
         controls.append(
             ExportOAPendingReport(ledger, scope, deps.report_jobs, client_request_id)
+        )
+    attachments = chat_attachment_context.get()
+    if (
+        deps.sheet_fill is not None
+        and scope.im_source is None
+        and client_request_id is not None
+        and attachments
+    ):
+        controls.append(
+            ProposeSheetFill(
+                ledger, scope, deps.sheet_fill,
+                frozenset(attachment.artifact_id for attachment in attachments),
+            )
         )
     toolkit = Toolkit(
         tools=controls,
@@ -595,6 +626,89 @@ class ExportOAPendingReport(_ControlTool):
         )
 
 
+_PROPOSAL_FORMAT_TEXT = "提案参数格式不正确，请按工具 schema 重新提交。"
+_ATTACHMENT_TEXT = "attachment_id 不是本轮附件，请使用 untrusted_attachments 里的 attachment_id。"
+_SESSION_TEXT = "登录状态已变化，本轮不能提交填表提案。"
+
+
+class ProposeSheetFill(_ControlTool):
+    """Fixed tool: propose mapping this turn's xlsx attachment onto approved fields.
+
+    A valid proposal becomes the plan of a confirmation card and ends the turn; the model
+    never supplies cell values, and nothing is queued until the user confirms the card.
+    """
+
+    name: str = PROPOSE_SHEET_FILL
+    description: str = (
+        "用户要求把本轮上传的 Excel 表格填好、补全或回填时调用，提交“列 → 字段”的映射提案。"
+        "untrusted_attachments 给出 attachment_id、工作表名、行数和第 1 行表头"
+        "（列字母 → 列名，第 1 行固定是表头）。"
+        "可用来源：oa_pending（本人 OA 待办，key_column 为待办标题所在列；可填 status 状态、"
+        "received_at 接收时间、created_at 创建时间、workflow_type_id 流程类型编号、"
+        "todo_id 待办编号）；"
+        "document（固定文档问答，key_column 为问题所在列；可填 quote 文档原文）。"
+        "每个工作表最多一个映射，fills 的列必须是表头非空的空白待填列。"
+        "first_row/last_row 可省略（默认第 2 行到最后一行）。"
+        "系统校验通过后会给用户一张确认卡，用户确认后才在后台填写，只填空白格；"
+        "不要和其他工具同时调用；校验未通过会返回原因，可修正后重试。"
+    )
+    input_schema: dict[str, Any] = PROPOSAL_INPUT_SCHEMA
+
+    def __init__(
+        self,
+        ledger: TurnLedger,
+        scope: ReadToolScope,
+        admission: SheetFillAdmission,
+        attachment_ids: frozenset[UUID],
+    ) -> None:
+        super().__init__(ledger)
+        self._scope = scope
+        self._admission = admission
+        self._attachment_ids = attachment_ids
+        self._attempts = 0
+
+    async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
+        ledger = self._ledger
+        if ledger.executions or _control_conflict(ledger, self.name):
+            return _error("填表提案要单独调用，不能和其他工具一起用。", "control_call_conflict")
+        self._attempts += 1
+        if self._attempts > SHEET_FILL_MAX_ATTEMPTS:
+            return _error("本轮填表提案次数已用完，请让用户补充说明后重试。",
+                          "sheet_fill_attempts_exhausted")
+        session = authenticated_session.get()
+        if session is None or not session_matches(self._scope):
+            return _error(_SESSION_TEXT, "session_invalid")
+        try:
+            proposal = SheetFillProposal.model_validate(kwargs)
+        except ValidationError:
+            return self._rejected("sheet_fill_proposal_invalid", _PROPOSAL_FORMAT_TEXT)
+        if proposal.attachment_id not in self._attachment_ids:
+            return self._rejected("sheet_fill_proposal_invalid", _ATTACHMENT_TEXT)
+        try:
+            plan = await self._admission.propose(
+                session.principal, self._scope.session_id, proposal
+            )
+        except SheetFillRejected as rejected:
+            return self._rejected(rejected.code, rejected.message)
+        _REPORT_LOGGER.info(
+            "sheet_fill stage=proposed job=- rows=%s filled=- marked=- elapsed_ms=- code=ok",
+            sum(mapping.last_row - mapping.first_row + 1 for mapping in plan.mappings),
+        )
+        ledger.terminal = SheetFillProposed(plan.model_dump(mode="json"))
+        halt_tool_use(_agent_state, "turn_terminal")
+        return ToolChunk(
+            content=[TextBlock(text="填表提案已生成确认卡，本轮结束。")],
+            state=ToolResultState.SUCCESS,
+        )
+
+    def _rejected(self, code: str, message: str) -> ToolChunk:
+        _REPORT_LOGGER.info(
+            "sheet_fill stage=rejected job=- rows=- filled=- marked=- elapsed_ms=- code=%s",
+            code,
+        )
+        return _error(message, "sheet_fill_proposal_rejected")
+
+
 class M1Middleware(MiddlewareBase):
     """Outermost layer: terminal short-circuit, exposure snapshots, call ids."""
 
@@ -779,6 +893,7 @@ __all__ = (
     "CONTROL_TOOLS",
     "DISCOVERY_CODES",
     "EXPORT_OA_PENDING_REPORT",
+    "PROPOSE_SHEET_FILL",
     "M1_TEMPLATE",
     "REPORT_UNSUPPORTED",
     "RESET_TOOLS",
@@ -789,6 +904,7 @@ __all__ = (
     "BrowserTool",
     "ExportOAPendingReport",
     "M1ResetTools",
+    "ProposeSheetFill",
     "ProposeWrite",
     "ReportUnsupported",
     "TurnToolkit",

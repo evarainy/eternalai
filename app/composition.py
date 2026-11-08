@@ -91,7 +91,7 @@ from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
 from app.infra.communication.composition import build_im_delivery, build_personal_agents
 from app.infra.communication.zulip import ZulipCommunicationAdapter
-from app.infra.fixed_txt import FixedTxtReader
+from app.infra.fixed_txt import build_document_qa_service
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.human_gate import PostgreSQLHumanGate
 from app.infra.identity.mcp_identity import McpIdentityMapping
@@ -191,6 +191,7 @@ from app.ports.user_profile import UserProfilePort
 from app.ports.workflow_store import McpRecoveryPolicyPort
 from app.runtime.document_qa import DocumentQAService
 from app.runtime.runtime import RuntimeImpl
+from app.sheet_fill import SheetFillAdmission, sheet_fill_kind
 from app.work_dispatch.attachments import WorkObjectAttachmentService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 from app.work_dispatch.service import WorkDispatchService
@@ -664,6 +665,7 @@ def _build_agentscope_runtime(
     session_idle_ttl_seconds: int,
     mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None,
     report_jobs: BackgroundJobService | None = None,
+    sheet_fill: SheetFillAdmission | None = None,
 ) -> tuple[RuntimePort, Callable[..., None]]:
     """The single wiring of the AgentScope path; AgentScope is imported only here.
 
@@ -726,6 +728,7 @@ def _build_agentscope_runtime(
             document_qa=document_qa,
             mcp_authorization_hint=mcp_authorization_hint,
             report_jobs=report_jobs,
+            sheet_fill=sheet_fill,
         )
     )
     return runtime, runtime.install_browser
@@ -1046,12 +1049,9 @@ def build_production_components(
     )
     document_settings = settings.fixed_document
     document_qa = (
-        DocumentQAService(
-            reader=FixedTxtReader(document_settings.path, document_settings.max_bytes),
-            llm_provider=resolved_llm, structured_output=resolved_structured_output,
-            model=settings.llm_model, tenant_id=document_settings.tenant_id,
-            ai_user_id=document_settings.ai_user_id, topic=document_settings.topic,
-            configuration_valid=document_settings.valid,
+        build_document_qa_service(
+            document_settings, llm_provider=resolved_llm,
+            structured_output=resolved_structured_output, model=settings.llm_model,
         )
         if document_settings is not None else None
     )
@@ -1130,12 +1130,26 @@ def build_production_components(
     report_kind = oa_pending_report_kind(
         settings.source_tenant_id, identity_mapping=resolved_identity_mapping
     )
+    file_artifacts = build_file_artifact_service(settings.file_artifacts, session_factory)
+    # Sheet filling needs the uploaded chat input; the proposal tool and a direct POST
+    # share one admission.
+    sheet_fill = (
+        SheetFillAdmission(
+            files=file_artifacts,
+            identity_mapping=resolved_identity_mapping,
+            document_qa=document_qa,
+        )
+        if file_artifacts is not None else None
+    )
+    job_kinds = {
+        **build_job_kinds(settings.background_self_check_max_hold_seconds),
+        report_kind.name: report_kind,
+    }
+    if sheet_fill is not None:
+        sheet_kind = sheet_fill_kind(settings.source_tenant_id, admission=sheet_fill)
+        job_kinds[sheet_kind.name] = sheet_kind
     background_jobs = BackgroundJobService(
-        PostgreSQLBackgroundJobLedger(session_factory),
-        {
-            **build_job_kinds(settings.background_self_check_max_hold_seconds),
-            report_kind.name: report_kind,
-        },
+        PostgreSQLBackgroundJobLedger(session_factory), job_kinds
     )
     # The M1 AgentScope runtime reuses the same production instances and
     # result mappings; with the legacy engine AgentScope is never imported.
@@ -1171,6 +1185,7 @@ def build_production_components(
             model_name=settings.llm_model,
             session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
             report_jobs=background_jobs,
+            sheet_fill=sheet_fill,
             # Placeholders only for candidates the policy hid solely because
             # this user has not authorized the fixed MCP service.
             mcp_authorization_hint=(
@@ -1336,7 +1351,6 @@ def build_production_components(
         }
     else:
         resolved_health_checks = dict(health_checks)
-    file_artifacts = build_file_artifact_service(settings.file_artifacts, session_factory)
     im_deliveries, delivery_client = build_im_delivery(
         settings.im_delivery, session_factory, settings.personal_agents, files=file_artifacts,
     )

@@ -121,6 +121,16 @@ class ReportJobSettled:
 
 
 @dataclass(frozen=True, slots=True)
+class SheetFillProposed:
+    """The fixed sheet fill tool accepted a proposal; the turn ends on a confirmation card.
+
+    ``plan`` is the validated plan v1 (JSON form); no job exists until the user confirms.
+    """
+
+    plan: dict[str, Any] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Clarify:
     """The model asked the user for missing information with ask_user."""
 
@@ -159,7 +169,7 @@ class TurnLedger:
     failures: list[LedgerFailure] = field(default_factory=list)
     terminal: (
         BindingCard | Proposal | Unsupported | Clarify | BrowserSettled
-        | AuthorizationRequired | ReportJobSettled | None
+        | AuthorizationRequired | ReportJobSettled | SheetFillProposed | None
     ) = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
@@ -217,6 +227,7 @@ __all__ = (
     "PreExecReason",
     "Proposal",
     "ReportJobSettled",
+    "SheetFillProposed",
     "TurnLedger",
     "Unsupported",
     "current_tool_call_id",

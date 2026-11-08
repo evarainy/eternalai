@@ -44,7 +44,7 @@ from app.infra.spreadsheets.oa_pending_report import (
     report_filename,
     verify_report,
 )
-from app.ports.background_jobs import BackgroundJobError
+from app.ports.background_jobs import BackgroundJobError, BackgroundJobRunOwner
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.file_artifacts import XLSX_MEDIA_TYPE, ChunkWriter, FileArtifactError
@@ -89,6 +89,36 @@ class _PendingOnlyRegistry:
         raise PermissionError("capability_registry_read_only")
 
 
+async def read_pending_workflows(
+    gateway: CapabilityGatewayPort,
+    role_reader: PostgreSQLPrincipalRoleReader,
+    owner: BackgroundJobRunOwner,
+    *,
+    task_id: str,
+) -> OAPendingWorkflowCollection:
+    """One full read of the requester's own OA to-dos; failures are closed job codes."""
+
+    assert owner.session_id is not None
+    roles = await role_reader.list_roles(owner.ai_user_id, tenant_id=owner.tenant_id)
+    result = await gateway.execute_capability(
+        task_id=task_id,
+        session_id=owner.session_id,
+        ai_user_id=owner.ai_user_id,
+        capability_id=OA_LIST_PENDING_WORKFLOWS,
+        arguments={},
+        request_context=RequestOrgContext(
+            request_id=str(uuid4()), tenant_id=owner.tenant_id, roles=list(roles),
+            channel="web",
+        ),
+    )
+    if result.status != "completed" or result.data is None:
+        raise BackgroundJobError(_FAILURES.get(result.error_code or "", "oa_unavailable"))
+    try:
+        return OAPendingWorkflowCollection.model_validate(result.data, strict=True)
+    except ValidationError:
+        raise BackgroundJobError("oa_incomplete") from None
+
+
 def _log(stage: str, job: object, *, rows: object = "-", started: float | None = None,
          code: str = "-") -> None:
     elapsed = "-" if started is None else int((monotonic() - started) * 1000)
@@ -128,26 +158,11 @@ class OAPendingReportHandler:
             raise BackgroundJobError("report_session_required")
         if outputs is None:
             raise BackgroundJobError("file_artifacts_unavailable")
-        roles = await self._roles.list_roles(owner.ai_user_id, tenant_id=owner.tenant_id)
         read_started_at = self._clock()
-        result = await self._gateway.execute_capability(
-            task_id=f"report-job:{job_id}",
-            session_id=owner.session_id,
-            ai_user_id=owner.ai_user_id,
-            capability_id=OA_LIST_PENDING_WORKFLOWS,
-            arguments={},
-            request_context=RequestOrgContext(
-                request_id=str(uuid4()), tenant_id=owner.tenant_id, roles=list(roles),
-                channel="web",
-            ),
+        collection = await read_pending_workflows(
+            self._gateway, self._roles, owner, task_id=f"report-job:{job_id}"
         )
         read_finished_at = self._clock()
-        if result.status != "completed" or result.data is None:
-            raise BackgroundJobError(_FAILURES.get(result.error_code or "", "oa_unavailable"))
-        try:
-            collection = OAPendingWorkflowCollection.model_validate(result.data, strict=True)
-        except ValidationError:
-            raise BackgroundJobError("oa_incomplete") from None
         rows = [
             ReportRow(item.title, item.status, item.received_at, item.created_at,
                       item.workflow_type_id)
@@ -196,6 +211,20 @@ def build_worker_oa_pending_report_kind(
 ) -> JobKindSpec:
     """The report kind with its worker handler over the minimal OA read Gateway."""
 
+    return oa_pending_report_kind(
+        settings.oa_read.source_tenant_id,
+        handler=OAPendingReportHandler(
+            build_worker_pending_gateway(settings, sessions),
+            PostgreSQLPrincipalRoleReader(session_factory=sessions),
+        ),
+    )
+
+
+def build_worker_pending_gateway(
+    settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession]
+) -> CapabilityGateway:
+    """Minimal read-only Gateway over ``oa.list_pending_workflows`` only (no renewal)."""
+
     oa_read = settings.oa_read
     credential_store = PostgreSQLCredentialStore(
         session_factory=sessions, encryption_key=settings.credential_encryption_key
@@ -212,12 +241,12 @@ def build_worker_oa_pending_report_kind(
         tenant_id=oa_read.source_tenant_id,
     )
     gateway.assert_production_wiring()
-    return oa_pending_report_kind(
-        oa_read.source_tenant_id,
-        handler=OAPendingReportHandler(
-            gateway, PostgreSQLPrincipalRoleReader(session_factory=sessions)
-        ),
-    )
+    return gateway
 
 
-__all__ = ("OAPendingReportHandler", "build_worker_oa_pending_report_kind")
+__all__ = (
+    "OAPendingReportHandler",
+    "build_worker_oa_pending_report_kind",
+    "build_worker_pending_gateway",
+    "read_pending_workflows",
+)

@@ -67,8 +67,9 @@ class JobExecution:
 
 
 JobHandler = Callable[[BaseModel, JobExecution], Awaitable[JobOutcome]]
-# (principal, trusted bound session id) -> None to accept, or a closed refusal code.
-JobAdmission = Callable[[Principal, str | None], Awaitable[str | None]]
+# (principal, trusted bound session id, params already parsed by the kind) -> None to
+# accept, or a closed refusal code.
+JobAdmission = Callable[[Principal, str | None, BaseModel], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -159,36 +160,46 @@ def oa_pending_report_key(principal: Principal, session_id: str, client_request_
     )
 
 
-async def _executed_by_worker(params: BaseModel, execution: JobExecution) -> JobOutcome:
+async def executed_by_worker(params: BaseModel, execution: JobExecution) -> JobOutcome:
     # The API process only accepts jobs; the worker registers the real handler.
     raise BackgroundJobError("background_job_kind_invalid")
+
+
+async def oa_binding_refusal(
+    identity_mapping: IdentityMappingPort | None, principal: Principal
+) -> str | None:
+    """Binding metadata only (no decryption): missing or revoked is ``oa_unbound``; a
+    failed verification or an unconfigured lookup is ``oa_unavailable``."""
+
+    if identity_mapping is None:
+        return "oa_unavailable"
+    mapping = await identity_mapping.get_mapping(
+        principal.ai_user_id, "oa", tenant_id=principal.org_ctx.tenant_id
+    )
+    if mapping is None or mapping.bind_status == "revoked":
+        return "oa_unbound"
+    if mapping.bind_status == "verification_failed":
+        return "oa_unavailable"
+    return None
 
 
 def oa_pending_report_kind(
     tenant_id: str,
     *,
     identity_mapping: IdentityMappingPort | None = None,
-    handler: JobHandler = _executed_by_worker,
+    handler: JobHandler = executed_by_worker,
 ) -> JobKindSpec:
     """The requester's own OA to-dos as xlsx; submitted only from a bound chat session.
 
-    Admission reads binding metadata only (no decryption): a missing or revoked binding
-    is ``oa_unbound``; a failed lookup is ``oa_unavailable``, never "unbound".
+    Admission reads binding metadata only (see ``oa_binding_refusal``).
     """
 
-    async def admit(principal: Principal, session_id: str | None) -> str | None:
+    async def admit(
+        principal: Principal, session_id: str | None, _params: BaseModel
+    ) -> str | None:
         if session_id is None:
             return "report_session_required"
-        if identity_mapping is None:
-            return "oa_unavailable"
-        mapping = await identity_mapping.get_mapping(
-            principal.ai_user_id, "oa", tenant_id=principal.org_ctx.tenant_id
-        )
-        if mapping is None or mapping.bind_status == "revoked":
-            return "oa_unbound"
-        if mapping.bind_status == "verification_failed":
-            return "oa_unavailable"
-        return None
+        return await oa_binding_refusal(identity_mapping, principal)
 
     return JobKindSpec(
         name=OA_PENDING_REPORT_KIND,
@@ -238,14 +249,18 @@ class BackgroundJobService:
         spec = self._kinds.get(kind)
         if spec is None or not spec.authorize(principal):
             raise BackgroundJobError("background_job_kind_invalid")
-        canonical = parse_job_params(spec, params).model_dump(mode="json")
+        parsed = parse_job_params(spec, params)
+        canonical = parsed.model_dump(mode="json")
         if spec.admit is not None:
-            refused = await spec.admit(principal, session_id)
+            refused = await spec.admit(principal, session_id, parsed)
             if refused is not None:
                 raise BackgroundJobError(refused)
+        # The same key from another chat session is a different request, never a replay.
         fingerprint = hashlib.sha256(
             json.dumps(
-                {"kind": kind, "params": canonical}, sort_keys=True, separators=(",", ":")
+                {"kind": kind, "params": canonical, "session_id": session_id},
+                sort_keys=True,
+                separators=(",", ":"),
             ).encode("utf-8")
         ).digest()
         return await self._ledger.accept(
@@ -293,6 +308,8 @@ __all__ = (
     "SELF_CHECK_NAMES",
     "SelfCheckParams",
     "build_job_kinds",
+    "executed_by_worker",
+    "oa_binding_refusal",
     "oa_pending_report_key",
     "oa_pending_report_kind",
     "parse_job_params",

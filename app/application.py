@@ -242,7 +242,9 @@ def create_app(
         prefix="/api/v1",
     )
     application.include_router(
-        make_background_jobs_router(background_job_service, csrf_protected_principal),
+        make_background_jobs_router(
+            background_job_service, csrf_protected_principal, session_binder=session_binder
+        ),
         prefix="/api/v1/background-jobs",
     )
     application.include_router(
