@@ -16,6 +16,7 @@ from app.ports.file_artifacts import (
     FileArtifactDownload,
     FileArtifactOwner,
     FileArtifactStorePort,
+    FileShareMetadata,
     JobOutputOwner,
     JobOutputPublisher,
     OutputWriter,
@@ -40,6 +41,11 @@ class _BoundJobOutputs:
 class FileArtifactService:
     def __init__(self, store: FileArtifactStorePort) -> None:
         self._store = store
+
+    async def share_metadata(
+        self, principal: Principal, artifact_id: UUID
+    ) -> FileShareMetadata:
+        return await self._store.share_metadata(_owner(principal), artifact_id)
 
     async def authorize_download(
         self, principal: Principal, artifact_id: UUID

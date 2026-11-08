@@ -16,12 +16,14 @@ from app.infra.persistence.im_deliveries import PostgreSQLIMDeliveryStore
 from app.infra.persistence.personal_agents import PostgreSQLPersonalAgentStore
 from app.personal_agents import PersonalAgentService
 from app.ports.communication import CommunicationDeliveryPort
+from app.ports.file_artifacts import FileArtifactSharePort
 from app.ports.personal_agent_runtime import PersonalAgentRuntimePort
 
 
 def build_im_delivery(
     settings: IMDeliverySettings | None, sessions: async_sessionmaker[AsyncSession],
     personal_settings: PersonalAgentSettings | None = None,
+    files: FileArtifactSharePort | None = None,
 ) -> tuple[IMDeliveryService | None, httpx2.AsyncClient | None]:
     if settings is None:
         return None, None
@@ -43,6 +45,7 @@ def build_im_delivery(
                 bot.bot_id: (bot.bot_email, bot.bot_api_key) for bot in personal_settings.bots
             },
         ),
+        files=files,
     ), client
 
 

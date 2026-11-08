@@ -520,6 +520,11 @@ function AssistantDetails({
 export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const draft = useAIDockStore((state) => state.draft);
   const transcript = useAIDockStore((state) => state.transcript);
+  const draftAttachments = useAIDockStore((state) => state.draftAttachments);
+  const deliveryAttachments = useMemo(() => [...new Map([
+    ...transcript.flatMap((entry) => entry.role === 'user' ? entry.attachments ?? [] : []),
+    ...draftAttachments,
+  ].map((attachment) => [attachment.artifact_id, attachment])).values()], [transcript, draftAttachments]);
   const currentSessionId = useAIDockStore((state) => state.sessionId);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
@@ -1173,7 +1178,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                         </ul>
                       ) : null}
                       {entry.role === 'assistant' && entry.presentationKind === 'completed' && entry.text.trim() ? (
-                        <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`} text={entry.text} />
+                        <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
+                          text={entry.text} attachments={deliveryAttachments} />
                       ) : null}
                       {entry.role === 'assistant' ? (
                         <AssistantDetails
@@ -1270,6 +1276,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                   forceRender
                 >
                   <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
+                  {deliveryAttachments.length > 0 ? <DeliveryComposerButton
+                    key={`${authGeneration}/${currentSessionId}/attachments`}
+                    text="" attachments={deliveryAttachments} /> : null}
                 </Sender.Header>
               }
               footer={

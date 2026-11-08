@@ -1,9 +1,81 @@
 {
   "components": {
     "schemas": {
+      "DeliveryFileView": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "grant_expires_at": {
+            "format": "date-time",
+            "title": "Grant Expires At",
+            "type": "string"
+          },
+          "grant_revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Revoked At"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "sha256",
+          "filename",
+          "size_bytes",
+          "grant_expires_at",
+          "grant_revoked_at"
+        ],
+        "title": "DeliveryFileView",
+        "type": "object"
+      },
       "DeliveryPrepare": {
         "additionalProperties": false,
         "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "grant_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Expires At"
+          },
           "idempotency_key": {
             "format": "uuid",
             "title": "Idempotency Key",
@@ -129,6 +201,16 @@
             "format": "uuid",
             "title": "Delivery Id",
             "type": "string"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryFileView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "im_instance_id": {
             "title": "Im Instance Id",
@@ -403,6 +485,16 @@
             },
             "description": "Conflict"
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -469,6 +561,16 @@
             },
             "description": "Conflict"
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -526,6 +628,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
           },
           "422": {
             "content": {
@@ -597,6 +709,16 @@
             },
             "description": "Conflict"
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -666,6 +788,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
           },
           "422": {
             "content": {
@@ -747,6 +879,16 @@
             },
             "description": "Conflict"
           },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -816,6 +958,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
           },
           "422": {
             "content": {
@@ -896,6 +1048,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IMDeliveryErrorResponse"
+                }
+              }
+            },
+            "description": "Gone"
           },
           "422": {
             "content": {

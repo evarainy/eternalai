@@ -4,7 +4,24 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+export type DeliveryFileViewGrantRevokedAt = string | null;
+
+export interface DeliveryFileView {
+  artifact_id: string;
+  filename: string;
+  grant_expires_at: string;
+  grant_revoked_at: DeliveryFileViewGrantRevokedAt;
+  sha256: string;
+  size_bytes: number;
+}
+
+export type DeliveryPrepareArtifactId = string | null;
+
+export type DeliveryPrepareGrantExpiresAt = string | null;
+
 export interface DeliveryPrepare {
+  artifact_id?: DeliveryPrepareArtifactId;
+  grant_expires_at?: DeliveryPrepareGrantExpiresAt;
   idempotency_key: string;
   /** @minLength 1 */
   note: string;
@@ -37,6 +54,8 @@ export interface DeliveryVerification {
 export type DeliveryViewAcceptedAt = string | null;
 
 export type DeliveryViewConfirmedAt = string | null;
+
+export type DeliveryViewFile = DeliveryFileView | null;
 
 export type DeliveryViewRemoteMessageId = string | null;
 
@@ -73,6 +92,7 @@ export interface DeliveryView {
   confirmed_at: DeliveryViewConfirmedAt;
   created_at: string;
   delivery_id: string;
+  file?: DeliveryViewFile;
   im_instance_id: string;
   initiator_ai_user_id: string;
   note: string;

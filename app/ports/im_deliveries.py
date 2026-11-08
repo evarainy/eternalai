@@ -1,4 +1,4 @@
-"""Text delivery snapshots, receipts and the transactional Outbox boundary."""
+"""Manual delivery snapshots, receipts and the transactional Outbox boundary."""
 
 from __future__ import annotations
 
@@ -35,6 +35,8 @@ class DeliveryPrepare(BaseModel):
     note: str = Field(min_length=1)
     send_expires_at: AwareDatetime
     idempotency_key: UUID
+    artifact_id: UUID | None = None
+    grant_expires_at: AwareDatetime | None = None
 
 
 class DeliveryVerification(BaseModel):
@@ -56,6 +58,15 @@ class DeliveryRecipient(BaseModel):
     ai_user_id: str
     display_name: str
     im_user_id: str
+
+
+class DeliveryFileView(BaseModel):
+    artifact_id: UUID
+    sha256: str
+    filename: str
+    size_bytes: int
+    grant_expires_at: datetime
+    grant_revoked_at: datetime | None
 
 
 class DeliveryView(BaseModel):
@@ -80,6 +91,7 @@ class DeliveryView(BaseModel):
     result_code: str | None
     updated_at: datetime
     verifications: list[VerificationView]
+    file: DeliveryFileView | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +142,10 @@ class DeliveryRecord:
     updated_at: datetime
     origin_inbox_id: UUID | None = None
     reply_slot: Literal["private", "group_status"] | None = None
+    artifact_id: UUID | None = None
+    artifact_sha256: bytes | None = field(default=None, repr=False)
+    grant_expires_at: datetime | None = None
+    grant_revoked_at: datetime | None = None
 
 
 def _digest(value: dict[str, str]) -> bytes:
@@ -142,7 +158,7 @@ def confirmation_digest(
     record: DeliveryRecord, initiator: DeliveryBinding, recipient: DeliveryBinding,
 ) -> bytes:
     """Bind the actual persisted preview to both verified identity mappings."""
-    return _digest({
+    value = {
         "delivery_id": str(record.delivery_id), "tenant_id": record.tenant_id,
         "initiator": record.initiator_ai_user_id,
         "initiator_binding": str(initiator.binding_id),
@@ -155,7 +171,14 @@ def confirmation_digest(
         "conversation": record.target_conversation_ref,
         "content": record.card_content, "note": record.note,
         "send_expires_at": cast(datetime, record.send_expires_at).isoformat(),
-    })
+    }
+    if record.artifact_id is not None:
+        value.update(
+            artifact_id=str(record.artifact_id),
+            artifact_sha256=cast(bytes, record.artifact_sha256).hex(),
+            grant_expires_at=cast(datetime, record.grant_expires_at).isoformat(),
+        )
+    return _digest(value)
 
 
 class IMDeliveryStorePort(Protocol):
