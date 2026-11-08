@@ -156,7 +156,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | Q06：账号停用判定未实现 | 目录合同无账号启停状态，停用判定无法生效 | X01 真实组织目录接入 |  | 真实 Source 提供启停状态、目录 port/provider 据此过滤或标记，并在真实环境验收「停用账号的周期规则当期 blocked」 | `app/ports/organization_directory.py::OrganizationUserMembership` / `OrganizationDirectoryPort`；`app/infra/organization_directory/postgresql.py::PostgreSQLOrganizationDirectory.read_view`；`app/infra/organization_directory/importer.py::_membership`；`app/work_dispatch/service.py::WorkDispatchService._member`；`app/composition.py::build_production_components` 的 transport_factory=None |
 | X03：真实 E01–E10 与服务恢复未验收 | 实际账号、可操作环境、获批业务任务/附件、数据可见范围与必要写入许可未齐；PR #225 保留前端启动 policy 拒绝、后端配置缺项，CI/专库验证不能代替真实验收 | X01 目录/角色资料、X03 账号/环境及专项业务动作授权（尚无已分配 task_id） |  | 在获准目标环境恢复所需服务，逐项完成 WORK_DISPATCH §8 E01–E10 真实流程与必要拒绝路径，记录操作/结果；填写、保存、提交分别取得授权，不外推专库当批授权 | PR #225「本棒新增欠债」；`docs/phase2/WORK_DISPATCH.md` §8/§9 X03；`docs/phase2/DECISIONS.md`「2026-10-23 — 任务派发 Q06/Q08 确认与阶段 D 测试库授权」；合成数据验收已执行，仅证明业务规则层，见 PR（本同步棒）正文 |
 | 派发验收日志可关联性不足 | 拒绝类日志缺统一 request_id；401/CSRF 拒绝与上传成功缺完整阶段链；改善排障，非功能缺陷 | 无功能阻塞；未排期 |  | 统一请求关联标识并补齐上述阶段链，在获准流程中证明成功与拒绝日志可关联 | 2026-10-24/25 合成验收日志可关联性结论，见 PR（本同步棒）正文 |
-| BrowserRunCard 取消请求用例疑似不稳定 | PR #227 首轮 CI 的 `web/src/features/browser/BrowserRunCard.test.tsx > allows another cancel request only after a rejected handoff` 失败，重跑通过；与该 PR 无关，未修改 | 无已确认业务阻塞；失败原因待定位 |  | 查明首轮失败原因并完成必要修复或证实外因，保留原始失败与后续运行证据 | PR #227「跨厂商静态评审」CI 说明；见 PR（本同步棒）正文 |
+| BrowserRunCard 取消请求用例疑似不稳定（已关闭） | PR #273 已合并：两次点击分别等待 React act 更新，保留原断言；修前 1/30 失败、修后 0/30，历史失败与本轮结果均保留，不保证长期永不偶发 | 无 | `P2-BROWSER-CARD-FLAKY-001`（已合并） | 已满足：定位等待缺口、最小修复及有界稳定性验证 | PR #227、#268、#273；仓库外 `debt/FLAKY.md`、`debt/flaky-evidence/` |
 | 一次页面完整测试失败的原因未确认 | 后续串行通过不能证明最初失败的外因；按阶段说明保留PARTIAL | P2-WORK-DISPATCH-FE-REFRESH-001 | P2-WORK-DISPATCH-FE-REFRESH-001 | 主控明确评审该时序风险并完成需要的验证；required CI 照常满足 | test-work-objects-final.log/json、test-work-objects-diagnosis.log/json、test-work-objects-serial.log/json |
 | 派发名单漂移诊断的实际部署消费未验收 | 本棒提供非阻断 health 检测入口，不证明真实 Source 采集、运维查询或通知到人；空集合可能使正常非监区持续报待核对，ID 不变而业务类型变化也不能仅凭目录 ID 识别 | 既有生产 OA Source 适配器欠债及具体部署验收授权 | 待 GOV-SYNC 绑定既有 Source/部署验收后继 | 在获准真实环境证明目录更新后的诊断被指定负责人看到，并确定名单核对处置；不能靠关闭诊断或放宽允许集合消警 | `P2-AUDIT-DEPT-DEFAULT-001` 已批方案 §3.4 / §7.1；`app/organization_directory_policy.py`；`tests/runtime/test_runtime_composition.py::test_dispatch_policy_diagnostic_is_wired_to_health` |
 | 组织目录生产 OA Source 适配器缺失（G2） | 生产 HTTP Source、分页与树展开未实现；本棒只有主体接缝、调度和合成 Source 验证，真实每日目录更新未交付 | OA 部门树与人员搜索请求的脱敏结构模板未取得 | `P2-ORGDIR-OA-SOURCE-001` | 取得脱敏模板，部署前确认唯一主体及全单位可见性，实现 Source 并验收真实完整快照、周期更新和失败边界；count 不冒充全单位证据 | `P2-ORGDIR-PERSON-SYNC-001`；`app/composition.py::build_production_components` 的 transport factory=None；`tests/runtime/test_runtime_composition.py::test_production_directory_scheduler_and_diagnostics_are_wired`；普通账号可见全单位通讯录（雨爷 2026-10-26 确认） |
@@ -790,25 +790,25 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| OA 工具 internal_error 未复现 | 消息预览回合先前两次 internal_error，2026-11-05 本人待办查询正常，临时诊断未触发，根因未定位；不阻塞本次闭环 | 无（等待再次复现与获准脱敏运行取证） | 待分配（OA 定点定位） | 复现并取得脱敏根因证据、完成最小修复及受影响真实只读路径验证 | PR #257、#258 正文 |
-| V1 来源与确认隔离剩余验收（D5） | 在途退出已通过；当前读权变化与已有 pending 冲突未逐项实证 | 对应获准真实路径（待分配） | `P2-IM-CONTEXT-READ-001` 后续验收 | 读权变化与 pending 冲突分别获实证 | PR #257 正文 |
+| OA 工具 internal_error 未复现 | 2026-11-06 DEBT1 三次受 identity_expired 阻断；OA2 重新登录后来源预览一次、本人待办两次均成功，仍未复现旧 internal_error，根因未定位；继续等再现取证，不冒称已修复 | 无（等待再次复现与获准脱敏运行取证） | 待分配（OA 定点定位） | 复现并取得脱敏根因证据、完成最小修复及受影响真实只读路径验证 | PR #257、#258；仓库外 `debt/DEBT1.md`、`debt/OA2.md` |
+| V1 来源与确认隔离剩余验收（D5） | 在途退出已通过；2026-11-06 DEBT1 3a 已实证当前读权变化：移除频道成员后读与确认均拒绝，恢复成员后可读；剩已有业务 pending 冲突未验 | 安全合成业务对象、已注册能力版本及取消终态路径待提供 | `P2-IM-CONTEXT-READ-001` 后续验收 | 已有业务 pending 未被 claim/消费/替换及取消终态获真实证据 | PR #257；仓库外 `debt/DEBT1.md` 3a/3b |
 | V1 试点身份桥接剩余边界（D8） | 本次登录/退出与复制库闭环已完成；正式组织目录、停用、第二租户、手机未覆盖 | `P2-ORGDIR-OA-SOURCE-001` 及现场专项授权 | `P2-IM-CONTEXT-READ-001`（试点）；其余待分配 | 剩余场景逐项实证，不以本次闭环批量核销 | PR #257 正文 |
-| V1 单进程前提 | 来源 ref 存于进程内；worker/replica 数量与重启失效未逐项实证 | 目标进程启停授权（待分配） | `P2-IM-CONTEXT-READ-001` 后续验收 | 实记 workers=1、replicas=1，并真实验证旧 ref 失效 | PR #257 正文 |
-| IM 身份映射保留与删除 | 保留期限及物理删除未定 | 保留/删除裁决（待分配） | 待分配（V5 试点前） | 精确对象与期限获准后验证 | `alembic/versions/20261104_120000_im_context.py` |
+| V1 单进程前提（合成验收已关闭） | 2026-11-06 DEBT1 第 4 项实证 API 与 worker 各一个进程、workers=1 且无 WEB_CONCURRENCY 覆盖；限定重启后旧 ref 读与确认均 409 im_source_expired；不外推服务器部署 | 无（本机合成验收）；服务器部署单进程约束仍须目标部署任务核对 | `P2-IM-CONTEXT-READ-001`（本机验收完成）；服务器迁移/部署任务（待分配） | 本机已满足；服务器部署仍须确认单进程或另行设计共享 ref | PR #257；仓库外 `debt/DEBT1.md` 第 4 项 |
+| IM 身份映射保留与删除 | 雨爷 2026-11-08 裁决：工作台账号即 IM 账号，一人一号，由工作台账号开通/SSO 登录；im_account_bindings 仅作技术对应；保留与删除期限推到 V5 试点前决定 | V5 试点前的精确保留/删除裁决 | 待分配（V5 试点前） | 精确对象与期限获准后验证；本次无删除或迁移授权 | DECISIONS 2026-11-06 / 2026-11-08 V2b 与身份裁决；`alembic/versions/20261104_120000_im_context.py` |
 | V2a 身份与代表关系剩余边界（D2） | 复制库与合成 Zulip 闭环已通过；正式组织授权关系未证明 | 正式试点身份与业务授权（待分配） | `P2-IM-FILE-DELIVERY-001` 后续验收 | 获准目标环境实证正确甲乙与 Bot 代表关系 | PR #258 正文 |
-| V2a 投递故障恢复（D4/Q4） | 正常闭环已通过；单次尝试、结果不明等异常恢复未逐项证明 | 故障取证授权（待分配） | `P2-IM-FILE-DELIVERY-001` 后续验收 | 剩余故障恢复路径逐项真实通过 | PR #258 正文 |
+| V2a 投递故障恢复（D4/Q4，合成验收已关闭） | 2026-11-06 DEBT1 5a/5b 通过：接受后丢响应进入 unknown，同 attempt 对账 accepted，远端恰一条、仅一次发送；发送前连接失败为 known_rejected，远端零条，无自动重发；不外推正式环境 | 无（合成验收） | `P2-IM-FILE-DELIVERY-001`（合成验收完成） | 已满足合成故障恢复义务；正式试点仍按下行 D8 保留 | PR #258；仓库外 `debt/DEBT1.md` 5a/5b |
 | V2a 正式试点与同页安装（D8） | 合成环境同页闭环已通过；正式环境映射变化与 12.3 补丁安装未覆盖 | `P2-IM-CONTEXT-READ-001` 正式试点及现场授权 | 待分配 | 获准正式环境正确身份、同页导航与映射变化实证 | `infra/communication/zulip/12.3/README.md`；PR #258 正文 |
 | IM 复制库验收适用范围 | 15433 副本与合成 Zulip 闭环不等同正式迁移与全场景验收 | 正式环境范围与专项授权（待分配） | 待分配（正式试点） | 获准目标环境迁移与业务记账实测 | PR #258 正文 |
 | Windows 本机 mypy 既有浏览器平台诊断 | `uv run mypy app/` 在 Windows 本机报 6 条，均在 `app/infra/browser/{d_form_flow,d_form_cli,synthetic_vault}.py`（平台相关，CI 的 Linux 检查通过）；IM 两棒与文件产物均如实记录 | 归属待裁决 | 待分配 | 相应 Windows 功能棒修复并验证 | PR #258、#260 正文 |
 
 ### IM 机会层 V3/布局新增欠债（2026-11-05）
 
-来源为已合并 PR #259/#261 正文；重复欠债合并登记，不以布局修复核销 V3 业务限制。证据路径均相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`；中文/浅色配置一项来自 laneG4 交接，不冒称 PR 正文已有记录。V2b（同版文件分享）的文件产物前置已解除，仍待分配；V4 已由 `P2-IM-AGENT-DELEGATION-001`（PR #264）承担，状态见 [STATUS](STATUS.md)。旧 D8 业务账号停用联动、第二租户、正式试点及 V1/V2a 其他未完成项保留，不由 A1–A9 批量核销。
+来源为已合并 PR #259/#261 正文；重复欠债合并登记，不以布局修复核销 V3 业务限制。证据路径均相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`；中文/浅色配置一项来自 laneG4 交接，不冒称 PR 正文已有记录。V2b 已由 `P2-IM-FILE-SHARE-001`（PR #271）合并，新增欠债见下节 V2b；V4 已由 `P2-IM-AGENT-DELEGATION-001`（PR #264）承担，状态见 [STATUS](STATUS.md)。旧 D8 业务账号停用联动、第二租户、正式试点及 V1/V2a 其他未完成项保留，不由 A1–A9 批量核销。
 
 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|
 | 已关闭：典型等价问法有界验证已形成结论；主线代码在冻结问法集（直问、两种标准委托、后段路由 × 地点/代号/时间 6 问）纯 Runtime 90/90 答对、端到端 6/6 正确，未观察到答对/拒答翻转；任意表达与长期稳定性未证明 | 无 | P2-IM-QUESTION-STABILITY-001（有界验证完成，无生产改动、无 PR） | 已满足：典型问法形成可复核结论；仅关闭本次有界验证义务，不外推任意表达与长期稳定性 | 任务 P2-IM-QUESTION-STABILITY-001 验收记录；历史来源 PR #259/#261/#264 |
-| A5 多人私聊与 A6 来源编辑拒绝仅沿用既有合成 API 证据，本人窗口未重跑；原生撰写框操作也未覆盖 | P2-IM-PERSONAL-AGENT-READ-001 | P2-IM-PERSONAL-AGENT-READ-001（后续验收） | 获准在本人窗口完成相应真实路径并登记结果 | PR #259/#261；acc/V3RUN4.md；acc/v3-auto.json |
+| 已关闭：A5/A6 本人窗口原生路径；2026-11-06 DEBT1 1/2 通过，A5 原生多人私聊有固定群状态、答案仅私回甲；A6 queued 时本人原生编辑后 im_source_changed，模型与投递均零 | 无 | P2-IM-PERSONAL-AGENT-READ-001（合成验收完成） | 已满足：甲乙本人独立会话的原生撰写/编辑与拒绝结果有真实证据，不外推正式环境 | PR #259/#261；仓库外 `debt/DEBT1.md` 1/2、A5/A6 截图及机器结果 |
 | Zulip 中文/浅色配置已进入部署脚本（PR #268）；本机合成执行不能证明麒麟 ARM64 离线包可用或正式频道委托，剩余目标机/正式环境执行未验 | 正式部署范围/目标机专项授权（未分配） | 后续 Docker/目标机验收任务（未分配） | 获准后从完整离线包执行并核中文/浅色、指定 A/B 订阅及委托闭环 | PR #268；部署配置验收记录 DCFG_PLAN.md、DCFG_IMPL.md、DCFG_ACC2.md；ARM64 镜像、CA/代理/接线欠项仍保留 |
 | 已关闭：760px 顶栏横向溢出；旧 scrollWidth=1115，现 745=clientWidth | P2-IM-MESSAGES-LAYOUT-001 | P2-IM-MESSAGES-LAYOUT-001 | 已满足：真实登录 760px 无横溢，两宽度折叠/深链/换记录保持 PASS | PR #259/#261；acc/LAYOUTFIX.md；acc/layout-fix-browser.json；acc/layout-fix-760-expanded.png |
 
@@ -820,7 +820,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 已关闭：后段路由典型问法有界验证 | 保留正文、不清洗后段提及；冻结问法集整体纯 Runtime 90/90、端到端 6/6 正确，含后段路由，未观察到答对/拒答翻转；任意表达与长期稳定性未证明 | 无 | P2-IM-QUESTION-STABILITY-001（有界验证完成，无生产改动、无 PR） | 已满足：典型实际问法已形成有界结论，不外推任意表达与长期稳定性 | 任务 P2-IM-QUESTION-STABILITY-001 验收记录；历史来源 PR #264 |
 | 正式环境频道订阅执行未验 | 指定助手 Bot 订阅指定频道已进入部署脚本（PR #268），合成新频道订阅后委托闭环通过；剩余目标机/正式环境执行未验，合并跟踪于上节“Zulip 中文/浅色配置”目标机欠债 | 正式部署范围/目标机专项授权（未分配） | 后续 Docker/目标机验收任务（未分配） | 获准后从完整离线包执行并核中文/浅色、指定 A/B 订阅及委托闭环 | PR #268；部署配置验收记录 DCFG_PLAN.md、DCFG_IMPL.md、DCFG_ACC2.md |
-| 合成 Zulip 误建的空频道 7 未删除 | 删除需专项授权；仅存在于合成 Zulip，不影响正式环境 | 删除授权 | 待分配 | 获授权删除，或确认随合成环境整体回收 | IM 窗口交接 |
+| 合成 Zulip 误建的空频道 7 未删除（已关闭） | 雨爷 2026-11-08 专项授权仅归档频道 7；名称“ACC1 合成验收”与 V4ACC2 记录一致，GET messages narrow 该频道 anchor=newest、num_before=1 返回空；DELETE streams/7 为 200，读回已归档且不在活跃列表 | 无 | `P2-GOV-SYNC-20261108-1` | 已满足：核对为空后归档，仅此频道 | 仓库外 `acc/V4ACC2-provision.json`、`gov/MERGE5_channel_archive.json`；Zulip 官方 archive-stream API |
 
 测试环境事实：为甲在合成 Zulip 上开通了合成助手 Bot 16（只在合成环境），不等同正式组织账号。
 
@@ -843,7 +843,18 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|
-| `BrowserRunCard.test.tsx` 取消重试用例偶发失败（同一候选首跑失败、重跑通过） | 取消重试用例偶发问题排查（未分配，非 PR #268 阻塞） | 后续前端稳定性任务（未分配） | 定位并修复偶发失败且按批准范围验证 | PR #268 同一候选 CI 首跑 failure、第二次 success，主线同测试通过为主控裁决依据；部署配置验收记录 DCFG_ACC2.md |
+| 已关闭：`BrowserRunCard.test.tsx` 取消重试用例偶发失败，PR #273 以 await act 等待两次点击更新；修前 1/30、修后 0/30，原断言保留 | 无 | `P2-BROWSER-CARD-FLAKY-001`（已合并） | 已满足本次定位与有界验证义务，不保证长期永不偶发 | PR #268、#273；仓库外 `debt/FLAKY.md`、`debt/flaky-evidence/` |
+
+### IM 机会层 V2b `P2-IM-FILE-SHARE-001` 新增欠债（2026-11-08）
+
+`P2-GOV-SYNC-20261108-1` 登记已合并 PR #271 正文的四项欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。F1–F7、F10 的合成真实验收不代替第三人、实际成品生产链或正式目标环境；5432/15432 已于 2026-11-08 获专项授权并升级至 `20261106_120000`，读回 revision、四个可空列与 FK 通过，该项欠债关闭（仓库外 `gov/UPG5.md`）。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 真实第三人隔离未验 | 本轮只有甲乙合法宿主会话；已按批准替代验乙未分享文件 404，不能冒充丙 | P2-IM-FILE-SHARE-001：第三获准宿主会话未提供 | P2-IM-FILE-SHARE-001 后续验收（未另分配 task） | 丙本人合法会话对给定文件 URL 404 有实际证据 | PR #271；v2b/acceptance-results.json F4 |
+| Q7 聊天生成成品文件生产链 | 当前用真实 chat_input 上传；JobOutputPublisher 无实际业务生产者 | P2-IM-FILE-SHARE-001：实际输出生产者缺项 | 待 GOV-SYNC 分配生产者任务 | Chat 真实生成成品→file_artifacts→同版私发完整链验收 | PR #271；CONTEXT.md V2b 来源决定；v2b/V2B_IMPL.md |
+| 5432/15432 升级到 20261106_120000（已关闭） | 雨爷 2026-11-08“升级。”专项授权后，先测试库 15432、后开发库 5432，均从 20261105_120000 升至 20261106_120000；revision、四个可空列与 artifact FK 读回通过；18005 未重启，本治理棒未连接数据库 | 无 | `P2-IM-FILE-SHARE-001` 合并后专项升级（已完成） | 已满足：两库获专项授权、升级至 20261106_120000 并读回结构 | PR #271；CONTEXT.md 2026-11-08“升级。”；gov/UPG5.md；gov/upg5-databases.json |
+| 正式环境/目标机未验 | 本轮为本机复制库、合成 Zulip、甲乙持久会话，非正式组织/目标服务器 | P2-IM-FILE-SHARE-001：正式部署及业务动作授权/目标机环境未提供 | 待 GOV-SYNC 分配正式验收任务 | 正式目标机与组织身份获准真实流程验收 | PR #271；v2b/environment.json；v2b/V2B_ACC.md |
 
 ### 聊天上传 `P2-CHAT-UPLOAD-001` 新增欠债（2026-11-06）
 
