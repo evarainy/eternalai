@@ -12,7 +12,7 @@ import os
 import re
 import ssl
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
@@ -559,6 +559,13 @@ class ProductionSettings:
         for value in (self.source_profile_id, self.source_tenant_id):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("source_profile_configuration_invalid")
+
+    def oa_read_settings(self) -> OAReadSettings:
+        """The narrow OA read values (same names, same values) for the shared adapter builder."""
+
+        return OAReadSettings(
+            **{item.name: getattr(self, item.name) for item in fields(OAReadSettings)}
+        )
 
     @classmethod
     def from_environment(
@@ -1298,6 +1305,8 @@ def _base64_key(
 __all__ = (
     "FileArtifactSettings",
     "OAReadAdapterMode",
+    "OAReadSettings",
+    "OAReportWorkerSettings",
     "ProductionSettings",
     "PersonalAgentSettings",
     "RedisConnectionURL",
@@ -1364,6 +1373,107 @@ def _file_artifact_settings(source: Mapping[str, str]) -> FileArtifactSettings |
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OAReadSettings:
+    """OA read-adapter values shared by the API and the worker.
+
+    Field names equal the ``ProductionSettings`` fields they come from; both parse them
+    with the same helpers, so the API path keeps its parameters and errors.
+    """
+
+    source_tenant_id: str
+    oa_read_adapter_mode: OAReadAdapterMode
+    oa_base_url: str
+    oa_timeout_seconds: float
+    oa_read_contract_pack_dir: Path | None = None
+    oa_pending_workflows_contract_pack_dir: Path | None = None
+    oa_system_messages_contract_pack_dir: Path | None = None
+    oa_message_center_path: str | None = None
+    oa_pending_workflows_split_page_key_path: str | None = None
+    oa_pending_workflows_counts_path: str | None = None
+    oa_pending_workflows_datas_path: str | None = None
+    oa_pending_workflows_actiontype: str | None = None
+    oa_pending_workflows_hide_no_data_tab: str | None = None
+    oa_pending_workflows_method: str | None = None
+    oa_pending_workflows_offical_type: str | None = None
+    oa_pending_workflows_view_scope: str | None = None
+    oa_pending_workflows_sort_params: str | None = None
+    oa_system_messages_category_id: str | None = None
+    oa_system_messages_bizstate: str | None = None
+    oa_system_messages_select_state: str | None = None
+    oa_message_center_page_size: int = 20
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_tenant_id, str) or not self.source_tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+
+
+@dataclass(frozen=True)
+class OAReportWorkerSettings:
+    """What the worker needs to read the requester's own OA to-dos: no login or renewal."""
+
+    oa_read: OAReadSettings
+    credential_encryption_key: bytes = field(repr=False)
+
+
+_OA_PENDING_PATH_KEYS: tuple[tuple[str, str], ...] = (
+    ("oa_pending_workflows_split_page_key_path", "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH"),
+    ("oa_pending_workflows_counts_path", "OA_PENDING_WORKFLOWS_COUNTS_PATH"),
+    ("oa_pending_workflows_datas_path", "OA_PENDING_WORKFLOWS_DATAS_PATH"),
+)
+# (field, key, allow_empty) exactly as ProductionSettings.from_environment parses them.
+_OA_FORM_PARAMETER_KEYS: tuple[tuple[str, str, bool], ...] = (
+    ("oa_pending_workflows_actiontype", "OA_PENDING_WORKFLOWS_ACTIONTYPE", False),
+    ("oa_pending_workflows_hide_no_data_tab", "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB", False),
+    ("oa_pending_workflows_method", "OA_PENDING_WORKFLOWS_METHOD", False),
+    ("oa_pending_workflows_offical_type", "OA_PENDING_WORKFLOWS_OFFICAL_TYPE", False),
+    ("oa_pending_workflows_view_scope", "OA_PENDING_WORKFLOWS_VIEW_SCOPE", False),
+    ("oa_pending_workflows_sort_params", "OA_PENDING_WORKFLOWS_SORT_PARAMS", False),
+    ("oa_system_messages_category_id", "OA_SYSTEM_MESSAGES_CATEGORY_ID", True),
+    ("oa_system_messages_bizstate", "OA_SYSTEM_MESSAGES_BIZSTATE", True),
+    ("oa_system_messages_select_state", "OA_SYSTEM_MESSAGES_SELECT_STATE", True),
+)
+
+
+def _oa_report_worker_settings(source: Mapping[str, str]) -> OAReportWorkerSettings | None:
+    """Unset or ``mock`` OA mode leaves the report kind out of the worker."""
+
+    mode = _oa_read_adapter_mode(source)
+    if mode == "mock":
+        return None
+    paths = {name: _oa_capability_path(source, mode, key) for name, key in _OA_PENDING_PATH_KEYS}
+    forms = {
+        name: _oa_live_form_parameter(source, mode, key, allow_empty=allow_empty)
+        for name, key, allow_empty in _OA_FORM_PARAMETER_KEYS
+    }
+    return OAReportWorkerSettings(
+        oa_read=OAReadSettings(
+            source_tenant_id=source.get("OA_TENANT_ID", ""),
+            oa_read_adapter_mode=mode,
+            oa_base_url=_http_base_url(source, "OA_BASE_URL"),
+            oa_timeout_seconds=_positive_float(
+                source, "OA_TIMEOUT_S", _DEFAULT_OA_TIMEOUT_SECONDS
+            ),
+            oa_read_contract_pack_dir=_oa_read_contract_pack_dir(source, mode),
+            oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
+                source, mode, "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"
+            ),
+            oa_system_messages_contract_pack_dir=_oa_live_contract_pack_dir(
+                source, mode, "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR"
+            ),
+            oa_message_center_path=_oa_capability_path(source, mode, "OA_MESSAGE_CENTER_PATH"),
+            oa_message_center_page_size=_bounded_positive_int(
+                source, "OA_MESSAGE_CENTER_PAGE_SIZE", 20, maximum=1_000
+            ),
+            **paths,
+            **forms,
+        ),
+        credential_encryption_key=_base64_key(
+            source, "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64", exact_bytes=32
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class WorkerSettings:
     """Queue values plus optional IM Bot, reader and tool-free model settings."""
@@ -1377,6 +1487,8 @@ class WorkerSettings:
     file_artifacts: FileArtifactSettings | None = field(default=None, repr=False)
     im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
     personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
+    # OA pending-workflow report kind; None leaves it unregistered in this worker.
+    oa_report: OAReportWorkerSettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1400,6 +1512,7 @@ class WorkerSettings:
             file_artifacts=_file_artifact_settings(source),
             im_delivery=IMDeliverySettings.from_env(source),
             personal_agents=PersonalAgentSettings.from_env(source),
+            oa_report=_oa_report_worker_settings(source),
         )
 
 
@@ -1424,6 +1537,20 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     "IM_DELIVERY_BOT_API_KEY",
     "IM_DELIVERY_RECIPIENTS_JSON",
     "IM_PERSONAL_AGENTS_JSON",
+    # OA pending-workflow report: read-only OA values plus the credential decryption key.
+    # No identity HMAC, session, password-login, renewal or heartbeat settings.
+    "OA_READ_ADAPTER_MODE",
+    "OA_TENANT_ID",
+    "OA_BASE_URL",
+    "OA_TIMEOUT_S",
+    "OA_READ_CONTRACT_PACK_DIR",
+    "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
+    "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
+    "OA_MESSAGE_CENTER_PATH",
+    "OA_MESSAGE_CENTER_PAGE_SIZE",
+    *(key for _, key in _OA_PENDING_PATH_KEYS),
+    *(key for _, key, _ in _OA_FORM_PARAMETER_KEYS),
+    "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
 )
 
 

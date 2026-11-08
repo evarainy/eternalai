@@ -135,7 +135,7 @@ class BackgroundJobRunner:
         if spec is None:
             raise BackgroundJobError("background_job_kind_invalid")
         params = parse_job_params(spec, claim.params)
-        execution = self._execution
+        execution = replace(self._execution, job_id=claim.job_id, owner=claim.owner)
         if self._job_outputs is not None:
             execution = replace(
                 execution,

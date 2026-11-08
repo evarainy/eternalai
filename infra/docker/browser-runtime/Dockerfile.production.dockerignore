@@ -204,6 +204,7 @@ services/decision/*
 !app/infra/adapters/oa/adapter.py
 !app/infra/adapters/oa/capabilities.py
 !app/infra/adapters/oa/contracts.py
+!app/infra/adapters/oa/factory.py
 !app/infra/adapters/oa/orginfo.py
 !app/infra/adapters/oa/profile.py
 !app/infra/adapters/oa/provider.py

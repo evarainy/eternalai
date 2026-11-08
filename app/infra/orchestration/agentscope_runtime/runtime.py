@@ -94,6 +94,7 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     Clarify,
     LedgerExecution,
     Proposal,
+    ReportJobSettled,
     TurnLedger,
     Unsupported,
 )
@@ -232,6 +233,18 @@ _CANDIDATE_FAILURE_MESSAGES: dict[ErrorCode, tuple[str, str]] = {
     ),
 }
 _IntentReason = Literal["provider_error", "blank_input", "schema_invalid", "protocol_error"]
+# Fixed replies of the OA pending report tool; never model text, never job content.
+REPORT_ACCEPTED_MESSAGE = "已开始生成 OA 待办报表，生成后可在下方卡片下载。"
+REPORT_UNCONFIRMED_MESSAGE = "报表任务提交结果未确认，请用原请求检查，不会重复生成。"
+_REPORT_REFUSALS: dict[str, tuple[str, ErrorCode]] = {
+    "oa_unbound": ("需要先在软件中心授权 OA 后才能导出。", "identity_unbound"),
+    "oa_unavailable": ("OA 暂不可用，请稍后重试。", "internal_error"),
+    "background_job_limit_reached": (
+        "进行中的后台任务已达上限，请稍后再试。", "internal_error"
+    ),
+    "background_job_accept_failed": ("报表任务提交失败，请重试。", "internal_error"),
+}
+_REPORT_REFUSED_DEFAULT = "报表任务暂时无法提交，请稍后重试。"
 
 
 def _intent_failure_message(reason: _IntentReason) -> tuple[str, str]:
@@ -711,7 +724,18 @@ class AgentScopeRuntime:
                 _RUNTIME_LOGGER.info(
                     "agentscope_turn_unclosed task=%s turn=%s", turn.task_id, turn.turn_id
                 )
-                envelope = self._build_failed(turn, *_intent_failure_message("schema_invalid"))
+                if rule in {"report_job_accepted", "report_job_unconfirmed"}:
+                    # The background job may exist: keep the recovery path, never drop it.
+                    envelope = deps.response_builder.build_message(
+                        turn.response_id, turn.task_id, scope.session_id,
+                        REPORT_UNCONFIRMED_MESSAGE, REPORT_UNCONFIRMED_MESSAGE,
+                        turn.trace_id, status="failed",
+                        data={"report_job": {"state": "unconfirmed"}},
+                    )
+                else:
+                    envelope = self._build_failed(
+                        turn, *_intent_failure_message("schema_invalid")
+                    )
                 rule = "turn_unclosed"
             return envelope
         except asyncio.CancelledError as error:
@@ -1255,6 +1279,9 @@ class AgentScopeRuntime:
         if isinstance(terminal, AuthorizationRequired):
             # Nothing of the turn ran after the selection; never model text.
             return self._authorization_outcome(turn, terminal)
+        if isinstance(terminal, ReportJobSettled):
+            # The report tool runs alone; its fixed reply ends the turn (never model text).
+            return self._report_outcome(turn, terminal)
         if ledger.staged is not None:
             # Staged but never published (CAS lost, timeout, failed post-check):
             # abandoned; the waiting marks may already exist.
@@ -1392,6 +1419,33 @@ class AgentScopeRuntime:
             self._close(turn, None, "binding_required", "identity_unbound"),
         )
 
+    def _report_outcome(self, turn: _Turn, terminal: ReportJobSettled) -> _Outcome:
+        """Fixed reply with a narrow job reference; the background job runs on its own."""
+
+        builder = self._deps.response_builder
+        ids = (turn.response_id, turn.task_id, turn.scope.session_id)
+        if terminal.outcome == "accepted":
+            envelope = builder.build_message(
+                *ids, REPORT_ACCEPTED_MESSAGE, REPORT_ACCEPTED_MESSAGE, turn.trace_id,
+                status="completed", data={"report_job": {"job_id": terminal.job_id}},
+            )
+            return _Outcome("report_job_accepted", envelope,
+                            self._close(turn, None, "completed", None))
+        if terminal.outcome == "unconfirmed":
+            envelope = builder.build_message(
+                *ids, REPORT_UNCONFIRMED_MESSAGE, REPORT_UNCONFIRMED_MESSAGE, turn.trace_id,
+                status="failed", data={"report_job": {"state": "unconfirmed"}},
+            )
+            return _Outcome("report_job_unconfirmed", envelope,
+                            self._close(turn, None, "failed", "internal_error"))
+        message, error_code = _REPORT_REFUSALS.get(
+            terminal.code, (_REPORT_REFUSED_DEFAULT, "internal_error")
+        )
+        return _Outcome(
+            "report_job_refused", self._build_failed(turn, message, message),
+            self._close(turn, None, "failed", error_code),
+        )
+
     def _checked_text(self, turn: _Turn, ledger: TurnLedger, text: str | None) -> str | None:
         """Drop final text that carries standalone tool-call blocks; never parse them.
 
@@ -1428,6 +1482,14 @@ class AgentScopeRuntime:
             await self._intent(turn, "ok", {"result": "valid", "match": "answer", **stats})
         elif rule == "r4c_clarify":
             await self._intent(turn, "ok", {"result": "valid", "match": "clarify", **stats})
+        elif rule == "report_job_accepted":
+            await self._intent(turn, "ok", {"result": "valid", "match": "report_job", **stats})
+        elif rule in {"report_job_unconfirmed", "report_job_refused"}:
+            await self._intent(
+                turn, "failed",
+                {**stats, "result": "valid", "match": "report_job",
+                 "reason": rule.removeprefix("report_job_")},
+            )
         elif rule in {"r4_low_confidence", "r4c_low_confidence", "r6_low_confidence"}:
             await self._intent(
                 turn, "failed", {**stats, "reason": "low_confidence"},

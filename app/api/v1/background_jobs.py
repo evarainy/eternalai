@@ -37,6 +37,10 @@ _ERRORS: dict[str, tuple[int, str]] = {
         "后台任务接收结果未确认，请用同一请求重试核对。",
     ),
     "background_job_unavailable": (503, "后台任务服务未启用。"),
+    # Admission refusals of the OA pending report kind (shared with the chat tool).
+    "oa_unbound": (409, "需要先在软件中心授权 OA 后才能导出。"),
+    "report_session_required": (422, "OA 待办报表需要在 AI 助手对话中发起。"),
+    "oa_unavailable": (503, "OA 暂不可用，请稍后重试。"),
 }
 
 

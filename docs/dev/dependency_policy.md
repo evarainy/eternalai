@@ -125,6 +125,7 @@ explicitly names a future dedicated allowlist file.
 | python | defusedxml | ==0.7.1 | production | public_registry_development_only | P2-CHAT-UPLOAD-001；DECISIONS 2026-11-02 第 5 条，2026-11-03 第 4 条及「新功能基础总体方案批准与一次性授权」；PSF-2.0；xlsx 检查子进程的 XML 解析 |
 | python | openpyxl | ==3.1.5 | production | public_registry_development_only | P2-CHAT-UPLOAD-001；同上；MIT；xlsx 检查子进程只读工作表名与尺寸 |
 | python | et-xmlfile | ==2.0.0 | production-transitive | public_registry_development_only | P2-CHAT-UPLOAD-001 openpyxl 3.1.5 required dependency, pinned by uv.lock；MIT |
+| python | xlsxwriter | ==3.3.1 (PyPI wheel sha256 8e2c89e59d733fe59e112317218c64fbbc276d90a8c144ebd6f7fa15e7ab184a, pinned by uv.lock) | production | public_registry_development_only | P2-XLSX-REPORT-001；DECISIONS 2026-11-02 第 5 条（新建报表 XlsxWriter）及 2026-11-03 第 4 条；雨爷 2026-11-09 授权新增；BSD-2-Clause；无运行时依赖；worker 内存生成 OA 待办报表 |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |

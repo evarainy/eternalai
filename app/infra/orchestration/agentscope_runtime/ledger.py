@@ -108,6 +108,19 @@ class AuthorizationRequired:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportJobSettled:
+    """The fixed OA pending report tool decided the turn; nothing else ran.
+
+    ``outcome`` is accepted (``job_id`` set), unconfirmed (the ledger commit outcome is
+    unknown after one same-key retry) or refused (``code`` is the closed refusal code).
+    """
+
+    outcome: Literal["accepted", "unconfirmed", "refused"]
+    code: str
+    job_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Clarify:
     """The model asked the user for missing information with ask_user."""
 
@@ -146,7 +159,7 @@ class TurnLedger:
     failures: list[LedgerFailure] = field(default_factory=list)
     terminal: (
         BindingCard | Proposal | Unsupported | Clarify | BrowserSettled
-        | AuthorizationRequired | None
+        | AuthorizationRequired | ReportJobSettled | None
     ) = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
@@ -203,6 +216,7 @@ __all__ = (
     "LedgerFailure",
     "PreExecReason",
     "Proposal",
+    "ReportJobSettled",
     "TurnLedger",
     "Unsupported",
     "current_tool_call_id",
