@@ -536,8 +536,10 @@ async def submit_oa_pending_report(
             _REPORT_LOGGER.info(
                 "report_job stage=failed job=- rows=- elapsed_ms=- code=%s", error.code
             )
-            if error.code == _UNKNOWN_OUTCOME:
-                return ReportJobSettled("unconfirmed", error.code)
+            if attempt == 2:
+                # The first attempt's outcome is still unknown; a later failure
+                # cannot prove it was never committed.
+                return ReportJobSettled("unconfirmed", _UNKNOWN_OUTCOME)
             return ReportJobSettled("refused", error.code)
         job_id = str(accepted.job.job_id)
         _REPORT_LOGGER.info(
@@ -580,6 +582,9 @@ class ExportOAPendingReport(_ControlTool):
         ledger = self._ledger
         if ledger.executions or _control_conflict(ledger, self.name):
             return _error("导出报表要单独调用，不能和其他工具一起用。", "control_call_conflict")
+        # Interrupted mid-submit (turn deadline): the commit may have landed, so the
+        # turn settles as unconfirmed and the original request can recover the job.
+        ledger.terminal = ReportJobSettled("unconfirmed", "submit_interrupted")
         ledger.terminal = await submit_oa_pending_report(
             self._scope, self._service, self._client_request_id
         )

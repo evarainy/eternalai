@@ -724,7 +724,18 @@ class AgentScopeRuntime:
                 _RUNTIME_LOGGER.info(
                     "agentscope_turn_unclosed task=%s turn=%s", turn.task_id, turn.turn_id
                 )
-                envelope = self._build_failed(turn, *_intent_failure_message("schema_invalid"))
+                if rule in {"report_job_accepted", "report_job_unconfirmed"}:
+                    # The background job may exist: keep the recovery path, never drop it.
+                    envelope = deps.response_builder.build_message(
+                        turn.response_id, turn.task_id, scope.session_id,
+                        REPORT_UNCONFIRMED_MESSAGE, REPORT_UNCONFIRMED_MESSAGE,
+                        turn.trace_id, status="failed",
+                        data={"report_job": {"state": "unconfirmed"}},
+                    )
+                else:
+                    envelope = self._build_failed(
+                        turn, *_intent_failure_message("schema_invalid")
+                    )
                 rule = "turn_unclosed"
             return envelope
         except asyncio.CancelledError as error:
