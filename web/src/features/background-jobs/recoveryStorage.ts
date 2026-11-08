@@ -35,6 +35,33 @@ export function loadRecovery(key: string, scope: string): unknown[] {
   return [];
 }
 
+/**
+ * Rewrite this scope's records. A copy written under another account scope is left untouched:
+ * a late callback of an earlier login must never remove the current account's records.
+ */
+export function updateRecovery(
+  key: string, scope: string, update: (items: unknown[]) => readonly unknown[],
+): void {
+  if (useAuthStore.getState().status !== 'authenticated') return;
+  let items: unknown[] = [];
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        clearRecovery(key);
+      } else {
+        const { scope: stored, items: storedItems } = parsed as Record<string, unknown>;
+        if (stored !== scope) return;
+        if (Array.isArray(storedItems)) items = storedItems as unknown[];
+      }
+    }
+  } catch {
+    clearRecovery(key);
+  }
+  storeRecovery(key, scope, update(items));
+}
+
 export function storeRecovery(key: string, scope: string, items: readonly unknown[]): void {
   if (items.length === 0) {
     clearRecovery(key);

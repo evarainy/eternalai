@@ -1,5 +1,5 @@
 import { useAuthStore } from '../../stores/authStore';
-import { clearRecovery, loadRecovery, storeRecovery } from './recoveryStorage';
+import { clearRecovery, loadRecovery, updateRecovery } from './recoveryStorage';
 import type { BackgroundJobResponse } from '../../generated/background-jobs/background-jobs.schemas';
 
 export const REPORT_KIND = 'report.oa_pending_workflows_xlsx';
@@ -20,13 +20,15 @@ export function loadReportJobs(scope: string): string[] {
 export function rememberReportJob(scope: string | null, jobId: string): void {
   if (scope === null || !isReportJobId(jobId)
       || useAuthStore.getState().status !== 'authenticated') return;
-  storeRecovery(STORAGE_KEY, scope,
-    [...loadReportJobs(scope).filter((item) => item !== jobId), jobId].slice(-MAX_STORED));
+  updateRecovery(STORAGE_KEY, scope, (items) => [
+    ...items.filter((item): item is string => isReportJobId(item) && item !== jobId), jobId,
+  ].slice(-MAX_STORED));
 }
 
 export function forgetReportJob(scope: string | null, jobId: string): void {
   if (scope === null) return;
-  storeRecovery(STORAGE_KEY, scope, loadReportJobs(scope).filter((item) => item !== jobId));
+  updateRecovery(STORAGE_KEY, scope,
+    (items) => items.filter((item) => isReportJobId(item) && item !== jobId));
 }
 
 export interface ReportResult {

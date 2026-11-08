@@ -11,7 +11,7 @@ import {
   type SheetFillSource,
 } from '../../contracts/sheetFillPlan';
 import { isReportJobId } from './reportJob';
-import { clearRecovery, loadRecovery, storeRecovery } from './recoveryStorage';
+import { clearRecovery, loadRecovery, updateRecovery } from './recoveryStorage';
 
 export const SHEET_FILL_KIND = 'sheet.fill_xlsx';
 const STORAGE_KEY = 'eternalai.sheet-fill-submissions.v1';
@@ -57,15 +57,16 @@ export function loadPendingSheetFills(scope: string): PendingSheetFill[] {
 
 export function rememberPendingSheetFill(scope: string | null, item: PendingSheetFill): void {
   if (scope === null || useAuthStore.getState().status !== 'authenticated') return;
-  storeRecovery(STORAGE_KEY, scope, [
-    ...loadPendingSheetFills(scope).filter((entry) => entry.responseId !== item.responseId), item,
+  updateRecovery(STORAGE_KEY, scope, (items) => [
+    ...items.map(parsePending).filter((entry): entry is PendingSheetFill => entry !== null)
+      .filter((entry) => entry.responseId !== item.responseId), item,
   ].slice(-MAX_STORED));
 }
 
 export function forgetPendingSheetFill(scope: string | null, responseId: string): void {
   if (scope === null) return;
-  storeRecovery(STORAGE_KEY, scope,
-    loadPendingSheetFills(scope).filter((entry) => entry.responseId !== responseId));
+  updateRecovery(STORAGE_KEY, scope, (items) => items.map(parsePending)
+    .filter((entry): entry is PendingSheetFill => entry !== null && entry.responseId !== responseId));
 }
 
 function submitOnce(item: PendingSheetFill): Promise<BackgroundJobAcceptResponse> {

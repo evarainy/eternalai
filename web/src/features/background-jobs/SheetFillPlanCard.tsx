@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { Alert, Button, Card, Flex, Space, Tag, Typography } from 'antd';
 import type { SheetFillMapping, SheetFillPlan } from '../../contracts/sheetFillPlan';
+import { useAuthStore } from '../../stores/authStore';
 import { rememberReportJob } from './reportJob';
 import {
   FIELD_LABELS,
@@ -70,7 +71,11 @@ export function SheetFillPlanCard({
     const item = { responseId, sessionId: submitSession, idempotencyKey, plan };
     rememberPendingSheetFill(recoveryScope, item);
     setPhase('submitting');
+    const generation = useAuthStore.getState().generation;
     const outcome = await submitSheetFill(item);
+    // The login changed while the request was in flight: this card belongs to the earlier
+    // account and must not touch the current account's recovery records or transcript.
+    if (useAuthStore.getState().generation !== generation) return;
     if (outcome.kind === 'accepted') {
       forgetPendingSheetFill(recoveryScope, responseId);
       rememberReportJob(recoveryScope, outcome.jobId);
