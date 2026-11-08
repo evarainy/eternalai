@@ -847,13 +847,13 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### IM 机会层 V2b `P2-IM-FILE-SHARE-001` 新增欠债（2026-11-08）
 
-`P2-GOV-SYNC-20261108-1` 登记已合并 PR #271 正文的四项欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。F1–F7、F10 的合成真实验收不代替第三人、实际成品生产链或正式目标环境；5432/15432 升级仍须专项授权。
+`P2-GOV-SYNC-20261108-1` 登记已合并 PR #271 正文的四项欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。F1–F7、F10 的合成真实验收不代替第三人、实际成品生产链或正式目标环境；5432/15432 已于 2026-11-08 获专项授权并升级至 `20261106_120000`，读回 revision、四个可空列与 FK 通过，该项欠债关闭（仓库外 `gov/UPG5.md`）。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 真实第三人隔离未验 | 本轮只有甲乙合法宿主会话；已按批准替代验乙未分享文件 404，不能冒充丙 | P2-IM-FILE-SHARE-001：第三获准宿主会话未提供 | P2-IM-FILE-SHARE-001 后续验收（未另分配 task） | 丙本人合法会话对给定文件 URL 404 有实际证据 | PR #271；v2b/acceptance-results.json F4 |
 | Q7 聊天生成成品文件生产链 | 当前用真实 chat_input 上传；JobOutputPublisher 无实际业务生产者 | P2-IM-FILE-SHARE-001：实际输出生产者缺项 | 待 GOV-SYNC 分配生产者任务 | Chat 真实生成成品→file_artifacts→同版私发完整链验收 | PR #271；CONTEXT.md V2b 来源决定；v2b/V2B_IMPL.md |
-| 5432/15432 待升级到 20261106_120000 | 专项授权仅复制库15433，已升级通过；本治理棒不连接另外两库 | P2-IM-FILE-SHARE-001：两库升级未获专项授权（PR #271 已合并） | P2-IM-FILE-SHARE-001 合并后迁移授权 | 获对应专项授权后，两库升级至20261106_120000并读回结构 | PR #271；laneV2bACC.md；v2b/migration.json |
+| 5432/15432 升级到 20261106_120000（已关闭） | 雨爷 2026-11-08“升级。”专项授权后，先测试库 15432、后开发库 5432，均从 20261105_120000 升至 20261106_120000；revision、四个可空列与 artifact FK 读回通过；18005 未重启，本治理棒未连接数据库 | 无 | `P2-IM-FILE-SHARE-001` 合并后专项升级（已完成） | 已满足：两库获专项授权、升级至 20261106_120000 并读回结构 | PR #271；CONTEXT.md 2026-11-08“升级。”；gov/UPG5.md；gov/upg5-databases.json |
 | 正式环境/目标机未验 | 本轮为本机复制库、合成 Zulip、甲乙持久会话，非正式组织/目标服务器 | P2-IM-FILE-SHARE-001：正式部署及业务动作授权/目标机环境未提供 | 待 GOV-SYNC 分配正式验收任务 | 正式目标机与组织身份获准真实流程验收 | PR #271；v2b/environment.json；v2b/V2B_ACC.md |
 
 ### 聊天上传 `P2-CHAT-UPLOAD-001` 新增欠债（2026-11-06）
