@@ -248,6 +248,13 @@ async def build_turn_toolkit(
             ExportOAPendingReport(ledger, scope, deps.report_jobs, client_request_id)
         )
     attachments = chat_attachment_context.get()
+    if attachments:
+        # Exposure facts only: counts and flags, never names or headers.
+        _REPORT_LOGGER.info(
+            "sheet_fill_tool_exposure configured=%s im_source=%s request_id=%s attachments=%d",
+            deps.sheet_fill is not None, scope.im_source is not None,
+            client_request_id is not None, len(attachments),
+        )
     if (
         deps.sheet_fill is not None
         and scope.im_source is None
