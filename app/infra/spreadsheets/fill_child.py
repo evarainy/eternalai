@@ -26,7 +26,7 @@ import struct
 import sys
 import warnings
 import zipfile
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -169,6 +169,40 @@ def extract(command: dict[str, Any], content: bytes) -> dict[str, Any]:
     return {"result": "ok", "mappings": result}
 
 
+def _save_in_memory(workbook: Any) -> bytes:
+    """``Workbook.save`` without touching the disk.
+
+    openpyxl 3.1.5 ``ExcelWriter.write_worksheet`` serialises each sheet into a
+    ``NamedTemporaryFile(delete=False)`` and zips it from the path; a killed child would
+    leave that file behind. ``WorksheetWriter`` accepts a ``BytesIO`` target, so the sheet
+    XML and the ZIP archive both stay in memory here.
+    """
+
+    from openpyxl.drawing.spreadsheet_drawing import (  # type: ignore[import-untyped]
+        SpreadsheetDrawing,
+    )
+    from openpyxl.worksheet._writer import WorksheetWriter  # type: ignore[import-untyped]
+    from openpyxl.writer.excel import ExcelWriter  # type: ignore[import-untyped]
+
+    class MemoryExcelWriter(ExcelWriter):  # type: ignore[misc]
+        def write_worksheet(self, ws: Any) -> None:
+            # Same steps as ExcelWriter.write_worksheet (non write-only branch).
+            ws._drawing = SpreadsheetDrawing()
+            ws._drawing.charts = ws._charts
+            ws._drawing.images = ws._images
+            writer = WorksheetWriter(ws, out=BytesIO())
+            writer.write()
+            ws._rels = writer._rels
+            self._archive.writestr(ws.path[1:], writer.read())
+            self.manifest.append(ws)
+
+    output = BytesIO()
+    workbook.properties.modified = datetime.now(UTC).replace(tzinfo=None)
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+        MemoryExcelWriter(workbook, archive).write_data()
+    return output.getvalue()
+
+
 def fill(command: dict[str, Any], content: bytes) -> tuple[dict[str, Any], bytes]:
     from openpyxl import load_workbook
     from openpyxl.styles import PatternFill  # type: ignore[import-untyped]
@@ -215,9 +249,7 @@ def fill(command: dict[str, Any], content: bytes) -> tuple[dict[str, Any], bytes
             cell.fill = mark_fill
         written[(write["sheet"], row, column)] = text
 
-    output = BytesIO()
-    workbook.save(output)
-    result = output.getvalue()
+    result = _save_in_memory(workbook)
 
     reopened = load_workbook(BytesIO(result), read_only=True, data_only=False)
     checked = 0
