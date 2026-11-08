@@ -26,6 +26,12 @@ import { fieldLabel, targetSystemLabels } from '../contracts/businessLabels';
 import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import { ReportJobCard } from '../features/background-jobs/ReportJobCard';
+import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard';
+import {
+  forgetPendingSheetFill,
+  loadPendingSheetFills,
+  type PendingSheetFill,
+} from '../features/background-jobs/sheetFill';
 import {
   forgetReportJob,
   loadReportJobs,
@@ -574,9 +580,29 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   useEffect(() => {
     setReportJobIds(authStatus === 'authenticated' ? loadReportJobs() : []);
   }, [authStatus, authGeneration]);
-  const transcriptReportJobs = useMemo(() => new Set(transcript.flatMap((entry) =>
-    entry.role === 'assistant' && entry.reportJobId !== undefined ? [entry.reportJobId] : [])),
+  // Sheet fill: jobs accepted from plan cards (by response id) and confirmed plans whose
+  // acceptance was never seen in this tab (shown after a same-tab refresh with a retry).
+  const [sheetFillJobs, setSheetFillJobs] = useState<Record<string, string>>({});
+  const [pendingSheetFills, setPendingSheetFills] = useState<PendingSheetFill[]>([]);
+  useEffect(() => {
+    setSheetFillJobs({});
+    setPendingSheetFills(authStatus === 'authenticated' ? loadPendingSheetFills() : []);
+  }, [authStatus, authGeneration]);
+  const transcriptSheetFills = useMemo(() => new Set(transcript.flatMap((entry) =>
+    entry.role === 'assistant' && entry.sheetFillPlan !== undefined && entry.responseId !== null
+      ? [entry.responseId] : [])),
   [transcript]);
+  const transcriptReportJobs = useMemo(() => new Set([
+    ...transcript.flatMap((entry) =>
+      entry.role === 'assistant' && entry.reportJobId !== undefined ? [entry.reportJobId] : []),
+    ...Object.entries(sheetFillJobs).flatMap(([responseId, jobId]) =>
+      transcriptSheetFills.has(responseId) ? [jobId] : []),
+  ]), [transcript, sheetFillJobs, transcriptSheetFills]);
+  const acceptSheetFill = (responseId: string, jobId: string) => {
+    setSheetFillJobs((current) => ({ ...current, [responseId]: jobId }));
+    setReportJobIds(loadReportJobs());
+    setPendingSheetFills(loadPendingSheetFills());
+  };
   // Kept in the dock store so a same-tab re-login or reload restores it with the conversation.
   const collection = useAIDockStore((state) => state.collection);
   const setCollection = useAIDockStore((state) => state.setCollection);
@@ -1198,8 +1224,20 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                       {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
                         <ReportJobCard jobId={entry.reportJobId} />
                       ) : null}
+                      {entry.role === 'assistant' && entry.sheetFillPlan !== undefined
+                        && entry.responseId !== null ? (
+                        <SheetFillPlanCard
+                          key={`${authGeneration}/${entry.responseId}`}
+                          plan={entry.sheetFillPlan}
+                          responseId={entry.responseId}
+                          sessionId={currentSessionId}
+                          acceptedJobId={sheetFillJobs[entry.responseId]}
+                          onAccepted={(jobId) => acceptSheetFill(entry.responseId!, jobId)}
+                        />
+                      ) : null}
                       {entry.role === 'assistant' && entry.presentationKind === 'completed'
-                        && entry.reportJobId === undefined && entry.text.trim() ? (
+                        && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
+                        && entry.text.trim() ? (
                         <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
                           text={entry.text} attachments={deliveryAttachments} />
                       ) : null}
@@ -1222,6 +1260,20 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 setReportJobIds(loadReportJobs());
               }} />
             ))}
+            {pendingSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
+              .map((item) => (
+                <SheetFillPlanCard
+                  key={`${authGeneration}/${item.responseId}`}
+                  plan={item.plan}
+                  responseId={item.responseId}
+                  sessionId={item.sessionId}
+                  onAccepted={(jobId) => acceptSheetFill(item.responseId, jobId)}
+                  onDismiss={() => {
+                    forgetPendingSheetFill(item.responseId);
+                    setPendingSheetFills(loadPendingSheetFills());
+                  }}
+                />
+              ))}
             {visibleBrowserTarget === null ? null : (
               <BrowserRunMonitor
                 key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}

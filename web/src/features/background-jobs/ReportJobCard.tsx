@@ -1,4 +1,5 @@
-/** OA pending report card: polls the caller's own job, offers cancel and the download link. */
+/** Background job card (OA pending report or sheet fill): polls the caller's own job, offers
+ * cancel and the download link. */
 
 import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Flex, Space, Tag, Typography } from 'antd';
@@ -11,6 +12,12 @@ import {
   reportFailureText,
   reportResult,
 } from './reportJob';
+import {
+  SHEET_FILL_KIND,
+  sheetFillFailureText,
+  sheetFillResult,
+  sheetFillResultText,
+} from './sheetFill';
 
 const { Text, Title } = Typography;
 const ACTIVE_POLL_MS = 2_000;
@@ -23,6 +30,43 @@ const STATUS: Record<BackgroundJobResponse['status'], { label: string; color: st
   succeeded: { label: '已生成', color: 'green' },
   failed: { label: '未能生成', color: 'red' },
   cancelled: { label: '已取消', color: 'default' },
+};
+const KINDS = new Set([REPORT_KIND, SHEET_FILL_KIND]);
+
+interface KindView {
+  title: string;
+  activeText: string;
+  cancelText: string;
+  resultUnavailableText: string;
+  result: (job: BackgroundJobResponse) => { artifactId: string; text: string } | null;
+  failureText: (code: string | null) => string;
+}
+
+const KIND_VIEWS: Record<string, KindView> = {
+  [REPORT_KIND]: {
+    title: 'OA 待办报表',
+    activeText: '正在后台读取本人 OA 待办并生成文件，可以离开此页面。',
+    cancelText: '取消生成',
+    resultUnavailableText: '报表结果暂不可用，请重新导出',
+    result: (job) => {
+      const result = reportResult(job);
+      return result === null ? null
+        : { artifactId: result.artifactId, text: `已生成 ${result.rowCount} 条待办。` };
+    },
+    failureText: reportFailureText,
+  },
+  [SHEET_FILL_KIND]: {
+    title: '表格填写',
+    activeText: '正在后台填写表格（只填空白格），可以离开此页面。',
+    cancelText: '取消填写',
+    resultUnavailableText: '填表结果暂不可用，请重新填表',
+    result: (job) => {
+      const result = sheetFillResult(job);
+      return result === null ? null
+        : { artifactId: result.artifactId, text: sheetFillResultText(result) };
+    },
+    failureText: sheetFillFailureText,
+  },
 };
 
 interface ReportJobCardProps {
@@ -44,7 +88,7 @@ export function ReportJobCard({ jobId, onDismiss }: ReportJobCardProps) {
       try {
         const next = await readJob(jobId);
         if (stopped) return;
-        if (next.job_id !== jobId || next.kind !== REPORT_KIND) {
+        if (next.job_id !== jobId || !KINDS.has(next.kind)) {
           setReadState('missing');
           return;
         }
@@ -81,28 +125,31 @@ export function ReportJobCard({ jobId, onDismiss }: ReportJobCardProps) {
     }
   };
 
+  const view = job === null ? null : KIND_VIEWS[job.kind] ?? null;
+
   if (readState === 'missing') {
     return (
-      <Alert type="warning" showIcon title="没有找到这项报表任务"
+      <Alert type="warning" showIcon title="没有找到这项后台任务"
         action={onDismiss ? <Button size="small" onClick={onDismiss}>移除</Button> : undefined} />
     );
   }
 
   const active = job !== null && isActive(job);
-  const result = job === null ? null : reportResult(job);
+  const result = job === null || view === null ? null : view.result(job);
   const status = job === null ? null : STATUS[job.status];
+  const title = view?.title ?? '后台任务';
 
   return (
-    <Card aria-label="OA 待办报表" size="small">
+    <Card aria-label={title} size="small">
       <Flex align="center" justify="space-between" gap={12} wrap>
         <Space wrap>
-          <Title level={5} style={{ margin: 0 }}>OA 待办报表</Title>
+          <Title level={5} style={{ margin: 0 }}>{title}</Title>
           {status === null ? <Tag>读取中</Tag> : <Tag color={status.color}>{status.label}</Tag>}
         </Space>
         <Space>
           {active && job?.status !== 'cancel_requested' ? (
             <Button loading={cancelling} disabled={cancelling} onClick={() => void cancel()}>
-              取消生成
+              {view?.cancelText ?? '取消'}
             </Button>
           ) : null}
           {job !== null && !active && onDismiss ? (
@@ -111,18 +158,18 @@ export function ReportJobCard({ jobId, onDismiss }: ReportJobCardProps) {
         </Space>
       </Flex>
 
-      {active ? <p role="status">正在后台读取本人 OA 待办并生成文件，可以离开此页面。</p> : null}
+      {active && view !== null ? <p role="status">{view.activeText}</p> : null}
       {result !== null ? (
         <p>
-          <Text>已生成 {result.rowCount} 条待办。</Text>{' '}
+          <Text>{result.text}</Text>{' '}
           <a href={reportDownloadUrl(result.artifactId)} download>下载 Excel</a>
         </p>
       ) : null}
-      {job?.status === 'succeeded' && result === null ? (
-        <Alert type="warning" showIcon title="报表结果暂不可用，请重新导出" />
+      {job?.status === 'succeeded' && result === null && view !== null ? (
+        <Alert type="warning" showIcon title={view.resultUnavailableText} />
       ) : null}
-      {job?.status === 'failed' ? (
-        <Alert type="error" showIcon title={reportFailureText(job.result_code)} />
+      {job?.status === 'failed' && view !== null ? (
+        <Alert type="error" showIcon title={view.failureText(job.result_code)} />
       ) : null}
       {job?.status === 'cancelled' ? <p>已取消。</p> : null}
       {readState === 'retrying' ? (
