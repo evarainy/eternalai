@@ -25,6 +25,12 @@ import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
 import { fieldLabel, targetSystemLabels } from '../contracts/businessLabels';
 import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
+import { ReportJobCard } from '../features/background-jobs/ReportJobCard';
+import {
+  forgetReportJob,
+  loadReportJobs,
+  rememberReportJob,
+} from '../features/background-jobs/reportJob';
 import {
   BrowserFillStopHistoryNotice,
   BrowserHandoffComposerNotice,
@@ -563,6 +569,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
   const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
   const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
+  // Report jobs of this tab (same-tab refresh recovery); reloaded whenever the login changes.
+  const [reportJobIds, setReportJobIds] = useState<string[]>([]);
+  useEffect(() => {
+    setReportJobIds(authStatus === 'authenticated' ? loadReportJobs() : []);
+  }, [authStatus, authGeneration]);
+  const transcriptReportJobs = useMemo(() => new Set(transcript.flatMap((entry) =>
+    entry.role === 'assistant' && entry.reportJobId !== undefined ? [entry.reportJobId] : [])),
+  [transcript]);
   // Kept in the dock store so a same-tab re-login or reload restores it with the conversation.
   const collection = useAIDockStore((state) => state.collection);
   const setCollection = useAIDockStore((state) => state.setCollection);
@@ -862,6 +876,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           setRetrySubmission(submission);
         }
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
+        if (result.reportJobId !== undefined) {
+          rememberReportJob(result.reportJobId);
+          setReportJobIds(loadReportJobs());
+        }
         return result;
       } catch (error) {
         if (isChatAttachmentRejection(error)) {
@@ -1177,7 +1195,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                           ))}
                         </ul>
                       ) : null}
-                      {entry.role === 'assistant' && entry.presentationKind === 'completed' && entry.text.trim() ? (
+                      {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
+                        <ReportJobCard jobId={entry.reportJobId} />
+                      ) : null}
+                      {entry.role === 'assistant' && entry.presentationKind === 'completed'
+                        && entry.reportJobId === undefined && entry.text.trim() ? (
                         <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
                           text={entry.text} attachments={deliveryAttachments} />
                       ) : null}
@@ -1194,6 +1216,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               </ol>
             )}
 
+            {reportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
+              <ReportJobCard key={jobId} jobId={jobId} onDismiss={() => {
+                forgetReportJob(jobId);
+                setReportJobIds(loadReportJobs());
+              }} />
+            ))}
             {visibleBrowserTarget === null ? null : (
               <BrowserRunMonitor
                 key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}

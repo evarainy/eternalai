@@ -124,6 +124,8 @@ export interface ProjectedResponse {
   mcpRecoveryPath?: string;
   /** Fixed in-site entry of the MCP authorization hint; never a server-supplied link. */
   mcpAuthorizationPath?: string;
+  /** Background OA pending report accepted by this reply; the card reads only the caller's own job. */
+  reportJobId?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -609,6 +611,8 @@ function structuredData(
   };
 }
 
+const REPORT_JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 // Internal UI reason code of the backend MCP authorization card (bind_required).
 const MCP_AUTHORIZATION_REASON = 'mcp_authorization_required';
 export const MCP_CONNECTIONS_ANCHOR = 'mcp-connections';
@@ -696,6 +700,23 @@ export function projectResponse(
         && value.data.d_form_collection === null) {
       return { ...base, presentationKind: 'unconfirmed' };
     }
+  }
+
+  if (isRecord(value.data) && Object.prototype.hasOwnProperty.call(value.data, 'report_job')) {
+    const reportJob = value.data.report_job;
+    if (!isRecord(reportJob) || Object.keys(value.data).length !== 1
+        || Object.keys(reportJob).length !== 1 || action !== 'none'
+        || value.ui.component_type !== 'none') {
+      return incompatibleResponse();
+    }
+    if (status === 'completed' && typeof reportJob.job_id === 'string'
+        && REPORT_JOB_ID.test(reportJob.job_id)) {
+      return { ...base, records: null, presentationKind: 'completed', reportJobId: reportJob.job_id };
+    }
+    if (status === 'failed' && reportJob.state === 'unconfirmed') {
+      return { ...base, records: null, presentationKind: 'unconfirmed' };
+    }
+    return incompatibleResponse();
   }
 
   if (status === 'cancelled' || status === 'confirmation_invalidated') {
