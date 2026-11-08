@@ -38,6 +38,17 @@ class BackgroundJobOwner(BaseModel):
     ai_user_id: str
 
 
+class BackgroundJobRunOwner(BaseModel):
+    """Who requested a claimed job, read from the ledger row; never from params."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: str
+    ai_user_id: str
+    # The trusted bound chat session recorded at acceptance, if any.
+    session_id: str | None
+
+
 class BackgroundJobView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -102,6 +113,7 @@ __all__ = (
     "BackgroundJobError",
     "BackgroundJobLedgerPort",
     "BackgroundJobOwner",
+    "BackgroundJobRunOwner",
     "BackgroundJobStatus",
     "BackgroundJobView",
     "ExternalEffect",

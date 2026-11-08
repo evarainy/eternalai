@@ -4,7 +4,9 @@ A separate process from the 18005 API with no HTTP listener. It loads only
 ``WorkerSettings`` (database, Redis, health timeout, directory age, concurrency, self-check
 hold limit, file artifact root and MAC key), plus optional IM Bot and reader configuration.
 When personal agents are enabled it also loads the tool-free published-material model seam, without
-the production composition, ordinary chat, OA or browser stacks. The loop is
+the production composition, ordinary chat, OA or browser stacks. When an OA read mode is
+configured it registers the OA pending-workflow report kind over a minimal read-only OA
+Gateway (requester's own saved session; no login, renewal or heartbeat). The loop is
 psycopg + Selector.
 """
 
@@ -102,9 +104,15 @@ async def run_worker(settings: WorkerSettings) -> None:
                 max_age_s=settings.organization_directory_max_age_s,
             ),
         )
+        kinds = build_job_kinds(settings.self_check_max_hold_seconds)
+        if settings.oa_report is not None:
+            from app.infra.jobs.oa_pending_report import build_worker_oa_pending_report_kind
+
+            report = build_worker_oa_pending_report_kind(settings.oa_report, sessions)
+            kinds[report.name] = report
         runner = BackgroundJobRunner(
             PostgreSQLBackgroundJobLedger(sessions),
-            build_job_kinds(settings.self_check_max_hold_seconds),
+            kinds,
             JobExecution(
                 checks={**checks.health, **checks.diagnostics},
                 check_timeout_seconds=settings.health_timeout_seconds,

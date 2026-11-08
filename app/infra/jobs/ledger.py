@@ -33,6 +33,7 @@ from app.ports.background_jobs import (
     BackgroundJobCancellation,
     BackgroundJobError,
     BackgroundJobOwner,
+    BackgroundJobRunOwner,
     BackgroundJobView,
 )
 
@@ -76,6 +77,7 @@ class JobClaim:
     params: dict[str, Any]
     claim_token: UUID
     attempt_count: int
+    owner: BackgroundJobRunOwner
 
 
 class PostgreSQLBackgroundJobLedger:
@@ -263,7 +265,8 @@ class PostgreSQLBackgroundJobLedger:
             row = (
                 await session.execute(
                     text(
-                        "SELECT status, queue_job_id, job_kind, params::text AS params "
+                        "SELECT status, queue_job_id, job_kind, params::text AS params, "
+                        "tenant_id, requested_by_ai_user_id, session_id "
                         "FROM public.background_jobs WHERE job_id = :job_id FOR UPDATE"
                     ),
                     {"job_id": job_id},
@@ -294,6 +297,11 @@ class PostgreSQLBackgroundJobLedger:
                 params=json.loads(row["params"]),
                 claim_token=token,
                 attempt_count=int(attempt),
+                owner=BackgroundJobRunOwner(
+                    tenant_id=str(row["tenant_id"]),
+                    ai_user_id=str(row["requested_by_ai_user_id"]),
+                    session_id=None if row["session_id"] is None else str(row["session_id"]),
+                ),
             )
 
     async def heartbeat(self, job_id: UUID, claim_token: UUID) -> str | None:
