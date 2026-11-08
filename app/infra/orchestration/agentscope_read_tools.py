@@ -94,6 +94,8 @@ from app.runtime.document_qa import DocumentQAService
 if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
 
+    from app.background_jobs import BackgroundJobService
+
 MAX_TOOL_RESULT_BYTES = 8192
 _READ_FAILED_TEXT = "读取失败。"
 _CLOSE_TIMEOUT_SECONDS = 5.0
@@ -139,6 +141,8 @@ class AgentScopeRuntimeDependencies:
     # (ai_user_id, capability_id, context) -> the candidate is policy-hidden only
     # because this user has not authorized its MCP service (placeholder only).
     mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None
+    # Accepts the fixed OA pending report job; None hides the report tool.
+    report_jobs: BackgroundJobService | None = None
 
 
 @dataclass(frozen=True, slots=True)

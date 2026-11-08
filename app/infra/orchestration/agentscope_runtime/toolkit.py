@@ -11,6 +11,10 @@ the turn without another provider call once a terminal outcome is recorded.
 Only public AgentScope interfaces are used; ``builtin_meta_tool`` is replaced
 after construction and checked (uv.lock pins the version; re-check on upgrade).
 
+When the turn has a trusted client request id and the job service is configured, a
+fixed ``export_oa_pending_report`` control tool accepts the requester's OA pending report
+as a background job on the verified bound session; the model sees only fixed text.
+
 An MCP authorization placeholder has no executor. A model response that calls
 one is replaced, before any of its tool calls is dispatched, by the terminal
 answer: the whole response is dropped and the turn ends on the authorization
@@ -46,6 +50,12 @@ from agentscope.tool import (
 )
 from jinja2 import Template
 
+from app.background_jobs import (
+    OA_PENDING_REPORT_KIND,
+    OA_PENDING_REPORT_PARAMS,
+    BackgroundJobService,
+    oa_pending_report_key,
+)
 from app.infra.llm.agentscope_chat import (
     ToolErrorKind,
     TurnLimits,
@@ -56,18 +66,23 @@ from app.infra.orchestration.agentscope_read_tools import (
     AgentScopeRuntimeDependencies,
     ReadToolScope,
     ToolExecutor,
+    session_matches,
 )
 from app.infra.orchestration.agentscope_runtime.catalog import GROUP_RULES, ToolCatalog
 from app.infra.orchestration.agentscope_runtime.ledger import (
     AuthorizationRequired,
     CallSnapshot,
     Clarify,
+    ReportJobSettled,
     TurnLedger,
     Unsupported,
     current_tool_call_id,
 )
 from app.knowledge.bounded import KNOWLEDGE_SYSTEM_PROMPT
 from app.knowledge.capability_selection import canonical_json
+from app.ports.auth import authenticated_session
+from app.ports.background_jobs import BackgroundJobError
+from app.ports.runtime import chat_client_request_id
 from app.version_binding import prompt_version_binding
 
 if TYPE_CHECKING:
@@ -77,7 +92,8 @@ if TYPE_CHECKING:
 AGENT_PROMPT_RESOURCE_ID = "runtime.agentscope_agent"
 REPORT_UNSUPPORTED = "report_unsupported"
 ASK_USER = "ask_user"
-CONTROL_TOOLS = frozenset({REPORT_UNSUPPORTED, ASK_USER})
+EXPORT_OA_PENDING_REPORT = "export_oa_pending_report"
+CONTROL_TOOLS = frozenset({REPORT_UNSUPPORTED, ASK_USER, EXPORT_OA_PENDING_REPORT})
 RESET_TOOLS = "reset_tools"
 # Reset results name the activated groups only; usage rules reach the model
 # through the system prompt while their group is active.
@@ -203,8 +219,18 @@ async def build_turn_toolkit(
                 tools=tools,
             )
         )
+    controls: list[ToolBase] = [ReportUnsupported(ledger), AskUser(ledger)]
+    client_request_id = chat_client_request_id.get()
+    if (
+        deps.report_jobs is not None
+        and scope.im_source is None
+        and client_request_id is not None
+    ):
+        controls.append(
+            ExportOAPendingReport(ledger, scope, deps.report_jobs, client_request_id)
+        )
     toolkit = Toolkit(
-        tools=[ReportUnsupported(ledger), AskUser(ledger)],
+        tools=controls,
         tool_groups=groups,
         meta_tool_response_template=M1_TEMPLATE,
     )
@@ -481,6 +507,89 @@ class AskUser(_ControlTool):
         )
 
 
+_REPORT_LOGGER = logging.getLogger("uvicorn.error.background_jobs")
+_UNKNOWN_OUTCOME = "background_job_accept_outcome_unknown"
+
+
+async def submit_oa_pending_report(
+    scope: ReadToolScope, service: BackgroundJobService, client_request_id: str
+) -> ReportJobSettled:
+    """Accept the report on the verified bound session; one same-key retry if unknown."""
+
+    session = authenticated_session.get()
+    if session is None or not session_matches(scope):
+        return ReportJobSettled("refused", "session_invalid")
+    principal = session.principal
+    key = oa_pending_report_key(principal, scope.session_id, client_request_id)
+    for attempt in (1, 2):
+        try:
+            accepted = await service.submit(
+                principal,
+                kind=OA_PENDING_REPORT_KIND,
+                params=OA_PENDING_REPORT_PARAMS,
+                idempotency_key=key,
+                session_id=scope.session_id,
+            )
+        except BackgroundJobError as error:
+            if error.code == _UNKNOWN_OUTCOME and attempt == 1:
+                continue
+            _REPORT_LOGGER.info(
+                "report_job stage=failed job=- rows=- elapsed_ms=- code=%s", error.code
+            )
+            if error.code == _UNKNOWN_OUTCOME:
+                return ReportJobSettled("unconfirmed", error.code)
+            return ReportJobSettled("refused", error.code)
+        job_id = str(accepted.job.job_id)
+        _REPORT_LOGGER.info(
+            "report_job stage=accepted job=%s rows=- elapsed_ms=- code=%s",
+            job_id, "deduplicated" if accepted.deduplicated else "accepted",
+        )
+        return ReportJobSettled("accepted", "accepted", job_id)
+    raise AssertionError("unreachable")
+
+
+class ExportOAPendingReport(_ControlTool):
+    """Fixed tool: queue the requester's OA pending report; the turn ends on its outcome."""
+
+    name: str = EXPORT_OA_PENDING_REPORT
+    description: str = (
+        "用户要求把本人的 OA 待办导出、生成或下载为 Excel、表格或报表文件时调用。"
+        "系统会在后台读取本人全部 OA 待办并生成文件，完成后在卡片中提供下载。"
+        "直接调用即可，不需要先激活工具组或查询待办；不要和其他工具同时调用；调用后本轮结束。"
+        "只是查看、询问或统计待办而没有要文件时不要调用。"
+    )
+    input_schema: dict[str, Any] = {  # fixed, code-owned schema
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+    def __init__(
+        self,
+        ledger: TurnLedger,
+        scope: ReadToolScope,
+        service: BackgroundJobService,
+        client_request_id: str,
+    ) -> None:
+        super().__init__(ledger)
+        self._scope = scope
+        self._service = service
+        self._client_request_id = client_request_id
+
+    async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
+        ledger = self._ledger
+        if ledger.executions or _control_conflict(ledger, self.name):
+            return _error("导出报表要单独调用，不能和其他工具一起用。", "control_call_conflict")
+        ledger.terminal = await submit_oa_pending_report(
+            self._scope, self._service, self._client_request_id
+        )
+        halt_tool_use(_agent_state, "turn_terminal")
+        return ToolChunk(
+            content=[TextBlock(text="报表请求已处理，本轮结束。")],
+            state=ToolResultState.SUCCESS,
+        )
+
+
 class M1Middleware(MiddlewareBase):
     """Outermost layer: terminal short-circuit, exposure snapshots, call ids."""
 
@@ -664,6 +773,7 @@ __all__ = (
     "ASK_USER",
     "CONTROL_TOOLS",
     "DISCOVERY_CODES",
+    "EXPORT_OA_PENDING_REPORT",
     "M1_TEMPLATE",
     "REPORT_UNSUPPORTED",
     "RESET_TOOLS",
@@ -672,9 +782,11 @@ __all__ = (
     "AskUser",
     "AuthorizationPlaceholder",
     "BrowserTool",
+    "ExportOAPendingReport",
     "M1ResetTools",
     "ProposeWrite",
     "ReportUnsupported",
     "TurnToolkit",
     "build_turn_toolkit",
+    "submit_oa_pending_report",
 )
