@@ -1,4 +1,5 @@
 import { useAuthStore } from '../../stores/authStore';
+import { clearRecovery, loadRecovery, storeRecovery } from './recoveryStorage';
 import type { BackgroundJobResponse } from '../../generated/background-jobs/background-jobs.schemas';
 
 export const REPORT_KIND = 'report.oa_pending_workflows_xlsx';
@@ -10,32 +11,22 @@ export function isReportJobId(value: unknown): value is string {
   return typeof value === 'string' && JOB_ID.test(value);
 }
 
-/** Same-tab recovery list: job ids only; the server re-checks ownership on every read. */
-export function loadReportJobs(): string[] {
-  if (useAuthStore.getState().status !== 'authenticated') return [];
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isReportJobId).slice(-MAX_STORED) : [];
-  } catch {
-    return [];
-  }
+/** Same-tab recovery list: job ids only, bound to the account scope that accepted them;
+ * the server still re-checks ownership on every read. */
+export function loadReportJobs(scope: string): string[] {
+  return loadRecovery(STORAGE_KEY, scope).filter(isReportJobId).slice(-MAX_STORED);
 }
 
-function storeReportJobs(jobIds: readonly string[]): void {
-  try {
-    if (jobIds.length === 0) window.sessionStorage.removeItem(STORAGE_KEY);
-    else window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(jobIds.slice(-MAX_STORED)));
-  } catch { /* Storage may be unavailable; the card still works until this tab reloads. */ }
+export function rememberReportJob(scope: string | null, jobId: string): void {
+  if (scope === null || !isReportJobId(jobId)
+      || useAuthStore.getState().status !== 'authenticated') return;
+  storeRecovery(STORAGE_KEY, scope,
+    [...loadReportJobs(scope).filter((item) => item !== jobId), jobId].slice(-MAX_STORED));
 }
 
-export function rememberReportJob(jobId: string): void {
-  if (!isReportJobId(jobId) || useAuthStore.getState().status !== 'authenticated') return;
-  storeReportJobs([...loadReportJobs().filter((item) => item !== jobId), jobId]);
-}
-
-export function forgetReportJob(jobId: string): void {
-  storeReportJobs(loadReportJobs().filter((item) => item !== jobId));
+export function forgetReportJob(scope: string | null, jobId: string): void {
+  if (scope === null) return;
+  storeRecovery(STORAGE_KEY, scope, loadReportJobs(scope).filter((item) => item !== jobId));
 }
 
 export interface ReportResult {
@@ -84,6 +75,6 @@ useAuthStore.subscribe((state, previous) => {
   if (state.status === 'unauthenticated'
       || (previous.status === 'authenticated'
         && (state.status !== 'authenticated' || state.generation !== previous.generation))) {
-    storeReportJobs([]);
+    clearRecovery(STORAGE_KEY);
   }
 });

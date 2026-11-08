@@ -89,6 +89,8 @@ interface AIDockState {
   collection: PendingCollection | null;
   applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
   appendTranscript: (entry: TranscriptEntry) => void;
+  /** Settles a sheet fill plan card of the current transcript: accepted job or cancelled. */
+  settleSheetFill: (responseId: string, outcome: { readonly jobId: string } | 'cancelled') => void;
   clearSession: () => void;
   clearPageContext: (expectedSurfaceId?: string) => void;
   closeDock: () => void;
@@ -170,6 +172,17 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     }),
   appendTranscript: (entry) =>
     set((state) => ({ transcript: [...state.transcript, entry] })),
+  settleSheetFill: (responseId, outcome) =>
+    set((state) => ({
+      transcript: state.transcript.map((entry) =>
+        entry.role === 'assistant' && entry.responseId === responseId
+          && entry.sheetFillPlan !== undefined && entry.reportJobId === undefined
+          && entry.sheetFillCancelled === undefined
+          ? outcome === 'cancelled'
+            ? { ...entry, sheetFillCancelled: true }
+            : { ...entry, reportJobId: outcome.jobId }
+          : entry),
+    })),
   clearSession: () =>
     set({
       imSource: null,

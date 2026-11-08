@@ -11,6 +11,7 @@ import {
   type SheetFillSource,
 } from '../../contracts/sheetFillPlan';
 import { isReportJobId } from './reportJob';
+import { clearRecovery, loadRecovery, storeRecovery } from './recoveryStorage';
 
 export const SHEET_FILL_KIND = 'sheet.fill_xlsx';
 const STORAGE_KEY = 'eternalai.sheet-fill-submissions.v1';
@@ -48,33 +49,23 @@ function parsePending(value: unknown): PendingSheetFill | null {
   return { responseId, sessionId, idempotencyKey, plan: parsedPlan };
 }
 
-export function loadPendingSheetFills(): PendingSheetFill[] {
-  if (useAuthStore.getState().status !== 'authenticated') return [];
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(parsePending).filter((item): item is PendingSheetFill => item !== null)
-      .slice(-MAX_STORED);
-  } catch {
-    return [];
-  }
+/** Only records written under the given account scope (see recoveryStorage). */
+export function loadPendingSheetFills(scope: string): PendingSheetFill[] {
+  return loadRecovery(STORAGE_KEY, scope).map(parsePending)
+    .filter((item): item is PendingSheetFill => item !== null).slice(-MAX_STORED);
 }
 
-function storePending(items: readonly PendingSheetFill[]): void {
-  try {
-    if (items.length === 0) window.sessionStorage.removeItem(STORAGE_KEY);
-    else window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(-MAX_STORED)));
-  } catch { /* Storage may be unavailable; the card still works until this tab reloads. */ }
+export function rememberPendingSheetFill(scope: string | null, item: PendingSheetFill): void {
+  if (scope === null || useAuthStore.getState().status !== 'authenticated') return;
+  storeRecovery(STORAGE_KEY, scope, [
+    ...loadPendingSheetFills(scope).filter((entry) => entry.responseId !== item.responseId), item,
+  ].slice(-MAX_STORED));
 }
 
-export function rememberPendingSheetFill(item: PendingSheetFill): void {
-  if (useAuthStore.getState().status !== 'authenticated') return;
-  storePending([...loadPendingSheetFills().filter((entry) => entry.responseId !== item.responseId), item]);
-}
-
-export function forgetPendingSheetFill(responseId: string): void {
-  storePending(loadPendingSheetFills().filter((entry) => entry.responseId !== responseId));
+export function forgetPendingSheetFill(scope: string | null, responseId: string): void {
+  if (scope === null) return;
+  storeRecovery(STORAGE_KEY, scope,
+    loadPendingSheetFills(scope).filter((entry) => entry.responseId !== responseId));
 }
 
 function submitOnce(item: PendingSheetFill): Promise<BackgroundJobAcceptResponse> {
@@ -245,6 +236,6 @@ useAuthStore.subscribe((state, previous) => {
   if (state.status === 'unauthenticated'
       || (previous.status === 'authenticated'
         && (state.status !== 'authenticated' || state.generation !== previous.generation))) {
-    storePending([]);
+    clearRecovery(STORAGE_KEY);
   }
 });

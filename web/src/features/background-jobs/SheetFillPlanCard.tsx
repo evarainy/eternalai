@@ -1,11 +1,11 @@
 /** Sheet fill confirmation card: shows the server-validated plan in business terms; "确认填表"
- * submits the background job (same key, plan and session on every retry), then the card
- * becomes the job card. Nothing is queued before the user confirms. */
+ * submits the background job (same key, plan and session on every retry); the accepted job
+ * or a cancellation is kept with the transcript entry, so a remounted card never offers a
+ * second submission. Nothing is queued before the user confirms. */
 
 import { useState } from 'react';
 import { Alert, Button, Card, Flex, Space, Tag, Typography } from 'antd';
 import type { SheetFillMapping, SheetFillPlan } from '../../contracts/sheetFillPlan';
-import { ReportJobCard } from './ReportJobCard';
 import { rememberReportJob } from './reportJob';
 import {
   FIELD_LABELS,
@@ -26,9 +26,13 @@ interface SheetFillPlanCardProps {
   responseId: string;
   /** The chat session the plan was proposed in; null cannot be confirmed. */
   sessionId: string | null;
-  /** Job accepted for this card in this tab; the card then shows the job. */
-  acceptedJobId?: string;
+  /** /me account scope of the current login; null keeps no same-tab recovery record. */
+  recoveryScope: string | null;
+  /** Cancelled earlier (shared transcript state): shown as the terminal state. */
+  cancelled?: boolean;
   onAccepted: (jobId: string) => void;
+  /** Records the cancellation where a remounted card reads it back. */
+  onCancel?: () => void;
   /** Removes a recovered card from this tab's recovery list. */
   onDismiss?: () => void;
 }
@@ -50,32 +54,31 @@ function MappingLine({ mapping }: { mapping: SheetFillMapping }) {
 }
 
 export function SheetFillPlanCard({
-  plan, responseId, sessionId, acceptedJobId, onAccepted, onDismiss,
+  plan, responseId, sessionId, recoveryScope, cancelled = false, onAccepted, onCancel, onDismiss,
 }: SheetFillPlanCardProps) {
-  const [stored] = useState(() =>
-    loadPendingSheetFills().find((item) => item.responseId === responseId) ?? null);
+  const [stored] = useState(() => (recoveryScope === null ? [] : loadPendingSheetFills(recoveryScope))
+    .find((item) => item.responseId === responseId) ?? null);
   // Generated once per card; a retry always reuses it so the server deduplicates.
   const [idempotencyKey] = useState(() => stored?.idempotencyKey ?? crypto.randomUUID());
-  const [phase, setPhase] = useState<Phase>(stored === null ? 'idle' : 'unconfirmed');
+  const [localPhase, setPhase] = useState<Phase>(stored === null ? 'idle' : 'unconfirmed');
+  const phase: Phase = cancelled ? 'cancelled' : localPhase;
   const [refusal, setRefusal] = useState('');
   const submitSession = stored?.sessionId ?? sessionId;
-
-  if (acceptedJobId !== undefined) return <ReportJobCard jobId={acceptedJobId} />;
 
   const confirm = async () => {
     if (submitSession === null) return;
     const item = { responseId, sessionId: submitSession, idempotencyKey, plan };
-    rememberPendingSheetFill(item);
+    rememberPendingSheetFill(recoveryScope, item);
     setPhase('submitting');
     const outcome = await submitSheetFill(item);
     if (outcome.kind === 'accepted') {
-      forgetPendingSheetFill(responseId);
-      rememberReportJob(outcome.jobId);
+      forgetPendingSheetFill(recoveryScope, responseId);
+      rememberReportJob(recoveryScope, outcome.jobId);
       onAccepted(outcome.jobId);
       return;
     }
     if (outcome.kind === 'refused') {
-      forgetPendingSheetFill(responseId);
+      forgetPendingSheetFill(recoveryScope, responseId);
       setRefusal(sheetFillRefusalText(outcome.code));
       setPhase('refused');
       return;
@@ -113,7 +116,7 @@ export function SheetFillPlanCard({
             onClick={() => void confirm()}>
             确认填表
           </Button>
-          <Button disabled={phase === 'submitting'} onClick={() => setPhase('cancelled')}>
+          <Button disabled={phase === 'submitting'} onClick={onCancel ?? (() => setPhase('cancelled'))}>
             取消
           </Button>
         </Space>

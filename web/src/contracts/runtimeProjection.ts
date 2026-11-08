@@ -129,6 +129,9 @@ export interface ProjectedResponse {
   reportJobId?: string;
   /** Server-validated sheet fill plan awaiting the user's confirmation (no job yet). */
   sheetFillPlan?: SheetFillPlan;
+  /** The user cancelled this plan card (kept with the transcript; never submitted). An
+   * accepted plan instead keeps its job in `reportJobId`. */
+  sheetFillCancelled?: true;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
