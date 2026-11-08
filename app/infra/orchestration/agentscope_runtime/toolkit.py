@@ -654,9 +654,11 @@ class ProposeSheetFill(_ControlTool):
         "received_at 接收时间、created_at 创建时间、workflow_type_id 流程类型编号、"
         "todo_id 待办编号）；"
         "document（固定文档问答，key_column 为问题所在列；可填 quote 文档原文）。"
+        "表格有多个工作表时，把每个能按上述来源填写的工作表都放进 mappings；"
         "每个工作表最多一个映射，fills 的列必须是表头非空的空白待填列。"
         "first_row/last_row 可省略（默认第 2 行到最后一行）。"
         "系统校验通过后会给用户一张确认卡，用户确认后才在后台填写，只填空白格；"
+        "不需要先查询 OA 待办或文档，取数由系统在确认后完成；"
         "不要和其他工具同时调用；校验未通过会返回原因，可修正后重试。"
     )
     input_schema: dict[str, Any] = PROPOSAL_INPUT_SCHEMA
@@ -676,7 +678,9 @@ class ProposeSheetFill(_ControlTool):
 
     async def call(self, _agent_state: AgentState, **kwargs: Any) -> ToolChunk:
         ledger = self._ledger
-        if ledger.executions or _control_conflict(ledger, self.name):
+        # Earlier read-only executions in this turn do not block a proposal: it executes
+        # nothing and only ends the turn with a card. Siblings in the same response still do.
+        if _control_conflict(ledger, self.name):
             return _error("填表提案要单独调用，不能和其他工具一起用。", "control_call_conflict")
         self._attempts += 1
         if self._attempts > SHEET_FILL_MAX_ATTEMPTS:
