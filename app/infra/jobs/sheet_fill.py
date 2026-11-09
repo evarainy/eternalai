@@ -35,7 +35,12 @@ from app.config import OAReportWorkerSettings, WorkerDocumentQASettings
 from app.file_artifacts import FileArtifactService
 from app.infra.adapters.oa.contracts import OAPendingWorkflow
 from app.infra.auth.postgresql import PostgreSQLPrincipalRoleReader
-from app.infra.jobs.oa_pending_report import build_worker_pending_gateway, read_pending_workflows
+from app.infra.jobs.oa_pending_report import (
+    WorkerSessionProbe,
+    build_worker_pending_gateway,
+    build_worker_session_probe,
+    read_pending_workflows,
+)
 from app.ports.background_jobs import BackgroundJobError
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.file_artifacts import (
@@ -204,11 +209,13 @@ class SheetFillHandler:
         oa_gateway: CapabilityGatewayPort | None,
         role_reader: PostgreSQLPrincipalRoleReader | None,
         document_qa: DocumentQAService | None,
+        oa_session_probe: WorkerSessionProbe | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ) -> None:
         self._files = files
         self._oa_gateway = oa_gateway
         self._roles = role_reader
+        self._oa_session_probe = oa_session_probe
         self._document_qa = document_qa
         self._clock = clock
 
@@ -282,7 +289,8 @@ class SheetFillHandler:
         if any(mapping.source == "oa_pending" for mapping, _, _ in work):
             assert self._oa_gateway is not None and self._roles is not None
             collection = await read_pending_workflows(
-                self._oa_gateway, self._roles, owner, task_id=f"sheet-fill-job:{job_id}"
+                self._oa_gateway, self._roles, owner, task_id=f"sheet-fill-job:{job_id}",
+                session_probe=self._oa_session_probe,
             )
             oa_index = {}
             for item in collection.workflows:
@@ -417,6 +425,8 @@ def build_worker_sheet_fill_kind(
             else build_worker_pending_gateway(oa_report, sessions),
             role_reader=None if oa_report is None
             else PostgreSQLPrincipalRoleReader(session_factory=sessions),
+            oa_session_probe=None if oa_report is None
+            else build_worker_session_probe(oa_report, sessions),
             document_qa=None if document_qa is None else build_document_qa(document_qa),
         ),
     )

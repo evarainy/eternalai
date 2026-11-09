@@ -3,16 +3,18 @@
 The worker reads only ``oa.list_pending_workflows`` with the requester's own saved OA
 session, through a minimal Gateway (registry limited to that descriptor, OA identity
 mapping, MinimalPolicyGuard, PostgreSQL trace and HumanGate). No login, renewal,
-heartbeat, directory, MCP or browser component is built. Generation, read-back check and
-publication run in that order; a mismatch never publishes. Logs carry stage, job, counts,
-elapsed time and closed codes only: never titles, states, user names, cookies or content.
+directory, MCP or browser component is built; an unclassified read failure is probed once
+with the official OA heartbeat so a dead Session reports ``oa_session_expired``.
+Generation, read-back check and publication run in that order; a mismatch never
+publishes. Logs carry stage, job, counts, elapsed time and closed codes only: never
+titles, states, user names, cookies or content.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from time import monotonic
 from typing import Any
@@ -31,6 +33,7 @@ from app.config import OAReportWorkerSettings
 from app.infra.adapters.oa.adapter import OA_LIST_PENDING_WORKFLOWS
 from app.infra.adapters.oa.contracts import OAPendingWorkflowCollection
 from app.infra.adapters.oa.factory import build_oa_read_provider_adapter
+from app.infra.adapters.oa.provider import OASessionHeartbeat
 from app.infra.auth.postgresql import PostgreSQLCredentialStore, PostgreSQLPrincipalRoleReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.human_gate import PostgreSQLHumanGate
@@ -47,6 +50,7 @@ from app.infra.spreadsheets.oa_pending_report import (
 from app.ports.background_jobs import BackgroundJobError, BackgroundJobRunOwner
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.credential_binding import OASessionHeartbeatResult
 from app.ports.file_artifacts import XLSX_MEDIA_TYPE, ChunkWriter, FileArtifactError
 from app.ports.request_context import RequestOrgContext
 
@@ -60,6 +64,8 @@ _FAILURES = {
     "policy_denied": "oa_forbidden",
     "upstream_permission_denied": "oa_forbidden",
 }
+# One heartbeat with the requester's own saved Session; None when it proves nothing.
+WorkerSessionProbe = Callable[[BackgroundJobRunOwner], Awaitable[OASessionHeartbeatResult | None]]
 
 
 class _PendingOnlyRegistry:
@@ -95,6 +101,7 @@ async def read_pending_workflows(
     owner: BackgroundJobRunOwner,
     *,
     task_id: str,
+    session_probe: WorkerSessionProbe | None = None,
 ) -> OAPendingWorkflowCollection:
     """One full read of the requester's own OA to-dos; failures are closed job codes."""
 
@@ -107,20 +114,28 @@ async def read_pending_workflows(
         capability_id=OA_LIST_PENDING_WORKFLOWS,
         arguments={},
         request_context=RequestOrgContext(
-            request_id=str(uuid4()), tenant_id=owner.tenant_id, roles=list(roles),
+            request_id=str(uuid4()),
+            tenant_id=owner.tenant_id,
+            roles=list(roles),
             channel="web",
         ),
     )
     if result.status != "completed" or result.data is None:
-        raise BackgroundJobError(_FAILURES.get(result.error_code or "", "oa_unavailable"))
+        code = _FAILURES.get(result.error_code or "")
+        if code is None:
+            # OA's ambiguous rejections (e.g. 002) mean expiry only when its heartbeat agrees.
+            dead = session_probe is not None and await session_probe(owner) == "dead"
+            code = "oa_session_expired" if dead else "oa_unavailable"
+        raise BackgroundJobError(code)
     try:
         return OAPendingWorkflowCollection.model_validate(result.data, strict=True)
     except ValidationError:
         raise BackgroundJobError("oa_incomplete") from None
 
 
-def _log(stage: str, job: object, *, rows: object = "-", started: float | None = None,
-         code: str = "-") -> None:
+def _log(
+    stage: str, job: object, *, rows: object = "-", started: float | None = None, code: str = "-"
+) -> None:
     elapsed = "-" if started is None else int((monotonic() - started) * 1000)
     _LOGGER.info(
         "report_job stage=%s job=%s rows=%s elapsed_ms=%s code=%s", stage, job, rows, elapsed, code
@@ -133,10 +148,13 @@ class OAPendingReportHandler:
         gateway: CapabilityGatewayPort,
         role_reader: PostgreSQLPrincipalRoleReader,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        *,
+        session_probe: WorkerSessionProbe | None = None,
     ) -> None:
         self._gateway = gateway
         self._roles = role_reader
         self._clock = clock
+        self._session_probe = session_probe
 
     async def __call__(self, params: BaseModel, execution: JobExecution) -> JobOutcome:
         started = monotonic()
@@ -160,12 +178,17 @@ class OAPendingReportHandler:
             raise BackgroundJobError("file_artifacts_unavailable")
         read_started_at = self._clock()
         collection = await read_pending_workflows(
-            self._gateway, self._roles, owner, task_id=f"report-job:{job_id}"
+            self._gateway,
+            self._roles,
+            owner,
+            task_id=f"report-job:{job_id}",
+            session_probe=self._session_probe,
         )
         read_finished_at = self._clock()
         rows = [
-            ReportRow(item.title, item.status, item.received_at, item.created_at,
-                      item.workflow_type_id)
+            ReportRow(
+                item.title, item.status, item.received_at, item.created_at, item.workflow_type_id
+            )
             for item in collection.workflows
         ]
         _log("oa_read", job_id, rows=len(rows), started=started)
@@ -216,8 +239,40 @@ def build_worker_oa_pending_report_kind(
         handler=OAPendingReportHandler(
             build_worker_pending_gateway(settings, sessions),
             PostgreSQLPrincipalRoleReader(session_factory=sessions),
+            session_probe=build_worker_session_probe(settings, sessions),
         ),
     )
+
+
+def build_worker_session_probe(
+    settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession]
+) -> WorkerSessionProbe:
+    """Read-only liveness check of the requester's own OA Session: never logs in or renews."""
+
+    credential_store = PostgreSQLCredentialStore(
+        session_factory=sessions, encryption_key=settings.credential_encryption_key
+    )
+    heartbeat = OASessionHeartbeat(
+        base_url=settings.oa_read.oa_base_url,
+        heartbeat_path=settings.oa_heartbeat_path,
+        timeout_seconds=settings.oa_read.oa_timeout_seconds,
+    )
+
+    async def probe(owner: BackgroundJobRunOwner) -> OASessionHeartbeatResult | None:
+        session = None
+        try:
+            session = await credential_store.load(owner.ai_user_id, "oa", tenant_id=owner.tenant_id)
+            result = None if session is None else await heartbeat(session)
+        except Exception as error:
+            # An unreadable credential or unreachable OA proves nothing about expiry.
+            _LOGGER.info("oa_heartbeat_unavailable exception_type=%s", type(error).__name__)
+            return None
+        finally:
+            session = None
+        _LOGGER.info("oa_heartbeat result=%s", result)
+        return result
+
+    return probe
 
 
 def build_worker_pending_gateway(
@@ -248,5 +303,6 @@ __all__ = (
     "OAPendingReportHandler",
     "build_worker_oa_pending_report_kind",
     "build_worker_pending_gateway",
+    "build_worker_session_probe",
     "read_pending_workflows",
 )
