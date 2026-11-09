@@ -70,6 +70,11 @@ _INVALID_MESSAGES = {
     "fill_column": "fills 的列必须是第 1 行表头非空的列字母，互不重复且不能等于 key_column。",
     "field": "field 不在所选来源的可填字段内。",
     "attachment": "attachment_id 不是本轮附件。",
+    "coverage": (
+        "untrusted_attachments 中还有含表头和数据行的工作表既不在 mappings 也不在 skipped_sheets："
+        "能按 oa_pending 或 document 填写的放进 mappings，确实不需要填写的列入 skipped_sheets，"
+        "再重新调用。"
+    ),
 }
 _SIZE_UNKNOWN_MESSAGE = "该工作表的行列数未知，暂不能填写；请让用户另存后重新上传。"
 _TOO_MANY_ROWS_MESSAGE = (
@@ -154,6 +159,8 @@ class SheetFillProposal(BaseModel):
 
     attachment_id: UUID
     mappings: list[SheetFillProposalMapping] = Field(min_length=1, max_length=MAX_MAPPINGS)
+    # Chat proposals only: sheets the model deliberately leaves blank (not part of the plan).
+    skipped_sheets: list[StrictStr] = Field(default_factory=list, max_length=100)
 
 
 PROPOSAL_INPUT_SCHEMA: dict[str, Any] = {  # fixed, code-owned schema
@@ -202,6 +209,13 @@ PROPOSAL_INPUT_SCHEMA: dict[str, Any] = {  # fixed, code-owned schema
                 "required": ["sheet", "source", "key_column", "fills"],
                 "additionalProperties": False,
             },
+        },
+        "skipped_sheets": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "不需要填写的工作表名称；每个有数据行的工作表都必须出现在 mappings 或这里"
+            ),
         },
     },
     "required": ["attachment_id", "mappings"],
@@ -289,6 +303,17 @@ def validate_plan(proposal: SheetFillProposal, inspection: ChatInputInspection) 
     )
 
 
+def _require_coverage(proposal: SheetFillProposal, inspection: ChatInputInspection) -> None:
+    """Every sheet with a header and data rows is either mapped or explicitly skipped."""
+
+    named = {item.sheet for item in proposal.mappings} | set(proposal.skipped_sheets)
+    for sheet in inspection.descriptor.sheets:
+        has_rows = sheet.max_row is not None and sheet.max_row > HEADER_ROW
+        has_header = sheet.header is not None and any(text.strip() for text in sheet.header)
+        if has_rows and has_header and sheet.name not in named:
+            raise _invalid("coverage")
+
+
 def proposal_from_plan(plan: SheetFillPlan) -> SheetFillProposal:
     return SheetFillProposal(
         attachment_id=plan.artifact_id,
@@ -361,6 +386,7 @@ class SheetFillAdmission:
     ) -> SheetFillPlan:
         inspection = await self._inspect(principal, session_id, proposal.attachment_id)
         plan = validate_plan(proposal, inspection)
+        _require_coverage(proposal, inspection)
         refused = await self._source_refusal(principal, plan)
         if refused is not None:
             raise SheetFillRejected(refused, _SOURCE_REFUSAL_MESSAGES[refused])
