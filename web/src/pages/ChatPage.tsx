@@ -26,6 +26,13 @@ import { fieldLabel, targetSystemLabels } from '../contracts/businessLabels';
 import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import { ReportJobCard } from '../features/background-jobs/ReportJobCard';
+import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard';
+import {
+  forgetPendingSheetFill,
+  loadPendingSheetFills,
+  type PendingSheetFill,
+} from '../features/background-jobs/sheetFill';
+import { recoveryScopeOf } from '../features/background-jobs/recoveryStorage';
 import {
   forgetReportJob,
   loadReportJobs,
@@ -569,14 +576,34 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
   const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
   const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
-  // Report jobs of this tab (same-tab refresh recovery); reloaded whenever the login changes.
+  // Same-tab refresh recovery (report job ids, unconfirmed sheet fill submissions) is read only
+  // under the account scope proven by /me of the current login; another scope is cleared.
+  const recoveryScope = authStatus === 'authenticated' && identityQuery.isSuccess
+    ? recoveryScopeOf(me) : null;
+  const recoveryScopeRef = useRef(recoveryScope);
+  recoveryScopeRef.current = recoveryScope;
   const [reportJobIds, setReportJobIds] = useState<string[]>([]);
+  // Confirmed sheet fill plans whose acceptance was never seen in this tab (shown with a retry).
+  const [pendingSheetFills, setPendingSheetFills] = useState<PendingSheetFill[]>([]);
   useEffect(() => {
-    setReportJobIds(authStatus === 'authenticated' ? loadReportJobs() : []);
-  }, [authStatus, authGeneration]);
+    setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
+    setPendingSheetFills(recoveryScope === null ? [] : loadPendingSheetFills(recoveryScope));
+  }, [recoveryScope, authGeneration]);
+  const transcriptSheetFills = useMemo(() => new Set(transcript.flatMap((entry) =>
+    entry.role === 'assistant' && entry.sheetFillPlan !== undefined && entry.responseId !== null
+      ? [entry.responseId] : [])),
+  [transcript]);
+  // Accepted sheet fill plans keep their job on the transcript entry (reportJobId).
   const transcriptReportJobs = useMemo(() => new Set(transcript.flatMap((entry) =>
     entry.role === 'assistant' && entry.reportJobId !== undefined ? [entry.reportJobId] : [])),
   [transcript]);
+  const settleSheetFill = useAIDockStore((state) => state.settleSheetFill);
+  const acceptSheetFill = (responseId: string, jobId: string) => {
+    settleSheetFill(responseId, { jobId });
+    const scope = recoveryScopeRef.current;
+    setReportJobIds(scope === null ? [] : loadReportJobs(scope));
+    setPendingSheetFills(scope === null ? [] : loadPendingSheetFills(scope));
+  };
   // Kept in the dock store so a same-tab re-login or reload restores it with the conversation.
   const collection = useAIDockStore((state) => state.collection);
   const setCollection = useAIDockStore((state) => state.setCollection);
@@ -877,8 +904,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         }
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         if (result.reportJobId !== undefined) {
-          rememberReportJob(result.reportJobId);
-          setReportJobIds(loadReportJobs());
+          const scope = recoveryScopeRef.current;
+          rememberReportJob(scope, result.reportJobId);
+          if (scope !== null) setReportJobIds(loadReportJobs(scope));
         }
         return result;
       } catch (error) {
@@ -1198,8 +1226,22 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                       {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
                         <ReportJobCard jobId={entry.reportJobId} />
                       ) : null}
+                      {entry.role === 'assistant' && entry.sheetFillPlan !== undefined
+                        && entry.reportJobId === undefined && entry.responseId !== null ? (
+                        <SheetFillPlanCard
+                          key={`${authGeneration}/${entry.responseId}`}
+                          plan={entry.sheetFillPlan}
+                          responseId={entry.responseId}
+                          sessionId={currentSessionId}
+                          recoveryScope={recoveryScope}
+                          cancelled={entry.sheetFillCancelled === true}
+                          onAccepted={(jobId) => acceptSheetFill(entry.responseId!, jobId)}
+                          onCancel={() => settleSheetFill(entry.responseId!, 'cancelled')}
+                        />
+                      ) : null}
                       {entry.role === 'assistant' && entry.presentationKind === 'completed'
-                        && entry.reportJobId === undefined && entry.text.trim() ? (
+                        && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
+                        && entry.text.trim() ? (
                         <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
                           text={entry.text} attachments={deliveryAttachments} />
                       ) : null}
@@ -1218,10 +1260,26 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
 
             {reportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
               <ReportJobCard key={jobId} jobId={jobId} onDismiss={() => {
-                forgetReportJob(jobId);
-                setReportJobIds(loadReportJobs());
+                forgetReportJob(recoveryScope, jobId);
+                setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
               }} />
             ))}
+            {pendingSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
+              .map((item) => (
+                <SheetFillPlanCard
+                  key={`${authGeneration}/${item.responseId}`}
+                  plan={item.plan}
+                  responseId={item.responseId}
+                  sessionId={item.sessionId}
+                  recoveryScope={recoveryScope}
+                  onAccepted={(jobId) => acceptSheetFill(item.responseId, jobId)}
+                  onDismiss={() => {
+                    forgetPendingSheetFill(recoveryScope, item.responseId);
+                    setPendingSheetFills(recoveryScope === null ? []
+                      : loadPendingSheetFills(recoveryScope));
+                  }}
+                />
+              ))}
             {visibleBrowserTarget === null ? null : (
               <BrowserRunMonitor
                 key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}

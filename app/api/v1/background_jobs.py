@@ -15,9 +15,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.csrf import PrincipalDependency
+from app.api.v1.runtime import _bind_session
 from app.background_jobs import BackgroundJobService
 from app.ports.auth import Principal
 from app.ports.background_jobs import BackgroundJobError, BackgroundJobStatus, BackgroundJobView
@@ -41,6 +42,24 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "oa_unbound": (409, "需要先在软件中心授权 OA 后才能导出。"),
     "report_session_required": (422, "OA 待办报表需要在 AI 助手对话中发起。"),
     "oa_unavailable": (503, "OA 暂不可用，请稍后重试。"),
+    # Admission refusals of the sheet fill kind (shared with the chat proposal tool).
+    "sheet_fill_source_changed": (
+        409,
+        "上传的表格已变化或不属于本次对话，请重新上传后再填表。",
+    ),
+    "sheet_fill_document_forbidden": (403, "当前账号不能使用固定文档问答填表。"),
+    "sheet_fill_sheet_size_unknown": (
+        422,
+        "表格的行列数无法确定，请另存后重新上传。",
+    ),
+    "sheet_fill_fidelity_unsupported": (
+        422,
+        "表格含图表、图片等对象，首版暂不支持，请另存为仅含数据的表格后重试",
+    ),
+    "sheet_fill_too_many_rows": (
+        422,
+        "填写的数据行超过上限（OA 待办每表 2000 行，文档问答合计 30 个问题）。",
+    ),
 }
 
 
@@ -49,6 +68,8 @@ class BackgroundJobCreateRequest(BaseModel):
 
     kind: str
     params: dict[str, Any]
+    # Client chat session id; bound to the caller by the session binder before use.
+    session_id: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class BackgroundJobResponse(BaseModel):
@@ -124,11 +145,14 @@ class _BackgroundJobRoute(APIRoute):
 
 
 def make_router(
-    service: BackgroundJobService | None, require_principal: PrincipalDependency
+    service: BackgroundJobService | None,
+    require_principal: PrincipalDependency,
+    session_binder: Callable[[Principal, str], str] | None = None,
 ) -> APIRouter:
     router = APIRouter(route_class=_BackgroundJobRoute)
     errors: dict[int | str, dict[str, Any]] = {
-        code: {"model": BackgroundJobErrorResponse} for code in (404, 409, 422, 429, 503)
+        code: {"model": BackgroundJobErrorResponse}
+        for code in (403, 404, 409, 422, 429, 503)
     }
 
     def configured() -> BackgroundJobService:
@@ -159,9 +183,22 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> BackgroundJobAcceptResponse:
         key = _idempotency_key(request)
+        bound_session_id = (
+            None
+            if body.session_id is None
+            else _bind_session(
+                principal=principal,
+                requested_session_id=body.session_id,
+                session_binder=session_binder,
+            )
+        )
         try:
             accepted = await configured().submit(
-                principal, kind=body.kind, params=body.params, idempotency_key=key
+                principal,
+                kind=body.kind,
+                params=body.params,
+                idempotency_key=key,
+                session_id=bound_session_id,
             )
         except BackgroundJobError as error:
             _fail(error.code)

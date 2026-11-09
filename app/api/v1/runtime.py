@@ -297,8 +297,9 @@ def make_router(
             if chat_attachments is None:
                 raise _attachment_error("chat_attachment_unsupported")
             try:
+                # Row 1 headers (read by the isolated child) let the model map columns.
                 attachments = await chat_attachments.resolve_chat_attachments(
-                    principal, session_id, body.attachment_ids
+                    principal, session_id, body.attachment_ids, with_headers=True
                 )
             except ChatAttachmentError as error:
                 raise _attachment_error(error.code) from None

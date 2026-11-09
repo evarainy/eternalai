@@ -6,6 +6,7 @@ import {
   isUserActionOutcome,
   type UserActionOutcome,
 } from './userActionOutcome';
+import { parseSheetFillPlan, type SheetFillPlan } from './sheetFillPlan';
 
 export const SAFE_INCOMPATIBLE_TEXT = '当前响应无法安全显示，请稍后重试。';
 
@@ -126,6 +127,11 @@ export interface ProjectedResponse {
   mcpAuthorizationPath?: string;
   /** Background OA pending report accepted by this reply; the card reads only the caller's own job. */
   reportJobId?: string;
+  /** Server-validated sheet fill plan awaiting the user's confirmation (no job yet). */
+  sheetFillPlan?: SheetFillPlan;
+  /** The user cancelled this plan card (kept with the transcript; never submitted). An
+   * accepted plan instead keeps its job in `reportJobId`. */
+  sheetFillCancelled?: true;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -717,6 +723,15 @@ export function projectResponse(
       return { ...base, records: null, presentationKind: 'unconfirmed' };
     }
     return incompatibleResponse();
+  }
+
+  if (isRecord(value.data) && Object.prototype.hasOwnProperty.call(value.data, 'sheet_fill_plan')) {
+    const plan = parseSheetFillPlan(value.data.sheet_fill_plan);
+    if (plan === null || Object.keys(value.data).length !== 1 || status !== 'completed'
+        || action !== 'none' || value.ui.component_type !== 'none') {
+      return incompatibleResponse();
+    }
+    return { ...base, records: null, presentationKind: 'completed', sheetFillPlan: plan };
   }
 
   if (status === 'cancelled' || status === 'confirmation_invalidated') {

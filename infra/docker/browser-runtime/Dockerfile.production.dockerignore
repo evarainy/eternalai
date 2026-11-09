@@ -130,6 +130,7 @@ services/decision/*
 !app/application.py
 !app/background_jobs.py
 !app/file_artifacts.py
+!app/sheet_fill.py
 !app/api/__init__.py
 !app/api/v1/__init__.py
 !app/api/v1/admin.py

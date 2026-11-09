@@ -90,6 +90,26 @@ class SheetSummary:
     name: str
     max_row: int | None
     max_column: int | None
+    # Row 1 cell texts (first 50 columns, each cut to 64 characters plus "…"), read by the
+    # isolated inspection child on request; None when not read. Untrusted user data.
+    header: tuple[str, ...] | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class WorkbookHeaders:
+    """Row 1 of every worksheet plus whether the package holds objects openpyxl drops."""
+
+    headers: dict[str, tuple[str, ...]] = field(repr=False)
+    unsupported_objects: bool
+
+
+@dataclass(frozen=True)
+class ChatInputInspection:
+    """A verified chat attachment with its sheet headers and content digest (lowercase hex)."""
+
+    descriptor: ChatAttachmentDescriptor
+    sha256: str
+    unsupported_objects: bool
 
 
 @dataclass(frozen=True)
@@ -162,6 +182,7 @@ __all__ = (
     "XLSX_MEDIA_TYPE",
     "ChatAttachmentDescriptor",
     "ChatAttachmentError",
+    "ChatInputInspection",
     "ChatUploadRequest",
     "ChatUploadResult",
     "ChunkSource",
@@ -177,4 +198,5 @@ __all__ = (
     "JobOutputPublisher",
     "OutputWriter",
     "SheetSummary",
+    "WorkbookHeaders",
 )

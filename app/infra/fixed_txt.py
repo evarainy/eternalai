@@ -8,8 +8,15 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.ports.fixed_document import FixedDocumentReadError, FixedDocumentSnapshot
+from app.runtime.document_qa import DocumentQAService
+
+if TYPE_CHECKING:
+    from app.config import FixedDocumentSettings
+    from app.ports.llm_provider import LLMProviderPort
+    from app.ports.structured_output import StructuredOutputPort
 
 
 def _open_nonblocking(path: str, flags: int) -> int:
@@ -76,3 +83,21 @@ class FixedTxtReader:
             text=text,
             version=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         )
+
+
+def build_document_qa_service(
+    settings: FixedDocumentSettings,
+    *,
+    llm_provider: LLMProviderPort,
+    structured_output: StructuredOutputPort,
+    model: str,
+) -> DocumentQAService:
+    """The fixed-document Q&A service, built the same way by the API and the worker."""
+
+    return DocumentQAService(
+        reader=FixedTxtReader(settings.path, settings.max_bytes),
+        llm_provider=llm_provider, structured_output=structured_output,
+        model=model, tenant_id=settings.tenant_id,
+        ai_user_id=settings.ai_user_id, topic=settings.topic,
+        configuration_valid=settings.valid,
+    )

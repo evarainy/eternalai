@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
 
     from app.background_jobs import BackgroundJobService
+    from app.sheet_fill import SheetFillAdmission
 
 MAX_TOOL_RESULT_BYTES = 8192
 _READ_FAILED_TEXT = "读取失败。"
@@ -143,6 +144,8 @@ class AgentScopeRuntimeDependencies:
     mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None
     # Accepts the fixed OA pending report job; None hides the report tool.
     report_jobs: BackgroundJobService | None = None
+    # Checks sheet fill proposals over this turn's attachment; None hides the fill tool.
+    sheet_fill: SheetFillAdmission | None = None
 
 
 @dataclass(frozen=True, slots=True)

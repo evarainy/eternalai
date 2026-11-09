@@ -1312,6 +1312,7 @@ __all__ = (
     "RedisConnectionURL",
     "RuntimeEngine",
     "WORKER_ENVIRONMENT_KEYS",
+    "WorkerDocumentQASettings",
     "WorkerSettings",
 )
 
@@ -1474,6 +1475,47 @@ def _oa_report_worker_settings(source: Mapping[str, str]) -> OAReportWorkerSetti
     )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerDocumentQASettings:
+    """Fixed-document Q&A for sheet filling in the worker; parsed exactly like the API."""
+
+    fixed_document: FixedDocumentSettings = field(repr=False)
+    llm_base_url: str
+    llm_model: str
+    llm_timeout_seconds: float
+    llm_max_tokens: int
+    llm_temperature: float
+    llm_top_p: float
+    llm_top_k: int
+    llm_enable_thinking: bool
+
+
+def _worker_document_qa_settings(source: Mapping[str, str]) -> WorkerDocumentQASettings | None:
+    """Unset ``FIXED_DOCUMENT_PATH`` leaves document sources out of this worker."""
+
+    fixed_document = FixedDocumentSettings.from_env(source)
+    if fixed_document is None:
+        return None
+    return WorkerDocumentQASettings(
+        fixed_document=fixed_document,
+        llm_base_url=_http_base_url(source, "LLM_BASE_URL", default=_DEFAULT_LLM_BASE_URL),
+        llm_model=_required(source, "LLM_MODEL", default=_DEFAULT_LLM_MODEL),
+        llm_timeout_seconds=_positive_float(
+            source, "LLM_TIMEOUT_S", _DEFAULT_LLM_TIMEOUT_SECONDS
+        ),
+        llm_max_tokens=_positive_int(source, "LLM_MAX_TOKENS", _DEFAULT_LLM_MAX_TOKENS),
+        llm_temperature=_bounded_float(
+            source, "LLM_TEMPERATURE", _DEFAULT_LLM_TEMPERATURE, minimum=0.0, maximum=2.0
+        ),
+        llm_top_p=_bounded_float(
+            source, "LLM_TOP_P", _DEFAULT_LLM_TOP_P,
+            minimum=0.0, maximum=1.0, minimum_inclusive=False,
+        ),
+        llm_top_k=_positive_int(source, "LLM_TOP_K", _DEFAULT_LLM_TOP_K),
+        llm_enable_thinking=_boolean(source, "LLM_ENABLE_THINKING", default=False),
+    )
+
+
 @dataclass(frozen=True)
 class WorkerSettings:
     """Queue values plus optional IM Bot, reader and tool-free model settings."""
@@ -1489,6 +1531,8 @@ class WorkerSettings:
     personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
     # OA pending-workflow report kind; None leaves it unregistered in this worker.
     oa_report: OAReportWorkerSettings | None = field(default=None, repr=False)
+    # Fixed-document Q&A for sheet filling; None refuses document mappings in this worker.
+    document_qa: WorkerDocumentQASettings | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, environment: Mapping[str, str] | None = None) -> WorkerSettings:
@@ -1513,6 +1557,7 @@ class WorkerSettings:
             im_delivery=IMDeliverySettings.from_env(source),
             personal_agents=PersonalAgentSettings.from_env(source),
             oa_report=_oa_report_worker_settings(source),
+            document_qa=_worker_document_qa_settings(source),
         )
 
 
@@ -1551,6 +1596,20 @@ WORKER_ENVIRONMENT_KEYS: tuple[str, ...] = (
     *(key for _, key in _OA_PENDING_PATH_KEYS),
     *(key for _, key, _ in _OA_FORM_PARAMETER_KEYS),
     "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
+    # Sheet fill document sources: the fixed document and its Q&A model, nothing else.
+    "FIXED_DOCUMENT_PATH",
+    "FIXED_DOCUMENT_MAX_BYTES",
+    "FIXED_DOCUMENT_TENANT_ID",
+    "FIXED_DOCUMENT_AI_USER_ID",
+    "FIXED_DOCUMENT_TOPIC",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_TIMEOUT_S",
+    "LLM_MAX_TOKENS",
+    "LLM_TEMPERATURE",
+    "LLM_TOP_P",
+    "LLM_TOP_K",
+    "LLM_ENABLE_THINKING",
 )
 
 

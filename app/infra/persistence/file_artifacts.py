@@ -43,7 +43,11 @@ from app.infra.files.local_store import (
     sync_and_close,
     write_all,
 )
-from app.infra.spreadsheets.intake import INSPECTION_TIMEOUT_SECONDS, inspect_workbook
+from app.infra.spreadsheets.intake import (
+    INSPECTION_TIMEOUT_SECONDS,
+    inspect_workbook,
+    read_workbook_headers,
+)
 from app.ports.file_artifacts import (
     CHAT_UPLOAD_MAX_BYTES,
     XLSX_MEDIA_TYPE,
@@ -1110,7 +1114,8 @@ def build_file_artifact_service(
     retention = STANDARD_RETENTION_SECONDS if override is None else override
     _LOGGER.info("file_artifact_storage kind=%s retention_seconds=%s", storage.kind, retention)
     return FileArtifactService(
-        PostgreSQLFileArtifactStore(sessions, storage, settings.mac_key, retention)
+        PostgreSQLFileArtifactStore(sessions, storage, settings.mac_key, retention),
+        header_reader=read_workbook_headers,
     )
 
 

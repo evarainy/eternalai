@@ -45,9 +45,12 @@ export interface BackgroundJobAcceptResponse {
 
 export type BackgroundJobCreateRequestParams = { [key: string]: unknown };
 
+export type BackgroundJobCreateRequestSessionId = string | null;
+
 export interface BackgroundJobCreateRequest {
   kind: string;
   params: BackgroundJobCreateRequestParams;
+  session_id?: BackgroundJobCreateRequestSessionId;
 }
 
 export interface BackgroundJobErrorDetail {
