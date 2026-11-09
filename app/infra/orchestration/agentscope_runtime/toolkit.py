@@ -654,7 +654,7 @@ class ProposeSheetFill(_ControlTool):
         "received_at 接收时间、created_at 创建时间、workflow_type_id 流程类型编号、"
         "todo_id 待办编号）；"
         "document（固定文档问答，key_column 为问题所在列；可填 quote 文档原文）。"
-        "表格有多个工作表时，逐个处理每个有数据行的工作表：能按上述来源填写的放进 mappings，"
+        "表格有多个工作表时，逐个处理每个行数大于 1 的工作表：能按上述来源填写的放进 mappings，"
         "不需要填写的列入 skipped_sheets；"
         "每个工作表最多一个映射，fills 的列必须是表头非空的空白待填列。"
         "first_row/last_row 可省略（默认第 2 行到最后一行）。"

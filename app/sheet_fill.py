@@ -71,7 +71,7 @@ _INVALID_MESSAGES = {
     "field": "field 不在所选来源的可填字段内。",
     "attachment": "attachment_id 不是本轮附件。",
     "coverage": (
-        "untrusted_attachments 中还有含表头和数据行的工作表既不在 mappings 也不在 skipped_sheets："
+        "untrusted_attachments 中还有行数大于 1 的工作表既不在 mappings 也不在 skipped_sheets："
         "能按 oa_pending 或 document 填写的放进 mappings，确实不需要填写的列入 skipped_sheets，"
         "再重新调用。"
     ),
@@ -214,7 +214,7 @@ PROPOSAL_INPUT_SCHEMA: dict[str, Any] = {  # fixed, code-owned schema
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "不需要填写的工作表名称；每个有数据行的工作表都必须出现在 mappings 或这里"
+                "不需要填写的工作表名称；行数大于 1 的工作表都必须出现在 mappings 或这里"
             ),
         },
     },
@@ -304,7 +304,9 @@ def validate_plan(proposal: SheetFillProposal, inspection: ChatInputInspection) 
 
 
 def _require_coverage(proposal: SheetFillProposal, inspection: ChatInputInspection) -> None:
-    """Every sheet with a header and data rows is either mapped or explicitly skipped."""
+    """Every sheet whose recorded size (the row count the model sees) exceeds the header row
+    and whose header is not blank is either mapped or explicitly skipped. The recorded size
+    may count formatted blank rows; such a sheet is simply listed in ``skipped_sheets``."""
 
     named = {item.sheet for item in proposal.mappings} | set(proposal.skipped_sheets)
     for sheet in inspection.descriptor.sheets:
