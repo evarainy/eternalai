@@ -654,8 +654,9 @@ class ProposeSheetFill(_ControlTool):
         "received_at 接收时间、created_at 创建时间、workflow_type_id 流程类型编号、"
         "todo_id 待办编号）；"
         "document（固定文档问答，key_column 为问题所在列；可填 quote 文档原文）。"
-        "表格有多个工作表时，逐个处理每个行数大于 1 的工作表：能按上述来源填写的放进 mappings，"
-        "不需要填写的列入 skipped_sheets；"
+        "表格有多个工作表时，逐个处理每个行数大于 1 的工作表：表头里有待办标题类列的用 oa_pending，"
+        "有问题、提问类列的用 document，都放进 mappings；只有两类列都没有、"
+        "或用户明确说不填的工作表才列入 skipped_sheets；"
         "每个工作表最多一个映射，fills 的列必须是表头非空的空白待填列。"
         "first_row/last_row 可省略（默认第 2 行到最后一行）。"
         "系统校验通过后会给用户一张确认卡，用户确认后才在后台填写，只填空白格；"
@@ -703,8 +704,11 @@ class ProposeSheetFill(_ControlTool):
         except SheetFillRejected as rejected:
             return self._rejected(rejected.code, rejected.message)
         _REPORT_LOGGER.info(
-            "sheet_fill stage=proposed job=- rows=%s filled=- marked=- elapsed_ms=- code=ok",
+            "sheet_fill stage=proposed job=- rows=%s filled=- marked=- elapsed_ms=- code=ok"
+            " sheets=%s skipped=%s",
             sum(mapping.last_row - mapping.first_row + 1 for mapping in plan.mappings),
+            len(plan.mappings),
+            len(proposal.skipped_sheets),
         )
         ledger.terminal = SheetFillProposed(plan.model_dump(mode="json"))
         halt_tool_use(_agent_state, "turn_terminal")

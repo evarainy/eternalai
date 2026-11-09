@@ -72,7 +72,8 @@ _INVALID_MESSAGES = {
     "attachment": "attachment_id 不是本轮附件。",
     "coverage": (
         "untrusted_attachments 中还有行数大于 1 的工作表既不在 mappings 也不在 skipped_sheets："
-        "能按 oa_pending 或 document 填写的放进 mappings，确实不需要填写的列入 skipped_sheets，"
+        "有待办标题列的用 oa_pending、有问题列的用 document 放进 mappings，"
+        "两类列都没有或用户明确说不填的才列入 skipped_sheets，"
         "再重新调用。"
     ),
 }
@@ -214,7 +215,8 @@ PROPOSAL_INPUT_SCHEMA: dict[str, Any] = {  # fixed, code-owned schema
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "不需要填写的工作表名称；行数大于 1 的工作表都必须出现在 mappings 或这里"
+                "既没有待办标题列也没有问题列、或用户明确说不填的工作表名称；"
+                "行数大于 1 的工作表都必须出现在 mappings 或这里"
             ),
         },
     },
