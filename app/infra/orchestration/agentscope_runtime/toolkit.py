@@ -655,7 +655,7 @@ class ProposeSheetFill(_ControlTool):
         "todo_id 待办编号）；"
         "document（固定文档问答，key_column 为问题所在列；可填 quote 文档原文）。"
         "表格有多个工作表时，逐个处理每个行数大于 1 的工作表：表头里有待办标题类列的用 oa_pending，"
-        "有问题、提问类列的用 document，都放进 mappings；只有两类列都没有、"
+        "有问题、提问类列的用 document，都放进 mappings；只有两类列都没有、没有可填写的列，"
         "或用户明确说不填的工作表才列入 skipped_sheets；"
         "每个工作表最多一个映射，fills 的列必须是表头非空的空白待填列。"
         "first_row/last_row 可省略（默认第 2 行到最后一行）。"
