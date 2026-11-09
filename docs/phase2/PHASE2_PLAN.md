@@ -744,17 +744,17 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### 新功能基础总体方案批准登记（2026-11-03）
 
-`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。首棒候选已交付并完成合并前真实验收、待合并（见下节），后两棒尚未施工；以下各项不因方案批准而关闭。
+`P2-GOV-SYNC-20261103-2` 按 [DECISIONS 2026-11-03 方案批准](DECISIONS.md#2026-11-03--裁决新功能基础总体方案批准与一次性授权) 登记总体方案 v1.6 §8.4 欠债草稿；方案为仓库外 `E:/code/eternalai-reviews/new-foundation-20261103/FOUNDATION_PLAN.v1.6.approved.md`（下称方案）。基础三棒均已交付合并，状态见 STATUS；本节按后续实际证据更新，以下各项不因方案批准而自动关闭。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 四个旧调度器迁移（含 OA 待办同步进后台） | 已决逐项迁移；凭据轮询依赖“入队即完成”；worker 持有凭据需另行授权 | `P2-BACKGROUND-FOUNDATION-001` | 待分配（逐项） | 每项迁移后终态、取消、重启续跑经真实验证，凭据边界获授权 | [DECISIONS 2026-11-02](DECISIONS.md#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 4 条；[DECISIONS 2026-11-03 拆分](DECISIONS.md#2026-11-03--裁决新功能基础拆分与监理模板口径对齐) 第 3 条 |
-| XlsxWriter 推迟 | 基础三棒不生成报表 | 业务输入（报表样表） | 待分配（新报表棒） | 完成 allowlist 登记、锁定与真实验收 | DECISIONS 2026-11-02 第 5 条 |
+| XlsxWriter 推迟（已关闭） | 基础三棒不生成报表；PR #275 已引入锁定的 xlsxwriter==3.3.1（BSD-2-Clause）、登记依赖策略，并经真实报表生成、回读与下载验收 | 无 | `P2-XLSX-REPORT-001`（已完成） | 已满足依赖登记、锁定与首份固定报表真实验收；多报表与目标机限制见下文报表新增欠债 | DECISIONS 2026-11-02 第 5 条；PR #275 |
 | 上传解析的网络与文件隔离及 LibreOffice 兼容导入 | 本机只剥离环境变量（J5）；xls/et 只提示另存 | 目标 Linux 容器；样表 | 待分配 | 解析容器无业务网、无凭据文件并经验证；样表验收后开启兼容导入 | DECISIONS 2026-11-02 第 3、7 条；方案 J5 |
 | write 类后台作业协议 | 首棒注册即拒绝 write 类 kind | 首个写入类后台 kind | 待分配（自动提交等） | 以业务账本作为副作用权威、unknown 不重放经真实验证；所需 DDL 另行授权 | 方案 §1.3；DECISIONS 2026-11-02 第 1、4 条 |
 | 已完成作业行与队列历史保留（含换代遗留的无主 doing 队列行） | 首版不清理 | 无 | 待分配 | 保留策略与删除授权完成，或确认数据量没有影响 | 方案 §1.3、§8.2 |
 | Linux worker 优雅停止与部署 | 部署推后 | 服务器迁移授权 | 待分配 | 目标环境 SIGTERM 优雅停止、账本心跳判停换代与 reconcile 经实测；POSIX 下载重开与清理互斥方案确定并验证 | DECISIONS 2026-11-02 第 7 条；方案 §2.6 |
-| 输出发布与产物棒正向链路（输入链路已验收） | 产物棒没有真实生产者；输入链路已于 2026-11-05 在上传棒验收 | `P2-CHAT-UPLOAD-001`；首个输出生产者 | `P2-CHAT-UPLOAD-001`（输入）；待分配（输出） | 输入链路在上传棒验收，输出链路在首个生产者棒验收 | 方案 J7 |
+| 输出发布与产物棒正向链路（已关闭） | 输入链路已于 2026-11-05 在上传棒验收；2026-11-09 PR #275 首个业务生产者经 JobOutputPublisher 发布 OA 报表并实际下载通过 | 无 | `P2-CHAT-UPLOAD-001`（输入）；`P2-XLSX-REPORT-001`（输出，已完成） | 已满足：输入链路与首个输出生产者的发布、下载真实通过；R3 内容人工核对另列，不外推正式目标机 | 方案 J7；PR #275 R1/R2；PR #276 R9 补测 |
 | 产物 HMAC 密钥轮换 | 首版只有 `v1` | 无 | 待分配 | 有轮换需求时实现密钥环并验证 | 方案 J9 |
 | 本人跨会话文件入口 | J10 只在当前会话可见 | 无 | 待分配 | 有需求时设计“我的文件”列表并经隔离验收 | 方案 §2.4 |
 
@@ -773,12 +773,12 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### 文件产物 `P2-FILE-ARTIFACTS-001` 新增欠债（2026-11-05）
 
-本棒（A 档、高风险，与 IM 机会层并行）按总体方案 v1.6 §2 及仓库外短 plan `E:/code/eternalai-reviews/new-foundation-20261103/FILE_ARTIFACTS_PLAN.md` v1.4 施工；R3 在 IM 两棒合入后接到 `20261104_130000` 之后。雨爷 2026-11-04 专项授权两库 upgrade 时一并执行 IM 两条迁移（只 upgrade）。[新功能基础总体方案批准登记](#新功能基础总体方案批准登记2026-11-03) 中“输出发布与产物棒正向链路”等行继续有效。
+本棒（A 档、高风险，与 IM 机会层并行）按总体方案 v1.6 §2 及仓库外短 plan `E:/code/eternalai-reviews/new-foundation-20261103/FILE_ARTIFACTS_PLAN.md` v1.4 施工；R3 在 IM 两棒合入后接到 `20261104_130000` 之后。雨爷 2026-11-04 专项授权两库 upgrade 时一并执行 IM 两条迁移（只 upgrade）。[新功能基础总体方案批准登记](#新功能基础总体方案批准登记2026-11-03) 中各行按当前状态跟踪；“输出发布与产物棒正向链路”已由 PR #275 关闭，异常路径与目标环境限制仍保留。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | Windows 下载与清理互斥未实测（已关闭） | 本棒没有 available 产物；清理与下载互斥依赖 `os.open` 句柄无删除共享。2026-11-05 上传棒 C9：页面读首块后暂停形成真实背压，该轮清理记 `file_in_use`、`failed=1`，下载 sha256 一致，下一轮 `removed`，本行关闭 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 样本根上限速下载跨越清理轮次：该轮记 `file_in_use` 失败、下载 sha256 一致、下一轮删除；不成立回评审 | 方案 §2.6、§8.3；`app/api/v1/file_artifacts.py::PinnedFileResponse` |
-| 封存协议与清理真实路径未验收（含 MAC 跨驱动）（输入链路已关闭） | 本棒无生产者，预留、续租、封存、D2、D1a/D1b 真删除只做静态取证与桩核对。2026-11-05 上传棒验收：API 封存、续租、过期 410、worker `removed` 与再跑 `scanned=0` 通过；异常路径转 [聊天上传新增欠债](#聊天上传-p2-chat-upload-001-新增欠债2026-11-06) 故障注入行；输出链路仍待首个输出生产者 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001`（输入）；首个输出生产者（输出） | 上传棒实测 API 封存、worker 删除 `removed=1`、再跑幂等；异常路径另获故障注入授权或维持静态取证 | 方案 §7.3、J7；`app/infra/persistence/file_artifacts.py` |
+| 封存协议与清理真实路径未验收（含 MAC 跨驱动）（输入链路已关闭） | 本棒无生产者，预留、续租、封存、D2、D1a/D1b 真删除只做静态取证与桩核对。2026-11-05 上传棒验收：API 封存、续租、过期 410、worker `removed` 与再跑 `scanned=0` 通过；异常路径转 [聊天上传新增欠债](#聊天上传-p2-chat-upload-001-新增欠债2026-11-06) 故障注入行；输出发布正向链路已由 PR #275 真实发布与下载关闭；异常封存/清理路径仍按原授权边界保留 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001`（输入）；首个输出生产者（输出） | 上传棒实测 API 封存、worker 删除 `removed=1`、再跑幂等；异常路径另获故障注入授权或维持静态取证 | 方案 §7.3、J7；`app/infra/persistence/file_artifacts.py` |
 | 他人产物 404 未真实验收 | 本棒没有可下载的他人产物，手工插行得不到合法 MAC；上传棒只实测了不存在 id 404，缺第二测试账号 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 第二测试账号访问他人产物实测 404 | 方案 §7.3、§7.4 |
 | 发布 rename 持久化未实测 | Windows `MOVEFILE_WRITE_THROUGH`、POSIX 目录 `fsync` 的掉电窗口无法在本机实测，只按官方语义取证 | 服务器迁移授权 | 待分配 | Linux 部署时核对目录 fsync 实际执行；本机写穿调用在上传棒正向封存中确认返回成功 | `app/infra/files/local_store.py::durable_replace`；Win32 `MoveFileExW` 文档 |
 | 下载端点未导出 OpenAPI 文件（已关闭） | 后端导出脚本只覆盖已有端点，本棒不改 `web/`。`web/openapi/file-artifacts.openapi.json` 已随 PR #263 提交（前端上传调用为手写 `chatUploadApi.ts`），本行关闭 | `P2-CHAT-UPLOAD-001` | `P2-CHAT-UPLOAD-001` | 前端接入下载时补导出脚本与生成物 | `scripts/export_background_jobs_openapi.py` |
@@ -791,7 +791,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | OA 工具 internal_error 未复现 | 2026-11-06 DEBT1 三次受 identity_expired 阻断；OA2 重新登录后来源预览一次、本人待办两次均成功，仍未复现旧 internal_error，根因未定位；继续等再现取证，不冒称已修复 | 无（等待再次复现与获准脱敏运行取证） | 待分配（OA 定点定位） | 复现并取得脱敏根因证据、完成最小修复及受影响真实只读路径验证 | PR #257、#258；仓库外 `debt/DEBT1.md`、`debt/OA2.md` |
-| V1 来源与确认隔离剩余验收（D5） | 在途退出已通过；2026-11-06 DEBT1 3a 已实证当前读权变化：移除频道成员后读与确认均拒绝，恢复成员后可读；剩已有业务 pending 冲突未验 | 安全合成业务对象、已注册能力版本及取消终态路径待提供 | `P2-IM-CONTEXT-READ-001` 后续验收 | 已有业务 pending 未被 claim/消费/替换及取消终态获真实证据 | PR #257；仓库外 `debt/DEBT1.md` 3a/3b |
+| V1 来源与确认隔离剩余验收（D5B，挂 V5） | 当前读权变化已由 DEBT1 3a 实证；已有业务 pending 时 IM 来源回合不冲突仍未验。acc 启动器缺浏览器办理安装对象（browser_vertical_installation_required），18005 所用 5432 库无对应 IM 绑定；雨爷 2026-11-09 同意挂 V5，不为补测擅自补真实绑定 | V5 统一环境：浏览器办理与 IM 同环境（任务待分配） | V5 统一环境验收（未另分配 task_id） | 真实业务 pending 存在时，IM 来源回合未 claim/消费/替换该 pending，取消后终态与无业务误写有实际证据 | PR #257；仓库外 `debt/DEBT1.md` 3a/3b、`debt/D5B2.md`；CONTEXT.md 2026-11-09 决定 |
 | V1 试点身份桥接剩余边界（D8） | 本次登录/退出与复制库闭环已完成；正式组织目录、停用、第二租户、手机未覆盖 | `P2-ORGDIR-OA-SOURCE-001` 及现场专项授权 | `P2-IM-CONTEXT-READ-001`（试点）；其余待分配 | 剩余场景逐项实证，不以本次闭环批量核销 | PR #257 正文 |
 | V1 单进程前提（合成验收已关闭） | 2026-11-06 DEBT1 第 4 项实证 API 与 worker 各一个进程、workers=1 且无 WEB_CONCURRENCY 覆盖；限定重启后旧 ref 读与确认均 409 im_source_expired；不外推服务器部署 | 无（本机合成验收）；服务器部署单进程约束仍须目标部署任务核对 | `P2-IM-CONTEXT-READ-001`（本机验收完成）；服务器迁移/部署任务（待分配） | 本机已满足；服务器部署仍须确认单进程或另行设计共享 ref | PR #257；仓库外 `debt/DEBT1.md` 第 4 项 |
 | IM 身份映射保留与删除 | 雨爷 2026-11-08 裁决：工作台账号即 IM 账号，一人一号，由工作台账号开通/SSO 登录；im_account_bindings 仅作技术对应；保留与删除期限推到 V5 试点前决定 | V5 试点前的精确保留/删除裁决 | 待分配（V5 试点前） | 精确对象与期限获准后验证；本次无删除或迁移授权 | DECISIONS 2026-11-06 / 2026-11-08 V2b 与身份裁决；`alembic/versions/20261104_120000_im_context.py` |
@@ -847,12 +847,12 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 ### IM 机会层 V2b `P2-IM-FILE-SHARE-001` 新增欠债（2026-11-08）
 
-`P2-GOV-SYNC-20261108-1` 登记已合并 PR #271 正文的四项欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。F1–F7、F10 的合成真实验收不代替第三人、实际成品生产链或正式目标环境；5432/15432 已于 2026-11-08 获专项授权并升级至 `20261106_120000`，读回 revision、四个可空列与 FK 通过，该项欠债关闭（仓库外 `gov/UPG5.md`）。
+`P2-GOV-SYNC-20261108-1` 登记已合并 PR #271 正文的四项欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。F1–F7、F10 的原合成真实验收不代替正式目标环境；2026-11-09 第三人隔离由 `debt/F4C.md` 补验，Q7 生产者缺项按 PR #275 发布与下载证据关闭；5432/15432 已于 2026-11-08 获专项授权并升级至 `20261106_120000`，读回 revision、四个可空列与 FK 通过，该项欠债关闭（仓库外 `gov/UPG5.md`）。
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 真实第三人隔离未验 | 本轮只有甲乙合法宿主会话；已按批准替代验乙未分享文件 404，不能冒充丙 | P2-IM-FILE-SHARE-001：第三获准宿主会话未提供 | P2-IM-FILE-SHARE-001 后续验收（未另分配 task） | 丙本人合法会话对给定文件 URL 404 有实际证据 | PR #271；v2b/acceptance-results.json F4 |
-| Q7 聊天生成成品文件生产链 | 当前用真实 chat_input 上传；JobOutputPublisher 无实际业务生产者 | P2-IM-FILE-SHARE-001：实际输出生产者缺项 | 待 GOV-SYNC 分配生产者任务 | Chat 真实生成成品→file_artifacts→同版私发完整链验收 | PR #271；CONTEXT.md V2b 来源决定；v2b/V2B_IMPL.md |
+| 真实第三人隔离（已关闭） | 2026-11-09 甲乙丙三个真实工作台账号、18015/worker、15433 与合成 Zulip 补验：丙下载、核实与详情均 404，列表不可见，甲乙同版下载及权限历史不受影响 | 无 | `P2-IM-FILE-SHARE-001` 后续验收（F4C 已完成） | 已满足：丙本人隔离与甲乙不受影响均有实际证据；不外推正式组织/目标机 | PR #271；仓库外 `debt/F4C.md` |
+| Q7 聊天生成成品文件生产链（生产者缺项已关闭） | PR #275 的 OA 报表为 JobOutputPublisher 首个业务调用方，真实验收生成、发布与下载通过；V2b 同版私发/下载另有既有验收，不把两次独立验收声称为新跑完整串联流程 | 无 | `P2-XLSX-REPORT-001`（生产者已交付验收）；`P2-IM-FILE-SHARE-001`（既有同版私发） | 已满足本项生产者缺项：Chat 生成成品并发布至 file_artifacts、本人实际下载通过；R3 内容核对仍待雨爷 | PR #275 R1/R2；PR #271；CONTEXT.md 2026-11-09 Q7 闭环登记 |
 | 5432/15432 升级到 20261106_120000（已关闭） | 雨爷 2026-11-08“升级。”专项授权后，先测试库 15432、后开发库 5432，均从 20261105_120000 升至 20261106_120000；revision、四个可空列与 artifact FK 读回通过；18005 未重启，本治理棒未连接数据库 | 无 | `P2-IM-FILE-SHARE-001` 合并后专项升级（已完成） | 已满足：两库获专项授权、升级至 20261106_120000 并读回结构 | PR #271；CONTEXT.md 2026-11-08“升级。”；gov/UPG5.md；gov/upg5-databases.json |
 | 正式环境/目标机未验 | 本轮为本机复制库、合成 Zulip、甲乙持久会话，非正式组织/目标服务器 | P2-IM-FILE-SHARE-001：正式部署及业务动作授权/目标机环境未提供 | 待 GOV-SYNC 分配正式验收任务 | 正式目标机与组织身份获准真实流程验收 | PR #271；v2b/environment.json；v2b/V2B_ACC.md |
 
@@ -870,6 +870,43 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 附件与浏览器技能组合拒绝未实测 | 验收账号没有浏览器技能开关 | 无 | 待分配 | 有开关的账号实测前端禁用与后端 422 `chat_attachment_unsupported` | `web/src/pages/ChatPage.tsx::attachmentsAllowed`；`app/api/v1/runtime.py::_attachment_error` |
 | 超大文件前端提示文案未逐字核对 | 验收以后端日志与目录计数确认拒绝 | 无 | 待分配 | 浏览器选择超限文件核对中文提示 | `web/src/features/chat-upload/chatUploadApi.ts` |
 | 重登换账号清空未实测 | 测试浏览器各只保存一个账号，不读取或输入凭据；雨爷 2026-11-06 决定 `P2-IM-REAUTH-FIX-001` 以 astra 静态审查与既有测试为准 | 第二测试账号 | 待分配 | 第二账号实测换人后 Dock 清空、IM 恢复 | PR #265；`web/src/app/identity.ts::useIdentityRevalidation` |
+
+### OA 待办报表 `P2-XLSX-REPORT-001` 新增欠债（2026-11-09）
+
+`P2-GOV-SYNC-20261109-1` 登记已合并 PR #275/#276。以下保留 #275 原欠债表全文；**现役更正**：原表“R9 未实测”义务已由 #276 的自然失效补测关闭，实际失败码为 `oa_unavailable`，不是 `oa_session_expired`。worker 不续期的范围仍有效；“无法识别过期”的现役欠债以本节后 #276 表中原行为准，该行也归属第一棒。R3 内容人工核对仍待雨爷，不因发布与下载成功关闭。
+
+| 欠债 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 报表行数上限沿用 provider 现有上限（5000 条/50 页），超限只报 `oa_unavailable`，没有单独的 `report_too_large` | 不改 provider 构造参数，保持 API 行为不变 | 无 | 需要更大报表时开棒 | 真实待办超过 5000 条，或业务要求区分该提示 | IMPL_REPORT 偏离第 1 条 |
+| worker 持有系统消息的非机密配置 | `LiveOAReadProvider` 构造时同时校验两份契约包 | 无 | provider 支持只配待办时 | provider 拆分 | IMPL_REPORT 偏离第 2 条 |
+| worker 内 OA 会话不续期，过期即失败（`oa_session_expired`） | 方案 §3.6 不给 worker 续期能力 | 无 | 出现真实过期失败时 | 用户反馈报表因过期失败 | PLAN §3.6；R9 未实测 |
+| R9（OA 会话失效）未实测 | 现场没有自然出现，按约定不主动破坏凭据 | 无 | 下次自然出现时 | 记录一次实测 | 本 PR 验证表 |
+| R3 内容人工核对待雨爷 | 执行方不读取真实报表内容 | 雨爷 | 雨爷打开文件 | 雨爷确认或开修复棒 | 本 PR 验证表 |
+| 运行中取消允许“完成抢先”，已发布的产物保留 | 复用 runner 现有取消语义 | 无 | 业务要求强取消时 | — | PLAN §3.2(7) |
+| 卡片跨浏览器/跨会话恢复不在范围 | 沿用既有同标签页 sessionStorage 方案 | 无 | 沿用 J10 欠债 | J10 关闭 | PLAN §9 P1-6 |
+| 报表筛选和多报表定义未做；目标机（麒麟 ARM）未验收 | 本棒只做固定一份报表；目标机验收推到 Docker 阶段 | 无 | 后续报表需求 / Docker 阶段 | — | PLAN §4、§7 |
+
+### 聊天上传填表 `P2-SHEET-FILL-001` 新增欠债（2026-11-09）
+
+以下原样登记已合并 PR #276 的九项欠债；其中 worker 无法识别 OA 会话过期一行同时更正第一棒 R9 的旧状态，作为第一棒 `P2-XLSX-REPORT-001` 的剩余限制，不重复派工。S3 下载已通过，结果内容仍待雨爷人工核对。
+
+| 欠债 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 普通说法下模型提案的完整性不稳定：有时只映射一个工作表；OA 会话失效时会先去查询 | glm-4.7 的工具选择不稳定；确认卡会如实展示要填什么，用户可以取消后说得更明确 | 无 | 工具命中率改进时 | 连续实测普通说法能稳定映射全部工作表 | 本 PR 验收 S1 记录 |
+| 干净结果表未做：表格含图表、图片等对象时直接拒绝 | 首版范围收窄（PLAN §7 P1-6） | 无 | 业务出现带对象的表格时 | 实现“干净结果表 + 原表” | PLAN §7 |
+| 表头固定为第 1 行 | 防止数据行进入模型（PLAN §7 P1-4） | 无 | 业务需要其他表头位置时 | 支持由用户指定表头行 | PLAN §7 |
+| 文档问答逐题串行，较慢（9 题约 25–80 秒） | 首版简单实现 | 无 | 题量变大时 | 并发或批量问答 | worker 日志 |
+| 没有模糊匹配，也不能覆盖已有值 | 首版只做全等匹配、只填空白格 | 无 | 业务需要时 | — | PLAN §3.6 |
+| worker 无法识别 OA 会话过期，统一报 `oa_unavailable`（第一棒 R9 实测） | worker 不持有心跳和续期能力 | 无 | worker 获得会话诊断能力时 | 能报出 `oa_session_expired` | 本 PR 验证 R9 段 |
+| 生产镜像白名单不含 worker 闭包文件（`app/infra/jobs/*`、`fill_child.py`） | 当前镜像只运行 API 入口 | 无 | worker 进入镜像时 | 补登记 | IMPL_REPORT §8 |
+| openpyxl 加载再保存会丢掉少数扩展（如数据验证扩展） | 首版接受 | 无 | 出现保真投诉时 | — | IMPL_REPORT §8 |
+| S3 内容由人工核对，待雨爷 | 执行方不读取真实内容 | 雨爷 | 雨爷打开结果文件 | 雨爷确认或开修复棒 | 本 PR 验证表 |
+
+### IM 环境新增欠债（2026-11-09）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 测试 CA 2026-11-11 到期 | 合成 Zulip 19412/19415 使用的测试 CA 于 2026-11-11T01:44:24Z 到期；此前仅续叶证书且未超过 CA 截止，届时影响合成访问 | 无（需对应证书/信任变更授权，不由治理棒执行） | 到期前续 CA 或换新根的环境任务（待分配） | 到期前完成续 CA 或换新根，并在 19412/19415 及获准客户端验证信任与访问 | 仓库外 CONTEXT.md 2026-11-09 ACCN2 环境处置；`debt/F4C.md`；本任务 laneGOV9.md |
 
 ### 使用中会话续期 R-APP 新增欠债（2026-10-28）
 
