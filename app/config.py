@@ -1415,6 +1415,8 @@ class OAReportWorkerSettings:
 
     oa_read: OAReadSettings
     credential_encryption_key: bytes = field(repr=False)
+    # Read-only liveness probe after an ambiguous OA rejection.
+    oa_heartbeat_path: str = _DEFAULT_OA_HEARTBEAT_PATH
 
 
 _OA_PENDING_PATH_KEYS: tuple[tuple[str, str], ...] = (
@@ -1471,6 +1473,9 @@ def _oa_report_worker_settings(source: Mapping[str, str]) -> OAReportWorkerSetti
         ),
         credential_encryption_key=_base64_key(
             source, "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64", exact_bytes=32
+        ),
+        oa_heartbeat_path=_oa_path_with_default(
+            source, "OA_HEARTBEAT_PATH", _DEFAULT_OA_HEARTBEAT_PATH
         ),
     )
 
