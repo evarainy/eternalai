@@ -31,6 +31,7 @@ from app.api.v1.csrf import (
 from app.api.v1.file_artifacts import make_router as make_file_artifacts_router
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
+from app.api.v1.im_client import make_router as make_im_client_router
 from app.api.v1.im_context import make_router as make_im_context_router
 from app.api.v1.im_deliveries import make_router as make_im_deliveries_router
 from app.api.v1.im_inbound import make_router as make_im_inbound_router
@@ -48,6 +49,7 @@ from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
 from app.file_artifacts import FileArtifactService
+from app.im_client import IMClientService
 from app.im_context import IMContextService
 from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.browser.adapter import BrowserCapabilityAdapter
@@ -128,6 +130,7 @@ def create_app(
     personal_agent_service: PersonalAgentService | None = None,
     close_im_deliveries: Callable[[], Awaitable[None]] | None = None,
     im_context: IMContextService | None = None,
+    im_client: IMClientService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -196,8 +199,12 @@ def create_app(
                         if credential_started and credential_polling_scheduler is not None:
                             await credential_polling_scheduler.stop()
                     finally:
-                        if close_im_deliveries is not None:
-                            await close_im_deliveries()
+                        try:
+                            if close_im_deliveries is not None:
+                                await close_im_deliveries()
+                        finally:
+                            if im_client is not None:
+                                await im_client.aclose()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -290,6 +297,10 @@ def create_app(
     application.include_router(
         make_im_context_router(im_context, csrf_protected_principal, session_binder),
         prefix="/api/v1/im-context",
+    )
+    application.include_router(
+        make_im_client_router(im_client, csrf_protected_principal),
+        prefix="/api/v1/im-client",
     )
     application.include_router(
         make_browser_runs_router(
@@ -575,6 +586,7 @@ def create_production_app(
         im_delivery_service=components.im_deliveries,
         close_im_deliveries=components.close_im_deliveries,
         im_context=components.im_context,
+        im_client=components.im_client,
         personal_agent_service=components.personal_agents,
         **({"background_sync_disabled_receipt": True} if not background_sync_enabled else {}),
         **({"d_form_execution_without_sync": True} if d_form_execution_without_sync else {}),

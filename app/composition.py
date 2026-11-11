@@ -51,6 +51,7 @@ from app.evaluator import TerminalEvaluator
 from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.file_artifacts import FileArtifactService
+from app.im_client import IMClientService
 from app.im_context import IMContextService
 from app.im_deliveries import IMDeliveryService
 from app.infra.adapters.business_mcp.adapter import BusinessMcpAdapter
@@ -247,6 +248,7 @@ class ProductionComponents:
     im_deliveries: IMDeliveryService | None = None
     close_im_deliveries: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     im_context: IMContextService | None = None
+    im_client: IMClientService | None = None
     personal_agents: PersonalAgentService | None = None
 
 
@@ -883,14 +885,20 @@ def build_production_components(
             raise RuntimeError("mcp_isolated_contract_boundary_invalid")
     session_revocations = PostgreSQLSessionRevocationStore(session_factory)
     im_context = None
+    im_client = None
     if settings.zulip is not None:
         adapter = ZulipCommunicationAdapter(settings.zulip)
+        binding_store = PostgreSQLIMAccountBindingStore(session_factory)
         im_context = IMContextService(
-            PostgreSQLIMAccountBindingStore(session_factory), adapter, adapter, session_revocations,
+            binding_store, adapter, adapter, session_revocations,
             provider="zulip", im_instance_id=settings.zulip.im_instance_id,
             realm_id=settings.zulip.realm_id, im_origin=settings.zulip.origin,
             helper_url=settings.zulip.helper_url,
             host_origin=settings.zulip.host_origin,
+        )
+        im_client = IMClientService(
+            binding_store, adapter, session_revocations, provider="zulip",
+            im_instance_id=settings.zulip.im_instance_id, realm_id=settings.zulip.realm_id,
         )
     mcp_store = PostgreSQLMcpStore(
         session_factory, settings.credential_encryption_key, session_revocations
@@ -1458,6 +1466,7 @@ def build_production_components(
         background_jobs=background_jobs,
         file_artifacts=file_artifacts,
         im_context=im_context,
+        im_client=im_client,
     )
 
 
