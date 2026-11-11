@@ -21,6 +21,7 @@ export interface ZulipUser {
   full_name: string;
   email: string;
   avatar_url: string | null;
+  /** register 的 realm_users 不带此字段（都是活跃账号），由 imStore 建快照时补上。 */
   is_active: boolean;
   is_bot: boolean;
   /** 本人可见时才有的真实邮箱；不可见时 `email` 只是内部占位地址，不展示。 */
@@ -95,7 +96,8 @@ export interface ZulipRegisterResponse {
   max_file_upload_size_mib: number;
   /** 单条消息正文上限（Unicode 字符数），超出时服务端截断。 */
   max_message_length: number;
-  realm_users: ZulipUser[];
+  /** 只含未停用的账号，条目不带 is_active。 */
+  realm_users: Omit<ZulipUser, 'is_active'>[];
   custom_profile_fields: ZulipProfileField[];
   subscriptions: ZulipSubscription[];
   recent_private_conversations: ZulipRecentPrivateConversation[];

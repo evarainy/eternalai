@@ -15,16 +15,17 @@ const SELF = 1;
 const DEPT_FIELD = 1;
 const TITLE_FIELD = 2;
 
-function person(id: number, name: string, dept: string, title = ''): ZulipUser {
+function person(id: number, name: string, dept: string, title = ''): Omit<ZulipUser, 'is_active'> {
   const profile_data: ZulipUser['profile_data'] = { [DEPT_FIELD]: { value: dept } };
   if (title) profile_data[TITLE_FIELD] = { value: title };
   return {
-    user_id: id, full_name: name, email: `user${id}@example.invalid`, avatar_url: null, is_active: true,
+    user_id: id, full_name: name, email: `user${id}@example.invalid`, avatar_url: null,
     is_bot: false, profile_data,
   };
 }
 
-const USERS: ZulipUser[] = [
+// 与 12.3 的 realm_users 一致：不带 is_active。
+const USERS: Omit<ZulipUser, 'is_active'>[] = [
   person(SELF, '王××', '办公室', '科员'),
   person(2, '李明', '规划处', '副处长'),
   person(3, '王芳', '财务处'),
@@ -63,7 +64,7 @@ const IMAGE_SVG = 'data:image/svg+xml,' + encodeURIComponent(
   + '<rect x="284" y="44" width="184" height="168" rx="8" fill="#f7f9fc" stroke="#c9d3e2"/></svg>',
 );
 
-function user(id: number): ZulipUser {
+function user(id: number): Omit<ZulipUser, 'is_active'> {
   const found = USERS.find((item) => item.user_id === id);
   if (!found) throw new Error(`devTransport: unknown user ${id}`);
   return found;

@@ -335,7 +335,8 @@ function onRealmUser(state: ImState, event: ZulipEvent): ImState {
   const person = event.person as (Partial<ZulipUser> & { user_id: number; custom_profile_field?: { id: number; value: string | null; rendered_value?: string } }) | undefined;
   if (!person) return state;
   const current = state.users[person.user_id];
-  if (event.op === 'add') return { ...state, users: { ...state.users, [person.user_id]: person as ZulipUser } };
+  // 新增用户事件只针对活跃账号，与 realm_users 一样可能不带 is_active。
+  if (event.op === 'add') return { ...state, users: { ...state.users, [person.user_id]: { ...person, is_active: true } as ZulipUser } };
   if (!current) return state;
   if (event.op === 'remove') return { ...state, users: { ...state.users, [person.user_id]: { ...current, is_active: false } } };
   if (event.op !== 'update') return state;

@@ -153,7 +153,8 @@ function indexSnapshot(register: ZulipRegisterResponse): Partial<ImState> {
   return {
     queueId: register.queue_id,
     selfId,
-    users: Object.fromEntries(register.realm_users.map((user) => [user.user_id, user])),
+    // 12.3 的 realm_users 只含未停用的账号，条目里没有 is_active（与 GET /users 不同），这里补上。
+    users: Object.fromEntries(register.realm_users.map((user) => [user.user_id, { ...user, is_active: true }])),
     ...profileFieldIds(register.custom_profile_fields),
     subscriptions: Object.fromEntries(register.subscriptions.map((sub) => [sub.stream_id, sub])),
     topicPolicies: Object.fromEntries((register.user_topics ?? [])
