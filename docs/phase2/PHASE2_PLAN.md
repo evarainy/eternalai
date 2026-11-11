@@ -911,6 +911,23 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 确认卡不显示被跳过的工作表 | skipped_sheets 不进入 plan 合同，首版不改前端 | 无 | 用户反馈看不到哪些表没填时 | 卡片列出跳过的工作表 | PR #278 F2 |
 | coverage 拒绝在日志中与其他 `sheet_fill_proposal_invalid` 共用同一个 code | 只记计数与 code，首版不细分 | 无 | 需要统计拒绝原因时 | 日志区分原因 | `toolkit.py::ProposeSheetFill._rejected` |
 
+### IM 自建前端、代理 B 与 V1 多来源新增欠债（2026-11-11）
+
+`P2-GOV-SYNC-20261111` 登记已合并 PR #280、#281、#282 正文中的欠债；证据路径相对仓库外 `E:/code/eternalai-reviews/im-selection-20261104/`。验收环境为本机 5183、代理 B、合成 Zulip `im-acc-zulip` 与甲乙丙本人会话，不代替正式目标机。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 代理出错时的页面呈现未实测 | 验收环境无权停止代理进程 | 无 | 目标机 Docker 阶段验收 | 可控环境停掉代理，页面显示错误且不泄露上游信息 | PR #280；`feplan/acc3/ACC3_REPORT.md` 第 7 项 |
+| 两个依赖 dispatch_db 的 logout 用例本地未运行 | fixture 会建/清 schema，超出代理棒授权的库边界；由 required CI 覆盖 | 无 | required CI | CI 全绿即覆盖（PR #280 已满足，本项关闭条件已达成，仅留记录） | PR #280；`proxyplan/PROXY_IMPL_REPORT.md` |
+| 既有 Windows mypy 7 项（非新增） | `d_form_flow.py`、`d_form_cli.py`、`synthetic_vault.py` 的平台类型问题，裁定保留 | 无 | 另行分配 | 原平台入口通过或另作明确处置 | PR #280/#281；`proxyplan/PROXY_BASELINE_EVIDENCE.json` |
+| 所选消息撤回后服务端整组拒绝分支未实测 | 验收时消息已超上游 600 秒撤回时限；前端撤回即去选，界面无法触发 | 无 | 下一次 IM 联合验收 | 撤回时限内用已撤回 id 直接请求 sources，整组拒绝且不写部分来源 | PR #281；`feplan/acc3/ACC4_REPORT.md`、`ACC6_REPORT.md` |
+| 资料卡非空部门/职务/电话/邮箱呈现未真实验证 | 测试账号自定义资料字段为空 | 无 | 目标机 Docker 阶段验收 | 有真实资料字段的账号核对各行显示与空值隐藏 | PR #282；`feplan/acc3/ACC7_REPORT.md`、`ACC8_REPORT.md` |
+| V3 授权与撤权未实测 | 会写入业务授权状态，本轮未授权 | 无 | 下一次 IM 联合验收 | 在面板完成一次授权与撤权并核对生效 | PR #282；`ACC7_REPORT.md` 第 7 项 |
+| V2/V4 卡片站内链接未实测 | 测试账号无现成送核或委托卡片 | 无 | 下一次 IM 联合验收 | 点卡片链接在本页打开对应抽屉、不整页刷新 | PR #282；`ACC7_REPORT.md` 第 8 项 |
+| 用户组展开成员未实测 | 测试实例没有非系统用户组 | 无 | 目标机 Docker 阶段验收 | 有用户组时展开成员并能查看资料 | PR #282；`ACC7_REPORT.md` 第 3 项 |
+| 普通群静音「新消息自然未读后立即切换」未单独覆盖 | 验收页面聚焦时新消息即自动已读，改用「标为未读」准备状态验证 | 无 | 下一次 IM 联合验收 | 后台页签收到新消息后切换静音并核对角标 | PR #282；`ACC8_REPORT.md` 第 4 项 |
+| ACC7、ACC9 各有一个中断驱动的甲会话未经界面退出 | 驱动异常中断，上下文随之关闭，无法补验会话撤销 | 无 | 无（会话按空闲过期） | 会话过期或该账号下次登录时被替换 | PR #282；`ACC7_REPORT.md` 第 13 项、`ACC9_REPORT.md` |
+
 ### IM 环境新增欠债（2026-11-09）
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
