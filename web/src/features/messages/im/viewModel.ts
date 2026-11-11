@@ -186,7 +186,13 @@ export function messageShape(html: string): MessageShape {
 export function messageText(html: string): string {
   // 段落、引用、换行之间补一个空格，避免摘要里前后两段文字粘在一起。
   const spaced = html.replace(/<\/(p|blockquote|div|li|h[1-6]|pre)>|<br\s*\/?>/gi, '$& ');
-  return (inertDocument(spaced).body.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const doc = inertDocument(spaced);
+  // Unicode emoji 在服务端 HTML 里是 `:name:` 文字加 `emoji-<码点>` class，摘要里换回字符本身（同 MessageBody）。
+  for (const span of doc.body.querySelectorAll('span.emoji')) {
+    const code = [...span.classList].find((name) => /^emoji-[0-9a-f-]+$/.test(name));
+    if (code) span.textContent = String.fromCodePoint(...code.slice(6).split('-').map((part) => parseInt(part, 16)));
+  }
+  return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
 /** 会话列表的摘要：群里带发送人，文件和图片用方括号标出。 */
