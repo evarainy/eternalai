@@ -431,7 +431,7 @@ describe('application authentication boundary', () => {
     saveDraft(parseDraft({ title: 'A-private' }), a);
     saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'A-private' }), a);
     // 2026-09-02 定稿把「退出登录」从左导航底部移进顶栏头像的用户菜单（画板 `TopPops.dc.html`）。
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
     await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
@@ -457,7 +457,7 @@ describe('application authentication boundary', () => {
       JSON.stringify({ detail: { code: 'logout_unavailable', message: 'Synthetic failure' } }), { status },
     )).mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false })));
     try {
-      fireEvent.click(screen.getByTestId('topbar-avatar'));
+      fireEvent.click(screen.getByTestId('user-bar-identity'));
       fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
       expect(await screen.findByText('退出未完成，请重试')).toBeInTheDocument();
       expect(useAuthStore.getState().status).toBe('authenticated');

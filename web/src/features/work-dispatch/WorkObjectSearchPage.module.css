@@ -171,3 +171,10 @@
 .historyFilters :global(.ant-select) { min-width: 240px; }
 .historyFilters label { display: flex; align-items: center; gap: 8px; }
 .historyFilters input[type='date'] { min-height: 36px; padding: 5px 9px; border: 1px solid var(--workbench-edge); border-radius: var(--workbench-radius-control); color: var(--workbench-text); background: var(--workbench-field-fill); font: inherit; }
+
+/* 去顶栏后本页自带的搜索框，宽度沿用原顶栏凹槽 392px。 */
+.searchBox {
+  width: 392px;
+  max-width: 100%;
+  margin-top: 16px;
+}

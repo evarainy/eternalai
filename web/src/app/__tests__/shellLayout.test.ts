@@ -3,23 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   IDENTITY_FALLBACK_LINES,
-  LAYOUT_BASELINE_WIDTH,
   MINIMUM_TARGET_SIZE,
-  SHELL_COLUMN_GAP,
-  SHELL_PADDING,
-  SIDEBAR_COLLAPSED_WIDTH,
-  SIDEBAR_EXPANDED_WIDTH,
-  TOPBAR_ELEMENT_WIDTHS,
-  TOPBAR_HORIZONTAL_PADDING,
-  TOPBAR_IDENTITY_WIDTH,
-  TOPBAR_SEARCH_MIN_WIDTH,
-  TOPBAR_SEARCH_WIDTH,
   USER_MENU_WIDTH,
   collapsedNavigationTargetWidth,
   singleLineTextWidth,
-  topbarAvailableWidth,
-  topbarMinimumRequiredWidth,
-  topbarRequiredWidth,
 } from '../shellLayout';
 
 function readSource(relativePath: string): string {
@@ -29,50 +16,10 @@ function readSource(relativePath: string): string {
   );
 }
 
-describe('AppShell 1280px layout budget', () => {
-  /*
-   * 2026-09-04 实机走查：1280×800 下顶栏溢出，右端头像被裁掉并压出横向滚动条。原核算漏了外壳的左右
-   * 内边距与列间隙共 48px。这条断言现在按补全后的可用宽度核**收缩到底**的顶栏——搜索框可让位，所以
-   * 它才是必须放得下的那个数；把 `topbarAvailableWidth()` 里任何一项扣除删掉，这条就会变红。
-   */
-  it('fits the six fixed topbar elements next to the expanded sidebar', () => {
-    expect(TOPBAR_ELEMENT_WIDTHS).toHaveLength(6);
-    expect(topbarMinimumRequiredWidth()).toBeLessThanOrEqual(
-      topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH, LAYOUT_BASELINE_WIDTH),
-    );
-    expect(TOPBAR_SEARCH_MIN_WIDTH).toBeLessThan(TOPBAR_SEARCH_WIDTH);
-  });
-
-  it('counts the shell padding and the column gap against the topbar budget', () => {
-    expect(
-      topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH, LAYOUT_BASELINE_WIDTH),
-    ).toBe(
-      LAYOUT_BASELINE_WIDTH -
-        SHELL_PADDING * 2 -
-        SIDEBAR_EXPANDED_WIDTH -
-        SHELL_COLUMN_GAP -
-        TOPBAR_HORIZONTAL_PADDING * 2,
-    );
-  });
-
-  it('keeps more room once the sidebar is collapsed to the icon rail', () => {
-    expect(topbarAvailableWidth(SIDEBAR_COLLAPSED_WIDTH)).toBeGreaterThan(
-      topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH),
-    );
-    // 收起导航后连画板给的 392px 全宽搜索框也放得下。
-    expect(topbarRequiredWidth()).toBeLessThanOrEqual(
-      topbarAvailableWidth(SIDEBAR_COLLAPSED_WIDTH),
-    );
-  });
-
+describe('AppShell sizing after the 2026-11-11 topbar removal', () => {
   it('keeps every fail-closed identity line on a single line of the user menu', () => {
-    /*
-     * 这几行不再出现在顶栏——姓名来自签名票据，顶栏最坏也只少一个部门，此时只显示姓名。它们只用在
-     * 268px 的用户菜单里，那一格比顶栏这一格宽，所以按顶栏宽度核算是更严的下界。
-     */
     expect(IDENTITY_FALLBACK_LINES.length).toBeGreaterThan(0);
     for (const line of IDENTITY_FALLBACK_LINES) {
-      expect(singleLineTextWidth(line)).toBeLessThanOrEqual(TOPBAR_IDENTITY_WIDTH);
       expect(singleLineTextWidth(line)).toBeLessThanOrEqual(USER_MENU_WIDTH);
     }
   });
@@ -81,9 +28,6 @@ describe('AppShell 1280px layout budget', () => {
     expect(collapsedNavigationTargetWidth()).toBeGreaterThanOrEqual(
       MINIMUM_TARGET_SIZE,
     );
-    for (const width of TOPBAR_ELEMENT_WIDTHS) {
-      expect(width).toBeGreaterThanOrEqual(MINIMUM_TARGET_SIZE);
-    }
   });
 });
 

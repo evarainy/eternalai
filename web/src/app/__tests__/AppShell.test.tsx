@@ -326,21 +326,20 @@ describe('AppShell and singleton AI Dock', () => {
     expect(document.body.textContent ?? '').not.toMatch(/[✦▤✎▦✉☻⊘◇➜◐◉⚑⚡⚙⏻✥«»]/u);
   });
 
-  it('submits the global Work Object search without changing the AI input', async () => {
+  it('submits the Ctrl K Work Object search without changing the AI input', async () => {
     useAIDockStore.setState({ mode: 'drawer' });
     renderShell('/admin/tasks');
     await settleLazyDock();
 
-    fireEvent.change(screen.getByLabelText('搜索工作事项'), {
-      target: { value: '\u3000 OA-WF-001\u0085  ReVIEW\ufeff' },
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+    const input = await screen.findByLabelText('搜索工作事项');
+    fireEvent.change(input, {
+      target: { value: '　 OA-WF-001  ReVIEW﻿' },
     });
+    expect(input).toHaveAttribute('placeholder', '搜索工作事项、文件编号、责任人');
     fireEvent.click(screen.getByRole('button', { name: /搜\s*索/ }));
 
     expect(screen.getByText('搜索结果页 ?q=oa-wf-001+review')).toBeInTheDocument();
-    expect(screen.getByLabelText('搜索工作事项')).toHaveAttribute(
-      'placeholder',
-      '搜索工作事项、文件编号、责任人',
-    );
     expect(screen.getByLabelText('要 AI 帮什么')).toHaveValue('');
     expect(useAIDockStore.getState().draft).toBe('');
   });
@@ -467,36 +466,38 @@ describe('AppShell primary navigation', () => {
   });
 });
 
-describe('AppShell topbar', () => {
+/*
+ * 2026-11-11 雨爷决定全站取消顶栏：全局项移到左导航底部的个人栏（头像、姓名、单位、通知铃），点个人栏
+ * 弹出菜单（搜索工作事项 Ctrl K、切换身份、风格、系统状态、退出登录），设计稿 `dt/claude-v3/v3-7`。
+ * 下面这组断言是原「AppShell topbar」各条在新结构上的等价断言：身份如实、取不到不编、状态靠颜色加文字、
+ * 读取三态分开、退出由服务端确认。
+ */
+describe('AppShell user bar', () => {
   beforeEach(resetStores);
 
-  it('fixes the element order and no longer renders a current-location block', () => {
+  function openUserMenu(): HTMLElement {
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
+    return screen.getByRole('region', { name: '用户菜单' });
+  }
+
+  it('no longer renders a topbar and puts the identity and bell at the bottom of the sidebar', () => {
     renderShell();
 
-    const topbar = screen.getByTestId('app-topbar');
-    expect(
-      Array.from(topbar.children).map((child) => child.getAttribute('data-slot')),
-    ).toEqual([
-      'search',
-      'identity',
-      'style',
-      'system-status',
-      'notifications',
-      'avatar',
-    ]);
+    expect(screen.queryByTestId('app-topbar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+    const sidebar = screen.getByRole('complementary', { name: '主导航' });
+    const userBar = within(sidebar).getByTestId('user-bar');
+    expect(within(userBar).getByTestId('user-bar-identity')).toBeInTheDocument();
+    expect(within(userBar).getByRole('button', { name: '通知' })).toBeInTheDocument();
     expect(screen.queryByText('当前位置')).not.toBeInTheDocument();
-    expect(screen.queryByText('搜索工作事项', { selector: 'strong' })).toBeNull();
   });
 
-  it('shows the real department and name on the single line the slot has', async () => {
+  it('shows the real name and department in the user bar', async () => {
     renderShell();
 
-    // 画板上这一格只有一行（`办公室 / 王××`）。姓名来自服务端签名的会话票据，部门来自 OA。
-    const identity = await screen.findByText(`${DEPARTMENT_NAME} / ${DISPLAY_NAME}`);
-    expect(identity).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId('topbar-identity')).queryByRole('button'),
-    ).not.toBeInTheDocument();
+    const identity = screen.getByTestId('user-bar-identity');
+    await waitFor(() => expect(identity).toHaveTextContent(DISPLAY_NAME));
+    expect(identity).toHaveTextContent(DEPARTMENT_NAME);
   });
 
   it('drops to the name alone when the department cannot be read, and says nothing else', async () => {
@@ -505,38 +506,38 @@ describe('AppShell topbar', () => {
     );
     renderShell();
 
-    const identity = screen.getByTestId('topbar-identity');
+    const identity = screen.getByTestId('user-bar-identity');
     await waitFor(() => expect(identity).toHaveTextContent(DISPLAY_NAME));
-    // 顶栏这一格取不到部门时不加一个字的提示——说明留给用户菜单。
-    expect(identity.textContent).toBe(DISPLAY_NAME);
-    expect(identity.textContent).not.toContain('/');
+    // 个人栏取不到部门时不加一个字的提示——说明留给用户菜单。
+    expect(identity.textContent).toBe(`${DISPLAY_NAME.slice(0, 1)}${DISPLAY_NAME}`);
     expect(identity.textContent).not.toContain('取不到');
   });
 
-  it('renders nothing in the identity slot before the backend has answered', () => {
+  it('renders no name in the user bar before the backend has answered', () => {
     apiMocks.readMe.mockReturnValue(new Promise(() => {}));
     renderShell();
 
     // 确认还没回来时不写占位、不写「读取中」，也不写一个假名字。
-    expect(screen.getByTestId('topbar-identity').textContent).toBe('');
+    const identity = screen.getByTestId('user-bar-identity');
+    expect(identity.textContent).toBe('');
   });
 
   it('shows the proxied photo and falls back to the surname when it cannot be loaded', async () => {
     renderShell();
 
-    const avatar = screen.getByTestId('topbar-avatar');
-    expect(avatar.tagName).toBe('BUTTON');
-    expect(avatar).toHaveAttribute('aria-expanded', 'false');
+    const trigger = screen.getByTestId('user-bar-identity');
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
-    const image = await screen.findByTestId('topbar-avatar-image');
+    const image = await screen.findByTestId('user-bar-avatar-image');
     // 前端只看到常量路径；OA 主机地址与照片相对路径都留在后端。
     expect(image).toHaveAttribute('src', '/api/v1/me/avatar');
-    expect(avatar).toHaveAccessibleName(`用户菜单：${DISPLAY_NAME}`);
+    expect(trigger).toHaveAccessibleName(`用户菜单：${DISPLAY_NAME}`);
 
     fireEvent.error(image);
 
-    expect(screen.queryByTestId('topbar-avatar-image')).not.toBeInTheDocument();
-    expect(screen.getByTestId('topbar-avatar-initial')).toHaveTextContent(
+    expect(screen.queryByTestId('user-bar-avatar-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('user-bar-avatar-initial')).toHaveTextContent(
       DISPLAY_NAME.slice(0, 1),
     );
   });
@@ -546,26 +547,21 @@ describe('AppShell topbar', () => {
     renderShell();
 
     expect(
-      await screen.findByTestId('topbar-avatar-initial'),
+      await screen.findByTestId('user-bar-avatar-initial'),
     ).toHaveTextContent(DISPLAY_NAME.slice(0, 1));
-    expect(screen.queryByTestId('topbar-avatar-image')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-bar-avatar-image')).not.toBeInTheDocument();
   });
 
   it('keeps a place for the job title and says it cannot be read instead of inventing one', async () => {
     renderShell();
 
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-
-    const menu = screen.getByRole('region', { name: '用户菜单' });
+    const menu = openUserMenu();
     expect(await within(menu).findByText(DISPLAY_NAME)).toBeInTheDocument();
-    /*
-     * 画板这一行写的是「办公室 · 主任科员」。部门有数据源，职务没有（OA 的用户信息接口里没有这个
-     * 字段），雨爷 2026-09-04 裁定留位 + 如实说明。
-     */
+    // 部门有数据源，职务没有（OA 的用户信息接口里没有这个字段），雨爷 2026-09-04 裁定留位 + 如实说明。
     expect(within(menu).getByTestId('user-menu-meta')).toHaveTextContent(
       `${DEPARTMENT_NAME} · ${JOB_TITLE_UNAVAILABLE_LINE}`,
     );
-    expect(menu.textContent).not.toContain('主任科员');
+    expect(menu.textContent).not.toMatch(/王|张三|李四|主任科员|科员/);
   });
 
   it('states each missing identity field on its own line in the user menu', async () => {
@@ -574,65 +570,50 @@ describe('AppShell topbar', () => {
     );
     renderShell();
 
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-
-    const menu = screen.getByRole('region', { name: '用户菜单' });
+    const menu = openUserMenu();
     expect(await within(menu).findByText(NAME_UNAVAILABLE_LINE)).toBeInTheDocument();
     expect(within(menu).getByTestId('user-menu-meta')).toHaveTextContent(
       `${DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`,
     );
   });
 
-  it('carries logout in the user menu instead of the sidebar and keeps the help entry honest', async () => {
+  it('lists the five v3 rows, keeps identity switching honest, and logs out from the menu', async () => {
     renderShell();
 
-    const sidebar = screen.getByRole('complementary', { name: '主导航' });
-    expect(
-      within(sidebar).queryByRole('button', { name: /退出登录/ }),
-    ).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /退出登录/ })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-
-    const menu = screen.getByRole('region', { name: '用户菜单' });
-    /*
-     * 画板 `TopPops.dc.html` 的用户菜单五行照抄，「退出登录」不再带「（本地）」后缀——那个后缀是我们
-     * 自己加的。它说明的那件事（只退工作台、不退 OA）改由行右侧的短注承担，仍然如实。
-     */
-    const logout = within(menu).getByRole('button', { name: /退出登录/ });
-    expect(logout).toBeInTheDocument();
-    expect(logout).toHaveTextContent('只退工作台');
-    expect(within(menu).getByRole('link', { name: /账号绑定/ })).toHaveAttribute(
+    const menu = openUserMenu();
+    for (const label of ['搜索工作事项', '切换身份', '风格', '系统状态', '退出登录']) {
+      expect(within(menu).getByText(label)).toBeInTheDocument();
+    }
+    // 雨爷 2026-11-11：切换身份保留入口、功能后做；不做一个点了没反应的按钮。
+    const switchRow = within(menu).getByText('切换身份').closest('[data-inert]');
+    expect(switchRow).toHaveAttribute('data-inert', 'true');
+    expect(switchRow).toHaveTextContent('后续开放');
+    expect(within(menu).queryByRole('button', { name: /切换身份/ })).not.toBeInTheDocument();
+    // 账号绑定仍从左导航的管理页面进入。
+    const sidebar = screen.getByRole('complementary', { name: '主导航' });
+    expect(within(sidebar).getByRole('link', { name: '账号绑定' })).toHaveAttribute(
       'href',
       '/admin/bindings',
     );
-    expect(
-      within(menu).getAllByText((_, node) => node?.textContent === '换个界面风格').length,
-    ).toBeGreaterThan(0);
-    expect(within(menu).getByText(/怎么用 \/ 找人帮忙/)).toBeInTheDocument();
-    expect(menu.textContent).not.toContain('8012');
-    expect(menu.textContent).not.toContain('内线');
 
+    const logout = within(menu).getByRole('button', { name: /退出登录/ });
+    expect(logout).toHaveTextContent('只退工作台');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     fireEvent.click(logout);
     await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
     fetchSpy.mockRestore();
   });
 
-  it('switches the background image from the style control and remembers the choice', () => {
+  it('switches the background image from the style row and remembers the choice', () => {
     renderShell();
-
-    const styleButton = screen.getByRole('button', { name: '切换界面风格' });
-    styleButton.focus();
-    expect(styleButton).toHaveFocus();
-    expect(styleButton).toHaveAttribute('aria-expanded', 'false');
     expect(shellElement()).toHaveAttribute('data-background', 'bgA');
 
-    fireEvent.click(styleButton);
+    const menu = openUserMenu();
+    fireEvent.click(within(menu).getByText('风格'));
 
-    expect(styleButton).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.queryByText('换底图在下一版提供。')).not.toBeInTheDocument();
-    const warm = screen.getByRole('button', { name: '暖橙' });
+    const panel = screen.getByRole('region', { name: '界面风格' });
+    const warm = within(panel).getByRole('button', { name: '暖橙' });
     expect(warm).toHaveAttribute('aria-pressed', 'false');
 
     fireEvent.click(warm);
@@ -645,26 +626,23 @@ describe('AppShell topbar', () => {
     ).toContain('"background":"bgB"');
   });
 
-  it('counts invalid OA credentials on the system status control only', async () => {
+  it('flags invalid OA credentials on the user bar without opening the menu', async () => {
     apiMocks.getBinding.mockResolvedValue(binding({ poll_status: 'invalid' }));
     renderShell();
 
-    const statusButton = await screen.findByRole('button', {
-      name: '系统状态，1 项需要处理',
+    const trigger = await screen.findByRole('button', {
+      name: `用户菜单：${DISPLAY_NAME}，系统状态 1 项需要处理`,
     });
-    expect(within(statusButton).getByTestId('system-status-count')).toHaveTextContent(
-      '1',
+    expect(within(trigger).getByTestId('user-bar-status-dot')).toHaveAttribute(
+      'data-status-kind',
+      'attention',
     );
+    expect(screen.getByRole('button', { name: '通知' }).textContent).not.toContain('1');
 
-    const notificationsButton = screen.getByRole('button', {
-      name: '通知，消息功能尚未开发，没有可显示的提醒',
-    });
-    expect(notificationsButton.textContent).not.toContain('1');
-    expect(
-      within(notificationsButton).queryByTestId('system-status-count'),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(statusButton);
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('1 个不正常');
+    fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
 
     expect(screen.getByText('OA 办公系统')).toBeInTheDocument();
     expect(
@@ -684,7 +662,7 @@ describe('AppShell topbar', () => {
 
   /*
    * 2026-08-20「每个前端棒的最低体验要求」：取后端数据的区块要有加载中 / 空 / 出错三态，且出错不得
-   * 冒充「没有数据」。系统状态面板的「还在读」与「读不到」是两回事，不能并成一个「暂时不知道」。
+   * 冒充「没有数据」。系统状态的「还在读」与「读不到」是两回事，不能并成一个「暂时不知道」。
    */
   it('separates “still loading” from “could not read” on the system status panel', async () => {
     let resolveBinding!: (value: CredentialBindingView) => void;
@@ -695,11 +673,10 @@ describe('AppShell topbar', () => {
     );
     renderShell();
 
-    const loadingButton = screen.getByRole('button', { name: '系统状态，正在读取' });
-    expect(within(loadingButton).getByTestId('system-status-count')).toHaveTextContent(
-      '…',
-    );
-    fireEvent.click(loadingButton);
+    const menu = openUserMenu();
+    expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('正在读取');
+    expect(screen.queryByTestId('user-bar-status-dot')).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
     expect(screen.getByText('正在读取。读到了这里会自己变。')).toBeInTheDocument();
     expect(screen.queryByText('正常。')).not.toBeInTheDocument();
 
@@ -707,24 +684,26 @@ describe('AppShell topbar', () => {
       resolveBinding(binding());
     });
 
-    expect(
-      await screen.findByRole('button', { name: '系统状态，暂无需要处理的项' }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('正常。')).toBeInTheDocument();
+    expect(await screen.findByText('正常。')).toBeInTheDocument();
+    expect(screen.getByTestId('system-status-summary')).toHaveTextContent('暂无不正常');
   });
 
   it('says the system status is unknown instead of pretending it is normal', async () => {
     apiMocks.getBinding.mockRejectedValue(new Error('unreachable'));
     renderShell();
 
-    const statusButton = await screen.findByRole('button', {
-      name: '系统状态，暂时无法判断',
+    const trigger = await screen.findByRole('button', {
+      name: `用户菜单：${DISPLAY_NAME}，系统状态暂时无法判断`,
     });
-    expect(within(statusButton).getByTestId('system-status-count')).toHaveTextContent(
-      '？',
+    expect(within(trigger).getByTestId('user-bar-status-dot')).toHaveAttribute(
+      'data-status-kind',
+      'unknown',
     );
 
-    fireEvent.click(statusButton);
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('读不到');
+    fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
 
     expect(
       screen.getByText(
@@ -734,28 +713,21 @@ describe('AppShell topbar', () => {
     expect(screen.getByTestId('system-status-summary')).toHaveTextContent('读不到');
   });
 
-  it('shows no attention count while OA credentials are healthy', async () => {
+  it('shows no attention mark while OA credentials are healthy', async () => {
     renderShell();
 
-    const statusButton = await screen.findByRole('button', {
-      name: '系统状态，暂无需要处理的项',
-    });
-    expect(
-      within(statusButton).queryByTestId('system-status-count'),
-    ).not.toBeInTheDocument();
+    const menu = openUserMenu();
+    expect(await within(menu).findByText('暂无不正常')).toBeInTheDocument();
+    expect(screen.queryByTestId('user-bar-status-dot')).not.toBeInTheDocument();
   });
 
   it('explains why the notification panel is empty and what to do instead', () => {
     renderShell();
 
-    fireEvent.click(screen.getByRole('button', {
-      name: '通知，消息功能尚未开发，没有可显示的提醒',
-    }));
+    fireEvent.click(screen.getByRole('button', { name: '通知' }));
 
     expect(screen.getByText('这里现在是空的。')).toBeInTheDocument();
-    expect(
-      screen.getByText('消息功能还没有开发，系统还不会给你发提醒。'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('系统还不会给你发提醒。')).toBeInTheDocument();
     const panel = screen.getByRole('region', { name: '通知' });
     expect(within(panel).getByRole('link', { name: '工作事项' })).toHaveAttribute(
       'href',
@@ -765,14 +737,10 @@ describe('AppShell topbar', () => {
 });
 
 /*
- * 2026-09-04 雨爷实机走查：「右上角用户头像点击后不是一个弹出层变成了一个很宽的占用主页面的层，这个
- * 也不符合我们的设计稿，这句话我说了很多次了」「系统状态图标要通过颜色区分，你就照搬我们设计稿」。
- *
- * 下面这组断言把画板 `TopPops.dc.html` 的两条尺寸（用户菜单 268px、系统状态 384px）与「浮在正文之上
- * 而不是挤开正文」的定位方式钉在渲染结果与样式表上：谁把 `.popover` 改回流内块、或把宽度改宽，这里
- * 就会变红。
+ * 2026-09-04 雨爷实机走查要求弹出层「浮在正文之上、不占据主页面」，用户菜单 268px、系统状态 384px；
+ * 系统状态靠带颜色的点区分。2026-11-11 弹层改锚在个人栏上方，这几条约束不变。
  */
-describe('AppShell topbar popovers follow the finalized canvas', () => {
+describe('AppShell user bar popovers', () => {
   beforeEach(resetStores);
 
   function popoverRule(panel: string): string {
@@ -786,20 +754,19 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     return block[1] ?? '';
   }
 
-  it('floats every topbar panel above the content instead of pushing it down', () => {
+  it('floats every panel above the content instead of pushing it down', () => {
     const css = readSource('../AppShell.module.css');
     const popover = /\.popover\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
 
-    expect(popover).toContain('position: absolute');
+    expect(popover).toContain('position: fixed');
     expect(popover).not.toContain('position: static');
-    expect(/\.stage\s*\{[^}]*position: relative/.test(css)).toBe(true);
   });
 
   it('gives the user menu the 268px width the canvas draws', () => {
     renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
 
-    const popover = screen.getByTestId('topbar-popover');
+    const popover = screen.getByTestId('shell-popover');
     expect(popover).toHaveAttribute('data-panel', 'user');
     expect(popoverRule('user')).toContain('width: 268px');
     // 弹层打开时主内容仍在，且弹层不是主内容的祖先——它是覆盖层，不是新的页面区块。
@@ -807,46 +774,18 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     expect(popover.contains(screen.getByTestId('app-main'))).toBe(false);
   });
 
-  it('lists the five canvas rows and reads the OA binding state instead of assuming it', async () => {
-    renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-
-    const menu = screen.getByRole('region', { name: '用户菜单' });
-    const rowLabels = ['账号绑定', '换个界面风格', '个人设置', '怎么用 / 找人帮忙', '退出登录'];
-    for (const label of rowLabels) {
-      expect(within(menu).getByText(label)).toBeInTheDocument();
-    }
-    expect(await within(menu).findByText('OA 已绑')).toBeInTheDocument();
-    // 姓名与部门来自后端；职务没有数据源，不得出现画板上那个编出来的职务。
-    expect(within(menu).getByText(DISPLAY_NAME)).toBeInTheDocument();
-    expect(menu.textContent).not.toMatch(/王|张三|李四|主任科员/);
-  });
-
-  it('says the OA binding could not be read rather than showing it as bound', async () => {
-    apiMocks.getBinding.mockRejectedValue(new Error('unreachable'));
-    renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-
-    const menu = screen.getByRole('region', { name: '用户菜单' });
-    expect(await within(menu).findByText('读不到')).toBeInTheDocument();
-    expect(within(menu).queryByText('OA 已绑')).not.toBeInTheDocument();
-  });
-
   it('gives the system status panel the 384px width and colour-coded rows, not glyphs', async () => {
     apiMocks.getBinding.mockResolvedValue(binding({ poll_status: 'invalid' }));
     renderShell();
     fireEvent.click(
-      await screen.findByRole('button', { name: '系统状态，1 项需要处理' }),
+      await screen.findByRole('button', { name: /系统状态 1 项需要处理/ }),
     );
+    fireEvent.click(screen.getByTestId('user-menu-system-status'));
 
     const panel = screen.getByRole('region', { name: '系统状态' });
     expect(panel).toHaveAttribute('data-panel', 'system-status');
     expect(popoverRule('system-status')).toContain('width: 384px');
 
-    /*
-     * 状态靠颜色区分：每一行带一个 `data-status-kind`，行里那个圆点自己也带同一个值，样式表按该值
-     * 上色。原实现用的 `？ × — ! √` 这类字符符号必须一个都不剩。
-     */
     const rows = Array.from(
       panel.querySelectorAll('[data-status-kind]:not([aria-hidden="true"])'),
     );
@@ -864,10 +803,7 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     }
     expect(panel.textContent ?? '').not.toMatch(/[？×—!√✓✗⚠]/u);
 
-    /*
-     * 一份色值，两个落点：面板行的圆点与顶栏触发器的圆点共用同一组规则。谁在别处再写一套色值，
-     * 这里读到的规则就不再同时带上两个类名。
-     */
+    // 一份色值，两个落点：面板行的圆点与菜单/个人栏的圆点共用同一组规则。
     const css = readSource('../AppShell.module.css');
     for (const kind of ['normal', 'attention', 'unchecked']) {
       expect(css).toContain(`.statusDot[data-status-kind='${kind}']`);
@@ -875,44 +811,31 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     }
   });
 
-  /*
-   * 雨爷 2026-09-04 走查：「系统状态那里要与设计稿一样，是通过带颜色的点来判断系统现在的状态。」
-   * 面板内部本来就是圆点，缺的是**顶栏那个触发器**——它还是一个线框图标。画板 `TopPops.dc.html` 的
-   * 顶栏这一格是 `<span class="dot" style="background:#e0342c"></span>系统状态`。
-   *
-   * 这条同时钉住无障碍底线：圆点是 `aria-hidden` 的纯视觉件，按钮的可见文字与 `aria-label` 必须仍然
-   * 把状态说清楚——颜色不能是唯一的区分手段。
-   */
   it.each([
-    ['invalid' as const, 'attention', '系统状态，1 项需要处理'],
-    ['active' as const, 'normal', '系统状态，暂无需要处理的项'],
+    ['invalid' as const, 'attention', '1 个不正常'],
+    ['active' as const, 'normal', '暂无不正常'],
   ])(
-    'shows a colour-coded dot in the topbar trigger when OA is %s',
-    async (pollStatus, kind, label) => {
+    'shows a colour-coded dot and words on the menu row when OA is %s',
+    async (pollStatus, kind, summary) => {
       apiMocks.getBinding.mockResolvedValue(binding({ poll_status: pollStatus }));
       renderShell();
+      fireEvent.click(screen.getByTestId('user-bar-identity'));
 
-      const trigger = await screen.findByRole('button', { name: label });
-      const dot = within(trigger).getByTestId('topbar-system-status-dot');
+      const row = await screen.findByTestId('user-menu-system-status');
+      await waitFor(() => expect(row).toHaveTextContent(summary));
+      const dot = within(row).getByTestId('user-menu-system-status-dot');
       expect(dot).toHaveAttribute('data-status-kind', kind);
       expect(dot).toHaveAttribute('aria-hidden', 'true');
-      // 颜色之外仍有文字：可见的「系统状态」四个字 + `aria-label` 里的整句状态。
-      expect(trigger).toHaveTextContent('系统状态');
-      expect(trigger).toHaveAttribute('aria-label', label);
-      // 触发器里不再有线框图标。
-      expect(trigger.querySelector('svg')).toBeNull();
+      // 颜色之外仍有文字：可见的「系统状态」四个字与状态摘要。
+      expect(row).toHaveTextContent('系统状态');
+      expect(row.querySelector('svg')).toBeNull();
     },
   );
 
-  /*
-   * 「AI 助手」「工作台自己的数据」两行画板上有，但工作台没有任何健康检查来源。行位照画板保留，状态
-   * 一律标成「还没有接上检查」——既不编「正常」，也不编一个不存在的检查周期。
-   */
   it('never claims the assistant or the workbench itself is healthy', async () => {
     renderShell();
-    fireEvent.click(
-      await screen.findByRole('button', { name: '系统状态，暂无需要处理的项' }),
-    );
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
+    fireEvent.click(await screen.findByTestId('user-menu-system-status'));
 
     const panel = screen.getByRole('region', { name: '系统状态' });
     for (const name of ['AI 助手', '工作台自己的数据']) {
@@ -927,31 +850,25 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
 
   it('closes an open panel with Escape so it cannot sit on top of the content', () => {
     renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
-    expect(screen.getByTestId('topbar-popover')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
+    expect(screen.getByTestId('shell-popover')).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    expect(screen.queryByTestId('topbar-popover')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shell-popover')).not.toBeInTheDocument();
   });
 
   /*
-   * 雨爷 2026-09-04 第二次走查：「页面最上方的搜索按钮丢失。」上一轮按画板把按钮收成了左侧的纯图标
-   * 提交键，实机上读不出是个按钮。这里钉死返修后的形态：
-   *
-   * 1. 右侧有一个**带可见文字「搜索」**的提交按钮，不是只有 `aria-label` 的图标键；
-   * 2. 左侧图标退回装饰（`aria-hidden`），整个搜索框里只有一个提交按钮；
-   * 3. 按钮与输入框在同一个 flex 行里 `align-items: center` 垂直居中，且按钮自己 `align-self: center`；
-   * 4. 凹槽与按钮都带**可辨边界**（WCAG 2.2 SC 1.4.11），不是只有白色高光：凹槽用
-   *    `--workbench-field-face`，按钮用 `--workbench-control-ring` + `--workbench-control-glow`。
+   * 雨爷 2026-09-04 第二次走查要求的搜索框形态（带可见文字的「搜索」按钮、左侧装饰图标、46px 凹槽内
+   * 垂直居中、可辨边界）随搜索框一起迁到 `WorkObjectSearchField`，在 Ctrl K 弹窗里核对。
    */
-  it('brings back a labelled search button aligned inside the 46px well', () => {
+  it('keeps the labelled search button aligned inside the 46px well', async () => {
     renderShell('/admin/tasks');
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
 
-    const submit = screen.getByRole('button', { name: '搜索' });
+    const submit = await screen.findByRole('button', { name: '搜索' });
     expect(submit.tagName).toBe('BUTTON');
     expect(submit).toHaveAttribute('type', 'submit');
-    // 可见文字，不是只有无障碍名称：上一轮丢的就是这个。
     expect(submit.textContent).toBe('搜索');
 
     const field = submit.parentElement;
@@ -959,7 +876,7 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     expect(field).toContainElement(screen.getByLabelText('搜索工作事项'));
     expect(within(field as HTMLElement).getAllByRole('button', { name: '搜索' })).toHaveLength(1);
 
-    const css = readSource('../AppShell.module.css');
+    const css = readSource('../WorkObjectSearchField.module.css');
     const fieldRule = /\.searchField\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(fieldRule).toContain('height: 46px');
     expect(fieldRule).toContain('align-items: center');
@@ -973,7 +890,6 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
   });
 });
 
-
 describe('server confirmed logout', () => {
   beforeEach(resetStores);
 
@@ -982,7 +898,7 @@ describe('server confirmed logout', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise<Response>((resolve) => { release = resolve; }));
     const mounted = renderShell();
     try {
-      fireEvent.click(screen.getByTestId('topbar-avatar'));
+      fireEvent.click(screen.getByTestId('user-bar-identity'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
       expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
       act(() => useAuthStore.getState().markAuthenticated());
@@ -1008,7 +924,7 @@ describe('server confirmed logout', () => {
     )).mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     useAIDockStore.setState({ draft: 'Synthetic private draft' });
     renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
     expect(useAuthStore.getState().status).toBe('authenticated');
     expect(screen.getByText('退出未完成，请重试')).toBeInTheDocument();
@@ -1024,7 +940,7 @@ describe('server confirmed logout', () => {
     let resolve!: (value: Response) => void;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise((done) => { resolve = done; }));
     renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
     expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
     expect(useAuthStore.getState().status).toBe('authenticated');
@@ -1041,7 +957,7 @@ describe('server confirmed logout', () => {
     else fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'logout_unavailable', message: 'Synthetic failure' } }), { status: Number(failure) }));
     fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false })));
     renderShell();
-    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
     fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
     expect(await screen.findByText('退出未完成，请重试')).toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe('authenticated');

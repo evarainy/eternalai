@@ -2,7 +2,8 @@ import { normalizeSearchQuery, normalizeSearchValue } from '../../shared/query/w
 import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Empty, Flex, Select, Space, Tag, Typography } from 'antd';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { WorkObjectSearchField } from '../../app/WorkObjectSearchField';
 import { ApiError } from '../../api/mutator';
 import { usePageContextRegistration } from '../../app/usePageContextRegistration';
 import type { PageContextDeclaration } from '../../contracts/pageContext';
@@ -91,6 +92,7 @@ export default function WorkObjectSearchPage() {
 
 function SearchContent({ authGeneration }: { authGeneration: number }) {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const client = useQueryClient();
   const [blocked, setBlocked] = useState(false);
   const [scope, setScope] = useState<'current' | 'completed' | 'withdrawn'>('current');
@@ -190,7 +192,7 @@ function SearchContent({ authGeneration }: { authGeneration: number }) {
         ? `查找失败：${errorText(listQuery.error)}。`
         : '没有匹配项。已在你有权查看的全部工作事项中检索。';
   const emptyNextStep = !hasSearch
-    ? '下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人。'
+    ? '下一步：在上方搜索框输入标题片段、完整来源编号或完整责任人。'
     : listQuery.isPending
       ? '下一步：请稍候，检索完成后会自动显示结果。'
       : listQuery.isError
@@ -207,6 +209,17 @@ function SearchContent({ authGeneration }: { authGeneration: number }) {
               标题可输入其中一段；来源编号和责任人请输入完整内容。
               本页显式检索全部 OA 历史状态；默认当前视图不包含“未再确认”记录。
             </Paragraph>
+            {/* 2026-11-11 全站取消顶栏后，本页自带搜索框（另可在任何页面按 Ctrl K）。 */}
+            <div className={styles.searchBox}>
+              <WorkObjectSearchField
+                key={rawTerm ?? ''}
+                initialValue={rawTerm ?? ''}
+                onSubmit={(value) => {
+                  const next = normalizeSearchQuery(value) ?? '';
+                  navigate({ pathname: '/search', search: next.length === 0 ? '' : `?${new URLSearchParams({ q: next })}` });
+                }}
+              />
+            </div>
           </div>
           <div className={styles.scopeCard} aria-live="polite">
             <strong>{scopeHeadline}</strong>

@@ -1,0 +1,70 @@
+/*
+ * 工作事项搜索凹槽：原顶栏 `.searchField`（画板 `Main.dc.html` 392×46）原样迁来。
+ * 可辨边界 + 主题色投影（WCAG 2.2 SC 1.4.11）与垂直居中两条要求不变，见 2026-09-04 走查记录。
+ */
+.searchField {
+  display: flex;
+  height: 46px;
+  align-items: center;
+  padding: 0 5px 0 14px;
+  gap: 8px;
+  background-color: var(--workbench-field-fill);
+  background-image: var(--workbench-well-fill);
+  border-radius: 16px;
+  box-shadow: var(--workbench-field-face);
+}
+
+.searchField:focus-within {
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/* 按钮聚焦时撤回凹槽那圈焦点环，一次只留一个环。 */
+.searchField:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
+}
+
+.searchIcon {
+  display: grid;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  place-items: center;
+}
+
+.searchSubmit {
+  display: inline-flex;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  align-self: center;
+  padding: 0 16px;
+  color: var(--workbench-text);
+  background-color: transparent;
+  background-image: var(--workbench-chip-fill-strong);
+  border: 0;
+  border-radius: 12px;
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.searchInput,
+.searchInput :global(.ant-input) {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--workbench-text);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+}
