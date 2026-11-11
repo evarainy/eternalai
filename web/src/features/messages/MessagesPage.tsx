@@ -145,8 +145,10 @@ export default function MessagesPage() {
               const sequence = ++selectionSequence;
               setSourceError(false);
               try {
+                // 来源接口改为按一组消息读取（message_ids）；这里的单条选择是一条的组。
+                const { message_id: messageId, ...selected } = data.payload;
                 const source = await selectApiV1ImContextSourcesPost({
-                  ...data.payload, provider: config.provider, im_instance_id: config.im_instance_id,
+                  ...selected, message_ids: [messageId], provider: config.provider, im_instance_id: config.im_instance_id,
                   session_id: sessionId,
                 });
                 if (!isCurrent() || sequence !== selectionSequence

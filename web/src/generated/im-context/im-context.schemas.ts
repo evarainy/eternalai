@@ -43,8 +43,12 @@ export interface SourceRequest {
   im_instance_id: string;
   /** @minLength 1 */
   im_user_id: string;
-  /** @minLength 1 */
-  message_id: string;
+  /**
+   * Positive ASCII decimal message IDs. Leading zeros are normalized; numeric aliases count as duplicates and are rejected. Returned in numeric order.
+   * @minItems 1
+   * @maxItems 50
+   */
+  message_ids: string[];
   /** @minLength 1 */
   provider: string;
   /** @minLength 1 */
