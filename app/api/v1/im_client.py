@@ -143,6 +143,8 @@ def make_router(
         request: Request, principal: Principal, kind: str, body_done: anyio.Event,
     ) -> Response:
         current = available()
+        if kind == "api" and len(request.headers.getlist("content-type")) > 1:
+            raise _denied()
         lease = await current.acquire(principal)
         prefix = b"/api/v1/im-client/" + (b"zulip" if kind == "api" else b"files")
         raw_path = request.scope.get("raw_path", b"")

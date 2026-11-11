@@ -15,6 +15,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.errors import HeaderParseError
+from email.headerregistry import BaseHeader, ContentTypeHeader
+from email.policy import HTTP
 from html.parser import HTMLParser
 from time import monotonic
 from typing import Any, Literal, cast
@@ -133,6 +136,18 @@ def _client_form(raw: bytes) -> dict[str, str]:
     except UnicodeDecodeError:
         text = raw.decode("iso-8859-1")
     return dict(parse_qsl(text, keep_blank_values=True, encoding="utf-8"))
+
+
+def _check_register_content_type(value: str) -> None:
+    try:
+        header = cast(ContentTypeHeader, HTTP.header_factory("Content-Type", value))
+    except (HeaderParseError, ValueError):
+        raise _endpoint_denied() from None
+    # Django matches the raw media token; MIME comments must not hide a non-form body.
+    if (cast(BaseHeader, header).defects
+            or value.split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded"
+            or header.params.get("charset", "utf-8").lower() != "utf-8"):
+        raise _endpoint_denied()
 
 
 async def _client_bytes(body: bytes) -> AsyncIterator[bytes]:
@@ -607,6 +622,8 @@ class ZulipCommunicationAdapter:
                     yield result
                 return
             endpoint = _match_client_endpoint(request.method, request.path)
+            if endpoint == "/register":
+                _check_register_content_type(request.headers.get("content-type", ""))
             media = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             body: bytes | AsyncIterator[bytes] = request.body
             form: dict[str, str] = {}
@@ -621,8 +638,16 @@ class ZulipCommunicationAdapter:
                 request.method
             )
             if endpoint == "/register":
+                try:
+                    forwarded_query = self._client_url(
+                        "/api/v1" + request.path, request.query,
+                    ).query
+                except (httpx2.InvalidURL, UnicodeDecodeError):
+                    raise _endpoint_denied() from None
+                if forwarded_query != request.query:
+                    raise _endpoint_denied()
                 # Match the upstream POST-over-query and last-value semantics.
-                # Missing/null would request upstream defaults beyond the frozen sets.
+                # Missing values can restore defaults; explicit null is not an array.
                 params = {**_client_form(request.query), **form}
                 for name, allowed in (
                     ("fetch_event_types", _REGISTER_FETCH_EVENT_TYPES),
