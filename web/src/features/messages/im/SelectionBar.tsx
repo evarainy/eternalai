@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { App as AntApp } from 'antd';
 import { sendToAi } from '../zulip/aiSource';
+import { useImStore } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import { ForwardDialog } from './ForwardDialog';
 import type { ForwardMode } from './ForwardDialog';
@@ -17,6 +18,16 @@ export function SelectionBar({ conversationKey }: { conversationKey: Conversatio
   const [mode, setMode] = useState<ForwardMode | null>(null);
   const [sending, setSending] = useState(false);
   const { message: toast } = AntApp.useApp();
+  const messages = useImStore((state) => state.windows[conversationKey]?.messages);
+
+  // 所选消息被撤回（delete_message 事件移出窗口）时同步去掉，条数与实际一致。
+  useEffect(() => {
+    if (!messages) return;
+    const present = new Set(messages.map((message) => message.id));
+    const { ids: selected } = useSelection.getState();
+    const kept = selected.filter((id) => present.has(id));
+    if (kept.length !== selected.length) useSelection.setState({ ids: kept });
+  }, [messages]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
