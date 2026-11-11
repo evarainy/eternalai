@@ -147,10 +147,19 @@
             "title": "Im User Id",
             "type": "string"
           },
-          "message_id": {
-            "minLength": 1,
-            "title": "Message Id",
-            "type": "string"
+          "message_ids": {
+            "description": "Positive ASCII decimal message IDs. Leading zeros are normalized; numeric aliases count as duplicates and are rejected. Returned in numeric order.",
+            "items": {
+              "maxLength": 20,
+              "minLength": 1,
+              "pattern": "^[0-9]+$",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Message Ids",
+            "type": "array",
+            "uniqueItems": true
           },
           "provider": {
             "minLength": 1,
@@ -173,7 +182,7 @@
           "im_instance_id",
           "realm_id",
           "im_user_id",
-          "message_id",
+          "message_ids",
           "conversation_ref",
           "session_id"
         ],
