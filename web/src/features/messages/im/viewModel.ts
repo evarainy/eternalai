@@ -232,22 +232,32 @@ export interface ConversationRow {
 }
 
 /**
- * 群是否静音（12.3 原生规则）：话题偏好「静音」直接静音；群静音时，话题偏好「取消静音」「关注」例外。
- * 新群只用空话题，所以按群 id 取空话题的偏好。单聊不静音。
+ * 群里某个话题是否静音（12.3 原生规则）：话题偏好「静音」直接静音；群静音时，话题偏好「取消静音」
+ * 「关注」例外。新群只用空话题；旧的多话题群逐话题判断。
  */
-export function conversationMuted(state: ImState, conversation: Conversation): boolean {
-  if (conversation.kind !== 'stream') return false;
-  const policy = state.topicPolicies[conversation.streamId] ?? 0;
+export function topicMuted(state: ImState, streamId: number, topic: string): boolean {
+  const policy = state.topicPolicies[`${streamId}:${topic}`] ?? 0;
   if (policy === 1) return true;
-  return (state.subscriptions[conversation.streamId]?.is_muted ?? false) && policy !== 2 && policy !== 3;
+  return (state.subscriptions[streamId]?.is_muted ?? false) && policy !== 2 && policy !== 3;
 }
 
-/** 未读总数（左导航角标、列表页签）：静音会话不计入。 */
+/** 会话行是否显示为静音：看空话题（新群唯一的话题）。单聊不静音。 */
+export function conversationMuted(state: ImState, conversation: Conversation): boolean {
+  return conversation.kind === 'stream' && topicMuted(state, conversation.streamId, '');
+}
+
+/** 一个会话里计入提醒的未读数：群按每条未读所在话题判断静音。 */
+export function countedUnread(state: ImState, conversation: Conversation): number {
+  const ids = state.unread[conversation.key] ?? [];
+  if (conversation.kind !== 'stream') return ids.length;
+  return ids.filter((id) => !topicMuted(state, conversation.streamId, state.unreadTopics[id] ?? '')).length;
+}
+
+/** 未读总数（左导航角标、列表页签）：静音的群和话题不计入。 */
 export function unreadTotal(state: ImState): number {
   let total = 0;
-  for (const [key, ids] of Object.entries(state.unread)) {
-    const conversation = state.conversations[key as ConversationKey];
-    if (ids && conversation && !conversationMuted(state, conversation)) total += ids.length;
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation) total += countedUnread(state, conversation);
   }
   return total;
 }

@@ -29,6 +29,8 @@ export interface ImTransport {
   /** 新群一律私密、历史对成员可见、只用空话题（FE_PLAN §9 第 1 件）。 */
   createGroup(name: string, userIds: number[]): Promise<{ id: number }>;
   upload(file: File, onProgress: (ratio: number) => void, signal: AbortSignal): Promise<ZulipUploadResult>;
+  /** 本人在线状态上报（合同 §3 允许清单 `POST /users/me/presence`）。 */
+  reportPresence(status: 'active' | 'idle'): Promise<void>;
 }
 
 export const IM_CLIENT_PREFIX = '/api/v1/im-client';
@@ -166,6 +168,11 @@ export function createHttpTransport(): ImTransport {
       });
     },
     upload: uploadFile,
+    async reportPresence(status) {
+      await zulip<unknown>('POST', '/users/me/presence', {
+        form: formBody({ status, ping_only: true, new_user_input: status === 'active' }),
+      });
+    },
     send({ target, content, queueId, localId }) {
       const recipient = target.type === 'stream'
         ? { type: 'stream', to: target.streamId, topic: target.topic }

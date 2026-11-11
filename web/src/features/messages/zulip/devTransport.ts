@@ -228,7 +228,7 @@ export function createDevTransport(): ImTransport {
         2: { active_timestamp: now }, 5: { active_timestamp: now - 30 }, 7: { active_timestamp: now },
         4: { idle_timestamp: now - 60, active_timestamp: now - 900 }, 8: { idle_timestamp: now - 120 },
       },
-      presence_offline_threshold_seconds: 140,
+      server_presence_offline_threshold_seconds: 140,
       server_timestamp: now,
       enter_sends: true,
       realm_emoji: {},
@@ -319,6 +319,7 @@ export function createDevTransport(): ImTransport {
       });
     },
     async deleteQueue() {},
+    async reportPresence() {},
     async messages(query) {
       const matchTerm = (message: ZulipMessage, term: ZulipNarrowTerm): boolean => {
         if (term.operator === 'channel') return message.type === 'stream' && message.stream_id === term.operand;

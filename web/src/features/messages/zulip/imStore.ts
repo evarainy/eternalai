@@ -3,7 +3,7 @@ import { ApiError } from '../../../api/mutator';
 import { applyEvents, profileFieldIds } from './events';
 import type { ImTransport } from './transport';
 import type {
-  ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipMessage, ZulipPresence, ZulipRealmEmoji, ZulipRegisterResponse,
+  ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEvent, ZulipMessage, ZulipPresence, ZulipRealmEmoji, ZulipRegisterResponse,
   ZulipSubscription, ZulipUser,
 } from './types';
 import {
@@ -44,10 +44,15 @@ export interface ImState {
   deptFieldId: string | null;
   titleFieldId: string | null;
   subscriptions: Record<number, ZulipSubscription>;
-  /** 群（空话题）的话题偏好：1 静音、2 取消静音、3 关注；与群静音一起决定未读是否计入。 */
-  topicPolicies: Record<number, number>;
+  /** 话题偏好，键为 `群id:话题`：1 静音、2 取消静音、3 关注；与群静音一起决定未读是否计入。 */
+  topicPolicies: Record<string, number>;
+  /** 群里未读消息所在的话题（新群只用空话题；旧的多话题群按话题判断静音）。 */
+  unreadTopics: Record<number, string>;
   presences: Record<number, ZulipPresence>;
   presenceThreshold: number;
+  presencePingSeconds: number;
+  /** 按在线状态上报的节奏更新，让「在线/离开/离线」随时间刷新。 */
+  clock: number;
   serverSkew: number;
   enterSends: boolean;
   conversations: Partial<Record<ConversationKey, Conversation>>;
@@ -68,7 +73,8 @@ export interface ImState {
 
 const EMPTY: Omit<ImState, 'session'> = {
   phase: 'idle', failure: null, offline: false, identity: null, queueId: null, selfId: 0, users: {},
-  deptFieldId: null, titleFieldId: null, subscriptions: {}, topicPolicies: {}, presences: {}, presenceThreshold: 140,
+  deptFieldId: null, titleFieldId: null, subscriptions: {}, topicPolicies: {}, unreadTopics: {}, presences: {},
+  presenceThreshold: 140, presencePingSeconds: 60, clock: 0,
   serverSkew: 0, enterSends: true, conversations: {}, latest: {}, order: {}, unread: {}, mentions: {}, windows: {},
   selected: null, anchor: null, drafts: {}, realmEmoji: [], maxUploadMib: 25, manualUnread: {},
 };
@@ -82,6 +88,17 @@ const pendingRead = new Set<number>();
 const readInFlight = new Set<number>();
 let readTimer: number | undefined;
 const windowRequests = new Map<ConversationKey, number>();
+/** 队列重建或会话被移除时递增：此前发起的窗口读取一律作废。 */
+let cacheEpoch = 0;
+/** 窗口读取在途期间已归并的事件批次，读取返回后按顺序重放到新窗口上，避免旧结果盖掉新变化。 */
+let eventSeq = 0;
+let loadsInFlight = 0;
+const eventLog: { seq: number; events: ZulipEvent[] }[] = [];
+/** 发出的消息按 local_id 等对应的 message 事件（结果不明确时用来确认）。 */
+const localWaiters = new Map<string, () => void>();
+let presenceTimer: number | undefined;
+/** 由登录生命周期登记：configuration 读失败时「重新连接」要从头走一遍。 */
+let restart: (() => void) | null = null;
 
 /** 模块级的可变缓存（如输入框未发出的文字）登记到这里，随 resetIm 一起清空，不跨身份残留。 */
 const resetHooks = new Set<() => void>();
@@ -111,11 +128,15 @@ function indexSnapshot(register: ZulipRegisterResponse): Partial<ImState> {
   for (const recent of register.recent_private_conversations) {
     add(dmConversation(recent.user_ids, selfId), recent.max_message_id);
   }
+  const unreadTopics: ImState['unreadTopics'] = {};
   const pushUnread = (conversation: Conversation, ids: number[]) => {
     add(conversation, Math.max(0, ...ids));
-    unread[conversation.key] = [...(unread[conversation.key] ?? []), ...ids];
+    unread[conversation.key] = [...(unread[conversation.key] ?? []), ...ids].sort((a, b) => a - b);
   };
-  for (const item of register.unread_msgs.streams) pushUnread(streamConversation(item.stream_id), item.unread_message_ids);
+  for (const item of register.unread_msgs.streams) {
+    pushUnread(streamConversation(item.stream_id), item.unread_message_ids);
+    for (const id of item.unread_message_ids) unreadTopics[id] = item.topic;
+  }
   for (const item of register.unread_msgs.pms) pushUnread(dmConversation([item.other_user_id], selfId), item.unread_message_ids);
   for (const item of register.unread_msgs.huddles) {
     pushUnread(dmConversation(item.user_ids_string.split(',').map(Number), selfId), item.unread_message_ids);
@@ -127,10 +148,12 @@ function indexSnapshot(register: ZulipRegisterResponse): Partial<ImState> {
     ...profileFieldIds(register.custom_profile_fields),
     subscriptions: Object.fromEntries(register.subscriptions.map((sub) => [sub.stream_id, sub])),
     topicPolicies: Object.fromEntries((register.user_topics ?? [])
-      .filter((topic) => topic.topic_name === '')
-      .map((topic) => [topic.stream_id, topic.visibility_policy])),
+      .map((topic) => [`${topic.stream_id}:${topic.topic_name}`, topic.visibility_policy])),
+    unreadTopics,
     presences: Object.fromEntries(Object.entries(register.presences).map(([id, value]) => [Number(id), value])),
-    presenceThreshold: register.presence_offline_threshold_seconds ?? 140,
+    presenceThreshold: register.server_presence_offline_threshold_seconds ?? 140,
+    presencePingSeconds: register.server_presence_ping_interval_seconds ?? 60,
+    clock: register.server_timestamp,
     serverSkew: register.server_timestamp - Date.now() / 1000,
     enterSends: register.enter_sends ?? true,
     conversations, order, unread,
@@ -167,6 +190,11 @@ export function resetIm(): void {
   pendingRead.clear();
   readInFlight.clear();
   windowRequests.clear();
+  cacheEpoch += 1;
+  eventLog.length = 0;
+  localWaiters.clear();
+  window.clearInterval(presenceTimer);
+  presenceTimer = undefined;
   for (const hook of resetHooks) hook();
   useImStore.setState((state) => ({ ...EMPTY, session: state.session + 1 }));
 }
@@ -209,14 +237,16 @@ async function connect(session: number, rebuild: boolean): Promise<void> {
         useImStore.setState({ phase: 'failed', failure: 'im_identity_mismatch', offline: false });
         return;
       }
+      // 重建时连当前会话的旧消息也丢掉，只保留选择和锚点，随后重读；此前在途的窗口读取一并作废。
+      cacheEpoch += 1;
+      eventLog.length = 0;
       useImStore.setState((state) => {
         const snapshot = indexSnapshot(register);
         const kept = rebuild && state.selected && snapshot.conversations?.[state.selected] ? state.selected : null;
-        const window = kept ? state.windows[kept] : undefined;
         return {
           ...snapshot,
           identity,
-          windows: kept && window ? { [kept]: window } : {},
+          windows: {},
           latest: {},
           selected: rebuild ? kept : state.selected,
           anchor: rebuild && state.anchor?.key !== kept ? null : state.anchor,
@@ -231,6 +261,7 @@ async function connect(session: number, rebuild: boolean): Promise<void> {
       const { selected, anchor } = useImStore.getState();
       if (rebuild && selected) void loadWindow(selected, session, anchor?.messageId);
       void receive(session, api, register.queue_id, register.last_event_id);
+      startPresence(session, api);
       return;
     } catch (error) {
       if (!isCurrent(session) || signal.aborted) return;
@@ -282,6 +313,16 @@ async function receive(session: number, api: ImTransport, queueId: string, lastE
       return;
     }
     for (const event of batch) cursor = Math.max(cursor, event.id);
+    eventSeq += 1;
+    if (loadsInFlight > 0) eventLog.push({ seq: eventSeq, events: batch });
+    for (const event of batch) {
+      if (event.type === 'message' && typeof event.local_message_id === 'string') localWaiters.get(event.local_message_id)?.();
+    }
+    // 当前会话的窗口被事件作废（例如别人把消息移进本群）时立即重读。
+    const after = useImStore.getState();
+    if (after.selected && after.conversations[after.selected] && !after.windows[after.selected]) {
+      void loadWindow(after.selected, session, after.anchor?.key === after.selected ? after.anchor.messageId : undefined);
+    }
     if (useImStore.getState().offline) useImStore.setState({ offline: false });
     failures = 0;
   }
@@ -295,54 +336,81 @@ export async function startIm(next: ImTransport): Promise<void> {
   await connect(session, false);
 }
 
-/** 读失败后手动重试（「重新连接」）。 */
+/** 登录生命周期登记从头启动的入口（读 configuration → 选 transport → startIm）。 */
+export function setImRestart(next: (() => void) | null): void {
+  restart = next;
+}
+
+/** 读失败后手动重试（「重新连接」）：从头走一遍，configuration 读失败的情形也能恢复。 */
 export function retryIm(): void {
-  const api = transport;
-  if (api) void startIm(api);
+  if (restart) restart();
+  else if (transport) void startIm(transport);
+}
+
+/* ---------- 本人在线状态（FE_PLAN §6 lane 3「presence」） ---------- */
+
+/** 按服务端的上报间隔报一次：页面在前台为 active，否则 idle；同时推进 clock 让显示随时间刷新。 */
+function startPresence(session: number, api: ImTransport): void {
+  window.clearInterval(presenceTimer);
+  const ping = () => {
+    if (!isCurrent(session)) return;
+    const active = document.visibilityState === 'visible' && document.hasFocus();
+    void api.reportPresence(active ? 'active' : 'idle').catch(() => undefined);
+    useImStore.setState((state) => ({ clock: Date.now() / 1000 + state.serverSkew }));
+  };
+  ping();
+  presenceTimer = window.setInterval(ping, useImStore.getState().presencePingSeconds * 1000);
 }
 
 /**
  * 读一个会话的消息窗口。`anchor` 为消息 id 时取它前后各 30 条（搜索命中、返回原消息、消息链接），
- * 否则取最新 60 条。读取期间由事件追加进来的更新消息保留，不被这次结果覆盖掉。
+ * 否则取最新 60 条。读取在途期间已归并的事件按顺序重放到新窗口上，旧结果盖不掉新的编辑、撤回、
+ * 标记和新消息；队列重建或会话被移除后，此前发起的读取直接作废。
  */
 async function loadWindow(key: ConversationKey, session: number, anchor?: number): Promise<void> {
   const conversation = useImStore.getState().conversations[key];
   if (!transport || !conversation) return;
-  // 同一会话先后两次定位时，只有最后发起的那次能回写窗口。
-  const sequence = (windowRequests.get(key) ?? 0) + 1;
-  windowRequests.set(key, sequence);
-  const latestRequest = () => isCurrent(session) && windowRequests.get(key) === sequence;
+  const sequence = nextWindowRequest(key);
+  const epoch = cacheEpoch;
+  const startSeq = eventSeq;
+  const latestRequest = () => isCurrent(session) && windowRequests.get(key) === sequence && cacheEpoch === epoch;
   useImStore.setState((state) => ({
     windows: { ...state.windows, [key]: { ...(state.windows[key] ?? EMPTY_WINDOW), status: 'loading' } },
   }));
+  loadsInFlight += 1;
   try {
     const result = await transport.messages({
       anchor: anchor ?? 'newest', numBefore: anchor ? 30 : 60, numAfter: anchor ? 30 : 0,
       narrow: conversationNarrow(conversation),
     }, controller.signal);
     if (!latestRequest()) return;
+    const replay = eventLog.filter((entry) => entry.seq > startSeq).flatMap((entry) => entry.events);
     useImStore.setState((state) => {
-      const last = result.messages[result.messages.length - 1]?.id ?? 0;
-      const arrived = result.found_newest
-        ? (state.windows[key]?.messages ?? []).filter((message) => message.id > last)
-        : [];
-      return {
-        ...absorbLatest(state, result.messages),
-        windows: {
-          ...state.windows,
-          [key]: {
-            status: 'ready', messages: [...result.messages, ...arrived], foundOldest: result.found_oldest,
-            foundNewest: result.found_newest,
-          },
-        },
+      if (!state.conversations[key]) return {};
+      const fresh: MessageWindow = {
+        status: 'ready', messages: result.messages, foundOldest: result.found_oldest, foundNewest: result.found_newest,
       };
+      // 只取重放后的这一个窗口；未读、摘要等其余状态早已由这些事件归并过。
+      const window = applyEvents({ ...state, windows: { ...state.windows, [key]: fresh } }, replay).windows[key];
+      if (!window) return {};
+      return { ...absorbLatest(state, window.messages), windows: { ...state.windows, [key]: window } };
     });
   } catch {
     if (!latestRequest()) return;
     useImStore.setState((state) => ({
       windows: { ...state.windows, [key]: { ...(state.windows[key] ?? EMPTY_WINDOW), status: 'failed' } },
     }));
+  } finally {
+    loadsInFlight -= 1;
+    if (loadsInFlight === 0) eventLog.length = 0;
   }
+}
+
+/** 每个定位意图都作废同一会话此前的读取（即使这次命中缓存、不发请求）。 */
+function nextWindowRequest(key: ConversationKey): number {
+  const sequence = (windowRequests.get(key) ?? 0) + 1;
+  windowRequests.set(key, sequence);
+  return sequence;
 }
 
 /**
@@ -358,7 +426,17 @@ export function openConversation(key: ConversationKey, anchorMessageId?: number)
   });
   const existing = state.windows[key];
   const anchorLoaded = anchorMessageId === undefined || existing?.messages.some((item) => item.id === anchorMessageId);
-  if (!existing || existing.status === 'failed' || !anchorLoaded) void loadWindow(key, state.session, anchorMessageId);
+  if (!existing || existing.status === 'failed' || !anchorLoaded) {
+    void loadWindow(key, state.session, anchorMessageId);
+  } else if (anchorMessageId !== undefined) {
+    nextWindowRequest(key);
+    if (existing.status === 'loading') {
+      useImStore.setState((current) => {
+        const window = current.windows[key];
+        return window ? { windows: { ...current.windows, [key]: { ...window, status: 'ready' } } } : {};
+      });
+    }
+  }
 }
 
 export function clearAnchor(): void {
@@ -400,16 +478,21 @@ export function markVisibleRead(key: ConversationKey, ids: number[]): void {
 
 async function flushRead(session: number): Promise<void> {
   readTimer = undefined;
-  const ids = [...pendingRead];
+  // 提交前再按「标为未读」的保护过滤一次：保护可能是在排队之后才加上的。
+  const protectedIds = useImStore.getState().manualUnread;
+  const ids = [...pendingRead].filter((id) => !protectedIds[id]);
   pendingRead.clear();
   if (!transport || ids.length === 0 || !isCurrent(session)) return;
   for (const id of ids) readInFlight.add(id);
   try {
     await transport.setFlag(ids, 'read', true);
     if (!isCurrent(session)) return;
-    useImStore.setState((state) => applyEvents(state, [
-      { id: -1, type: 'update_message_flags', op: 'add', flag: 'read', messages: ids, all: false },
-    ]));
+    useImStore.setState((state) => {
+      const confirmed = ids.filter((id) => !state.manualUnread[id]);
+      return applyEvents(state, [
+        { id: -1, type: 'update_message_flags', op: 'add', flag: 'read', messages: confirmed, all: false },
+      ]);
+    });
   } catch {
     // 不在这里重试：消息仍未读，下次进入可见区域或页面回到前台时再报。
   } finally {
@@ -419,24 +502,63 @@ async function flushRead(session: number): Promise<void> {
 
 /* ---------- 写操作：只提交请求，界面以随后到达的事件为准 ---------- */
 
+/** 上游明确拒绝（4xx）是确定的失败；断网、超时、5xx 都可能已经生效，算「结果不明确」。 */
+function definitiveFailure(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500;
+}
+
+/** 结果不明确时用来抛给输入框：界面显示「结果待确认」，不自动重发。 */
+export class UnconfirmedResult extends Error {
+  constructor() {
+    super('结果待确认');
+    this.name = 'UnconfirmedResult';
+  }
+}
+
+const CONFIRM_WAIT_MS = 8000;
+
 /**
- * 发送一条消息。结果不明确时不自动重发（合同 §3.2）；失败原样抛给输入框显示。成功后由 message 事件
- * 插入窗口；不改当前锚点和滚动位置（FE_PLAN §2.1：只有点「回到最新」「N 条新消息」才滚到底）。
+ * 发送一条消息。成功后由 message 事件插入窗口；不改当前锚点和滚动位置（FE_PLAN §2.1）。
+ * 结果不明确时不重发（合同 §3.2）：在事件流里等这次 local_id 回显的 message 事件，等到即算发出；
+ * 等不到抛 UnconfirmedResult，由使用者看消息记录后自行决定。
  */
 export async function sendMessage(key: ConversationKey, content: string): Promise<void> {
   const state = useImStore.getState();
   const conversation = state.conversations[key];
   if (!conversation || !state.queueId) throw new ApiError(409, 'im_not_ready', '消息还没有准备好。');
   const localId = `${Date.now()}.${++localCounter}`;
-  await requireTransport().send({ target: conversationTarget(conversation), content, queueId: state.queueId, localId });
+  let echoed = false;
+  const echo = new Promise<void>((resolve) => {
+    localWaiters.set(localId, () => {
+      echoed = true;
+      resolve();
+    });
+  });
+  try {
+    await requireTransport().send({ target: conversationTarget(conversation), content, queueId: state.queueId, localId });
+  } catch (error) {
+    if (definitiveFailure(error) || !isCurrent(state.session)) throw error;
+    if (!echoed) await Promise.race([echo, new Promise((resolve) => window.setTimeout(resolve, CONFIRM_WAIT_MS))]);
+    if (!echoed) throw new UnconfirmedResult();
+  } finally {
+    localWaiters.delete(localId);
+  }
 }
 
 export function readRawContent(messageId: number): Promise<string> {
   return requireTransport().rawContent(messageId);
 }
 
+/** 编辑。结果不明确时只读核对一次：取回原文与本次内容一致即算成功，否则抛 UnconfirmedResult，不重发。 */
 export async function editMessage(messageId: number, content: string): Promise<void> {
-  await requireTransport().editMessage(messageId, content);
+  const api = requireTransport();
+  try {
+    await api.editMessage(messageId, content);
+  } catch (error) {
+    if (definitiveFailure(error)) throw error;
+    const current = await api.rawContent(messageId).catch(() => null);
+    if (current?.trim() !== content.trim()) throw new UnconfirmedResult();
+  }
 }
 
 export async function deleteMessage(messageId: number): Promise<void> {
@@ -453,13 +575,30 @@ export async function toggleStar(message: ZulipMessage): Promise<void> {
   await requireTransport().setFlag([message.id], 'starred', !message.flags.includes('starred'));
 }
 
-/** 标为未读：同时登记保护，离开这个会话之前自动标读不处理它（FE_PLAN §5.2）。 */
+/**
+ * 标为未读（FE_PLAN §5.2）：点下去就先登记保护、撤下排队中的自动标读，再提交；离开这个会话之前自动标读
+ * 不处理它。已经在途的自动标读先于本次请求到达服务端，服务端按到达顺序生效，最终是未读。失败时撤销保护。
+ */
 export async function markUnread(key: ConversationKey, message: ZulipMessage): Promise<void> {
   const { session } = useImStore.getState();
-  await requireTransport().setFlag([message.id], 'read', false);
+  pendingRead.delete(message.id);
+  useImStore.setState((state) => ({ manualUnread: { ...state.manualUnread, [message.id]: true } }));
+  try {
+    await requireTransport().setFlag([message.id], 'read', false);
+  } catch (error) {
+    if (isCurrent(session)) {
+      useImStore.setState((state) => {
+        const manualUnread = { ...state.manualUnread };
+        delete manualUnread[message.id];
+        return { manualUnread };
+      });
+    }
+    throw error;
+  }
   if (!isCurrent(session)) return;
   useImStore.setState((state) => ({
     unread: { ...state.unread, [key]: [...new Set([...(state.unread[key] ?? []), message.id])].sort((a, b) => a - b) },
+    unreadTopics: message.type === 'stream' ? { ...state.unreadTopics, [message.id]: message.subject } : state.unreadTopics,
     manualUnread: { ...state.manualUnread, [message.id]: true },
   }));
 }

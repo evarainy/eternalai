@@ -72,22 +72,24 @@ function withoutUnread(state: ImState, targets: ReadonlySet<number> | 'all'): Im
     }
   }
   const mentions = targets === 'all' ? {} : { ...state.mentions };
-  const manualUnread = targets === 'all' ? {} : { ...state.manualUnread };
+  const unreadTopics = targets === 'all' ? {} : { ...state.unreadTopics };
   if (targets !== 'all') {
     for (const id of targets) {
       delete mentions[id];
-      delete manualUnread[id];
+      delete unreadTopics[id];
     }
   }
-  return { ...state, unread, mentions, manualUnread };
+  // 「标为未读」的保护（manualUnread）不在这里清：它只随换会话结束，迟到的已读事件不能把它撤掉。
+  return { ...state, unread, mentions, unreadTopics };
 }
 
-function addUnread(state: ImState, key: ConversationKey, id: number, mentioned: boolean): ImState {
+function addUnread(state: ImState, key: ConversationKey, id: number, mentioned: boolean, topic: string | null): ImState {
   const list = state.unread[key] ?? [];
   return {
     ...state,
     unread: list.includes(id) ? state.unread : { ...state.unread, [key]: [...list, id].sort((a, b) => a - b) },
     mentions: mentioned ? { ...state.mentions, [id]: true } : state.mentions,
+    unreadTopics: topic === null ? state.unreadTopics : { ...state.unreadTopics, [id]: topic },
   };
 }
 
@@ -115,7 +117,8 @@ function onMessage(state: ImState, event: ZulipEvent): ImState {
       : state.windows,
   };
   if (!flags.includes('read')) {
-    next = addUnread(next, key, message.id, flags.some((flag) => MENTION_FLAGS.includes(flag)));
+    next = addUnread(next, key, message.id, flags.some((flag) => MENTION_FLAGS.includes(flag)),
+      message.type === 'stream' ? message.subject : null);
   }
   return next;
 }
@@ -138,12 +141,31 @@ function onUpdateMessage(state: ImState, event: ZulipEvent): ImState {
     if (carried.length > 0) unread[target] = [...(unread[target] ?? []), ...carried].sort((a, b) => a - b);
     return { ...moved, windows, unread };
   }
-  const content = event.rendered_content;
+  let next = state;
+  // 话题改名（12.3 带 subject）：同步消息的话题和未读所在话题，静音按新话题判断。
+  if (typeof event.subject === 'string') {
+    const topic = event.subject;
+    next = changeMessages(next, targets, (message) => ({ ...message, subject: topic }));
+    const unreadTopics = { ...next.unreadTopics };
+    for (const id of targets) if (id in unreadTopics) unreadTopics[id] = topic;
+    next = { ...next, unreadTopics };
+  }
   const messageId = event.message_id;
-  if (typeof content !== 'string' || typeof messageId !== 'number') return state;
+  if (typeof messageId !== 'number') return next;
+  // 编辑后本人的标记（例如新加或去掉了 @本人）随事件给出，提醒状态跟着正文一起变。
+  if (Array.isArray(event.flags)) {
+    const flags = event.flags as string[];
+    next = changeMessages(next, new Set([messageId]), (message) => ({ ...message, flags }));
+    const mentions = { ...next.mentions };
+    if (!flags.includes('read') && flags.some((flag) => MENTION_FLAGS.includes(flag))) mentions[messageId] = true;
+    else delete mentions[messageId];
+    next = { ...next, mentions };
+  }
+  const content = event.rendered_content;
+  if (typeof content !== 'string') return next;
   const renderingOnly = event.rendering_only === true;
   const editedAt = typeof event.edit_timestamp === 'number' ? event.edit_timestamp : undefined;
-  return changeMessages(state, new Set([messageId]), (message) => ({
+  return changeMessages(next, new Set([messageId]), (message) => ({
     ...message,
     content,
     last_edit_timestamp: renderingOnly ? message.last_edit_timestamp : editedAt ?? message.last_edit_timestamp,
@@ -187,8 +209,8 @@ function onFlags(state: ImState, event: ZulipEvent): ImState {
     const detail = details[String(id)];
     const key = messageDetailsKey(next, detail);
     if (!key) continue;
-    const mentioned = typeof detail === 'object' && detail !== null && (detail as { mentioned?: boolean }).mentioned === true;
-    next = addUnread(next, key, id, mentioned);
+    const value = (typeof detail === 'object' && detail !== null ? detail : {}) as { mentioned?: boolean; topic?: string };
+    next = addUnread(next, key, id, value.mentioned === true, typeof value.topic === 'string' ? value.topic : null);
   }
   return next;
 }
@@ -344,8 +366,9 @@ function onDrafts(state: ImState, event: ZulipEvent): ImState {
 }
 
 function onUserTopic(state: ImState, event: ZulipEvent): ImState {
-  if (typeof event.stream_id !== 'number' || event.topic_name !== '' || typeof event.visibility_policy !== 'number') return state;
-  return { ...state, topicPolicies: { ...state.topicPolicies, [event.stream_id]: event.visibility_policy } };
+  const { stream_id: streamId, topic_name: topic, visibility_policy: policy } = event;
+  if (typeof streamId !== 'number' || typeof topic !== 'string' || typeof policy !== 'number') return state;
+  return { ...state, topicPolicies: { ...state.topicPolicies, [`${streamId}:${topic}`]: policy } };
 }
 
 export function profileFieldIds(fields: ZulipProfileField[]): Pick<ImState, 'deptFieldId' | 'titleFieldId'> {

@@ -83,7 +83,8 @@ export interface ZulipRegisterResponse {
   unread_msgs: ZulipUnreadMessages;
   presences: Record<string, ZulipPresence>;
   server_timestamp: number;
-  presence_offline_threshold_seconds?: number;
+  server_presence_offline_threshold_seconds?: number;
+  server_presence_ping_interval_seconds?: number;
   enter_sends?: boolean;
   realm_emoji?: Record<string, ZulipRealmEmoji>;
   drafts?: ZulipDraft[];

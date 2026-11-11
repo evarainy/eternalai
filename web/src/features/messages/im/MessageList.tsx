@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from '../../../shared/ui/Icon';
-import { clearAnchor, markVisibleRead, retryConversation, returnToLatest } from '../zulip/imStore';
+import { clearAnchor, markVisibleRead, openConversation, retryConversation, returnToLatest } from '../zulip/imStore';
 import type { ImState, MessageWindow } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import { MessageItem } from './MessageItem';
@@ -62,7 +62,11 @@ export function MessageList({ conversationKey, state, messageWindow }: {
       const rect = element.querySelector(`[data-message-id="${message.id}"]`)?.getBoundingClientRect();
       return rect !== undefined && (rect.bottom < box.top || rect.top > box.bottom);
     });
-    setHiddenMention(hidden?.id ?? null);
+    // 窗口停在较早位置时，未加载进来的未读 @ 也要提示（点按钮按锚点读取）。
+    const loaded = new Set(messages.map((message) => message.id));
+    const outside = (state.unread[conversationKey] ?? [])
+      .find((id) => state.mentions[id] && !loaded.has(id) && !dismissed[id]);
+    setHiddenMention(hidden?.id ?? outside ?? null);
   };
 
   const reportVisible = () => {
@@ -192,10 +196,17 @@ export function MessageList({ conversationKey, state, messageWindow }: {
 
   const jumpToMention = () => {
     if (hiddenMention === null) return;
-    scroller.current?.querySelector(`[data-message-id="${hiddenMention}"]`)?.scrollIntoView({ block: 'center' });
+    const node = scroller.current?.querySelector(`[data-message-id="${hiddenMention}"]`);
+    if (node) node.scrollIntoView({ block: 'center' });
+    else openConversation(conversationKey, hiddenMention);
     setDismissed((current) => ({ ...current, [hiddenMention]: true }));
     setHiddenMention(null);
   };
+
+  // 窗口不在最新处时，新消息不进窗口：按本会话比窗口更新的未读来提示。
+  const pendingNew = messageWindow && !messageWindow.foundNewest && lastId !== undefined
+    ? (state.unread[conversationKey] ?? []).filter((id) => id > lastId).length
+    : newCount;
 
   if (!messageWindow || (messageWindow.status === 'loading' && messages.length === 0)) {
     return <div className={styles.messages}><p className={styles.state} role="status">正在读取消息…</p></div>;
@@ -253,9 +264,9 @@ export function MessageList({ conversationKey, state, messageWindow }: {
           <Icon name="atsign" size={15} />有人@你
         </button>
       ) : null}
-      {newCount > 0 ? (
+      {pendingNew > 0 ? (
         <button className={`${styles.pill} ${styles.pillNew}`} onClick={jumpToLatest} type="button">
-          {newCount} 条新消息<Icon name="chevron" size={15} />
+          {pendingNew} 条新消息<Icon name="chevron" size={15} />
         </button>
       ) : null}
     </>

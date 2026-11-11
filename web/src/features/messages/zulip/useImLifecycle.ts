@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { configurationApiV1ImContextConfigurationGet } from '../../../generated/im-context/im-context';
 import { useAuthStore } from '../../../stores/authStore';
 import { configureIM, imBridgeBlocked, imLogoutInProgress, registerIMView } from '../hostBridge';
-import { disableIm, resetIm, startIm, useImStore } from './imStore';
+import { disableIm, resetIm, setImRestart, startIm, useImStore } from './imStore';
 import { setImUpstreamOrigin } from './links';
 import { createHttpTransport } from './transport';
 import type { ImTransport } from './transport';
@@ -56,8 +56,13 @@ export function useImLifecycle(): void {
       }
     };
     void start();
+    // 「重新连接」从 configuration 开始重走，读 configuration 失败的情形也能恢复。
+    setImRestart(() => {
+      if (isCurrent()) void start();
+    });
     return () => {
       live = false;
+      setImRestart(null);
       unregister();
       setImUpstreamOrigin(null);
       resetIm();
