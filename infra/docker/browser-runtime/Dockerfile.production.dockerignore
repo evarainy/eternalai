@@ -458,3 +458,6 @@ services/decision/*
 !services/decision/__init__.py
 !services/decision/manifest.py
 !uv.lock
+!app/api/v1/im_client.py
+!app/im_client.py
+!app/ports/im_client.py
