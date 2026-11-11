@@ -192,6 +192,7 @@
 
 /* 图标底座：只放 `shared/ui/Icon` 的内联 SVG，颜色由 `currentColor` 继承，不自带模糊、不填固定色。 */
 .navIcon {
+  position: relative;
   display: grid;
   width: 30px;
   height: 30px;
@@ -867,4 +868,21 @@
 
 .floatingText {
   white-space: nowrap;
+}
+
+/* 消息未读角标（FE_PLAN §2.1 消息页布局）：收起和展开时都挂在图标右上角。 */
+.navBadge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #f5483b;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
 }

@@ -211,10 +211,13 @@
 
 .tray {
   display: flex;
+  max-height: 104px;
+  flex: none;
   flex-wrap: wrap;
   gap: 8px;
   margin: 0 0 6px;
   padding: 0;
+  overflow-y: auto;
   list-style: none;
 }
 

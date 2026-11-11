@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Icon } from '../../../shared/ui/Icon';
-import { openConversation, useImStore } from '../zulip/imStore';
+import { openConversation, retryIm, useImStore } from '../zulip/imStore';
 import { Avatar } from './Avatar';
 import { NewChatButton } from './NewChatButton';
-import { conversationAvatar, conversationRows, userPresence } from './viewModel';
+import { conversationAvatar, conversationRows, imFailureText, unreadTotal, userPresence } from './viewModel';
 import type { ConversationRow } from './viewModel';
 import styles from './ConversationList.module.css';
 
@@ -27,15 +27,23 @@ export function ConversationList() {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const rows = useMemo(() => conversationRows(state), [state]);
-  // 静音群不计入未读总数（FE_PLAN §3 第 1 行）。
-  const total = rows.reduce((sum, row) => sum + (row.muted ? 0 : row.unread), 0);
+  // 静音会话不计入未读总数（FE_PLAN §3 第 1 行）。
+  const total = unreadTotal(state);
   const visible = rows.filter((row) => matches(row, filter, query.trim().toLowerCase()));
 
   let body;
   if (state.phase === 'loading' || state.phase === 'idle') {
     body = <p className={styles.state} role="status">正在读取会话…</p>;
+  } else if (state.phase === 'disabled') {
+    body = <p className={styles.state}>单位消息尚未启用，请联系维护人员核对连接配置。</p>;
   } else if (state.phase === 'failed') {
-    body = <p className={styles.state} role="alert">会话列表读取失败，请稍后刷新页面重试。</p>;
+    const retryable = state.failure !== 'im_mapping_required' && state.failure !== 'im_identity_mismatch';
+    body = (
+      <p className={styles.state} role="alert">
+        {imFailureText(state.failure)}
+        {retryable ? <button className={styles.retry} onClick={retryIm} type="button">重新连接</button> : null}
+      </p>
+    );
   } else if (visible.length === 0) {
     body = <p className={styles.state}>{rows.length === 0 ? '还没有会话。' : '没有符合条件的会话。'}</p>;
   } else {
@@ -103,6 +111,7 @@ export function ConversationList() {
         </label>
         <NewChatButton className={styles.iconButton ?? ''} />
       </div>
+      {state.offline ? <p className={styles.offline} role="status">连接中断，正在重新连接…</p> : null}
       <div className={styles.tabs} role="group" aria-label="筛选会话">
         {FILTERS.map((item) => (
           <button

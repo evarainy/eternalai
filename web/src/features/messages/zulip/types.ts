@@ -63,6 +63,13 @@ export interface ZulipPresence {
   idle_timestamp?: number;
 }
 
+/** 话题偏好（12.3 `visibility_policy`）：0 无、1 静音、2 取消静音、3 关注。新群只用空话题。 */
+export interface ZulipUserTopic {
+  stream_id: number;
+  topic_name: string;
+  visibility_policy: number;
+}
+
 export interface ZulipRegisterResponse {
   queue_id: string;
   last_event_id: number;
@@ -80,6 +87,7 @@ export interface ZulipRegisterResponse {
   enter_sends?: boolean;
   realm_emoji?: Record<string, ZulipRealmEmoji>;
   drafts?: ZulipDraft[];
+  user_topics?: ZulipUserTopic[];
 }
 
 export interface ZulipRealmEmoji {
@@ -186,7 +194,7 @@ export interface ZulipSendRequest {
   localId: string;
 }
 
-/** 事件按 12.3 的形状松散声明；receiver 在 lane 3 按 `type` 分派。 */
+/** 事件按 12.3 的形状松散声明；`events.ts` 按 `type` 分派并只读用到的字段。 */
 export interface ZulipEvent {
   id: number;
   type: string;

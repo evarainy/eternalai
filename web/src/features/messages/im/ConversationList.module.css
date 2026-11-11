@@ -267,3 +267,22 @@
   cursor: default;
   opacity: 0.55;
 }
+
+.retry {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+}
+
+.offline {
+  margin: 0 12px 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fff4e5;
+  color: #8a5a00;
+  font-size: 12.5px;
+}

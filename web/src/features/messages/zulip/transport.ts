@@ -160,7 +160,8 @@ export function createHttpTransport(): ImTransport {
       return zulip<{ id: number }>('POST', '/channels/create', {
         form: formBody({
           name, subscribers: userIds, invite_only: true, history_public_to_subscribers: true,
-          topics_policy: 'empty_topic_only',
+          // 12.3 的 topics_policy 是 Json[TopicsPolicy]：值本身要是 JSON 字符串。
+          topics_policy: JSON.stringify('empty_topic_only'),
         }),
       });
     },

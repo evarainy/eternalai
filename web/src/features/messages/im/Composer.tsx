@@ -34,6 +34,8 @@ interface Attachment {
 }
 
 type DraftStatus = 'saving' | 'saved' | 'unsaved' | null;
+/** 一份服务端草稿：id 为 null 表示还没建；saved 是服务端已确认的内容。 */
+interface DraftSlot { id: number | null; saved: string }
 const DRAFT_LABEL: Record<Exclude<DraftStatus, null>, string> = { saving: '保存中', saved: '已保存', unsaved: '未保存' };
 
 let nextAttachment = 1;
@@ -74,12 +76,15 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
   const filePicker = useRef<HTMLInputElement>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
   const start = useRef<{ y: number; height: number } | null>(null);
-  const draftId = useRef<number | null>(drafts[0]?.id ?? null);
-  const savedText = useRef(drafts[0]?.content ?? '');
+  // 当前选中的那份草稿。切换草稿时换成新对象；在途保存只改它发起时绑定的那个对象。
+  const slot = useRef<DraftSlot>({ id: drafts[0]?.id ?? null, saved: drafts[0]?.content ?? '' });
+  // 同一输入框的草稿保存串行执行，避免并发 POST 产生副本、或旧 PATCH 晚到覆盖新内容。
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
   const latestText = useRef(text);
   const idleTimer = useRef<number | undefined>(undefined);
-  const abort = useRef(new AbortController());
-  const editing = useComposerBridge((bridge) => bridge.editing);
+  const abort = useRef<AbortController | null>(null);
+  const bridgeEditing = useComposerBridge((bridge) => bridge.editing);
+  const editing = bridgeEditing?.key === conversationKey ? bridgeEditing : null;
   const insert = useComposerBridge((bridge) => bridge.insert);
   const beforeEdit = useRef<string | null>(null);
 
@@ -96,23 +101,40 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
     : [];
 
   /* ---------- 草稿 ---------- */
+  /**
+   * 把 `content` 存进 `target`（默认当前草稿）。排在上一次保存之后执行，执行时若 target 仍是当前草稿就取
+   * 最新文字，这样连续触发只会按顺序落成同一份草稿。
+   */
+  const queueSave = (target: DraftSlot, content: string | null, onFail?: () => void) => {
+    saveChain.current = saveChain.current.then(async () => {
+      const current = slot.current === target;
+      const value = content ?? latestText.current;
+      if (value === target.saved) return;
+      if (current) setDraftStatus('saving');
+      const id = await saveDraft(conversationKey, target.id, value);
+      target.id = id;
+      target.saved = value;
+      if (slot.current === target) setDraftStatus(id === null ? null : latestText.current === value ? 'saved' : 'unsaved');
+    }).catch(() => {
+      if (onFail) onFail();
+      else if (slot.current === target) setDraftStatus('unsaved');
+    });
+  };
+
   const persistDraft = () => {
     window.clearTimeout(idleTimer.current);
-    const content = latestText.current;
-    if (editing || content === savedText.current) return;
+    if (editing || latestText.current === slot.current.saved) return;
     setDraftStatus('saving');
-    saveDraft(conversationKey, draftId.current, content).then((id) => {
-      draftId.current = id;
-      savedText.current = content;
-      setDraftStatus(id === null ? null : latestText.current === content ? 'saved' : 'unsaved');
-    }, () => setDraftStatus('unsaved'));
+    queueSave(slot.current, null);
   };
   const persistRef = useRef(persistDraft);
   persistRef.current = persistDraft;
 
   useEffect(() => {
     input.current?.focus();
-    const controller = abort.current;
+    // 每次 setup 新建 controller：开发期 StrictMode 会先 cleanup 再 setup 一次。
+    const controller = new AbortController();
+    abort.current = controller;
     return () => {
       // 切换会话（本组件按会话 key 重新挂载）时保存草稿，并中止未完成的上传。
       persistRef.current();
@@ -134,12 +156,13 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
   const update = (value: string, caret?: number) => {
     setText(value);
     latestText.current = value;
-    if (value) unsent.set(conversationKey, value);
-    else unsent.delete(conversationKey);
     const query = mentionQuery(value, caret ?? value.length);
     setMention(query && members.length > 0 ? { ...query, index: 0 } : null);
+    // 编辑模式下文字只是编辑缓冲，不写进未发送缓存和草稿。
     if (editing) return;
-    setDraftStatus(value === savedText.current ? (draftId.current === null ? null : 'saved') : 'unsaved');
+    if (value) unsent.set(conversationKey, value);
+    else unsent.delete(conversationKey);
+    setDraftStatus(value === slot.current.saved ? (slot.current.id === null ? null : 'saved') : 'unsaved');
     window.clearTimeout(idleTimer.current);
     idleTimer.current = window.setTimeout(() => persistRef.current(), DRAFT_IDLE_MS);
   };
@@ -176,13 +199,15 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
     requestAnimationFrame(() => input.current?.focus());
   }, [editing]);
 
-  const cancelEditing = () => {
+  /** 退出编辑模式（保存成功或取消），恢复进入编辑前的输入。 */
+  const leaveEditing = () => {
     const restore = beforeEdit.current ?? '';
     beforeEdit.current = null;
     useComposerBridge.getState().stopEditing();
     setText(restore);
     latestText.current = restore;
   };
+  const cancelEditing = leaveEditing;
 
   const chooseMention = (userId: number) => {
     if (!mention) return;
@@ -238,33 +263,38 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
     setError(null);
     try {
       if (editing) {
-        await editMessage(conversationKey, editing.messageId, content);
-        beforeEdit.current = null;
-        useComposerBridge.getState().stopEditing();
-        const restore = unsent.get(conversationKey) ?? '';
-        setText(restore);
-        latestText.current = restore;
+        await editMessage(editing.messageId, content);
+        leaveEditing();
         return;
       }
+      // 只处理点发送这一刻的附件和文字；发送期间新加的附件、新输入的文字都保留。
+      const sending = attachments;
+      const sentText = text;
+      const signal = abort.current?.signal ?? AbortSignal.abort();
       const links: string[] = [];
-      for (const item of attachments) {
+      for (const item of sending) {
         const result = await uploadAttachment(item.file, (ratio) => {
           setAttachments((current) => current.map((entry) => (entry.id === item.id ? { ...entry, progress: ratio } : entry)));
-        }, abort.current.signal);
+        }, signal);
         links.push(`[${result.filename}](${result.url})`);
       }
       await sendMessage(conversationKey, [content, ...links].filter(Boolean).join('\n'));
-      releaseAll();
-      if (latestText.current === text) {
-        update('');
+      const sent = new Set(sending.map((item) => item.id));
+      for (const item of sending) if (item.preview) URL.revokeObjectURL(item.preview);
+      setAttachments((current) => current.filter((item) => !sent.has(item.id)));
+      if (latestText.current === sentText) {
         window.clearTimeout(idleTimer.current);
-      }
-      if (draftId.current !== null) {
-        const id = draftId.current;
-        draftId.current = null;
-        savedText.current = '';
+        setText('');
+        latestText.current = '';
+        unsent.delete(conversationKey);
+        // 草稿里存的就是刚发出的内容（或还没来得及存），排队删掉；失败时明确提示，不重发消息。
+        const target = slot.current;
+        if (target.id !== null) {
+          queueSave(target, '', () => {
+            if (slot.current === target) setError('消息已发出，但草稿没有删掉；离开输入框时会再删一次。');
+          });
+        }
         setDraftStatus(null);
-        void saveDraft(conversationKey, id, '').catch(() => undefined);
       }
     } catch (failure) {
       if (!(failure instanceof DOMException && failure.name === 'AbortError')) {
@@ -280,7 +310,7 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
     const last = [...messages].reverse().find((message) => message.sender_id === state.selfId);
     if (!last) return;
     readRawContent(last.id).then(
-      (raw) => useComposerBridge.getState().startEditing(last.id, raw),
+      (raw) => useComposerBridge.getState().startEditing(conversationKey, state.session, last.id, raw),
       () => setError('读取原文失败，暂时不能编辑。'),
     );
   };
@@ -360,7 +390,7 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
     </div>
   );
 
-  const otherDrafts = drafts.filter((draft) => draft.id !== draftId.current);
+  const otherDrafts = drafts.filter((draft) => draft.id !== slot.current.id);
 
   return (
     <div
@@ -433,9 +463,9 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
               onClick: ({ key }) => {
                 const draft = otherDrafts.find((item) => String(item.id) === key);
                 if (!draft) return;
+                // 先把当前草稿的改动排进它自己的保存，再换到另一份；旧保存完成后不会改回当前选择。
                 persistRef.current();
-                draftId.current = draft.id;
-                savedText.current = draft.content;
+                slot.current = { id: draft.id, saved: draft.content };
                 setText(draft.content);
                 latestText.current = draft.content;
                 setDraftStatus('saved');

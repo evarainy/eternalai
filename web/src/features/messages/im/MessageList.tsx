@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from '../../../shared/ui/Icon';
-import { clearAnchor, retryConversation, returnToLatest } from '../zulip/imStore';
+import { clearAnchor, markVisibleRead, retryConversation, returnToLatest } from '../zulip/imStore';
 import type { ImState, MessageWindow } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import { MessageItem } from './MessageItem';
@@ -12,9 +12,17 @@ const positions = new Map<ConversationKey, number>();
 
 const BOTTOM_SLACK = 80;
 
+const MENTION_FLAGS = ['mentioned', 'stream_wildcard_mentioned', 'topic_wildcard_mentioned', 'wildcard_mentioned'];
+
+/** 页面在前台：标签页可见且窗口有焦点（FE_PLAN §5.2 自动标读的前提）。 */
+function foreground(): boolean {
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
 /**
  * 消息记录：独立滚动。打开会话时按 FE_PLAN §2.1 的优先级定位——明确锚点 > 记住的位置 > 最新；
- * 只有点「回到最新」或「N 条新消息」才主动滚到底。翻看历史时显示「N 条新消息 ↓」和「有人@你」。
+ * 只有点「回到最新」或「N 条新消息」才主动滚到底，贴底时新消息跟随。翻看历史时显示「N 条新消息 ↓」，
+ * 视口外（上方或下方）有未读 @ 时显示「有人@你」。消息进入可见区域且页面在前台时批量标为已读。
  */
 export function MessageList({ conversationKey, state, messageWindow }: {
   conversationKey: ConversationKey;
@@ -29,7 +37,10 @@ export function MessageList({ conversationKey, state, messageWindow }: {
   // 程序贴底触发的 scroll 事件不能改写「是否在底部」：它可能在图片撑高之后才到达。
   const autoTop = useRef(-1);
   const [newCount, setNewCount] = useState(0);
-  const [mentionAbove, setMentionAbove] = useState<number | null>(null);
+  const [hiddenMention, setHiddenMention] = useState<number | null>(null);
+  // 「以下为新消息」分隔线在打开会话时定下，标读后不立刻消失。
+  const [unreadLine, setUnreadLine] = useState<number | null>(null);
+  const visible = useRef(new Set<number>());
   const [dismissed, setDismissed] = useState<Record<number, true>>({});
   const messages = messageWindow?.messages ?? [];
   const lastId = messages[messages.length - 1]?.id;
@@ -43,12 +54,19 @@ export function MessageList({ conversationKey, state, messageWindow }: {
     setNewCount(0);
   };
 
-  const findMentionAbove = (element: HTMLDivElement) => {
-    const top = element.getBoundingClientRect().top;
-    const hidden = messages.find((message) => message.flags.includes('mentioned') && !message.flags.includes('read')
-      && !dismissed[message.id]
-      && (element.querySelector(`[data-message-id="${message.id}"]`)?.getBoundingClientRect().bottom ?? Infinity) < top);
-    setMentionAbove(hidden?.id ?? null);
+  const findHiddenMention = (element: HTMLDivElement) => {
+    const box = element.getBoundingClientRect();
+    const hidden = messages.find((message) => {
+      if (dismissed[message.id] || message.flags.includes('read')) return false;
+      if (!message.flags.some((flag) => MENTION_FLAGS.includes(flag))) return false;
+      const rect = element.querySelector(`[data-message-id="${message.id}"]`)?.getBoundingClientRect();
+      return rect !== undefined && (rect.bottom < box.top || rect.top > box.bottom);
+    });
+    setHiddenMention(hidden?.id ?? null);
+  };
+
+  const reportVisible = () => {
+    if (visible.current.size > 0 && foreground()) markVisibleRead(conversationKey, [...visible.current]);
   };
 
   // 打开会话或窗口换批时定位；同一会话里追加消息时只在贴底状态下跟随。
@@ -59,6 +77,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
       placedKey.current = conversationKey;
       seenLastId.current = lastId;
       setNewCount(0);
+      setUnreadLine(messages.find((message) => !message.flags.includes('read') && message.sender_id !== state.selfId)?.id ?? null);
       const anchored = anchorId !== null ? element.querySelector(`[data-message-id="${anchorId}"]`) : null;
       if (anchored) {
         anchored.scrollIntoView({ block: 'center' });
@@ -71,15 +90,14 @@ export function MessageList({ conversationKey, state, messageWindow }: {
       } else {
         stickToBottom(element);
       }
-      findMentionAbove(element);
+      findHiddenMention(element);
       return;
     }
     const previous = seenLastId.current;
     seenLastId.current = lastId;
     if (previous === undefined || lastId <= previous) return;
     const arrived = messages.filter((message) => message.id > previous);
-    const ownSend = arrived.some((message) => message.sender_id === state.selfId);
-    if (nearBottom.current || ownSend) stickToBottom(element);
+    if (nearBottom.current) stickToBottom(element);
     else setNewCount((count) => count + arrived.length);
     // messages/state 每次渲染都变；这里只在会话或最后一条变化时定位。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,6 +113,45 @@ export function MessageList({ conversationKey, state, messageWindow }: {
     autoTop.current = element.scrollTop;
     nearBottom.current = false;
   }, [anchorId, conversationKey, lastId]);
+
+  // 新消息、标读、编辑后重算视口外的 @，并把仍在可见区的未读再报一次。
+  useEffect(() => {
+    if (scroller.current) findHiddenMention(scroller.current);
+    reportVisible();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageWindow, dismissed, state.unread[conversationKey]]);
+
+  // 可见区跟踪：消息露出一半以上（或占满半屏）算看到。
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || !track.current) return;
+    const seen = visible.current;
+    seen.clear();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const id = Number((entry.target as HTMLElement).dataset.messageId);
+        const enough = entry.intersectionRatio >= 0.5 || entry.intersectionRect.height >= element.clientHeight / 2;
+        if (entry.isIntersecting && enough) seen.add(id);
+        else seen.delete(id);
+      }
+      reportVisible();
+    }, { root: element, threshold: [0, 0.5, 1] });
+    for (const node of track.current.querySelectorAll('[data-message-id]')) observer.observe(node);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationKey, messageWindow?.messages]);
+
+  // 页面回到前台时补报。
+  useEffect(() => {
+    const onFront = () => reportVisible();
+    window.addEventListener('focus', onFront);
+    document.addEventListener('visibilitychange', onFront);
+    return () => {
+      window.removeEventListener('focus', onFront);
+      document.removeEventListener('visibilitychange', onFront);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationKey]);
 
   // 图片等内容加载后高度会变；停在底部附近时继续贴底。
   useEffect(() => {
@@ -116,7 +173,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
     const element = scroller.current;
     if (!element) return;
     positions.set(conversationKey, element.scrollTop);
-    findMentionAbove(element);
+    findHiddenMention(element);
     if (Math.abs(element.scrollTop - autoTop.current) < 2) return;
     nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < BOTTOM_SLACK;
     if (nearBottom.current) setNewCount(0);
@@ -134,10 +191,10 @@ export function MessageList({ conversationKey, state, messageWindow }: {
   };
 
   const jumpToMention = () => {
-    if (mentionAbove === null) return;
-    scroller.current?.querySelector(`[data-message-id="${mentionAbove}"]`)?.scrollIntoView({ block: 'center' });
-    setDismissed((current) => ({ ...current, [mentionAbove]: true }));
-    setMentionAbove(null);
+    if (hiddenMention === null) return;
+    scroller.current?.querySelector(`[data-message-id="${hiddenMention}"]`)?.scrollIntoView({ block: 'center' });
+    setDismissed((current) => ({ ...current, [hiddenMention]: true }));
+    setHiddenMention(null);
   };
 
   if (!messageWindow || (messageWindow.status === 'loading' && messages.length === 0)) {
@@ -157,7 +214,6 @@ export function MessageList({ conversationKey, state, messageWindow }: {
     return <div className={styles.messages}><p className={styles.state}>还没有消息，说点什么吧。</p></div>;
   }
 
-  const firstUnread = messages.find((message) => !message.flags.includes('read') && message.sender_id !== state.selfId);
   return (
     <>
       {!messageWindow.foundNewest ? (
@@ -181,7 +237,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
               {needsSeparator(messages[index - 1], message) ? (
                 <div className={styles.separator}>{separatorTime(message.timestamp)}</div>
               ) : null}
-              {message === firstUnread ? <div className={styles.unreadLine}>以下为新消息</div> : null}
+              {message.id === unreadLine ? <div className={styles.unreadLine}>以下为新消息</div> : null}
               <MessageItem
                 conversationKey={conversationKey}
                 highlighted={message.id === anchorId}
@@ -192,7 +248,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
           ))}
         </div>
       </div>
-      {mentionAbove !== null ? (
+      {hiddenMention !== null ? (
         <button className={`${styles.pill} ${styles.pillMention}`} onClick={jumpToMention} type="button">
           <Icon name="atsign" size={15} />有人@你
         </button>

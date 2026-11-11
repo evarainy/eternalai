@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import type { KeyboardEvent } from 'react';
-import { openConversation, resetIm, startIm, useImStore } from '../zulip/imStore';
-import type { ImTransport } from '../zulip/transport';
+import { openConversation, useImStore } from '../zulip/imStore';
 import { ChatPane } from './ChatPane';
 import { ConversationList } from './ConversationList';
 import { ImLayout } from './ImLayout';
@@ -9,17 +8,12 @@ import { conversationRows } from './viewModel';
 import styles from './ImLayout.module.css';
 
 /**
- * 消息页 IM 区：挂载时按给定 transport 读快照，卸载时清空状态。由 MessagesPage 按 auth generation
- * 重新挂载；lane 3 把接收器移到 AppShell 的登录生命周期上（FE_PLAN §4.2「接收器挂在哪里」）。
+ * 消息页 IM 区：只负责呈现。快照与事件接收挂在 AppShell 的登录生命周期上（`useImLifecycle`），
+ * 离开消息页也继续接收、更新角标。
  */
-export function ImWorkspace({ createTransport }: { createTransport: () => ImTransport }) {
+export function ImWorkspace() {
   const phase = useImStore((state) => state.phase);
   const selected = useImStore((state) => state.selected);
-
-  useEffect(() => {
-    void startIm(createTransport());
-    return resetIm;
-  }, [createTransport]);
 
   // 首次就绪时打开最上面的会话，之后保持用户的选择。
   useEffect(() => {

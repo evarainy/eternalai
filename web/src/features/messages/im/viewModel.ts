@@ -231,6 +231,35 @@ export interface ConversationRow {
   isGroup: boolean;
 }
 
+/**
+ * 群是否静音（12.3 原生规则）：话题偏好「静音」直接静音；群静音时，话题偏好「取消静音」「关注」例外。
+ * 新群只用空话题，所以按群 id 取空话题的偏好。单聊不静音。
+ */
+export function conversationMuted(state: ImState, conversation: Conversation): boolean {
+  if (conversation.kind !== 'stream') return false;
+  const policy = state.topicPolicies[conversation.streamId] ?? 0;
+  if (policy === 1) return true;
+  return (state.subscriptions[conversation.streamId]?.is_muted ?? false) && policy !== 2 && policy !== 3;
+}
+
+/** 未读总数（左导航角标、列表页签）：静音会话不计入。 */
+export function unreadTotal(state: ImState): number {
+  let total = 0;
+  for (const [key, ids] of Object.entries(state.unread)) {
+    const conversation = state.conversations[key as ConversationKey];
+    if (ids && conversation && !conversationMuted(state, conversation)) total += ids.length;
+  }
+  return total;
+}
+
+/** 读不到消息时给使用者看的说明（按合同错误码）。 */
+export function imFailureText(code: string | null): string {
+  if (code === 'im_mapping_required') return '你的消息账号还没有绑定，请联系管理员处理。';
+  if (code === 'im_identity_mismatch') return '消息账号和绑定的身份对不上，请联系管理员核对。';
+  if (code === 'im_disabled') return '单位消息尚未启用。';
+  return '消息服务暂时连不上。';
+}
+
 /** 会话列表的行：置顶在前，其余按最新消息 id 倒序。 */
 export function conversationRows(state: ImState): ConversationRow[] {
   const rows: (ConversationRow & { order: number; pinned: boolean })[] = [];
@@ -248,7 +277,7 @@ export function conversationRows(state: ImState): ConversationRow[] {
       draft: draft !== undefined,
       unread: unreadIds.length,
       mentioned: unreadIds.some((id) => state.mentions[id]),
-      muted: sub?.is_muted ?? false,
+      muted: conversationMuted(state, conversation),
       isGroup: conversation.kind === 'stream' || conversation.userIds.length > 1,
       order: state.order[conversation.key] ?? 0,
       pinned: sub?.pin_to_top ?? false,

@@ -13,6 +13,9 @@ import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { Icon } from '../shared/ui/Icon';
 import type { IconName } from '../shared/ui/Icon';
+import { useImLifecycle } from '../features/messages/zulip/useImLifecycle';
+import { useImStore } from '../features/messages/zulip/imStore';
+import { unreadTotal } from '../features/messages/im/viewModel';
 import { useCurrentIdentity } from './identity';
 import { useLogout } from './logout';
 import { RouteLoadBoundary } from './RouteLoadingFallback';
@@ -222,20 +225,24 @@ const UNCHECKED_STATUS_ROWS: readonly SystemStatusRow[] = [
 ];
 
 function NavigationLink({
+  badge = 0,
   collapsed,
   icon,
   label,
   to,
 }: {
+  badge?: number;
   collapsed: boolean;
   icon: IconName;
   label: string;
   to: string;
 }) {
+  const name = badge > 0 ? `${label}，${badge} 条未读` : label;
   return (
-    <NavLink aria-label={label} className={styles.navLink} title={label} to={to}>
+    <NavLink aria-label={name} className={styles.navLink} title={name} to={to}>
       <span className={styles.navIcon}>
         <Icon name={icon} size={17} strokeWidth={1.9} />
+        {badge > 0 ? <span aria-hidden="true" className={styles.navBadge}>{badge > 99 ? '99+' : badge}</span> : null}
       </span>
       {collapsed ? null : <span className={styles.navText}>{label}</span>}
     </NavLink>
@@ -252,6 +259,9 @@ export function AppShell() {
   const clearPageContext = useAIDockStore((state) => state.clearPageContext);
   const isAIAssistantPage = location.pathname === AI_ASSISTANT_PATH;
   const isMessagesPage = location.pathname === MESSAGES_PATH;
+  // IM 接收器挂在登录生命周期上：切到其他页面也继续接收、更新左导航角标（FE_PLAN §4.2）。
+  useImLifecycle();
+  const messagesUnread = useImStore(unreadTotal);
   // 2026-11-11：消息页左导航默认收起，并单独记住；其他页面仍用原来那一份。
   const collapsed = useNavigationStore((state) =>
     isMessagesPage ? state.messagesCollapsed : state.collapsed,
@@ -446,6 +456,7 @@ export function AppShell() {
         <nav aria-label="工作区" className={styles.nav}>
           {PRIMARY_NAVIGATION.map((item) => (
             <NavigationLink
+              badge={item.to === MESSAGES_PATH ? messagesUnread : 0}
               collapsed={collapsed}
               icon={item.icon}
               key={item.to}

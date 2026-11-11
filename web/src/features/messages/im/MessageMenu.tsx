@@ -68,14 +68,14 @@ export function MessageMenu({ children, conversationKey, message }: {
     } else if (key === 'copy') {
       copy(text, '已复制');
     } else if (key === 'star') {
-      run(() => toggleStar(conversationKey, message), '收藏没有成功，请重试');
+      run(() => toggleStar(message), '收藏没有成功，请重试');
     } else if (key === 'unread') {
       run(() => markUnread(conversationKey, message), '标为未读没有成功，请重试');
     } else if (key === 'link') {
       copy(messageLink(message.id), '已复制消息链接');
     } else if (key === 'edit') {
       readRawContent(message.id).then(
-        (raw) => bridge.startEditing(message.id, raw),
+        (raw) => useComposerBridge.getState().startEditing(conversationKey, state.session, message.id, raw),
         () => void toast.error('读取原文失败，暂时不能编辑'),
       );
     } else if (key === 'delete') {
@@ -85,7 +85,7 @@ export function MessageMenu({ children, conversationKey, message }: {
         okText: '撤回',
         okButtonProps: { danger: true },
         cancelText: '取消',
-        onOk: () => deleteMessage(conversationKey, message.id).catch(() => {
+        onOk: () => deleteMessage(message.id).catch(() => {
           void toast.error('撤回没有成功：可能已超过可撤回时间或没有权限');
         }),
       });
@@ -103,7 +103,7 @@ export function MessageMenu({ children, conversationKey, message }: {
                 aria-label={`表态 ${emoji.name}`}
                 className={styles.quickButton}
                 key={emoji.code}
-                onClick={() => run(() => toggleReaction(conversationKey, message, unicodeEmojiRef(emoji)), '表态没有成功，请重试')}
+                onClick={() => run(() => toggleReaction(message, unicodeEmojiRef(emoji)), '表态没有成功，请重试')}
                 type="button"
               >
                 {emojiChar(emoji.code)}

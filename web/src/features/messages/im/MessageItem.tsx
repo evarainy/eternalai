@@ -58,7 +58,7 @@ export function MessageItem({ conversationKey, highlighted, message, state }: {
                 data-mine={reaction.mine ? 'true' : 'false'}
                 key={reaction.key}
                 onClick={() => {
-                  toggleReaction(conversationKey, message, reaction.emoji).catch(() => void toast.error('表态没有成功，请重试'));
+                  toggleReaction(message, reaction.emoji).catch(() => void toast.error('表态没有成功，请重试'));
                 }}
                 type="button"
               >
