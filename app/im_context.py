@@ -160,8 +160,6 @@ class IMContextService:
             if ids == tuple(mid for mid in selection.message_ids if mid in ids):
                 raise IMContextError("im_source_not_found", 404)
             raise IMContextError("im_source_changed")
-        if not result.found_anchor:
-            raise IMContextError("im_source_changed")
         _LOG.info("im_stage stage=context result=read count=%s", len(ids))
         return result
 
