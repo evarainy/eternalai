@@ -44,6 +44,17 @@ from app.ports.im_client import IMClientError, IMClientRequest, IMClientResponse
 from app.ports.im_context import IMContextError
 
 _CLIENT_LOG = logging.getLogger("uvicorn.error.im_client")
+_REGISTER_FETCH_EVENT_TYPES = frozenset({
+    "message", "update_message", "delete_message", "update_message_flags", "subscription",
+    "stream", "realm_user", "realm_user_groups", "user_group", "presence", "drafts",
+    "user_settings", "user_topic", "realm", "custom_profile_fields", "realm_emoji",
+    "recent_private_conversations",
+})
+_REGISTER_EVENT_TYPES = frozenset({
+    "message", "update_message", "delete_message", "update_message_flags", "reaction",
+    "subscription", "stream", "realm_user", "user_group", "presence", "drafts", "user_settings",
+    "user_topic", "realm", "custom_profile_fields", "realm_emoji",
+})
 _CLIENT_ENDPOINTS = (
     ("/register", "POST"),
     ("/events", "GET DELETE"),
@@ -138,7 +149,7 @@ class _ClientScope:
 @dataclass(slots=True)
 class _ClientCredentials:
     email: str = field(repr=False)
-    key: str = field(repr=False)
+    key: SecretStr = field(repr=False)
     user_id: int
     scopes: dict[str, _ClientScope] = field(default_factory=dict, repr=False)
 
@@ -334,7 +345,7 @@ class ZulipCommunicationAdapter:
         )
         # A shared pool may receive Set-Cookie; none may reach any subsequent request.
         request.headers.pop("cookie", None)
-        auth = (httpx2.BasicAuth(credentials.email, credentials.key)
+        auth = (httpx2.BasicAuth(credentials.email, credentials.key.get_secret_value())
                 if credentials is not None else None)
         return await self._client.send(request, stream=True, auth=auth, follow_redirects=False)
 
@@ -372,10 +383,11 @@ class ZulipCommunicationAdapter:
             if isinstance(payload.get("msg"), str) and payload["msg"]:
                 message = payload["msg"]
         if credentials is not None:
+            key = credentials.key.get_secret_value()
             basic = base64.b64encode(
-                (credentials.email + ":" + credentials.key).encode()
+                (credentials.email + ":" + key).encode()
             ).decode()
-            secrets += (credentials.key, basic, "Basic " + basic)
+            secrets += (key, basic, "Basic " + basic)
         for secret in secrets:
             for value in (secret, quote(secret, safe="")):
                 if value:
@@ -410,7 +422,7 @@ class ZulipCommunicationAdapter:
                 key, email = payload.get("api_key"), payload.get("email")
                 if not isinstance(key, str) or not key or not isinstance(email, str) or not email:
                     raise _client_protocol_error()
-                credentials = _ClientCredentials(email, key, 0)
+                credentials = _ClientCredentials(email, SecretStr(key), 0)
             finally:
                 await self._client_close(response)
             response = await self._client_send(
@@ -478,8 +490,10 @@ class ZulipCommunicationAdapter:
                         scope.emoji_realms.add(match[1])
 
         if endpoint == "/register":
-            for user in payload.get("realm_users", []):
-                avatar(user)
+            avatar(payload)
+            for name in ("realm_users", "realm_non_active_users"):
+                for user in payload.get(name, []):
+                    avatar(user)
             emoji(payload.get("realm_emoji"))
         elif endpoint == "/users":
             for user in payload.get("members", []):
@@ -606,6 +620,22 @@ class ZulipCommunicationAdapter:
             effective_method = form.get("method", request.method) if request.method == "POST" else (
                 request.method
             )
+            if endpoint == "/register":
+                # Match the upstream POST-over-query and last-value semantics.
+                # Missing/null would request upstream defaults beyond the frozen sets.
+                params = {**_client_form(request.query), **form}
+                for name, allowed in (
+                    ("fetch_event_types", _REGISTER_FETCH_EVENT_TYPES),
+                    ("event_types", _REGISTER_EVENT_TYPES),
+                ):
+                    try:
+                        events = json.loads(params.get(name, "null"))
+                    except json.JSONDecodeError:
+                        raise _endpoint_denied() from None
+                    if not isinstance(events, list) or any(
+                        not isinstance(event, str) or event not in allowed for event in events
+                    ):
+                        raise _endpoint_denied()
             queue_id = ""
             read, deadline = 15.0, 15.0
             upload = endpoint == "/user_uploads"

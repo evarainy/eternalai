@@ -188,9 +188,11 @@ def make_router(
                     await stack.aclose()
 
     async def proxy(request: Request, principal: Principal, kind: str) -> Response:
-        # One reader owns the request body. Start disconnect listening only after
-        # it has finished, so multipart bytes cannot be stolen by another task.
+        # API/upload bodies have one reader; the listener waits for it to finish.
+        # Files forward no body, so listen while identity and upstream headers wait.
         body_done = anyio.Event()
+        if kind == "file":
+            body_done.set()
         response: Response | None = None
         async with anyio.create_task_group() as tasks:
             async def disconnect() -> None:
