@@ -360,11 +360,6 @@ class ZulipCommunicationAdapter:
         )
         # A shared pool may receive Set-Cookie; none may reach any subsequent request.
         request.headers.pop("cookie", None)
-        _CLIENT_LOG.info(
-            "im_client_diagnostic stage=request method=%s chunked=%s has_content_length=%s",
-            method, request.headers.get("transfer-encoding") == "chunked",
-            "content-length" in request.headers,
-        )
         auth = (httpx2.BasicAuth(credentials.email, credentials.key.get_secret_value())
                 if credentials is not None else None)
         return await self._client.send(request, stream=True, auth=auth, follow_redirects=False)
@@ -617,7 +612,6 @@ class ZulipCommunicationAdapter:
         started = monotonic()
         status = mapped_status = 0
         code = "ok"
-        io_stage = "match"
         try:
             if request.kind == "file":
                 endpoint = _match_file_path(request.method, request.path, request.query, scope)
@@ -633,13 +627,17 @@ class ZulipCommunicationAdapter:
             media = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             body: bytes | AsyncIterator[bytes] = request.body
             form: dict[str, str] = {}
-            if media == "application/x-www-form-urlencoded":
+            if media == "multipart/form-data":
+                if endpoint != "/user_uploads":
+                    raise _endpoint_denied()
+            else:
+                # Only multipart uploads need an unknown-length request stream.
+                # Bytes preserve ordinary bodies without chunk-framing empty GETs.
                 body = b"".join([part async for part in request.body])
-                form = _client_form(body)
-                if request.method == "POST" and "method" in form:
-                    _match_client_endpoint(form["method"], request.path)
-            elif media == "multipart/form-data" and endpoint != "/user_uploads":
-                raise _endpoint_denied()
+                if media == "application/x-www-form-urlencoded":
+                    form = _client_form(body)
+                    if request.method == "POST" and "method" in form:
+                        _match_client_endpoint(form["method"], request.path)
             effective_method = form.get("method", request.method) if request.method == "POST" else (
                 request.method
             )
@@ -694,16 +692,13 @@ class ZulipCommunicationAdapter:
             async with asyncio.timeout(None if upload else deadline):
                 # Recheck after reading a form or waiting for any upstream work.
                 await revalidate()
-                io_stage = "send"
                 response = await self._client_send(
                     request.method, self._client_url("/api/v1" + request.path, request.query),
                     credentials=credentials, headers=headers, content=body, timeout=timeout,
                 )
                 try:
                     status = response.status_code
-                    io_stage = "response_body"
                     await response.aread()
-                    io_stage = "post_read"
                     if status >= 400:
                         if upload and status == 405:
                             try:
@@ -749,12 +744,6 @@ class ZulipCommunicationAdapter:
                     await self._client_close(response)
             yield result
         except (httpx2.TimeoutException, httpx2.NetworkError, TimeoutError) as error:
-            cause = error.__cause__
-            _CLIENT_LOG.info(
-                "im_client_diagnostic stage=%s exception=%s cause=%s cause2=%s",
-                io_stage, type(error).__name__, type(cause).__name__,
-                type(cause.__cause__).__name__ if cause is not None else "NoneType",
-            )
             code = ("timeout" if isinstance(error, (httpx2.TimeoutException, TimeoutError))
                     else "network")
             mapped_status = 504
