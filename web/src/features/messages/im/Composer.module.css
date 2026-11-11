@@ -1,0 +1,138 @@
+/* 输入区（迁自 v3 的 .comp/.tools/.input/.cfoot/.hint/.send/.hgrip） */
+.composer {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+
+.tools {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 4px;
+  color: var(--ink2);
+}
+
+.tool {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tool:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.tool:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.toolEnd {
+  margin-left: auto;
+}
+
+.input {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.6;
+  outline: none;
+  resize: none;
+}
+
+/* 与 styles.css 中 antd 输入框的做法一致：内层 textarea 不画兜底焦点环，焦点态画在输入区顶边 */
+.input:focus-visible {
+  outline: none !important;
+}
+
+.composer:focus-within {
+  border-top-color: rgba(47, 107, 255, 0.45);
+}
+
+.input::placeholder {
+  color: var(--ink4);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error {
+  color: var(--red);
+  font-size: 12px;
+}
+
+.hint {
+  margin-left: auto;
+  color: var(--ink4);
+  font-size: 12px;
+}
+
+.send {
+  display: grid;
+  height: 32px;
+  padding: 0 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: var(--blue);
+  box-shadow: 0 2px 6px -1px rgba(47, 107, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.send:disabled {
+  box-shadow: none;
+  cursor: default;
+  opacity: 0.5;
+}
+
+.hgrip {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  left: 0;
+  z-index: 6;
+  height: 6px;
+  cursor: row-resize;
+  outline: none;
+  touch-action: none;
+}
+
+.hgrip::after {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--blue);
+  content: '';
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.hgrip:hover::after,
+.hgrip:focus-visible::after,
+.hgrip[data-dragging='true']::after {
+  opacity: 0.75;
+}

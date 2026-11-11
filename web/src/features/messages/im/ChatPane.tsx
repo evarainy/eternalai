@@ -1,0 +1,65 @@
+import { Icon } from '../../../shared/ui/Icon';
+import { useImStore } from '../zulip/imStore';
+import { Avatar } from './Avatar';
+import { Composer } from './Composer';
+import { MessageList } from './MessageList';
+import {
+  PRESENCE_LABEL, conversationAvatar, conversationMemberCount, conversationTitle, userDept, userPresence, userTitle,
+} from './viewModel';
+import styles from './ChatPane.module.css';
+
+/** 聊天区：头部、消息记录、输入框。会话内搜索、加成员、群设置抽屉在 lane 2/4 接入。 */
+export function ChatPane() {
+  const state = useImStore();
+  const key = state.selected;
+  const conversation = key ? state.conversations[key] : undefined;
+  if (!key || !conversation) {
+    return <div className={styles.empty}>{state.phase === 'ready' ? '选择左侧的会话开始聊天' : ''}</div>;
+  }
+
+  const title = conversationTitle(state, conversation);
+  const avatar = conversationAvatar(state, conversation);
+  const single = avatar.kind === 'person' ? avatar : null;
+  let sub;
+  if (single && !single.bot) {
+    const presence = userPresence(state, single.userId);
+    const org = [userDept(state, single.userId), userTitle(state, single.userId)].filter(Boolean).join(' · ');
+    sub = (
+      <div className={styles.sub}>
+        <span className={styles.dot} data-presence={presence} />
+        {PRESENCE_LABEL[presence]}
+        {org ? <><span className={styles.divider} />{org}</> : null}
+      </div>
+    );
+  } else {
+    const count = conversationMemberCount(state, conversation);
+    sub = count === null ? null : <div className={styles.sub}>{count} 人</div>;
+  }
+
+  return (
+    <>
+      <header className={styles.head}>
+        <Avatar avatar={avatar} />
+        <div className={styles.titleBlock}>
+          <h2 className={styles.title}>{title}</h2>
+          {sub}
+        </div>
+        <div className={styles.icons}>
+          <button aria-label="在会话内搜索" className={styles.iconButton} disabled title="会话内搜索（后续接入）" type="button">
+            <Icon name="search" size={19} />
+          </button>
+          <button aria-label="添加成员" className={styles.iconButton} disabled title="添加成员（后续接入）" type="button">
+            <Icon name="useradd" size={19} />
+          </button>
+          <button aria-label="更多" className={styles.iconButton} disabled title="群设置（后续接入）" type="button">
+            <Icon name="more" size={20} strokeWidth={2.2} />
+          </button>
+        </div>
+      </header>
+      <div className={styles.messageArea}>
+        <MessageList conversationKey={key} messageWindow={state.windows[key]} state={state} />
+      </div>
+      <Composer conversationKey={key} enterSends={state.enterSends} key={key} placeholder={`发给 ${title}`} />
+    </>
+  );
+}

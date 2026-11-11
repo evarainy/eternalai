@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+/// <reference types="vite/client" />
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Alert, Button } from 'antd';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -64,7 +65,7 @@ function DeliveryWorkspace() {
   </details>;
 }
 
-export default function MessagesPage() {
+function IframeMessagesPage() {
   const status = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -251,4 +252,21 @@ export default function MessagesPage() {
     </div>
     <PersonalAgentPanel key={generation} />
   </div>;
+}
+
+/**
+ * lane 1、2 的临时开发开关（FE_PLAN §4.2 devTransport）：只在开发构建且 `VITE_IM_DEV_DATA=1` 时显示
+ * 自建 IM 区并加载合成数据；生产构建中这段条件恒为假，模块不会打包。lane 3 接真实数据后删除开关和 iframe。
+ */
+const DevImWorkspace = import.meta.env.DEV && import.meta.env.VITE_IM_DEV_DATA === '1'
+  ? lazy(() => import('./im/DevImWorkspace'))
+  : null;
+
+export default function MessagesPage() {
+  const status = useAuthStore((state) => state.status);
+  const generation = useAuthStore((state) => state.generation);
+  if (DevImWorkspace && status === 'authenticated') {
+    return <Suspense fallback={null}><DevImWorkspace key={generation} /></Suspense>;
+  }
+  return <IframeMessagesPage />;
 }
