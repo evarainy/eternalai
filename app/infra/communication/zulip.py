@@ -2,25 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import logging
+import math
 import re
 import ssl
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.errors import HeaderParseError
+from email.headerregistry import BaseHeader, ContentTypeHeader
+from email.policy import HTTP
 from html.parser import HTMLParser
+from time import monotonic
 from typing import Any, Literal, cast
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, unquote, urlencode
 from uuid import UUID
 
+import anyio
 import httpx2
 from pydantic import SecretStr
 
 from app.config import ZulipSettings
+from app.infra.mcp.transport import seal_vendor_logs
 from app.ports.communication import (
     AuthenticatedInboundMessage,
     DeliveryMessage,
@@ -34,7 +43,155 @@ from app.ports.communication import (
     InboundEvent,
     VerifiedInboundMessage,
 )
+from app.ports.im_client import IMClientError, IMClientRequest, IMClientResponse
 from app.ports.im_context import IMContextError
+
+_CLIENT_LOG = logging.getLogger("uvicorn.error.im_client")
+_REGISTER_FETCH_EVENT_TYPES = frozenset({
+    "message", "update_message", "delete_message", "update_message_flags", "subscription",
+    "stream", "realm_user", "realm_user_groups", "user_group", "presence", "drafts",
+    "user_settings", "user_topic", "realm", "custom_profile_fields", "realm_emoji",
+    "recent_private_conversations",
+})
+_REGISTER_EVENT_TYPES = frozenset({
+    "message", "update_message", "delete_message", "update_message_flags", "reaction",
+    "subscription", "stream", "realm_user", "user_group", "presence", "drafts", "user_settings",
+    "user_topic", "realm", "custom_profile_fields", "realm_emoji",
+})
+_CLIENT_ENDPOINTS = (
+    ("/register", "POST"),
+    ("/events", "GET DELETE"),
+    ("/messages", "GET POST"),
+    ("/messages/{id}", "PATCH DELETE"),
+    ("/messages/flags", "POST"),
+    ("/messages/{id}/reactions", "POST DELETE"),
+    ("/messages/{id}/read_receipts", "GET"),
+    ("/drafts", "GET POST"),
+    ("/drafts/{id}", "PATCH DELETE"),
+    ("/users", "GET"),
+    ("/users/{id}", "GET"),
+    ("/users/{id}/channels", "GET"),
+    ("/realm/profile_fields", "GET"),
+    ("/streams/{id}", "GET"),
+    ("/streams/{id}/members", "GET"),
+    ("/users/me/{id}/topics", "GET"),
+    ("/realm/emoji", "GET"),
+    ("/user_groups", "GET"),
+    ("/channels/create", "POST"),
+    ("/users/me/subscriptions", "POST DELETE"),
+    ("/users/me/subscriptions/properties", "POST"),
+    ("/users/me/presence", "POST"),
+    ("/user_uploads", "POST"),
+)
+_CLIENT_PATTERNS = tuple(
+    (template, re.compile(re.escape(template).replace(r"\{id\}", r"[1-9][0-9]*")),
+     frozenset(methods.split())) for template, methods in _CLIENT_ENDPOINTS
+)
+_FILE_HEADERS = frozenset({
+    "content-range", "accept-ranges", "content-type", "content-disposition", "content-length",
+})
+_EMOJI_PATH = re.compile(r"/user_avatars/([1-9][0-9]*)/emoji/images/(?:still/)?[^/]+")
+_THUMBNAIL_FORMATS = frozenset({
+    "840x560.webp", "840x560-anim.webp", "4032x3024.webp", "3024x4032.webp",
+})
+
+
+def _endpoint_denied() -> IMClientError:
+    return IMClientError("im_endpoint_not_allowed", 404, "IM endpoint is not allowed.")
+
+
+def _client_protocol_error() -> IMClientError:
+    return IMClientError("im_upstream:SERVER_ERROR", 502, "Invalid IM upstream response.")
+
+
+def _client_path(path: str) -> str:
+    """Validate before URL libraries normalize dot segments or encoded separators."""
+    current = path
+    while True:
+        if (not current.startswith("/") or "//" in current
+                or any(ch in current for ch in "\\?#")
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in current)
+                or any(segment in (".", "..") for segment in current.split("/"))):
+            raise _endpoint_denied()
+        decoded = unquote(current)
+        if decoded == current:
+            return decoded
+        if decoded.count("/") != current.count("/"):
+            raise _endpoint_denied()
+        current = decoded
+
+
+def _match_client_endpoint(method: str, path: str) -> str:
+    decoded = _client_path(path)
+    for template, pattern, methods in _CLIENT_PATTERNS:
+        if method in methods and pattern.fullmatch(decoded):
+            return template
+    raise _endpoint_denied()
+
+
+def _client_form(raw: bytes) -> dict[str, str]:
+    # Django QueryDict: UTF-8 bytes, ISO-8859-1 fallback, then UTF-8 parse_qsl.
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("iso-8859-1")
+    return dict(parse_qsl(text, keep_blank_values=True, encoding="utf-8"))
+
+
+def _check_register_content_type(value: str) -> None:
+    try:
+        header = cast(ContentTypeHeader, HTTP.header_factory("Content-Type", value))
+    except (HeaderParseError, ValueError):
+        raise _endpoint_denied() from None
+    # Django matches the raw media token; MIME comments must not hide a non-form body.
+    if (cast(BaseHeader, header).defects
+            or value.split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded"
+            or header.params.get("charset", "utf-8").lower() != "utf-8"):
+        raise _endpoint_denied()
+
+
+async def _client_bytes(body: bytes) -> AsyncIterator[bytes]:
+    yield body
+
+
+@dataclass(slots=True)
+class _ClientScope:
+    queues: dict[str, float] = field(default_factory=dict, repr=False)
+    avatars: set[tuple[str, bytes]] = field(default_factory=set, repr=False)
+    emoji_realms: set[str] = field(default_factory=set, repr=False)
+
+
+@dataclass(slots=True)
+class _ClientCredentials:
+    email: str = field(repr=False)
+    key: SecretStr = field(repr=False)
+    user_id: int
+    scopes: dict[str, _ClientScope] = field(default_factory=dict, repr=False)
+
+
+def _match_file_path(method: str, path: str, query: bytes, scope: _ClientScope) -> str:
+    decoded = _client_path(path)
+    if method != "GET":
+        raise _endpoint_denied()
+    if re.fullmatch(r"/user_uploads/(?:download/)?[1-9][0-9]*/.+", decoded):
+        return "file_upload"
+    thumbnail = re.fullmatch(r"/user_uploads/thumbnail/[1-9][0-9]*/.+/([^/]+)", decoded)
+    if thumbnail is not None and thumbnail[1] in _THUMBNAIL_FORMATS:
+        return "file_thumbnail"
+    if decoded == "/thumbnail":
+        target = _client_form(query).get("url", "")
+        if re.fullmatch(r"user_uploads/[1-9][0-9]*/.+", target):
+            _client_path("/" + target)
+            return "file_thumbnail_legacy"
+    if re.fullmatch(r"/avatar/[1-9][0-9]*(?:/medium)?", decoded):
+        return "file_avatar"
+    if decoded.startswith("/user_avatars/"):
+        if (decoded, query) in scope.avatars:
+            return "file_avatar_resource"
+        emoji = _EMOJI_PATH.fullmatch(decoded)
+        if emoji is not None and emoji[1] in scope.emoji_realms:
+            return "file_emoji"
+    raise _endpoint_denied()
 
 
 def _b64(value: bytes) -> str:
@@ -184,6 +341,428 @@ class ZulipCommunicationAdapter:
     def __init__(self, settings: ZulipSettings) -> None:
         self._settings = settings
         self._tls = ssl.create_default_context(cafile=settings.tls_ca_file)
+        seal_vendor_logs()
+        self._client = httpx2.AsyncClient(
+            verify=self._tls, follow_redirects=False, trust_env=False, timeout=15,
+            headers={"Accept-Encoding": "identity"},
+        )
+
+    def _client_url(self, path: str, query: bytes = b"") -> httpx2.URL:
+        return httpx2.URL(self._settings.origin + path).copy_with(query=query)
+
+    async def _client_send(
+        self, method: str, url: httpx2.URL, *,
+        credentials: _ClientCredentials | None, headers: Mapping[str, str] | None = None,
+        content: bytes | AsyncIterator[bytes] = b"", timeout: httpx2.Timeout | float = 15,
+    ) -> httpx2.Response:
+        request = self._client.build_request(
+            method, url, headers=headers, content=content, timeout=timeout,
+        )
+        # A shared pool may receive Set-Cookie; none may reach any subsequent request.
+        request.headers.pop("cookie", None)
+        auth = (httpx2.BasicAuth(credentials.email, credentials.key.get_secret_value())
+                if credentials is not None else None)
+        return await self._client.send(request, stream=True, auth=auth, follow_redirects=False)
+
+    @staticmethod
+    async def _client_close(response: httpx2.Response) -> None:
+        with anyio.CancelScope(shield=True):
+            await response.aclose()
+
+    @staticmethod
+    def _client_json(response: httpx2.Response) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError:
+            raise _client_protocol_error() from None
+        if not isinstance(payload, dict):
+            raise _client_protocol_error()
+        return cast(dict[str, Any], payload)
+
+    def _client_error(
+        self, response: httpx2.Response, credentials: _ClientCredentials | None, *,
+        secrets: tuple[str, ...] = (),
+    ) -> IMClientError:
+        status = response.status_code
+        default = "UNAUTHORIZED" if status == 401 else (
+            "SERVER_ERROR" if status >= 500 else "BAD_REQUEST"
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        code, message = default, "IM upstream request failed."
+        if isinstance(payload, dict):
+            if isinstance(payload.get("code"), str) and payload["code"]:
+                code = payload["code"]
+            if isinstance(payload.get("msg"), str) and payload["msg"]:
+                message = payload["msg"]
+        if credentials is not None:
+            key = credentials.key.get_secret_value()
+            basic = base64.b64encode(
+                (credentials.email + ":" + key).encode()
+            ).decode()
+            secrets += (key, basic, "Basic " + basic)
+        for secret in secrets:
+            for value in (secret, quote(secret, safe="")):
+                if value:
+                    code, message = code.replace(value, "[redacted]"), message.replace(
+                        value, "[redacted]",
+                    )
+        headers = {
+            name: value for name, value in response.headers.items()
+            if name in _FILE_HEADERS - {"content-type", "content-length"}
+        }
+        return IMClientError(
+            "im_upstream:" + code, 502 if status == 401 or status >= 500 else status,
+            message, invalidate_credentials=status == 401, headers=headers,
+        )
+
+    async def client_identity(self, binding: IMAccountBinding) -> IMReadIdentity:
+        token, _ = self._token(binding)
+        try:
+            # The only JWT/key handshake in the new client. It is never replayed.
+            response = await self._client_send(
+                "POST", self._client_url("/api/v1/jwt/fetch_api_key"), credentials=None,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                content=urlencode({"token": token}).encode(),
+            )
+            try:
+                await response.aread()
+                if response.status_code >= 300:
+                    if response.status_code < 400:
+                        raise _client_protocol_error()
+                    raise self._client_error(response, None, secrets=(token,))
+                payload = self._client_json(response)
+                key, email = payload.get("api_key"), payload.get("email")
+                if not isinstance(key, str) or not key or not isinstance(email, str) or not email:
+                    raise _client_protocol_error()
+                credentials = _ClientCredentials(email, SecretStr(key), 0)
+            finally:
+                await self._client_close(response)
+            response = await self._client_send(
+                "GET", self._client_url("/api/v1/users/me"), credentials=credentials,
+            )
+            try:
+                await response.aread()
+                if response.status_code >= 300:
+                    if response.status_code < 400:
+                        raise _client_protocol_error()
+                    raise self._client_error(response, credentials, secrets=(token,))
+                me = self._client_json(response)
+                uid = me.get("user_id")
+                if (type(uid) is not int or uid <= 0 or str(uid) != binding.im_user_id
+                        or me.get("is_bot") is not False or me.get("is_active") is not True):
+                    raise IMClientError("im_identity_mismatch", 409, "IM identity does not match.")
+                credentials.user_id = uid
+                return IMReadIdentity(
+                    "zulip", self._settings.im_instance_id, self._settings.realm_id,
+                    str(uid), credentials,
+                )
+            finally:
+                await self._client_close(response)
+        except (httpx2.TimeoutException, httpx2.NetworkError):
+            raise IMClientError("im_unavailable", 504, "IM upstream is unavailable.") from None
+        except (httpx2.RemoteProtocolError, httpx2.DecodingError):
+            raise _client_protocol_error() from None
+
+    def _client_resource(self, value: object) -> tuple[str, bytes] | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            url = httpx2.URL(value)
+            if url.is_relative_url:
+                url = httpx2.URL(self._settings.origin + "/").join(url)
+            origin = httpx2.URL(self._settings.origin)
+            if (url.scheme, url.host, url.port) != (origin.scheme, origin.host, origin.port):
+                return None
+            raw_path = url.raw_path.split(b"?", 1)[0].decode("ascii")
+            return _client_path(raw_path), url.query
+        except (httpx2.InvalidURL, UnicodeDecodeError, IMClientError):
+            return None
+
+    def _client_resources(
+        self, endpoint: str, payload: dict[str, Any], scope: _ClientScope,
+    ) -> None:
+        def avatar(user: object) -> None:
+            if not isinstance(user, dict):
+                return
+            for name in ("avatar_url", "avatar_url_medium"):
+                resource = self._client_resource(user.get(name))
+                if resource is not None and resource[0].startswith("/user_avatars/"):
+                    scope.avatars.add(resource)
+
+        def emoji(items: object) -> None:
+            if not isinstance(items, dict):
+                return
+            for item in items.values():
+                if not isinstance(item, dict):
+                    continue
+                for name in ("source_url", "still_url"):
+                    resource = self._client_resource(item.get(name))
+                    match = _EMOJI_PATH.fullmatch(resource[0]) if resource is not None else None
+                    if match is not None:
+                        scope.emoji_realms.add(match[1])
+
+        if endpoint == "/register":
+            avatar(payload)
+            for name in ("realm_users", "realm_non_active_users"):
+                for user in payload.get(name, []):
+                    avatar(user)
+            emoji(payload.get("realm_emoji"))
+        elif endpoint == "/users":
+            for user in payload.get("members", []):
+                avatar(user)
+        elif endpoint == "/users/{id}":
+            avatar(payload.get("user"))
+        elif endpoint == "/realm/emoji":
+            emoji(payload.get("emoji"))
+        if endpoint in ("/register", "/events"):
+            for event in payload.get("events", []):
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "realm_user":
+                    avatar(event.get("person"))
+                elif event.get("type") == "realm_emoji":
+                    emoji(event.get("realm_emoji"))
+
+    @staticmethod
+    async def _client_file_body(response: httpx2.Response) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in response.aiter_raw():
+                yield chunk
+        except (httpx2.TimeoutException, httpx2.NetworkError):
+            raise IMClientError("im_unavailable", 504, "IM upstream is unavailable.") from None
+        except (httpx2.RemoteProtocolError, httpx2.DecodingError):
+            raise _client_protocol_error() from None
+
+    @asynccontextmanager
+    async def _client_file(
+        self, request: IMClientRequest, credentials: _ClientCredentials,
+        revalidate: Callable[[], Awaitable[None]],
+    ) -> AsyncIterator[IMClientResponse]:
+        url = self._client_url(request.path, request.query)
+        origin = httpx2.URL(self._settings.origin)
+        headers = {k: v for k, v in request.headers.items() if k in ("range", "accept")}
+        response: httpx2.Response | None = None
+        try:
+            for hop in range(self._client.max_redirects + 1):
+                same_origin = (url.scheme, url.host, url.port) == (
+                    origin.scheme, origin.host, origin.port,
+                )
+                response = await self._client_send(
+                    "GET", url, credentials=credentials if same_origin else None,
+                    headers=headers, timeout=httpx2.Timeout(60, connect=10, pool=10),
+                )
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = response.headers.get("location")
+                if location is None or hop == self._client.max_redirects:
+                    raise _client_protocol_error()
+                target = url.join(location)
+                if target.scheme != "https" or target.userinfo:
+                    raise _client_protocol_error()
+                target_path = _client_path(target.raw_path.split(b"?", 1)[0].decode("ascii"))
+                if target_path.startswith(("/static/", "/accounts/", "/login")):
+                    raise _client_protocol_error()
+                if (target.scheme, target.host, target.port) == (
+                    origin.scheme, origin.host, origin.port,
+                ) and not (
+                    re.fullmatch(r"/user_uploads/(?:temporary/|download/|thumbnail/)?[^/]+/.+",
+                                 target_path)
+                    or target_path.startswith("/user_avatars/")
+                    or re.fullmatch(r"/avatar/[1-9][0-9]*(?:/medium)?", target_path)
+                    or target_path == "/thumbnail"
+                ):
+                    raise _client_protocol_error()
+                await revalidate()
+                await self._client_close(response)
+                response = None
+                url = target
+            assert response is not None
+            if response.status_code not in (200, 206):
+                await response.aread()
+                if response.status_code < 400:
+                    raise _client_protocol_error()
+                raise self._client_error(response, credentials)
+            if (response.headers.get("content-type", "").split(";", 1)[0] == "text/html"
+                    and request.path.startswith("/avatar/")):
+                raise _client_protocol_error()
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise _client_protocol_error()
+            yield IMClientResponse(
+                response.status_code,
+                {k: v for k, v in response.headers.items() if k in _FILE_HEADERS},
+                self._client_file_body(response),
+            )
+        except (httpx2.InvalidURL, UnicodeDecodeError):
+            raise _client_protocol_error() from None
+        finally:
+            if response is not None:
+                await self._client_close(response)
+
+    @asynccontextmanager
+    async def request(
+        self, identity: IMReadIdentity, request: IMClientRequest, *,
+        revalidate: Callable[[], Awaitable[None]],
+    ) -> AsyncIterator[IMClientResponse]:
+        credentials = cast(_ClientCredentials, identity.handle)
+        scope = credentials.scopes.setdefault(request.session_scope, _ClientScope())
+        endpoint = "rejected"
+        started = monotonic()
+        status = mapped_status = 0
+        code = "ok"
+        try:
+            if request.kind == "file":
+                endpoint = _match_file_path(request.method, request.path, request.query, scope)
+                async with self._client_file(
+                    request, credentials, revalidate,
+                ) as result:
+                    status = mapped_status = result.status
+                    yield result
+                return
+            endpoint = _match_client_endpoint(request.method, request.path)
+            if endpoint == "/register":
+                _check_register_content_type(request.headers.get("content-type", ""))
+            media = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            body: bytes | AsyncIterator[bytes] = request.body
+            form: dict[str, str] = {}
+            if media == "application/x-www-form-urlencoded":
+                body = b"".join([part async for part in request.body])
+                form = _client_form(body)
+                if request.method == "POST" and "method" in form:
+                    _match_client_endpoint(form["method"], request.path)
+            elif media == "multipart/form-data" and endpoint != "/user_uploads":
+                raise _endpoint_denied()
+            effective_method = form.get("method", request.method) if request.method == "POST" else (
+                request.method
+            )
+            if endpoint == "/register":
+                try:
+                    forwarded_query = self._client_url(
+                        "/api/v1" + request.path, request.query,
+                    ).query
+                except (httpx2.InvalidURL, UnicodeDecodeError):
+                    raise _endpoint_denied() from None
+                if forwarded_query != request.query:
+                    raise _endpoint_denied()
+                # Match the upstream POST-over-query and last-value semantics.
+                # Missing values can restore defaults; explicit null is not an array.
+                params = {**_client_form(request.query), **form}
+                for name, allowed in (
+                    ("fetch_event_types", _REGISTER_FETCH_EVENT_TYPES),
+                    ("event_types", _REGISTER_EVENT_TYPES),
+                ):
+                    try:
+                        events = json.loads(params.get(name, "null"))
+                    except json.JSONDecodeError:
+                        raise _endpoint_denied() from None
+                    if not isinstance(events, list) or any(
+                        not isinstance(event, str) or event not in allowed for event in events
+                    ):
+                        raise _endpoint_denied()
+            queue_id = ""
+            read, deadline = 15.0, 15.0
+            upload = endpoint == "/user_uploads"
+            if endpoint == "/events":
+                params = _client_form(request.query) if request.method == "GET" else {
+                    **_client_form(request.query), **form,
+                }
+                queue_id = params.get("queue_id", "")
+                if queue_id not in scope.queues:
+                    raise IMClientError(
+                        "im_upstream:BAD_EVENT_QUEUE_ID", 400, "Event queue is unavailable.",
+                    )
+                if request.method == "GET":
+                    actual = scope.queues[queue_id]
+                    read, deadline = actual + 15, actual + 45
+                    _CLIENT_LOG.info(
+                        "im_client stage=upstream endpoint=events poll=%s read=%s deadline=%s",
+                        actual, read, deadline,
+                    )
+            if upload:
+                read = 60.0
+            headers = {k: v for k, v in request.headers.items()
+                       if k in ("content-type", "content-length", "accept")}
+            timeout = httpx2.Timeout(read=read, write=60 if upload else 10, connect=10, pool=10)
+            async with asyncio.timeout(None if upload else deadline):
+                # Recheck after reading a form or waiting for any upstream work.
+                await revalidate()
+                response = await self._client_send(
+                    request.method, self._client_url("/api/v1" + request.path, request.query),
+                    credentials=credentials, headers=headers, content=body, timeout=timeout,
+                )
+                try:
+                    status = response.status_code
+                    await response.aread()
+                    if status >= 400:
+                        if upload and status == 405:
+                            try:
+                                dispatch = response.json()
+                            except ValueError:
+                                dispatch = None
+                            if (isinstance(dispatch, dict) and dispatch.get("result") == "error"
+                                    and dispatch.get("msg") == "Method Not Allowed"
+                                    and dispatch.get("allowed_methods") == ["POST"]):
+                                raise _endpoint_denied()
+                        error = self._client_error(response, credentials)
+                        if endpoint == "/events" and error.code == "im_upstream:BAD_EVENT_QUEUE_ID":
+                            scope.queues.pop(queue_id, None)
+                        raise error
+                    if status >= 300:
+                        raise _client_protocol_error()
+                    payload = self._client_json(response)
+                    if endpoint == "/register":
+                        qid = payload.get("queue_id")
+                        poll_timeout = payload.get("event_queue_longpoll_timeout_seconds")
+                        if (str(payload.get("user_id")) != identity.im_user_id):
+                            raise IMClientError(
+                                "im_identity_mismatch", 409, "IM identity does not match.",
+                            )
+                        if (not isinstance(qid, str) or not qid
+                                or not isinstance(poll_timeout, (int, float))
+                                or isinstance(poll_timeout, bool)
+                                or not math.isfinite(poll_timeout) or poll_timeout <= 0):
+                            raise _client_protocol_error()
+                        scope.queues[qid] = float(poll_timeout)
+                    if endpoint == "/events" and effective_method == "DELETE":
+                        scope.queues.pop(queue_id, None)
+                    if upload and not isinstance(payload.get("url"), str):
+                        raise _client_protocol_error()
+                    self._client_resources(endpoint, payload, scope)
+                    mapped_status = status
+                    result = IMClientResponse(
+                        status, {"content-type": response.headers.get(
+                            "content-type", "application/json",
+                        )}, _client_bytes(response.content),
+                    )
+                finally:
+                    await self._client_close(response)
+            yield result
+        except (httpx2.TimeoutException, httpx2.NetworkError, TimeoutError) as error:
+            code = ("timeout" if isinstance(error, (httpx2.TimeoutException, TimeoutError))
+                    else "network")
+            mapped_status = 504
+            raise IMClientError("im_unavailable", 504, "IM upstream is unavailable.") from None
+        except (httpx2.RemoteProtocolError, httpx2.DecodingError):
+            code, mapped_status = "protocol", 502
+            raise _client_protocol_error() from None
+        except IMClientError as error:
+            code = "im_upstream" if error.code.startswith("im_upstream:") else error.code
+            mapped_status = error.http_status
+            raise
+        finally:
+            _CLIENT_LOG.info(
+                "im_client stage=upstream endpoint=%s method=%s status=%s mapped_status=%s "
+                "code=%s duration_ms=%s", endpoint, request.method, status,
+                mapped_status, code, int((monotonic() - started) * 1000),
+            )
+
+    def release_scope(self, identity: IMReadIdentity, session_scope: str) -> None:
+        cast(_ClientCredentials, identity.handle).scopes.pop(session_scope, None)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     def _token(self, binding: IMAccountBinding) -> tuple[str, datetime]:
         expires = datetime.now(UTC) + timedelta(seconds=60)
