@@ -136,3 +136,153 @@
 .hgrip[data-dragging='true']::after {
   opacity: 0.75;
 }
+
+.composer[data-dropping='true'] {
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 2px rgba(47, 107, 255, 0.35);
+}
+
+.editing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.editing button,
+.draftPick {
+  border: 0;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.draftPick {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+
+.draftPick:hover {
+  background: var(--hover);
+}
+
+.draftStatus {
+  color: var(--ink4);
+  font-size: 12px;
+}
+
+.inputWrap {
+  position: relative;
+}
+
+.mentions {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  min-width: 180px;
+  margin: 0;
+  padding: 4px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--pop);
+  list-style: none;
+}
+
+.mentions li {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+
+.mentions li[aria-selected='true'],
+.mentions li:hover {
+  background: var(--hover);
+}
+
+.tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.trayItem {
+  display: flex;
+  max-width: 220px;
+  height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 8px;
+  background: var(--list);
+  box-shadow: 0 0 0 1px var(--line);
+  font-size: 12.5px;
+}
+
+.trayItem img,
+.trayFile {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink2);
+  object-fit: cover;
+}
+
+.trayName {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trayItem button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.trayProgress {
+  flex: none;
+  color: var(--blue);
+}
+
+/* 表情面板（浮层挂在 body 上，颜色写字面值） */
+.emojiGrid {
+  display: grid;
+  width: 252px;
+  gap: 2px;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.emojiGrid button {
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.emojiGrid button:hover {
+  background: #eef0f3;
+}

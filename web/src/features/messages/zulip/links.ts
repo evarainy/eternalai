@@ -30,6 +30,8 @@ export function imFileUrl(raw: string): string | null {
   let path = raw.trim();
   if (path.startsWith(FILES_PREFIX)) return path;
   if (upstreamOrigin && path.startsWith(upstreamOrigin + '/')) path = path.slice(upstreamOrigin.length);
+  // Zulip 12.3 把指向本站的绝对链接改写成不带前导 `/` 的根相对形式（如 `user_uploads/2/...`）。
+  if (/^(user_uploads|user_avatars|avatar|thumbnail)(\/|\?|$)/.test(path)) path = '/' + path;
   if (!path.startsWith('/') || path.startsWith('//')) return null;
   return FILE_ROOTS.some((pattern) => pattern.test(path)) ? FILES_PREFIX + path : null;
 }
@@ -41,4 +43,9 @@ export function imDownloadUrl(fileUrl: string): string {
     return fileUrl;
   }
   return `${marker}download/${fileUrl.slice(marker.length)}`;
+}
+
+/** 消息页内的消息链接；lane 4 解析并同页定位。 */
+export function messageLink(messageId: number): string {
+  return `${window.location.origin}/messages?im_message=${messageId}`;
 }

@@ -78,6 +78,36 @@ export interface ZulipRegisterResponse {
   server_timestamp: number;
   presence_offline_threshold_seconds?: number;
   enter_sends?: boolean;
+  realm_emoji?: Record<string, ZulipRealmEmoji>;
+  drafts?: ZulipDraft[];
+}
+
+export interface ZulipRealmEmoji {
+  id: string;
+  name: string;
+  source_url: string;
+  deactivated: boolean;
+}
+
+/** 12.3 草稿：`to` 对群是 [stream_id]，对私聊是收件人 id（不含本人）；一个会话可以有多份。 */
+export interface ZulipDraft {
+  id?: number;
+  type: 'stream' | 'private' | '';
+  to: number[];
+  topic: string;
+  content: string;
+  timestamp: number;
+}
+
+export interface ZulipEmojiRef {
+  name: string;
+  code: string;
+  type: ZulipReaction['reaction_type'];
+}
+
+export interface ZulipUploadResult {
+  url: string;
+  filename: string;
 }
 
 export interface ZulipReaction {
@@ -105,6 +135,7 @@ interface ZulipMessageBase {
   reactions: ZulipReaction[];
   avatar_url?: string | null;
   local_message_id?: string;
+  last_edit_timestamp?: number;
 }
 
 export interface ZulipStreamMessage extends ZulipMessageBase {
@@ -150,9 +181,9 @@ export type ZulipSendTarget =
 export interface ZulipSendRequest {
   target: ZulipSendTarget;
   content: string;
-  /** 成对的 queue_id 与 local_id；message 事件里回显为 local_message_id（合同 §3.2）。 */
-  queueId: string | null;
-  localId: string | null;
+  /** 成对、必填的 queue_id 与 local_id；message 事件里回显为 local_message_id（合同 §3.2）。 */
+  queueId: string;
+  localId: string;
 }
 
 /** 事件按 12.3 的形状松散声明；receiver 在 lane 3 按 `type` 分派。 */

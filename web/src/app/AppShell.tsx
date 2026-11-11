@@ -306,6 +306,7 @@ export function AppShell() {
   const statusRows = [statusRow, ...UNCHECKED_STATUS_ROWS];
   const attentionCount = statusRow.kind === 'attention' ? 1 : 0;
   const statusUnknown = statusRow.kind === 'unknown';
+  const statusRetrying = statusRow.kind === 'retrying';
   const statusLoading = statusRow.kind === 'loading';
   const statusSummary: { text: string; tone: 'ok' | 'alert' | 'muted' } = statusLoading
     ? { text: '正在读取', tone: 'muted' }
@@ -320,7 +321,9 @@ export function AppShell() {
       ? `${avatarLabelBase}，系统状态 ${attentionCount} 项需要处理`
       : statusUnknown
         ? `${avatarLabelBase}，系统状态暂时无法判断`
-        : avatarLabelBase;
+        : statusRetrying
+          ? `${avatarLabelBase}，系统状态正在重试`
+          : avatarLabelBase;
 
   const submitSearch = (value: string) => {
     const term = normalizeSearchQuery(value) ?? '';
@@ -506,10 +509,10 @@ export function AppShell() {
                 {avatar(22)}
               </span>
               {/*
-                顶栏去掉后系统状态收进了个人菜单；需要处理或读不到时在头像角上留一个带颜色的点，
+                顶栏去掉后系统状态收进了个人菜单；需要处理、读不到或正在重试时在头像角上留一个带颜色的点，
                 不打开菜单也能看见（颜色之外，按钮的无障碍名称里也说明了状态）。
               */}
-              {attentionCount > 0 || statusUnknown ? (
+              {attentionCount > 0 || statusUnknown || statusRetrying ? (
                 <span
                   aria-hidden="true"
                   className={`${styles.signalDot} ${styles.userBarStatusDot}`}

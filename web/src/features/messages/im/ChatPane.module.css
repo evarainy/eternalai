@@ -168,3 +168,59 @@
   color: var(--ink3);
   font-size: 14px;
 }
+
+/* 定位横幅（迁自 v3 的 .banner） */
+.banner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f9fd;
+  color: var(--ink2);
+  font-size: 12.5px;
+}
+
+.banner button {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+}
+
+/* 翻历史时的跳转提示（迁自 v3 的 .jpill） */
+.pill {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--pop);
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pillMention {
+  top: 12px;
+  right: 62px;
+  color: #d6452f;
+}
+
+.pillNew {
+  right: 62px;
+  bottom: 14px;
+}

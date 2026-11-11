@@ -1,0 +1,113 @@
+/* 会话内搜索：叠在消息记录上方的面板（迁自 v3 搜索页的 .res/.r1/.r2/mark） */
+.panel {
+  position: absolute;
+  top: 8px;
+  right: 62px;
+  left: 26px;
+  z-index: 4;
+  display: flex;
+  max-height: 60%;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--pop);
+}
+
+.bar {
+  display: flex;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line2);
+  color: var(--ink3);
+}
+
+.bar input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none !important;
+}
+
+.close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--hover);
+}
+
+.note {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--ink3);
+  font-size: 13px;
+}
+
+.results {
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.results button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.results button:hover {
+  background: var(--sel);
+}
+
+.meta {
+  display: flex;
+  gap: 8px;
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+.meta b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink2);
+  font-size: 13px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.snippet mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: #ffe9a8;
+  color: inherit;
+}

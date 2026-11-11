@@ -132,10 +132,26 @@
   line-height: 1.35;
 }
 
+/*
+ * 顶栏去掉后个人栏常驻侧栏底部；窗口矮（最低 640px）或展开「管理页面」时，只让中间的导航区收缩并
+ * 自己纵向滚动，品牌和个人栏不被裁掉。左右各留 6px，键盘焦点环不被滚动区裁切。
+ */
 .nav {
   display: grid;
+  min-height: 0;
+  flex: 0 1 auto;
+  align-content: start;
   gap: 4px;
-  margin-top: 12px;
+  margin: 6px -6px 0;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.brand,
+.sidebarFooter {
+  flex: none;
 }
 
 .navLink,

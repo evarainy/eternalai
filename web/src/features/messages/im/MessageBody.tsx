@@ -46,7 +46,20 @@ purifier.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
-const SANITIZE_OPTIONS = { FORBID_ATTR: ['style'], FORBID_TAGS: ['style', 'form', 'input', 'button'] };
+/**
+ * 只放行 Zulip 渲染消息实际用到、且不自行加载资源的标签；图片之外的媒体（音视频等）一律去掉，只留
+ * 它外层的文件链接，避免出现绕过代理文件入口的第二条资源通道。
+ */
+const SANITIZE_OPTIONS = {
+  ALLOWED_TAGS: [
+    'a', 'b', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
+    'i', 'img', 'li', 'ol', 'p', 'pre', 's', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td',
+    'th', 'thead', 'time', 'tr', 'ul',
+  ],
+  ALLOWED_ATTR: [
+    'alt', 'class', 'colspan', 'data-user-group-id', 'data-user-id', 'datetime', 'href', 'rowspan', 'src', 'title',
+  ],
+};
 
 function fileLabel(ext: string): string {
   return ext ? ext.toUpperCase().slice(0, 4) : 'FILE';

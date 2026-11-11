@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Icon } from '../../../shared/ui/Icon';
 import { useImStore } from '../zulip/imStore';
 import { Avatar } from './Avatar';
+import { ChatSearch } from './ChatSearch';
+import { useComposerBridge } from './composerStore';
 import { Composer } from './Composer';
 import { MessageList } from './MessageList';
 import {
@@ -12,6 +15,21 @@ import styles from './ChatPane.module.css';
 export function ChatPane() {
   const state = useImStore();
   const key = state.selected;
+  const [searching, setSearching] = useState(false);
+
+  // 换会话时关掉搜索、清掉输入框的回复/编辑请求。
+  useEffect(() => {
+    setSearching(false);
+    useComposerBridge.getState().reset();
+  }, [key]);
+
+  // Ctrl+F（ImWorkspace 只在焦点处于 IM 区时转发）与输入框工具栏的「聊天记录」。
+  useEffect(() => {
+    const open = () => setSearching(true);
+    window.addEventListener('eternalai:im-search', open);
+    return () => window.removeEventListener('eternalai:im-search', open);
+  }, []);
+
   const conversation = key ? state.conversations[key] : undefined;
   if (!key || !conversation) {
     return <div className={styles.empty}>{state.phase === 'ready' ? '选择左侧的会话开始聊天' : ''}</div>;
@@ -45,7 +63,7 @@ export function ChatPane() {
           {sub}
         </div>
         <div className={styles.icons}>
-          <button aria-label="在会话内搜索" className={styles.iconButton} disabled title="会话内搜索（后续接入）" type="button">
+          <button aria-label="在会话内搜索" className={styles.iconButton} onClick={() => setSearching(true)} title="在会话内搜索（Ctrl+F）" type="button">
             <Icon name="search" size={19} />
           </button>
           <button aria-label="添加成员" className={styles.iconButton} disabled title="添加成员（后续接入）" type="button">
@@ -57,6 +75,7 @@ export function ChatPane() {
         </div>
       </header>
       <div className={styles.messageArea}>
+        {searching ? <ChatSearch conversationKey={key} onClose={() => setSearching(false)} /> : null}
         <MessageList conversationKey={key} messageWindow={state.windows[key]} state={state} />
       </div>
       <Composer conversationKey={key} enterSends={state.enterSends} key={key} placeholder={`发给 ${title}`} />

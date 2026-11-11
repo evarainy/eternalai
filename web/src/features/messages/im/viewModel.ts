@@ -1,6 +1,8 @@
+import { conversationDrafts } from '../zulip/imStore';
+import { imFileUrl } from '../zulip/links';
 import type { ImState } from '../zulip/imStore';
-import type { Conversation } from '../zulip/narrow';
-import type { ZulipMessage } from '../zulip/types';
+import type { Conversation, ConversationKey } from '../zulip/narrow';
+import type { ZulipEmojiRef, ZulipMessage } from '../zulip/types';
 
 /** 界面用的纯函数：名称、头像、在线状态、时间与摘要。只读 store 快照，不发请求。 */
 
@@ -171,7 +173,7 @@ export function messageShape(html: string): MessageShape {
   if (blocks.length === 1 && blocks[0]!.tagName === 'P' && blocks[0]!.childNodes.length === 1) {
     const link = blocks[0]!.firstElementChild;
     const href = link?.getAttribute('href') ?? '';
-    if (link?.tagName === 'A' && /\/user_uploads\//.test(href)) {
+    if (link?.tagName === 'A' && imFileUrl(href)?.includes('/files/user_uploads/')) {
       const name = link.textContent?.trim() || decodeURIComponent(href.split('/').pop() ?? '文件');
       const ext = (name.split('.').pop() ?? '').toLowerCase();
       const fileKind = FILE_KINDS.find(([pattern]) => pattern.test(ext))?.[1] ?? 'other';
@@ -182,7 +184,9 @@ export function messageShape(html: string): MessageShape {
 }
 
 export function messageText(html: string): string {
-  return (inertDocument(html).body.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // 段落、引用、换行之间补一个空格，避免摘要里前后两段文字粘在一起。
+  const spaced = html.replace(/<\/(p|blockquote|div|li|h[1-6]|pre)>|<br\s*\/?>/gi, '$& ');
+  return (inertDocument(spaced).body.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
 /** 会话列表的摘要：群里带发送人，文件和图片用方括号标出。 */
@@ -195,16 +199,60 @@ export function messageSummary(state: ImState, message: ZulipMessage): string {
 
 /** 表态按 emoji 归并计数；`mine` 表示本人也点过。 */
 export function groupReactions(message: ZulipMessage, selfId: number) {
-  const groups = new Map<string, { key: string; label: string; count: number; mine: boolean }>();
+  const groups = new Map<string, { key: string; label: string; count: number; mine: boolean; emoji: ZulipEmojiRef }>();
   for (const reaction of message.reactions) {
     const key = `${reaction.reaction_type}:${reaction.emoji_code}`;
     const label = reaction.reaction_type === 'unicode_emoji'
       ? String.fromCodePoint(...reaction.emoji_code.split('-').map((part) => parseInt(part, 16)))
       : `:${reaction.emoji_name}:`;
-    const group = groups.get(key) ?? { key, label, count: 0, mine: false };
+    const group = groups.get(key) ?? {
+      key, label, count: 0, mine: false,
+      emoji: { name: reaction.emoji_name, code: reaction.emoji_code, type: reaction.reaction_type },
+    };
     group.count += 1;
     group.mine ||= reaction.user_id === selfId;
     groups.set(key, group);
   }
   return [...groups.values()];
+}
+
+/* ---------- 会话列表 ---------- */
+
+export interface ConversationRow {
+  key: ConversationKey;
+  title: string;
+  time: string;
+  summary: string;
+  unread: number;
+  mentioned: boolean;
+  /** 本会话有服务端已保存的草稿；正在看的会话不显示。 */
+  draft: boolean;
+  muted: boolean;
+  isGroup: boolean;
+}
+
+/** 会话列表的行：置顶在前，其余按最新消息 id 倒序。 */
+export function conversationRows(state: ImState): ConversationRow[] {
+  const rows: (ConversationRow & { order: number; pinned: boolean })[] = [];
+  for (const conversation of Object.values(state.conversations)) {
+    if (!conversation) continue;
+    const sub = conversation.kind === 'stream' ? state.subscriptions[conversation.streamId] : undefined;
+    const latest = state.latest[conversation.key];
+    const unreadIds = state.unread[conversation.key] ?? [];
+    const draft = state.selected === conversation.key ? undefined : conversationDrafts(state, conversation.key)[0];
+    rows.push({
+      key: conversation.key,
+      title: conversationTitle(state, conversation),
+      time: latest ? listTime(latest.timestamp) : '',
+      summary: draft ? draft.content.replace(/\s+/g, ' ') : latest ? messageSummary(state, latest) : '',
+      draft: draft !== undefined,
+      unread: unreadIds.length,
+      mentioned: unreadIds.some((id) => state.mentions[id]),
+      muted: sub?.is_muted ?? false,
+      isGroup: conversation.kind === 'stream' || conversation.userIds.length > 1,
+      order: state.order[conversation.key] ?? 0,
+      pinned: sub?.pin_to_top ?? false,
+    });
+  }
+  return rows.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order);
 }

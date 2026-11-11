@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
+import type { KeyboardEvent } from 'react';
 import { openConversation, resetIm, startIm, useImStore } from '../zulip/imStore';
 import type { ImTransport } from '../zulip/transport';
 import { ChatPane } from './ChatPane';
 import { ConversationList } from './ConversationList';
 import { ImLayout } from './ImLayout';
+import { conversationRows } from './viewModel';
 import styles from './ImLayout.module.css';
 
 /**
@@ -23,14 +25,29 @@ export function ImWorkspace({ createTransport }: { createTransport: () => ImTran
   useEffect(() => {
     if (phase !== 'ready' || selected) return;
     const state = useImStore.getState();
-    const first = Object.keys(state.conversations)
-      .map((key) => key as keyof typeof state.conversations)
-      .sort((a, b) => (state.order[b] ?? 0) - (state.order[a] ?? 0))[0];
-    if (first) openConversation(first);
+    const first = conversationRows(state)[0];
+    if (first) openConversation(first.key);
   }, [phase, selected]);
 
+  // 快捷键只在焦点处于 IM 区时生效（FE_PLAN §3「快捷键」）：Ctrl+F 会话内搜索，Alt+↑/↓ 切换会话。
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      window.dispatchEvent(new CustomEvent('eternalai:im-search'));
+      return;
+    }
+    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      const state = useImStore.getState();
+      const rows = conversationRows(state);
+      const index = rows.findIndex((row) => row.key === state.selected);
+      const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)];
+      if (next) openConversation(next.key);
+    }
+  };
+
   return (
-    <div className={styles.page}>
+    <div className={styles.page} onKeyDown={onKeyDown}>
       <h1 className={styles.srOnly}>消息</h1>
       <ImLayout chat={<ChatPane />} list={<ConversationList />} />
     </div>

@@ -1,0 +1,44 @@
+/* 右键菜单（迁自 v3 的 .menu/.qr/.mi.toai）。浮层挂在 body 上，取不到 .im 的变量，颜色写字面值。 */
+.pop {
+  width: 216px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 36px -10px rgba(20, 30, 60, 0.24), 0 3px 10px -2px rgba(20, 30, 60, 0.1),
+    0 0 0 1px rgba(20, 30, 60, 0.05);
+}
+
+.pop :global(.ant-dropdown-menu) {
+  padding: 0;
+  box-shadow: none;
+}
+
+.quick {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 5px;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid #f0f1f4;
+}
+
+.quickButton {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.quickButton:hover {
+  background: #eef0f3;
+}
+
+.toAi {
+  background: linear-gradient(90deg, #edf2ff, #f3efff);
+  color: #2450c8 !important;
+  font-weight: 600;
+}

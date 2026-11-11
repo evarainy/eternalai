@@ -1,8 +1,9 @@
-import { requestWithResponse } from '../../../api/mutator';
+import { ApiError, requestWithResponse } from '../../../api/mutator';
 import type {
-  ImIdentity, ZulipEventsResponse, ZulipMessagesQuery, ZulipMessagesResponse, ZulipRegisterResponse,
-  ZulipSendRequest,
+  ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEventsResponse, ZulipMessagesQuery, ZulipMessagesResponse,
+  ZulipRegisterResponse, ZulipSendRequest, ZulipUploadResult,
 } from './types';
+import { uploadFile } from './upload';
 
 /**
  * 浏览器到本人代理 B 的接口（`IM_CLIENT_CONTRACT.md` v2.2）。界面与 store 只依赖这个接口；
@@ -16,6 +17,18 @@ export interface ImTransport {
   deleteQueue(queueId: string): Promise<void>;
   messages(query: ZulipMessagesQuery, signal?: AbortSignal): Promise<ZulipMessagesResponse>;
   send(request: ZulipSendRequest): Promise<{ id: number }>;
+  /** 编辑时取原文：同一 GET /messages 加 apply_markdown=false（合同 §3.2）。 */
+  rawContent(messageId: number): Promise<string>;
+  editMessage(messageId: number, content: string): Promise<void>;
+  deleteMessage(messageId: number): Promise<void>;
+  react(messageId: number, emoji: ZulipEmojiRef, add: boolean): Promise<void>;
+  setFlag(messageIds: number[], flag: 'read' | 'starred', add: boolean): Promise<void>;
+  createDraft(draft: ZulipDraft): Promise<number>;
+  editDraft(draftId: number, draft: ZulipDraft): Promise<void>;
+  deleteDraft(draftId: number): Promise<void>;
+  /** 新群一律私密、历史对成员可见、只用空话题（FE_PLAN §9 第 1 件）。 */
+  createGroup(name: string, userIds: number[]): Promise<{ id: number }>;
+  upload(file: File, onProgress: (ratio: number) => void, signal: AbortSignal): Promise<ZulipUploadResult>;
 }
 
 export const IM_CLIENT_PREFIX = '/api/v1/im-client';
@@ -104,6 +117,54 @@ export function createHttpTransport(): ImTransport {
         },
       });
     },
+    async rawContent(messageId) {
+      const result = await zulip<ZulipMessagesResponse>('GET', '/messages', {
+        query: {
+          anchor: messageId, num_before: 0, num_after: 0, narrow: '[]', apply_markdown: false,
+          allow_empty_topic_name: true,
+        },
+      });
+      const message = result.messages.find((item) => item.id === messageId);
+      if (!message) throw new ApiError(404, 'im_message_not_found', '这条消息已不存在或无权查看。');
+      return message.content;
+    },
+    async editMessage(messageId, content) {
+      await zulip<unknown>('PATCH', `/messages/${messageId}`, { form: formBody({ content }) });
+    },
+    async deleteMessage(messageId) {
+      await zulip<unknown>('DELETE', `/messages/${messageId}`);
+    },
+    async react(messageId, emoji, add) {
+      await zulip<unknown>(add ? 'POST' : 'DELETE', `/messages/${messageId}/reactions`, {
+        form: formBody({ emoji_name: emoji.name, emoji_code: emoji.code, reaction_type: emoji.type }),
+      });
+    },
+    async setFlag(messageIds, flag, add) {
+      await zulip<unknown>('POST', '/messages/flags', {
+        form: formBody({ messages: messageIds, op: add ? 'add' : 'remove', flag }),
+      });
+    },
+    async createDraft(draft) {
+      const result = await zulip<{ ids: number[] }>('POST', '/drafts', { form: formBody({ drafts: [draft] }) });
+      const id = result.ids[0];
+      if (id === undefined) throw new ApiError(502, 'im_upstream:BAD_RESPONSE', '草稿保存结果未确认。');
+      return id;
+    },
+    async editDraft(draftId, draft) {
+      await zulip<unknown>('PATCH', `/drafts/${draftId}`, { form: formBody({ draft }) });
+    },
+    async deleteDraft(draftId) {
+      await zulip<unknown>('DELETE', `/drafts/${draftId}`);
+    },
+    createGroup(name, userIds) {
+      return zulip<{ id: number }>('POST', '/channels/create', {
+        form: formBody({
+          name, subscribers: userIds, invite_only: true, history_public_to_subscribers: true,
+          topics_policy: 'empty_topic_only',
+        }),
+      });
+    },
+    upload: uploadFile,
     send({ target, content, queueId, localId }) {
       const recipient = target.type === 'stream'
         ? { type: 'stream', to: target.streamId, topic: target.topic }
@@ -114,8 +175,8 @@ export function createHttpTransport(): ImTransport {
           to: recipient.to,
           topic: 'topic' in recipient ? recipient.topic : undefined,
           content,
-          queue_id: queueId && localId ? queueId : undefined,
-          local_id: queueId && localId ? localId : undefined,
+          queue_id: queueId,
+          local_id: localId,
         }),
       });
     },
