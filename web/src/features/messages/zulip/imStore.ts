@@ -744,9 +744,10 @@ export async function createGroup(name: string, userIds: number[]): Promise<void
   useImStore.setState((state) => ({
     subscriptions: {
       ...state.subscriptions,
-      [id]: {
+      // subscription 事件先到时以事件为准；否则按本次创建的参数登记（新群一律私密、只用空话题）。
+      [id]: state.subscriptions[id] ?? {
         stream_id: id, name, description: '', invite_only: true, is_muted: false, pin_to_top: false,
-        color: '#76ce90', subscribers: members,
+        color: '#76ce90', subscribers: members, topics_policy: 'empty_topic_only',
       },
     },
     conversations: { ...state.conversations, [conversation.key]: conversation },
