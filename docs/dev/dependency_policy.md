@@ -133,6 +133,7 @@ explicitly names a future dedicated allowlist file.
 | npm | vite | >=5,<9 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Vite) |
 | npm | typescript | >=5,<7 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TypeScript strict) |
 | npm | antd | >=6,<7 | frontend-runtime | pending_internal_mirror_confirmation | P2-FE-ANTD6-001 verified baseline (Ant Design 6.x) |
+| npm | dompurify | ==3.4.14 | frontend-runtime | pending_internal_mirror_confirmation | P2-IM-WEB-CLIENT-001：净化 IM 消息服务端 HTML 的唯一入口；版本与 lockfile 中 mermaid 已解析的传递依赖一致；Apache-2.0 / MPL-2.0 双许可，选 Apache-2.0 |
 | npm | @ant-design/x | >=2,<3 | frontend-runtime | pending_internal_mirror_confirmation | P2-FE-VISUAL-REFACTOR-001; `docs/phase2/DECISIONS.md` 2026-08-20「前端视觉基线」裁定装 `@ant-design/x`；原排除理由「v2.x requires antd ^6.0.0+ (incompatible with frozen antd 5.x baseline)」已随 P2-FE-ANTD6-001 把基线迁到 antd 6 而失效 |
 | npm | react-router-dom | >=6,<8 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (React Router) |
 | npm | @tanstack/react-query | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TanStack Query) |

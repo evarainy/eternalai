@@ -1,9 +1,8 @@
 import { normalizeSearchQuery } from '../shared/query/workObjectSearchNormalization';
 import { lazy, useEffect, useRef, useState } from 'react';
-import type { CSSProperties, FormEvent } from 'react';
+import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import AntApp from 'antd/es/app';
-import Input from 'antd/es/input/Input';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { leaderRosterQueryKey, readLeaderRoster } from '../features/leader-roster/leaderRosterApi';
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
@@ -14,6 +13,9 @@ import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { Icon } from '../shared/ui/Icon';
 import type { IconName } from '../shared/ui/Icon';
+import { useImLifecycle } from '../features/messages/zulip/useImLifecycle';
+import { useImStore } from '../features/messages/zulip/imStore';
+import { unreadTotal } from '../features/messages/im/viewModel';
 import { useCurrentIdentity } from './identity';
 import { useLogout } from './logout';
 import { RouteLoadBoundary } from './RouteLoadingFallback';
@@ -24,20 +26,13 @@ import {
   SIDEBAR_COLLAPSED_PADDING,
   SIDEBAR_COLLAPSED_WIDTH,
   SIDEBAR_EXPANDED_WIDTH,
-  TOPBAR_AVATAR_WIDTH,
-  TOPBAR_GAP,
-  TOPBAR_HORIZONTAL_PADDING,
-  TOPBAR_IDENTITY_WIDTH,
-  TOPBAR_NOTIFICATIONS_WIDTH,
-  TOPBAR_SEARCH_MIN_WIDTH,
-  TOPBAR_SEARCH_WIDTH,
-  TOPBAR_STYLE_WIDTH,
-  TOPBAR_SYSTEM_STATUS_WIDTH,
 } from './shellLayout';
+import { QuickSearch } from './QuickSearch';
 import { BACKGROUND_PRESETS, BACKGROUND_PRESET_LABELS } from './theme';
 import styles from './AppShell.module.css';
 
 const AI_ASSISTANT_PATH = '/chat';
+const MESSAGES_PATH = '/messages';
 const BINDINGS_PATH = '/admin/bindings';
 const WORK_OBJECTS_PATH = '/work-objects';
 
@@ -75,10 +70,11 @@ const LEADER_ROSTER_NAVIGATION: PrimaryNavigationItem = {
   icon: 'users', label: '领导名单', to: '/admin/leader-roster',
 };
 
-type TopbarPanel = 'style' | 'system-status' | 'notifications' | 'user';
+/** 2026-11-11 去顶栏后，这些弹出层都由左导航底部的个人栏打开。 */
+type ShellPanel = 'style' | 'system-status' | 'notifications' | 'user';
 
-/** 弹出层的可访问名称；同时用于 `aria-label`，与顶栏触发按钮一一对应。 */
-const PANEL_LABELS: Record<TopbarPanel, string> = {
+/** 弹出层的可访问名称；同时用于 `aria-label`。 */
+const PANEL_LABELS: Record<ShellPanel, string> = {
   'notifications': '通知',
   'style': '界面风格',
   'system-status': '系统状态',
@@ -88,15 +84,6 @@ const PANEL_LABELS: Record<TopbarPanel, string> = {
 interface ShellCssVariables extends CSSProperties {
   '--shell-sidebar-width': string;
   '--shell-sidebar-collapsed-padding': string;
-  '--topbar-avatar-width': string;
-  '--topbar-gap': string;
-  '--topbar-identity-width': string;
-  '--topbar-notifications-width': string;
-  '--topbar-padding': string;
-  '--topbar-search-min-width': string;
-  '--topbar-search-width': string;
-  '--topbar-style-width': string;
-  '--topbar-system-status-width': string;
 }
 
 function shellCssVariables(collapsed: boolean): ShellCssVariables {
@@ -105,15 +92,6 @@ function shellCssVariables(collapsed: boolean): ShellCssVariables {
       collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH
     }px`,
     '--shell-sidebar-collapsed-padding': `${SIDEBAR_COLLAPSED_PADDING}px`,
-    '--topbar-avatar-width': `${TOPBAR_AVATAR_WIDTH}px`,
-    '--topbar-gap': `${TOPBAR_GAP}px`,
-    '--topbar-identity-width': `${TOPBAR_IDENTITY_WIDTH}px`,
-    '--topbar-notifications-width': `${TOPBAR_NOTIFICATIONS_WIDTH}px`,
-    '--topbar-padding': `${TOPBAR_HORIZONTAL_PADDING}px`,
-    '--topbar-search-min-width': `${TOPBAR_SEARCH_MIN_WIDTH}px`,
-    '--topbar-search-width': `${TOPBAR_SEARCH_WIDTH}px`,
-    '--topbar-style-width': `${TOPBAR_STYLE_WIDTH}px`,
-    '--topbar-system-status-width': `${TOPBAR_SYSTEM_STATUS_WIDTH}px`,
   };
 }
 
@@ -224,29 +202,6 @@ function oaSystemStatusRow(
   };
 }
 
-/**
- * 用户菜单「账号绑定」那一行右侧的状态标。画板画的是「OA 已绑」；这里一律取 `getBinding('oa')` 的
- * 真实结果，读不到就说读不到，不默认「已绑」。
- */
-function oaBindingPill(
-  binding: CredentialBindingView | undefined,
-  fetchState: SystemStatusFetch,
-): { text: string; tone: 'ok' | 'alert' | 'muted' } {
-  if (fetchState === 'loading') {
-    return { text: '读取中', tone: 'muted' };
-  }
-  if (fetchState === 'error' || binding === undefined) {
-    return { text: '读不到', tone: 'muted' };
-  }
-  if (!binding.bound) {
-    return { text: 'OA 未绑', tone: 'muted' };
-  }
-  if (binding.poll_status === 'invalid' || binding.poll_status === 'captcha_required') {
-    return { text: 'OA 需重绑', tone: 'alert' };
-  }
-  return { text: 'OA 已绑', tone: 'ok' };
-}
-
 /** 画板上的另外两行：有行位、无判定来源，一律如实标注。 */
 const UNCHECKED_STATUS_ROWS: readonly SystemStatusRow[] = [
   {
@@ -269,71 +224,25 @@ const UNCHECKED_STATUS_ROWS: readonly SystemStatusRow[] = [
   },
 ];
 
-/**
- * 顶栏搜索。画板 `Main.dc.html` 画的是一个 392×46 的凹槽，左边一个图标、右边一行提示文字，**画板上
- * 没有独立按钮**；上一轮据此把按钮收成了左侧那个纯图标提交键。雨爷 2026-09-04 第二次走查的结论是
- * 「页面最上方的搜索按钮丢失」——**以雨爷为准**，把带文字的搜索按钮加回来：
- *
- * - 左侧图标退回装饰（`aria-hidden`），提交入口只有右侧那一个，读屏软件不会听到两个「搜索」；
- * - 按钮与输入框在同一个 flex 行里，靠 `align-items: center` 垂直居中（这正是他上一轮提的对齐问题）；
- * - 可见性按 WCAG 2.2 SC 1.4.11 做：1px 可辨边界（≥3:1）+ 主题色投影，两者并用，不是只加投影；
- * - 凹槽整体仍是画板的 392×46，提示文字不变。
- */
-function GlobalWorkObjectSearch({
-  initialValue,
-  onSubmit,
-}: {
-  initialValue: string;
-  onSubmit: (value: string) => void;
-}) {
-  const [value, setValue] = useState(initialValue);
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    onSubmit(value);
-  };
-
-  return (
-    <form
-      className={styles.searchField}
-      data-focus-ring="host"
-      onSubmit={handleSubmit}
-      role="search"
-    >
-      <span aria-hidden="true" className={styles.searchIcon}>
-        <Icon name="search" size={19} />
-      </span>
-      <Input
-        allowClear
-        aria-label="搜索工作事项"
-        className={styles.searchInput}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="搜索工作事项、文件编号、责任人"
-        value={value}
-        variant="borderless"
-      />
-      <button className={styles.searchSubmit} type="submit">
-        搜索
-      </button>
-    </form>
-  );
-}
-
 function NavigationLink({
+  badge = 0,
   collapsed,
   icon,
   label,
   to,
 }: {
+  badge?: number;
   collapsed: boolean;
   icon: IconName;
   label: string;
   to: string;
 }) {
+  const name = badge > 0 ? `${label}，${badge} 条未读` : label;
   return (
-    <NavLink aria-label={label} className={styles.navLink} title={label} to={to}>
+    <NavLink aria-label={name} className={styles.navLink} title={name} to={to}>
       <span className={styles.navIcon}>
         <Icon name={icon} size={17} strokeWidth={1.9} />
+        {badge > 0 ? <span aria-hidden="true" className={styles.navBadge}>{badge > 99 ? '99+' : badge}</span> : null}
       </span>
       {collapsed ? null : <span className={styles.navText}>{label}</span>}
     </NavLink>
@@ -348,16 +257,27 @@ export function AppShell() {
   const dockMode = useAIDockStore((state) => state.mode);
   const openDock = useAIDockStore((state) => state.openDock);
   const clearPageContext = useAIDockStore((state) => state.clearPageContext);
-  const collapsed = useNavigationStore((state) => state.collapsed);
-  const toggleCollapsed = useNavigationStore((state) => state.toggleCollapsed);
+  const isAIAssistantPage = location.pathname === AI_ASSISTANT_PATH;
+  const isMessagesPage = location.pathname === MESSAGES_PATH;
+  // IM 接收器挂在登录生命周期上：切到其他页面也继续接收、更新左导航角标（FE_PLAN §4.2）。
+  useImLifecycle();
+  const messagesUnread = useImStore(unreadTotal);
+  // 2026-11-11：消息页左导航默认收起，并单独记住；其他页面仍用原来那一份。
+  const collapsed = useNavigationStore((state) =>
+    isMessagesPage ? state.messagesCollapsed : state.collapsed,
+  );
+  const toggleCollapsed = useNavigationStore((state) =>
+    isMessagesPage ? state.toggleMessagesCollapsed : state.toggleCollapsed,
+  );
   const background = useAppearanceStore((state) => state.background);
   const setBackground = useAppearanceStore((state) => state.setBackground);
-  const [openPanel, setOpenPanel] = useState<TopbarPanel | null>(null);
+  const [openPanel, setOpenPanel] = useState<ShellPanel | null>(null);
+  const [quickSearchOpen, setQuickSearchOpen] = useState(false);
   const [hasOpenedDock, setHasOpenedDock] = useState(
     dockMode !== 'closed',
   );
   const popoverRef = useRef<HTMLElement | null>(null);
-  const topbarRef = useRef<HTMLElement | null>(null);
+  const userBarRef = useRef<HTMLDivElement | null>(null);
 
   const identity = useCurrentIdentity();
   const [avatarBroken, setAvatarBroken] = useState(false);
@@ -369,20 +289,8 @@ export function AppShell() {
   const avatarSource =
     identity.avatarPath !== null && !avatarBroken ? identity.avatarPath : null;
   const surname = identity.displayName?.trim().slice(0, 1) || null;
-  const avatarLabel =
+  const avatarLabelBase =
     identity.displayName === null ? '用户菜单' : `用户菜单：${identity.displayName}`;
-  const identityLine =
-    identity.displayName === null
-      ? null
-      : identity.departmentName === null
-        ? identity.displayName
-        : `${identity.departmentName} / ${identity.displayName}`;
-
-  const isAIAssistantPage = location.pathname === AI_ASSISTANT_PATH;
-  const initialSearchValue =
-    location.pathname === '/search'
-      ? new URLSearchParams(location.search).get('q') ?? ''
-      : '';
 
   const bindingQuery = useQuery({
     queryKey: ['credential-binding', authGeneration, 'oa'] as const,
@@ -408,8 +316,8 @@ export function AppShell() {
   const statusRows = [statusRow, ...UNCHECKED_STATUS_ROWS];
   const attentionCount = statusRow.kind === 'attention' ? 1 : 0;
   const statusUnknown = statusRow.kind === 'unknown';
+  const statusRetrying = statusRow.kind === 'retrying';
   const statusLoading = statusRow.kind === 'loading';
-  const bindingPill = oaBindingPill(bindingQuery.data, statusFetch);
   const statusSummary: { text: string; tone: 'ok' | 'alert' | 'muted' } = statusLoading
     ? { text: '正在读取', tone: 'muted' }
     : statusUnknown
@@ -418,8 +326,18 @@ export function AppShell() {
         ? { text: `${attentionCount} 个不正常`, tone: 'alert' }
         : { text: '暂无不正常', tone: 'ok' };
 
+  const avatarLabel =
+    attentionCount > 0
+      ? `${avatarLabelBase}，系统状态 ${attentionCount} 项需要处理`
+      : statusUnknown
+        ? `${avatarLabelBase}，系统状态暂时无法判断`
+        : statusRetrying
+          ? `${avatarLabelBase}，系统状态正在重试`
+          : avatarLabelBase;
+
   const submitSearch = (value: string) => {
     const term = normalizeSearchQuery(value) ?? '';
+    setQuickSearchOpen(false);
     navigate({
       pathname: '/search',
       search: term.length === 0 ? '' : `?${new URLSearchParams({ q: term })}`,
@@ -432,8 +350,13 @@ export function AppShell() {
     }
   }, [dockMode]);
 
-  const togglePanel = (panel: TopbarPanel) =>
+  const togglePanel = (panel: ShellPanel) =>
     setOpenPanel((current) => (current === panel ? null : panel));
+
+  const openQuickSearch = () => {
+    setOpenPanel(null);
+    setQuickSearchOpen(true);
+  };
 
   useEffect(() => {
     if (isAIAssistantPage) {
@@ -441,9 +364,22 @@ export function AppShell() {
     }
   }, [clearPageContext, isAIAssistantPage]);
 
+  // Ctrl K：任何页面都能打开工作事项搜索（2026-11-11 去顶栏后的全局搜索入口）。
+  useEffect(() => {
+    const openOnShortcut = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setOpenPanel(null);
+        setQuickSearchOpen(true);
+      }
+    };
+    document.addEventListener('keydown', openOnShortcut);
+    return () => document.removeEventListener('keydown', openOnShortcut);
+  }, []);
+
   /*
-   * 弹出层浮在正文之上，所以必须能在不点触发按钮的情况下关掉：点面板与顶栏以外的地方、或按 Esc。
-   * 触发按钮本身的点击交给 `togglePanel`，因此顶栏内的点击在这里一律放行，避免「关一次又开一次」。
+   * 弹出层浮在正文之上，所以必须能在不点触发按钮的情况下关掉：点面板与个人栏以外的地方、或按 Esc。
+   * 个人栏内的点击交给各自按钮，因此在这里一律放行，避免「关一次又开一次」。
    */
   useEffect(() => {
     if (openPanel === null) {
@@ -456,7 +392,7 @@ export function AppShell() {
       }
       if (
         popoverRef.current?.contains(target) === true ||
-        topbarRef.current?.contains(target) === true
+        userBarRef.current?.contains(target) === true
       ) {
         return;
       }
@@ -475,17 +411,28 @@ export function AppShell() {
     };
   }, [openPanel]);
 
-  const systemStatusLabel = statusLoading
-    ? '系统状态，正在读取'
-    : statusUnknown
-      ? '系统状态，暂时无法判断'
-      : attentionCount > 0
-        ? `系统状态，${attentionCount} 项需要处理`
-        : '系统状态，暂无需要处理的项';
+  const avatar = (size: number) =>
+    avatarSource === null ? (
+      surname === null ? (
+        <Icon name="user" size={size} />
+      ) : (
+        <span className={styles.avatarInitial} data-testid="user-bar-avatar-initial">
+          {surname}
+        </span>
+      )
+    ) : (
+      <img
+        alt=""
+        className={styles.avatarImage}
+        data-testid="user-bar-avatar-image"
+        onError={() => setAvatarBroken(true)}
+        src={avatarSource}
+      />
+    );
 
   return (
     <div
-      className={`${styles.shell} ${styles[background]}${isAIAssistantPage ? ` ${styles.shellFixed}` : ''}`}
+      className={`${styles.shell} ${styles[background]}${isAIAssistantPage || isMessagesPage ? ` ${styles.shellFixed}` : ''}`}
       data-background={background}
       data-collapsed={collapsed ? 'true' : 'false'}
       style={shellCssVariables(collapsed)}
@@ -509,6 +456,7 @@ export function AppShell() {
         <nav aria-label="工作区" className={styles.nav}>
           {PRIMARY_NAVIGATION.map((item) => (
             <NavigationLink
+              badge={item.to === MESSAGES_PATH ? messagesUnread : 0}
               collapsed={collapsed}
               icon={item.icon}
               key={item.to}
@@ -555,6 +503,54 @@ export function AppShell() {
           </details>
         </nav>
         <div className={styles.sidebarFooter}>
+          {/*
+            2026-11-11 全站取消顶栏：头像、姓名、单位与通知铃移到这里（设计稿 v3-7 / v3-8）。
+            姓名来自服务端签名的会话票据；部门取不到就只显示姓名，不写占位。
+          */}
+          <div className={styles.userBar} data-testid="user-bar" ref={userBarRef}>
+            <button
+              aria-expanded={openPanel === 'user'}
+              aria-label={avatarLabel}
+              className={styles.userBarWho}
+              data-testid="user-bar-identity"
+              onClick={() => togglePanel('user')}
+              type="button"
+            >
+              <span className={styles.userBarAvatar} data-testid="user-bar-avatar">
+                {avatar(22)}
+              </span>
+              {/*
+                顶栏去掉后系统状态收进了个人菜单；需要处理、读不到或正在重试时在头像角上留一个带颜色的点，
+                不打开菜单也能看见（颜色之外，按钮的无障碍名称里也说明了状态）。
+              */}
+              {attentionCount > 0 || statusUnknown || statusRetrying ? (
+                <span
+                  aria-hidden="true"
+                  className={`${styles.signalDot} ${styles.userBarStatusDot}`}
+                  data-status-kind={statusRow.kind}
+                  data-testid="user-bar-status-dot"
+                />
+              ) : null}
+              {collapsed || identity.displayName === null ? null : (
+                <span className={styles.userBarInfo}>
+                  <b>{identity.displayName}</b>
+                  {identity.departmentName === null ? null : (
+                    <span>{identity.departmentName}</span>
+                  )}
+                </span>
+              )}
+            </button>
+            <button
+              aria-expanded={openPanel === 'notifications'}
+              aria-label="通知"
+              className={styles.userBarBell}
+              data-testid="user-bar-bell"
+              onClick={() => togglePanel('notifications')}
+              type="button"
+            >
+              <Icon name="bell" size={19} />
+            </button>
+          </div>
           <button
             aria-label={collapsed ? '展开导航' : '收起导航'}
             className={styles.sidebarAction}
@@ -572,372 +568,245 @@ export function AppShell() {
         </div>
       </aside>
 
-      <div className={styles.stage} data-testid="app-main">
-        <header className={styles.topbar} data-testid="app-topbar" ref={topbarRef}>
-          <div className={styles.topbarSearch} data-slot="search">
-            <GlobalWorkObjectSearch
-              key={`${location.pathname}:${location.search}`}
-              initialValue={initialSearchValue}
-              onSubmit={submitSearch}
-            />
-          </div>
-
-          {/*
-            2026-09-02 裁决：这一格显示「部门 / 姓名」。姓名来自服务端签名的会话票据，只要还登录着
-            就一定有；部门来自 OA，取不到就只显示姓名，**一个字的提示都不加**（说明与下一步由用户
-            菜单承担）。启动确认还没回来时这一格是空的，不写任何占位。
-          */}
-          <div
-            className={styles.identity}
-            data-slot="identity"
-            data-testid="topbar-identity"
-          >
-            {identityLine === null ? null : (
-              <span className={styles.identityLine}>{identityLine}</span>
-            )}
-          </div>
-
-          <button
-            aria-expanded={openPanel === 'style'}
-            aria-label="切换界面风格"
-            className={styles.signalButton}
-            data-slot="style"
-            onClick={() => togglePanel('style')}
-            type="button"
-          >
-            <Icon className={styles.signalIcon} name="droplet" size={18} />
-            <span className={styles.signalText}>风格</span>
-          </button>
-
-          <button
-            aria-expanded={openPanel === 'system-status'}
-            aria-label={systemStatusLabel}
-            className={styles.signalButton}
-            data-slot="system-status"
-            data-testid="topbar-system-status"
-            onClick={() => togglePanel('system-status')}
-            type="button"
-          >
-            {/*
-              画板 `TopPops.dc.html` 的顶栏这一格是**带颜色的圆点**（`<span class="dot"
-              style="background:#e0342c"></span>系统状态`），不是线框图标。颜色取自与面板里同一份
-              `data-status-kind` 映射，不另写一套色值；圆点只承担视觉，可见文字「系统状态」与按钮
-              `aria-label` 里的整句状态仍在，颜色不是唯一的区分手段。
-            */}
-            <span
-              aria-hidden="true"
-              className={styles.signalDot}
-              data-status-kind={statusRow.kind}
-              data-testid="topbar-system-status-dot"
-            />
-            <span className={styles.signalText}>系统状态</span>
-            {statusLoading ? (
-              <span className={styles.badgeUnknown} data-testid="system-status-count">
-                …
-              </span>
-            ) : statusUnknown ? (
-              <span className={styles.badgeUnknown} data-testid="system-status-count">
-                ？
-              </span>
-            ) : attentionCount > 0 ? (
-              <span className={styles.badgeAlert} data-testid="system-status-count">
-                {attentionCount}
-              </span>
-            ) : null}
-          </button>
-
-          <button
-            aria-expanded={openPanel === 'notifications'}
-            aria-label="通知，消息功能尚未开发，没有可显示的提醒"
-            className={styles.signalButton}
-            data-slot="notifications"
-            onClick={() => togglePanel('notifications')}
-            type="button"
-          >
-            <Icon className={styles.signalIcon} name="bell" size={18} />
-            <span className={styles.signalText}>通知</span>
-          </button>
-
-          <button
-            aria-expanded={openPanel === 'user'}
-            aria-label={avatarLabel}
-            className={styles.avatarButton}
-            data-slot="avatar"
-            data-testid="topbar-avatar"
-            onClick={() => togglePanel('user')}
-            type="button"
-          >
-            {/*
-              头像走后端代理：`src` 永远是常量 `/api/v1/me/avatar`，OA 主机地址与照片相对路径
-              （都属人员信息）不出后端。取不到照片就退回姓氏首字，再取不到姓名才用线框图标。
-            */}
-            {avatarSource === null ? (
-              surname === null ? (
-                <Icon name="user" size={24} />
-              ) : (
-                <span
-                  className={styles.avatarInitial}
-                  data-testid="topbar-avatar-initial"
-                >
-                  {surname}
+      {/*
+        个人栏弹出层：浮在正文之上、锚在左导航底部个人栏的上方，不占据也不推挤主内容。
+        用户菜单 268px，其余面板沿用原画板宽度（系统状态 384px、通知 412px、风格 320px）。
+      */}
+      {openPanel === null ? null : (
+        <section
+          aria-label={PANEL_LABELS[openPanel]}
+          className={styles.popover}
+          data-panel={openPanel}
+          data-testid="shell-popover"
+          ref={popoverRef}
+          role="region"
+        >
+          {openPanel === 'style' ? (
+            <>
+              <div className={styles.popHead}>
+                <span className={styles.popIcon}>
+                  <Icon name="droplet" size={18} strokeWidth={1.9} />
                 </span>
-              )
-            ) : (
-              <img
-                alt=""
-                className={styles.avatarImage}
-                data-testid="topbar-avatar-image"
-                onError={() => setAvatarBroken(true)}
-                src={avatarSource}
-              />
-            )}
-          </button>
-        </header>
-
-        {/*
-          顶栏弹出层。画板 `TopPops.dc.html` 把它们画成浮在正文之上的 `.pop`：用户菜单 268px、系统状态
-          384px、通知 412px，锚在顶栏下方、右对齐到各自的触发按钮，**不占据也不推挤主内容**。这里因此
-          用 `position: absolute`（`.stage` 是定位上下文），不再作为 `.stage` 的流内兄弟节点。
-        */}
-        {openPanel === null ? null : (
-          <section
-            aria-label={PANEL_LABELS[openPanel]}
-            className={styles.popover}
-            data-panel={openPanel}
-            data-testid="topbar-popover"
-            ref={popoverRef}
-            role="region"
-          >
-            {openPanel === 'style' ? (
-              <>
-                <div className={styles.popHead}>
-                  <span className={styles.popIcon}>
-                    <Icon name="droplet" size={18} strokeWidth={1.9} />
-                  </span>
-                  <h2 className={styles.popTitle}>界面风格</h2>
-                </div>
-                <div className={styles.popBody}>
-                  <div className={styles.backgroundChoices}>
-                    {BACKGROUND_PRESETS.map((preset) => (
-                      <button
-                        aria-pressed={background === preset}
-                        className={styles.backgroundChoice}
-                        key={preset}
-                        onClick={() => setBackground(preset)}
-                        type="button"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={styles.backgroundSwatch}
-                          data-preset={preset}
-                        />
-                        <span>{BACKGROUND_PRESET_LABELS[preset]}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : null}
-
-            {openPanel === 'user' ? (
-              <>
-                <div className={styles.userHead}>
-                  <span className={styles.userAvatar}>
-                    {avatarSource === null ? (
-                      surname === null ? (
-                        <Icon name="user" size={30} />
-                      ) : (
-                        <span className={styles.avatarInitial}>{surname}</span>
-                      )
-                    ) : (
-                      <img
-                        alt=""
-                        className={styles.avatarImage}
-                        onError={() => setAvatarBroken(true)}
-                        src={avatarSource}
+                <h2 className={styles.popTitle}>界面风格</h2>
+              </div>
+              <div className={styles.popBody}>
+                <div className={styles.backgroundChoices}>
+                  {BACKGROUND_PRESETS.map((preset) => (
+                    <button
+                      aria-pressed={background === preset}
+                      className={styles.backgroundChoice}
+                      key={preset}
+                      onClick={() => setBackground(preset)}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={styles.backgroundSwatch}
+                        data-preset={preset}
                       />
-                    )}
-                  </span>
-                  <div className={styles.userWho}>
-                    <span className={styles.userName}>
-                      {identity.displayName ?? NAME_UNAVAILABLE_LINE}
-                    </span>
-                    {/*
-                      画板这一行写的是「办公室 · 主任科员」。部门有数据源，职务**没有**——OA 的用户
-                      信息接口落盘字段里就没有职务字段。雨爷 2026-09-04 裁定「留位 + 如实说明，
-                      不得编造」，所以位置留着，写的是取不到。
-                    */}
-                    <span className={styles.userMeta} data-testid="user-menu-meta">
-                      {`${identity.departmentName ?? DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`}
-                    </span>
-                  </div>
+                      <span>{BACKGROUND_PRESET_LABELS[preset]}</span>
+                    </button>
+                  ))}
                 </div>
-                <div className={styles.menuGroup}>
-                  <Link
-                    className={styles.menuRow}
-                    onClick={() => setOpenPanel(null)}
-                    to={BINDINGS_PATH}
-                  >
-                    <span className={styles.menuIcon}>
-                      <Icon name="card" size={16} strokeWidth={1.9} />
-                    </span>
-                    <span>账号绑定</span>
-                    <span className={styles.pill} data-tone={bindingPill.tone}>
-                      {bindingPill.text}
-                    </span>
-                  </Link>
-                  <button
-                    className={styles.menuRow}
-                    onClick={() => setOpenPanel('style')}
-                    type="button"
-                  >
-                    <span className={styles.menuIcon}>
-                      <Icon name="droplet" size={16} strokeWidth={1.9} />
-                    </span>
-                    <span>换个界面风格</span>
-                  </button>
-                  {/*
-                    这两项画板上有，但工作台里没有对应页面。做成不可点的行位并如实标注去处，
-                    不做一个点了没反应的按钮。
-                  */}
-                  <div className={styles.menuRow} data-inert="true">
-                    <span className={styles.menuIcon}>
-                      <Icon name="sliders" size={16} strokeWidth={1.9} />
-                    </span>
-                    <span>个人设置</span>
-                    <span className={styles.menuNote}>还没做</span>
-                  </div>
-                  <div className={styles.menuRow} data-inert="true">
-                    <span className={styles.menuIcon}>
-                      <Icon name="help" size={16} strokeWidth={1.9} />
-                    </span>
-                    <span>怎么用 / 找人帮忙</span>
-                    <span className={styles.menuNote}>找管理员</span>
-                  </div>
-                </div>
-                <div className={styles.menuFoot}>
-                  {logoutFailed ? <p role="alert">退出未完成，请重试</p> : null}
-                  <button
-                    className={styles.menuRow}
-                    data-tone="alert"
-                    disabled={logoutPending}
-                    onClick={() => { void logout(); }}
-                    type="button"
-                  >
-                    <span className={styles.menuIcon}>
-                      <Icon name="external" size={16} strokeWidth={1.9} />
-                    </span>
-                    <span>{logoutPending ? '正在退出…' : '退出登录'}</span>
-                    <span className={styles.menuNote}>只退工作台</span>
-                  </button>
-                </div>
-              </>
-            ) : null}
+              </div>
+            </>
+          ) : null}
 
-            {openPanel === 'system-status' ? (
-              <>
-                <div className={styles.popHead}>
-                  <span className={styles.popIcon} data-tone={statusRow.kind}>
-                    <Icon name={statusRow.icon} size={18} strokeWidth={1.9} />
+          {openPanel === 'user' ? (
+            <>
+              <div className={styles.userHead}>
+                <span className={styles.userAvatar}>{avatar(30)}</span>
+                <div className={styles.userWho}>
+                  <span className={styles.userName}>
+                    {identity.displayName ?? NAME_UNAVAILABLE_LINE}
                   </span>
-                  <h2 className={styles.popTitle}>系统状态</h2>
-                  <span
-                    className={styles.pill}
-                    data-testid="system-status-summary"
-                    data-tone={statusSummary.tone}
-                  >
-                    {statusSummary.text}
+                  {/*
+                    部门有数据源，职务**没有**——OA 的用户信息接口落盘字段里就没有职务字段。
+                    雨爷 2026-09-04 裁定「留位 + 如实说明，不得编造」。
+                  */}
+                  <span className={styles.userMeta} data-testid="user-menu-meta">
+                    {`${identity.departmentName ?? DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`}
                   </span>
                 </div>
-                <p className={styles.popNote}>
-                  这里只说各个系统还能不能用。要你办的事在右边的「通知」里。
-                </p>
-                {statusRows.map((row) => (
-                  <div
-                    className={styles.statusRow}
-                    data-status-kind={row.kind}
-                    key={row.key}
-                  >
+              </div>
+              <div className={styles.menuGroup}>
+                <button className={styles.menuRow} onClick={openQuickSearch} type="button">
+                  <span className={styles.menuIcon}>
+                    <Icon name="search" size={16} strokeWidth={1.9} />
+                  </span>
+                  <span>搜索工作事项</span>
+                  <span className={styles.menuNote}>Ctrl K</span>
+                </button>
+                {/* 雨爷 2026-11-11：保留入口，功能以后做；不做一个点了没反应的按钮。 */}
+                <div className={styles.menuRow} data-inert="true">
+                  <span className={styles.menuIcon}>
+                    <Icon name="users" size={16} strokeWidth={1.9} />
+                  </span>
+                  <span>切换身份</span>
+                  <span className={styles.menuNote}>后续开放</span>
+                </div>
+                <button
+                  className={styles.menuRow}
+                  onClick={() => setOpenPanel('style')}
+                  type="button"
+                >
+                  <span className={styles.menuIcon}>
+                    <Icon name="droplet" size={16} strokeWidth={1.9} />
+                  </span>
+                  <span>风格</span>
+                  <span className={styles.menuNote}>{BACKGROUND_PRESET_LABELS[background]}</span>
+                </button>
+                <button
+                  className={styles.menuRow}
+                  data-testid="user-menu-system-status"
+                  onClick={() => setOpenPanel('system-status')}
+                  type="button"
+                >
+                  <span className={styles.menuIcon}>
                     <span
                       aria-hidden="true"
-                      className={styles.statusDot}
-                      data-status-kind={row.kind}
+                      className={styles.signalDot}
+                      data-status-kind={statusRow.kind}
+                      data-testid="user-menu-system-status-dot"
                     />
-                    <div className={styles.statusBody}>
-                      <div className={styles.statusName}>{row.name}</div>
-                      <p className={styles.statusText}>{row.statusText}</p>
-                      {row.action === null && row.technical === null ? null : (
-                        <div className={styles.statusActions}>
-                          {row.action === null ? null : (
-                            <Link
-                              className={styles.statusAction}
-                              onClick={() => setOpenPanel(null)}
-                              to={row.action.to}
-                            >
-                              {row.action.label}
-                            </Link>
-                          )}
-                          {row.technical === null ? null : (
-                            <span className={styles.statusTechnical}>
-                              {row.technical}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </>
-            ) : null}
-
-            {openPanel === 'notifications' ? (
-              <>
-                <div className={styles.popHead}>
-                  <span className={styles.popIcon}>
-                    <Icon name="bell" size={18} strokeWidth={1.9} />
                   </span>
-                  <h2 className={styles.popTitle}>通知</h2>
-                </div>
-                <p className={styles.popNote}>
-                  要你办的事在这儿；系统能不能用，看左边的「系统状态」。
-                </p>
-                <div className={styles.popBody}>
-                  <p className={styles.popEmpty}>这里现在是空的。</p>
-                  <p className={styles.popHint}>
-                    消息功能还没有开发，系统还不会给你发提醒。
-                  </p>
-                  <p className={styles.popHint}>
-                    要办的事请看
-                    <Link
-                      className={styles.panelInlineLink}
-                      onClick={() => setOpenPanel(null)}
-                      to={WORK_OBJECTS_PATH}
-                    >
-                      工作事项
-                    </Link>
-                    ；OA 里的通知请直接去 OA 查看。
-                  </p>
-                </div>
-              </>
-            ) : null}
-          </section>
-        )}
+                  <span>系统状态</span>
+                  <span className={styles.menuNote} data-testid="system-status-count">
+                    {statusSummary.text}
+                  </span>
+                </button>
+              </div>
+              <div className={styles.menuFoot}>
+                {logoutFailed ? <p role="alert">退出未完成，请重试</p> : null}
+                <button
+                  className={styles.menuRow}
+                  data-tone="alert"
+                  disabled={logoutPending}
+                  onClick={() => { void logout(); }}
+                  type="button"
+                >
+                  <span className={styles.menuIcon}>
+                    <Icon name="external" size={16} strokeWidth={1.9} />
+                  </span>
+                  <span>{logoutPending ? '正在退出…' : '退出登录'}</span>
+                  <span className={styles.menuNote}>只退工作台</span>
+                </button>
+              </div>
+            </>
+          ) : null}
 
+          {openPanel === 'system-status' ? (
+            <>
+              <div className={styles.popHead}>
+                <span className={styles.popIcon} data-tone={statusRow.kind}>
+                  <Icon name={statusRow.icon} size={18} strokeWidth={1.9} />
+                </span>
+                <h2 className={styles.popTitle}>系统状态</h2>
+                <span
+                  className={styles.pill}
+                  data-testid="system-status-summary"
+                  data-tone={statusSummary.tone}
+                >
+                  {statusSummary.text}
+                </span>
+              </div>
+              <p className={styles.popNote}>
+                这里只说各个系统还能不能用。要你办的事在个人栏的「通知」里。
+              </p>
+              {statusRows.map((row) => (
+                <div
+                  className={styles.statusRow}
+                  data-status-kind={row.kind}
+                  key={row.key}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={styles.statusDot}
+                    data-status-kind={row.kind}
+                  />
+                  <div className={styles.statusBody}>
+                    <div className={styles.statusName}>{row.name}</div>
+                    <p className={styles.statusText}>{row.statusText}</p>
+                    {row.action === null && row.technical === null ? null : (
+                      <div className={styles.statusActions}>
+                        {row.action === null ? null : (
+                          <Link
+                            className={styles.statusAction}
+                            onClick={() => setOpenPanel(null)}
+                            to={row.action.to}
+                          >
+                            {row.action.label}
+                          </Link>
+                        )}
+                        {row.technical === null ? null : (
+                          <span className={styles.statusTechnical}>
+                            {row.technical}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : null}
+
+          {openPanel === 'notifications' ? (
+            <>
+              <div className={styles.popHead}>
+                <span className={styles.popIcon}>
+                  <Icon name="bell" size={18} strokeWidth={1.9} />
+                </span>
+                <h2 className={styles.popTitle}>通知</h2>
+              </div>
+              <p className={styles.popNote}>
+                要你办的事在这儿；系统能不能用，看个人菜单里的「系统状态」。
+              </p>
+              <div className={styles.popBody}>
+                <p className={styles.popEmpty}>这里现在是空的。</p>
+                <p className={styles.popHint}>系统还不会给你发提醒。</p>
+                <p className={styles.popHint}>单位消息的新消息与未读，看左侧「消息」上的数字。</p>
+                <p className={styles.popHint}>
+                  要办的事请看
+                  <Link
+                    className={styles.panelInlineLink}
+                    onClick={() => setOpenPanel(null)}
+                    to={WORK_OBJECTS_PATH}
+                  >
+                    工作事项
+                  </Link>
+                  ；OA 里的通知请直接去 OA 查看。
+                </p>
+              </div>
+            </>
+          ) : null}
+        </section>
+      )}
+
+      <div className={styles.stage} data-testid="app-main">
         <main className={styles.content} id="main-content">
           <Outlet />
         </main>
       </div>
 
+      <QuickSearch
+        onClose={() => setQuickSearchOpen(false)}
+        onSubmit={submitSearch}
+        open={quickSearchOpen}
+      />
+
       {isAIAssistantPage ? null : (
         <button
           aria-label="打开 AI 助手"
           className={styles.floatingEntry}
+          data-compact={isMessagesPage ? 'true' : 'false'}
           data-testid="ai-dock-launcher"
           onClick={openDock}
+          title="问 AI"
           type="button"
         >
           <Icon className={styles.floatingIcon} name="spark" size={21} strokeWidth={1.9} />
-          <span className={styles.floatingText}>问 AI</span>
+          {isMessagesPage ? null : <span className={styles.floatingText}>问 AI</span>}
         </button>
       )}
 

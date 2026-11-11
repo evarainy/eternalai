@@ -294,7 +294,7 @@ describe('WorkObjectSearchPage', () => {
       screen.getByText('尚未开始搜索，因为还没有提交关键词。'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人/),
+      screen.getByText(/下一步：在上方搜索框输入标题片段、完整来源编号或完整责任人/),
     ).toBeInTheDocument();
     expect(
       screen.getByText('提交关键词后，将在你有权查看的全部工作事项中检索。'),

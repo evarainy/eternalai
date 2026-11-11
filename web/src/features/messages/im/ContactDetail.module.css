@@ -1,0 +1,116 @@
+/* 联系人详情（v3-6 右栏） */
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #fff;
+}
+
+.empty {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  background: #fff;
+  color: var(--ink3);
+  font-size: 13px;
+}
+
+.card {
+  display: flex;
+  width: min(380px, 100% - 48px);
+  flex-direction: column;
+  align-items: center;
+  margin: 84px auto 40px;
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.presence {
+  color: var(--ink3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.presence[data-presence='online'] {
+  color: #1f9d55;
+}
+
+.org {
+  margin: 4px 0 0;
+  color: var(--ink2);
+  font-size: 13px;
+}
+
+.rows {
+  display: grid;
+  width: 100%;
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+.rows div {
+  display: flex;
+  gap: 22px;
+}
+
+.rows dt {
+  width: 56px;
+  flex: none;
+  color: var(--ink3);
+}
+
+.rows dd {
+  min-width: 0;
+  margin: 0;
+  word-break: break-all;
+}
+
+.muted {
+  color: var(--ink3);
+}
+
+.channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.channels button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.primary {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--blue);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+}

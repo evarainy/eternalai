@@ -1,0 +1,53 @@
+/* 联系人页左栏：行、分节标题、用户组展开（v3-6 的 .ct-* 部分），其余沿用 ConversationList.module.css */
+.row {
+  height: 60px;
+}
+
+.sub {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 10px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.section svg {
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+
+.section[aria-expanded='true'] svg {
+  transform: none;
+}
+
+.groupIcon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.nested {
+  margin: 0;
+  padding: 0 0 4px 18px;
+  list-style: none;
+}

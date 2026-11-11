@@ -1,0 +1,78 @@
+/* 头像（迁自 v3 的 .av/.gav/.bot/.av-wrap/.dot） */
+.wrap {
+  position: relative;
+  flex: none;
+}
+
+.av {
+  display: grid;
+  flex: none;
+  overflow: hidden;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.av img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.s36 { width: 36px; height: 36px; font-size: 12px; }
+.s28 { width: 28px; height: 28px; font-size: 11px; }
+.s56 { width: 56px; height: 56px; font-size: 17px; }
+.s72 { width: 72px; height: 72px; font-size: 21px; }
+
+.c1 { background: linear-gradient(145deg, #5b8cff, #3a6cf0); }
+.c2 { background: linear-gradient(145deg, #36b3a3, #1f998a); }
+.c3 { background: linear-gradient(145deg, #f29b4b, #e5792b); }
+.c4 { background: linear-gradient(145deg, #8f7cf5, #6e5ae6); }
+.c5 { background: linear-gradient(145deg, #4fb0e8, #2d93d2); }
+.c6 { background: linear-gradient(145deg, #e86f8f, #d3506f); }
+
+.group {
+  display: grid;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 3px;
+  gap: 2px;
+  grid-template-columns: 1fr 1fr;
+  border-radius: 11px;
+  background: #dfe3ea;
+}
+
+.group i {
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.bot {
+  border-radius: 11px;
+  background: linear-gradient(145deg, #6d8bff, #4a62e8);
+}
+
+.dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--dot-ring, #fff);
+  border-radius: 50%;
+  background: #2fb560;
+}
+
+.dot[data-presence='away'] { background: #f2a33a; }
+.dot[data-presence='off'] { background: #c3c7ce; }

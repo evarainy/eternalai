@@ -235,7 +235,7 @@ describe('blur-layer detector', () => {
 
   it('resolves declared class names to the names that reach the DOM', async () => {
     renderScreen('/work-objects');
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     const sidebarLayer = findBlurLayers(shellElement()).find(
       (layer) => layer.declaredSelector === '.sidebar',
@@ -256,14 +256,14 @@ describe('blur-layer detector', () => {
    */
   it('parses every blur selector it found, including the runtime-injected ones', async () => {
     renderScreen('/chat');
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     expect(unparsableBlurSelectors(shellElement())).toEqual([]);
   });
 });
 
 describe('per-screen blur-layer budget', () => {
-  it('keeps the work-objects screen on the three stationary surfaces', async () => {
+  it('keeps the work-objects screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -273,19 +273,17 @@ describe('per-screen blur-layer budget', () => {
     expect(layers).toEqual([
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
   it('keeps the AI assistant screen within budget without the floating entry', async () => {
     renderScreen('/chat');
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
       'pages/ChatPage.module.css .sessionRail',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
@@ -304,12 +302,11 @@ describe('per-screen blur-layer budget', () => {
       'app/AIDock.module.css .dock',
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('adds no blur layer when a topbar popover is open on top of everything else', async () => {
+  it('adds no blur layer when a user-bar popover is open on top of everything else', async () => {
     useAIDockStore.setState({ lastOpenMode: 'pinned', mode: 'pinned' });
     renderScreen('/work-objects');
     await waitFor(() =>
@@ -318,7 +315,8 @@ describe('per-screen blur-layer budget', () => {
     await screen.findByTestId('ai-dock');
     const before = describeBlurLayers(shellElement());
 
-    fireEvent.click(screen.getByRole('button', { name: '切换界面风格' }));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
+    fireEvent.click(screen.getByText('风格'));
     expect(screen.getByRole('region', { name: '界面风格' })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
@@ -328,20 +326,22 @@ describe('per-screen blur-layer budget', () => {
 
   /*
    * 2026-09-04 把用户菜单与系统状态改成了画板的 268px / 384px 弹出层。弹出层承载正文，按落盘的
-   * 玻璃约束**不许买模糊**——三个顶栏弹层各开一次，列表都不能多出一项。上面那条只覆盖了「界面
-   * 风格」，另外两个是本轮改过的面，这里逐个钉死。
+   * 玻璃约束**不许买模糊**——弹层各开一次，列表都不能多出一项。2026-11-11 去顶栏后弹层由个人栏打开，
+   * 系统状态从用户菜单里进入。
    */
   it.each([
-    ['用户菜单', 'topbar-avatar'],
-    ['系统状态', 'topbar-system-status'],
-  ])('adds no blur layer when the %s popover is open', async (region, trigger) => {
+    ['用户菜单', ['user-bar-identity']],
+    ['系统状态', ['user-bar-identity', 'user-menu-system-status']],
+  ])('adds no blur layer when the %s popover is open', async (region, triggers) => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
     );
     const before = describeBlurLayers(shellElement());
 
-    fireEvent.click(await screen.findByTestId(trigger));
+    for (const trigger of triggers) {
+      fireEvent.click(await screen.findByTestId(trigger));
+    }
     expect(screen.getByRole('region', { name: region })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
@@ -349,20 +349,19 @@ describe('per-screen blur-layer budget', () => {
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the dispatch draft screen on the three stationary surfaces', async () => {
+  it('keeps the dispatch draft screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
     renderScreen('/work-dispatch');
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the software-centre screen on the three stationary surfaces', async () => {
+  it('keeps the software-centre screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
     renderScreen('/apps');
     await screen.findByTestId('oa-status');
 
@@ -370,7 +369,6 @@ describe('per-screen blur-layer budget', () => {
     expect(layers).toEqual([
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -422,7 +420,6 @@ describe('per-screen blur-layer budget', () => {
       'app/AIDock.module.css .dock',
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
-      'app/AppShell.module.css .topbar',
       'pages/ChatPage.module.css .sessionRail',
       'pages/LoginPage.module.css .card',
     ]);
@@ -443,7 +440,7 @@ describe('per-screen blur-layer budget', () => {
     ['/chat', ['pages/ChatPage.module.css .sessionRail']],
   ])('keeps the main content region of %s free of scroll-bound blur', async (path, expected) => {
     renderScreen(path);
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     const content = document.querySelector('#main-content');
     expect(content).toBeInstanceOf(HTMLElement);
@@ -452,7 +449,7 @@ describe('per-screen blur-layer budget', () => {
 
   it('does not count the closed floating panel that is still in the tree', async () => {
     renderScreen('/work-objects');
-    await screen.findByTestId('app-topbar');
+    await screen.findByTestId('user-bar');
 
     expect(screen.queryByTestId('ai-dock')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));

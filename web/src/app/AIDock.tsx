@@ -92,6 +92,10 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const requestInFlight = useRef(false);
+  // 是否有请求在途：用本组件自己的状态，不读 useMutation 的 isPending。开发期 StrictMode 会在懒加载的
+  // Dock 首次挂载时卸载再挂载，React Query 的观察者随之脱离在途请求，之后 isPending 永远停在 true，
+  // 挡住同页后续的自动分析（ACC5 实测）。
+  const [busy, setBusy] = useState(false);
   const analyzedIMSource = useRef<string | null>(null);
   const dockRef = useRef<HTMLElement | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
@@ -140,25 +144,27 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     },
     onSettled: () => {
       requestInFlight.current = false;
+      setBusy(false);
     },
   });
 
-  const { mutate, isPending } = mutation;
+  const { mutate } = mutation;
   useEffect(() => {
     if (imSource === null || analyzedIMSource.current === imSource.source.ref_id
-        || requestInFlight.current || isPending) return;
+        || requestInFlight.current || busy) return;
     const auth = useAuthStore.getState();
     if (auth.status !== 'authenticated' || auth.generation !== imSource.authGeneration
         || useAIDockStore.getState().sessionId !== imSource.sessionId) return;
     analyzedIMSource.current = imSource.source.ref_id;
     requestInFlight.current = true;
+    setBusy(true);
     const identity: UnsentIdentity = {
       generation: auth.generation, sessionId: imSource.sessionId, requestId: crypto.randomUUID(),
     };
     const message = '请分析我选中的消息及其上下文，概括主要内容和需要处理的事项。只做只读分析，不保存或提交任何业务。';
     appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
     mutate({ message, identity, sourceRef: imSource.source.ref_id });
-  }, [imSource, isPending, mutate, appendTranscript]);
+  }, [imSource, busy, mutate, appendTranscript]);
 
   useEffect(() => {
     if (!dragging) {
@@ -210,6 +216,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     }
     appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
     setDraft('');
+    setBusy(true);
     mutation.mutate({ message, identity, sourceRef: selected?.source.ref_id });
   };
 
@@ -360,7 +367,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
         </header>
 
         <div
-          aria-busy={mutation.isPending}
+          aria-busy={busy}
           aria-live="polite"
           className={styles.transcript}
         >
@@ -420,9 +427,9 @@ export function AIDock({ suppressed = false }: AIDockProps) {
               <span className={styles.hint}>可拖动 · 可收起</span>
               <Button
                 className={styles.sendButton}
-                disabled={draft.trim().length === 0 || mutation.isPending}
+                disabled={draft.trim().length === 0 || busy}
                 htmlType="submit"
-                loading={mutation.isPending}
+                loading={busy}
                 type="primary"
               >
                 发送

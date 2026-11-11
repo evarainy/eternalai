@@ -1,0 +1,56 @@
+.bar {
+  display: flex;
+  min-height: 64px;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+
+.count {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.count small {
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+.action,
+.cancel {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.action:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.action:disabled {
+  color: var(--ink3);
+  cursor: not-allowed;
+}
+
+.cancel {
+  border-color: transparent;
+  color: var(--ink2);
+}
+
+.cancel:hover {
+  background: var(--hover);
+}

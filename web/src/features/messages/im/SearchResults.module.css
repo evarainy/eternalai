@@ -1,0 +1,136 @@
+/* 搜索结果（v3-5 的 .sr-* 部分）：分节标题、命中行、查看全部 */
+.results {
+  flex: 1;
+  min-height: 0;
+  padding: 0 6px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.section {
+  margin-bottom: 6px;
+}
+
+.title {
+  margin: 0;
+  padding: 8px 10px 4px;
+  color: var(--ink3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hit {
+  --dot-ring: var(--list);
+
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.hit:hover {
+  --dot-ring: var(--hover);
+
+  background: var(--hover);
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.name {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time {
+  flex: none;
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+.text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--ink2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.meta {
+  overflow: hidden;
+  color: var(--ink3);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hit mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: #fde68a;
+  color: inherit;
+}
+
+.fileIcon {
+  display: flex;
+  flex: none;
+  transform: scale(0.82);
+  transform-origin: top left;
+  width: 32px;
+  height: 36px;
+}
+
+.more {
+  padding: 2px 10px 6px;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.note,
+.hint {
+  padding: 16px;
+  color: var(--ink3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.hint {
+  padding-top: 4px;
+  font-size: 12px;
+}

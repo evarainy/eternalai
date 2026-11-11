@@ -262,7 +262,7 @@ describe('全站按钮统一到同一套三层语言', () => {
    * 规则够不着，必须各自引用同一组令牌。少一处就是雨爷说的「这一页的按钮还是看不出来」。
    */
   it.each([
-    ['顶栏搜索提交键', '../AppShell.module.css', '.searchSubmit {'],
+    ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {'],
     ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,'],
     ['AI 助手左栏「新对话」', '../../pages/ChatPage.module.css', '.newSessionButton {'],
     ['浮动面板「知道了」', '../AIDock.module.css', '.noticeButton {'],
@@ -353,7 +353,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       'inset 0 0 0 2px var(--workbench-primary)',
     );
     for (const [path, selector] of [
-      ['../AppShell.module.css', '.searchField:focus-within {'],
+      ['../WorkObjectSearchField.module.css', '.searchField:focus-within {'],
       [
         '../../pages/ChatPage.module.css',
         '.sender:global(.ant-sender):focus-within {',
@@ -413,9 +413,9 @@ describe('一个控件同一时刻只画一个焦点环', () => {
    */
   it.each([
     [
-      '顶栏搜索凹槽',
-      '../AppShell.tsx',
-      '../AppShell.module.css',
+      '工作事项搜索凹槽（原顶栏搜索）',
+      '../WorkObjectSearchField.tsx',
+      '../WorkObjectSearchField.module.css',
       '.searchField:focus-within {',
       'data-focus-ring="host"',
     ],
@@ -454,7 +454,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
   });
 
   it.each([
-    ['顶栏搜索凹槽', '../AppShell.module.css', '.searchField:focus-within:has(button:focus-visible) {'],
+    ['工作事项搜索凹槽（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchField:focus-within:has(button:focus-visible) {'],
     [
       '交办页「交办对象」凹槽',
       '../../features/work-dispatch/WorkDispatchPage.module.css',

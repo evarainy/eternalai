@@ -25,7 +25,6 @@ export function BootGate() {
   return (
     <div aria-busy="true" className={styles.gate} data-testid="boot-gate">
       <div aria-hidden="true" className={styles.sidebarFrame} />
-      <div aria-hidden="true" className={styles.topbarFrame} />
       <div aria-hidden="true" className={styles.stageFrame} />
     </div>
   );

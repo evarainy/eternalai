@@ -1,0 +1,361 @@
+/* 单条消息（迁自 v3 的 .m/.mbody/.mname/.bub/.quote/.react/.file/.fic/.img） */
+.message {
+  display: flex;
+  max-width: 78%;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.message[data-self='true'] {
+  flex-direction: row-reverse;
+  align-self: flex-end;
+}
+
+.body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.message[data-self='true'] .body {
+  align-items: flex-end;
+}
+
+.name {
+  margin: 0 0 4px 2px;
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+.name b {
+  margin-right: 8px;
+  color: var(--ink2);
+  font-weight: 400;
+}
+
+.dept {
+  margin-right: 8px;
+  color: var(--ink4);
+}
+
+.bubble {
+  max-width: 100%;
+  padding: 9px 13px;
+  border-radius: 4px 10px 10px;
+  background: var(--bubble);
+  box-shadow: 0 1px 2px rgba(20, 30, 60, 0.06), 0 0 0 1px rgba(20, 30, 60, 0.035);
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.message[data-self='true'] .bubble {
+  border-radius: 10px 4px 10px 10px;
+  background: var(--mine);
+  box-shadow: 0 1px 2px rgba(30, 70, 160, 0.08);
+  color: var(--mine-ink);
+}
+
+/* 净化后的服务端 HTML：只给 Zulip 实际产出的标签排版 */
+.bubble :global(p) {
+  margin: 0;
+}
+
+.bubble :global(p + p),
+.bubble :global(blockquote + p),
+.bubble :global(ul),
+.bubble :global(ol),
+.bubble :global(pre) {
+  margin: 4px 0 0;
+}
+
+.bubble :global(ul),
+.bubble :global(ol) {
+  padding-left: 20px;
+}
+
+.bubble :global(a) {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.bubble :global(a:hover) {
+  text-decoration: underline;
+}
+
+.bubble :global(blockquote) {
+  margin: 0 0 7px;
+  padding: 5px 9px;
+  border-left: 3px solid #c5ccd8;
+  border-radius: 3px;
+  background: rgba(20, 30, 60, 0.045);
+  color: var(--ink2);
+  font-size: 13px;
+}
+
+.message[data-self='true'] .bubble :global(blockquote) {
+  border-left-color: #8fb0f0;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.bubble :global(.user-mention),
+.bubble :global(.user-group-mention) {
+  color: var(--blue);
+  font-weight: 500;
+}
+
+.message[data-self='true'] .bubble :global(.user-mention),
+.message[data-self='true'] .bubble :global(.user-group-mention) {
+  color: #1b4fd8;
+}
+
+.bubble :global(code) {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(20, 30, 60, 0.06);
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.bubble :global(pre) {
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(20, 30, 60, 0.05);
+}
+
+.bubble :global(pre code) {
+  padding: 0;
+  background: none;
+}
+
+.bubble :global(img.emoji) {
+  width: 20px;
+  height: 20px;
+  vertical-align: -4px;
+}
+
+.bubble :global(.message_inline_image img) {
+  max-width: 260px;
+  max-height: 200px;
+  margin-top: 4px;
+  border-radius: 8px;
+}
+
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.reaction {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--line);
+  color: var(--ink2);
+  font-size: 12px;
+}
+
+.reaction[data-mine='true'] {
+  background: var(--blue-soft);
+  box-shadow: 0 0 0 1px rgba(47, 107, 255, 0.25);
+  color: var(--blue);
+}
+
+/* 文件卡 */
+.file {
+  display: flex;
+  width: 300px;
+  max-width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(20, 30, 60, 0.06), 0 0 0 1px rgba(20, 30, 60, 0.05);
+}
+
+.fileIcon {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 44px;
+  flex: none;
+  padding-bottom: 6px;
+  place-items: end center;
+  border-radius: 5px;
+  background: linear-gradient(160deg, #9aa3b2, #7d8696);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.fileIcon::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 11px;
+  height: 11px;
+  border-bottom-left-radius: 4px;
+  background: rgba(255, 255, 255, 0.45);
+  content: '';
+}
+
+.fileIcon[data-kind='xls'] { background: linear-gradient(160deg, #2fb36b, #1d9654); }
+.fileIcon[data-kind='doc'] { background: linear-gradient(160deg, #4d86ff, #2f62e6); }
+.fileIcon[data-kind='pdf'] { background: linear-gradient(160deg, #f2665a, #dc4337); }
+.fileIcon[data-kind='ppt'] { background: linear-gradient(160deg, #f29b4b, #e5792b); }
+
+.fileText {
+  min-width: 0;
+}
+
+.fileName {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileMeta {
+  margin-top: 2px;
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+.fileActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.fileAction {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--ink2);
+}
+
+.fileAction:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* 图片：不包气泡 */
+.image {
+  display: block;
+  overflow: hidden;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(20, 30, 60, 0.08), 0 0 0 1px rgba(20, 30, 60, 0.05);
+}
+
+.image img {
+  display: block;
+  max-width: 260px;
+  max-height: 220px;
+}
+
+/* 右键菜单的触发区：只包正文，不包头像与名字 */
+.target {
+  max-width: 100%;
+}
+
+.marks {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--ink3);
+  font-size: 12px;
+}
+
+/* 锚点消息（搜索命中、返回原消息）短暂高亮 */
+.message[data-highlighted='true'] .bubble,
+.message[data-highlighted='true'] .file,
+.message[data-highlighted='true'] .image {
+  box-shadow: 0 0 0 2px rgba(255, 196, 0, 0.55), 0 1px 2px rgba(20, 30, 60, 0.06);
+}
+
+/* 多选（FE_PLAN §11）：左侧勾选框，整条可点。 */
+.message[data-selecting='true'] {
+  max-width: 100%;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message[data-selecting='true'][data-self='true'] {
+  flex-direction: row;
+  justify-content: flex-end;
+}
+
+.check {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 9px;
+  border: 1.5px solid var(--ink3);
+  border-radius: 50%;
+  background: #fff;
+}
+
+.message[data-self='true'] .check {
+  order: -1;
+  margin-right: auto;
+}
+
+.check[data-checked='true'] {
+  border-color: var(--blue);
+  background: var(--blue) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat;
+}
+
+/* 合并转发的聊天记录卡：折叠时只露出标题和开头几条。 */
+.bubble[data-merged] {
+  min-width: 240px;
+}
+
+.bubble[data-merged='closed'] .mergedBody {
+  max-height: 168px;
+  overflow: hidden;
+  mask-image: linear-gradient(#000 70%, transparent);
+}
+
+.mergedToggle {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.avatarButton {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+/* 多话题群看全部话题时，每条消息标出所属话题（F41） */
+.topic {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+}

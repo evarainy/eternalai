@@ -1,0 +1,114 @@
+/*
+ * IM 区根节点与三栏骨架（迁自 dt/claude-v3/im.css 的 .im/.list/.chat/.vgrip）。
+ * 局部 token 只定义在 .im 根上，由子组件通过 CSS 变量继承；IM 区为不透明面板，内部不用 backdrop-filter。
+ */
+.im {
+  --ink: #1f2329;
+  --ink2: #646a73;
+  --ink3: #8f959e;
+  --ink4: #bbbfc4;
+  --line: #e9ebef;
+  --line2: #f0f1f4;
+  --list: #f6f7f9;
+  --hover: #eef0f3;
+  --sel: #e4ebfb;
+  --chat: #f3f4f7;
+  --bubble: #fff;
+  --mine: #d7e6ff;
+  --mine-ink: #13233f;
+  --blue: #2f6bff;
+  --blue-soft: #e8efff;
+  --red: #f2453d;
+  --pop: 0 14px 36px -10px rgba(20, 30, 60, 0.24), 0 3px 10px -2px rgba(20, 30, 60, 0.1),
+    0 0 0 1px rgba(20, 30, 60, 0.05);
+
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 12px 38px -16px rgba(16, 26, 58, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.list {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--list);
+}
+
+.chat {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--chat);
+}
+
+/* 可拖动分隔线：平时透明，悬停、拖动或键盘聚焦时显示蓝线 */
+.vgrip {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 6;
+  width: 6px;
+  cursor: col-resize;
+  outline: none;
+  touch-action: none;
+}
+
+.vgrip::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: var(--blue);
+  content: '';
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.vgrip:hover::after,
+.vgrip:focus-visible::after,
+.vgrip[data-dragging='true']::after {
+  opacity: 0.75;
+}
+
+.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* 消息页外层：填满工作台主区，整页不滚动 */
+.page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.srOnly {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
