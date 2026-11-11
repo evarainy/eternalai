@@ -289,3 +289,31 @@
 .emojiGrid button:hover {
   background: #eef0f3;
 }
+
+/* 多话题旧群（F41）：输入框上方的发送话题，必须选定 */
+.topicBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 0;
+  color: var(--ink2);
+  font-size: 12.5px;
+}
+
+.topicInput {
+  width: 260px;
+}
+
+.topicNote {
+  color: var(--ink3);
+}
+
+.topicNote button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+}

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
+import { App as AntApp } from 'antd';
+import { useSearchParams } from 'react-router-dom';
 import type { KeyboardEvent } from 'react';
-import { openConversation, useImStore } from '../zulip/imStore';
+import { locateMessage, openConversation, useImStore } from '../zulip/imStore';
 import { ChatPane } from './ChatPane';
 import { ContactDetail } from './ContactDetail';
 import { ContactList } from './ContactList';
@@ -27,6 +29,27 @@ export function ImWorkspace() {
     const first = conversationRows(state)[0];
     if (first) openConversation(first.key);
   }, [phase, selected]);
+
+  // 消息链接与返回原消息（`?im_message=<id>&im_stream=<id>`）：IM 就绪后定位一次，并去掉参数。
+  const { message: toast } = AntApp.useApp();
+  const [params, setParams] = useSearchParams();
+  const linkedMessage = params.get('im_message');
+  const linkedStream = params.get('im_stream');
+  useEffect(() => {
+    if (phase !== 'ready' || !linkedMessage) return;
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('im_message');
+      next.delete('im_stream');
+      return next;
+    }, { replace: true });
+    locateMessage(Number(linkedMessage), linkedStream ? Number(linkedStream) : null).then(
+      (found) => {
+        if (!found) void toast.warning('没有找到这条消息，可能已撤回或你无权查看。');
+      },
+      () => void toast.error('定位消息没有成功，请稍后重试。'),
+    );
+  }, [phase, linkedMessage, linkedStream, setParams, toast]);
 
   // 按锚点打开消息（返回原消息、消息链接）时，从联系人页签切回消息页签。
   const anchor = useImStore((state) => state.anchor);

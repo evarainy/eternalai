@@ -45,7 +45,31 @@ export function imDownloadUrl(fileUrl: string): string {
   return `${marker}download/${fileUrl.slice(marker.length)}`;
 }
 
-/** 消息页内的消息链接；lane 4 解析并同页定位。 */
-export function messageLink(messageId: number): string {
-  return `${window.location.origin}/messages?im_message=${messageId}`;
+/**
+ * 消息页内的消息链接，由消息页解析并定位（`ImWorkspace`）。群消息带上频道，定位时按频道读，入群前的
+ * 共享历史也能找到。
+ */
+export function messageLink(messageId: number, streamId: number | null): string {
+  return `${window.location.origin}${messagePagePath({ messageId, streamId })}`;
+}
+
+/**
+ * Zulip 的消息链接（`#narrow/channel/12-名称/topic/…/near/345`，或带固定上游 origin 的绝对地址）：
+ * 取出消息 id 和所在频道。不是消息链接时返回 null。
+ */
+export function zulipMessageTarget(href: string): { messageId: number; streamId: number | null } | null {
+  let hash = href.trim();
+  if (upstreamOrigin && hash.startsWith(upstreamOrigin + '/')) hash = hash.slice(upstreamOrigin.length + 1);
+  if (!hash.startsWith('#narrow/')) return null;
+  const message = /\/(?:near|with)\/(\d+)(?:\/|$)/.exec(hash);
+  if (!message) return null;
+  const channel = /\/(?:channel|stream)\/(\d+)(?:-|\/|$)/.exec(hash);
+  return { messageId: Number(message[1]), streamId: channel ? Number(channel[1]) : null };
+}
+
+/** 打开消息页并定位某条消息的站内地址（返回原消息、正文里的 Zulip 消息链接共用）。 */
+export function messagePagePath(target: { messageId: number; streamId: number | null }): string {
+  const params = new URLSearchParams({ im_message: String(target.messageId) });
+  if (target.streamId !== null) params.set('im_stream', String(target.streamId));
+  return `/messages?${params.toString()}`;
 }

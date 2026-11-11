@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { Icon } from '../../../shared/ui/Icon';
 import { isMergedRecord } from '../zulip/forward';
-import { imDownloadUrl, imFileUrl } from '../zulip/links';
+import { imDownloadUrl, imFileUrl, messagePagePath, zulipMessageTarget } from '../zulip/links';
 import { messageShape } from './viewModel';
 import type { FileKind } from './viewModel';
 import styles from './MessageItem.module.css';
@@ -28,8 +28,13 @@ purifier.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     const href = node.getAttribute('href') ?? '';
     const rewritten = imFileUrl(href);
+    const message = rewritten ? null : zulipMessageTarget(href);
     if (rewritten) {
       node.setAttribute('href', rewritten);
+    } else if (message) {
+      // 正文里的 Zulip 消息链接：改成消息页的定位地址，本页内跳转后定位原消息。
+      node.setAttribute('href', messagePagePath(message));
+      node.setAttribute('data-internal', 'true');
     } else if (/^https?:/i.test(href) && new URL(href).origin === window.location.origin) {
       // 工作台自己的页面（送核卡片的「回到 EternalAI 核实」）：本页内跳转。
       node.setAttribute('data-internal', 'true');

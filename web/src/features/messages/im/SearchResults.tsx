@@ -32,7 +32,6 @@ function terms(query: string): string[] {
 
 /** 命中词高亮：按空格拆开的每个词都标出来，不区分大小写。 */
 function Highlight({ text, words }: { text: string; words: string[] }) {
-  if (words.length === 0) return <>{text}</>;
   const pattern = new RegExp(`(${words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
   return <>{text.split(pattern).map((part, index) => (index % 2 === 1 ? <mark key={index}>{part}</mark> : part))}</>;
 }
@@ -146,10 +145,10 @@ function useRemote(query: string, files: boolean): Remote {
   return remote;
 }
 
-function RemoteState({ remote, what }: { remote: Remote; what: string }) {
-  if (remote.status === 'loading') return <p className={styles.note} role="status">正在搜索{what}…</p>;
-  if (remote.status === 'failed') return <p className={styles.note} role="alert">{what}搜索失败，请稍后重试。</p>;
-  return null;
+function RemoteState({ status, what }: { status: 'loading' | 'failed'; what: string }) {
+  return status === 'loading'
+    ? <p className={styles.note} role="status">正在搜索{what}…</p>
+    : <p className={styles.note} role="alert">{what}搜索失败，请稍后重试。</p>;
 }
 
 /**
@@ -171,7 +170,7 @@ export function SearchResults({ query }: { query: string }) {
   const sections: ReactNode[] = [];
   if (all || tab === 'messages') {
     const found = messages.status === 'ready' ? messages.messages : [];
-    sections.push(messages.status !== 'ready' ? <RemoteState key="m" remote={messages} what="聊天记录" /> : found.length > 0 ? (
+    sections.push(messages.status !== 'ready' ? <RemoteState key="m" status={messages.status} what="聊天记录" /> : found.length > 0 ? (
       <Section key="m" onMore={more(found, 'messages')} title={`聊天记录 · ${countLabel(found.length, messages.more)}`}>
         {limit(found).map((message) => <MessageHit key={message.id} message={message} words={words} />)}
       </Section>
@@ -179,7 +178,7 @@ export function SearchResults({ query }: { query: string }) {
   }
   if (all || tab === 'files') {
     const found = files.status === 'ready' ? files.messages : [];
-    sections.push(files.status !== 'ready' ? <RemoteState key="f" remote={files} what="文件" /> : found.length > 0 ? (
+    sections.push(files.status !== 'ready' ? <RemoteState key="f" status={files.status} what="文件" /> : found.length > 0 ? (
       <Section key="f" onMore={more(found, 'files')} title={`文件 · ${countLabel(found.length, files.more)}`}>
         {limit(found).map((message) => <FileHit key={message.id} message={message} words={words} />)}
       </Section>
@@ -210,7 +209,7 @@ export function SearchResults({ query }: { query: string }) {
       <Section key="c" onMore={more(contacts, 'contacts')} title={`联系人 · ${contacts.length} 人`}>
         {limit(contacts).map((userId) => {
           const org = [userDept(state, userId), userTitle(state, userId)].filter(Boolean).join(' · ');
-          const bot = state.users[userId]?.is_bot ?? false;
+          const bot = state.users[userId]!.is_bot;
           return (
             <li key={userId}>
               <button className={styles.hit} onClick={() => chatWith([userId])} type="button">

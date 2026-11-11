@@ -144,6 +144,12 @@ function onUpdateMessage(state: ImState, event: ZulipEvent): ImState {
   let next = state;
   // 话题改名（12.3 带 subject）：同步消息的话题和未读所在话题，静音按新话题判断。
   if (typeof event.subject === 'string') {
+    const filter = state.topicFilter;
+    if (filter && typeof event.stream_id === 'number' && streamConversation(event.stream_id).key === filter.key) {
+      const windows = { ...next.windows };
+      delete windows[filter.key];
+      next = { ...next, windows };
+    }
     const topic = event.subject;
     next = changeMessages(next, targets, (message) => ({ ...message, subject: topic }));
     const unreadTopics = { ...next.unreadTopics };

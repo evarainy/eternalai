@@ -3,8 +3,8 @@ import { readPersonalAgents } from '../personalAgentApi';
 import { onImReset } from '../zulip/imStore';
 
 /**
- * 本人名下 AI 助手的 bot 用户 id（V3 入口：在与本人助手的会话里打开 PersonalAgentPanel）。每个身份只读一次，
- * 换身份随 resetIm 作废；读不到（个人助手未开通等）就当作没有，不显示入口。
+ * 本人名下 AI 助手的 bot 用户 id（V3 入口：在与本人助手的会话里打开 PersonalAgentPanel）。每个身份成功读到
+ * 一次就缓存，换身份随 resetIm 作废。读取失败不缓存、不当成「没有助手」，由调用方提供重试。
  */
 let cached: Promise<Set<number>> | null = null;
 onImReset(() => {
@@ -12,23 +12,30 @@ onImReset(() => {
 });
 
 function load(): Promise<Set<number>> {
-  cached ??= readPersonalAgents().then(
-    (result) => new Set(result.agents.map((agent) => Number(agent.bot_user_id))),
-    () => new Set<number>(),
-  );
+  cached ??= readPersonalAgents().then((result) => new Set(result.agents.map((agent) => Number(agent.bot_user_id))));
+  cached.catch(() => {
+    cached = null;
+  });
   return cached;
 }
 
-export function useOwnAgentBots(): Set<number> {
+export function useOwnAgentBots(): { bots: Set<number>; failed: boolean; retry: () => void } {
   const [bots, setBots] = useState<Set<number>>(new Set());
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    void load().then((value) => {
-      if (live) setBots(value);
-    });
+    load().then(
+      (value) => {
+        if (!live) return;
+        setBots(value);
+        setFailed(false);
+      },
+      () => live && setFailed(true),
+    );
     return () => {
       live = false;
     };
-  }, []);
-  return bots;
+  }, [attempt]);
+  return { bots, failed, retry: () => setAttempt((value) => value + 1) };
 }

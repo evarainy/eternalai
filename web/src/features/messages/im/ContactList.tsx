@@ -124,7 +124,7 @@ export function ContactList() {
   const words = query.trim().toLowerCase();
 
   const active = Object.values(state.users).filter((user) => user.is_active);
-  const byName = (a: number, b: number) => collator.compare(state.users[a]?.full_name ?? '', state.users[b]?.full_name ?? '');
+  const byName = (a: number, b: number) => collator.compare(state.users[a]!.full_name, state.users[b]!.full_name);
 
   let body;
   if (state.phase !== 'ready') {

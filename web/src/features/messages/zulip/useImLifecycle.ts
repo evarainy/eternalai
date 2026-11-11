@@ -1,12 +1,12 @@
 /// <reference types="vite/client" />
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { configurationApiV1ImContextConfigurationGet } from '../../../generated/im-context/im-context';
 import { useAIDockStore } from '../../../stores/aiDockStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { configureIM, imBridgeBlocked, imLogoutInProgress, registerIMView } from '../hostBridge';
-import { disableIm, locateMessage, resetIm, setImRestart, startIm, useImStore } from './imStore';
-import { setImUpstreamOrigin } from './links';
+import { disableIm, resetIm, setImRestart, startIm, useImStore } from './imStore';
+import { messagePagePath, setImUpstreamOrigin, zulipMessageTarget } from './links';
 import { createHttpTransport } from './transport';
 import type { ImTransport } from './transport';
 
@@ -27,7 +27,10 @@ const devTransport = import.meta.env.DEV && import.meta.env.VITE_IM_DEV_DATA ===
 export function useImLifecycle(): void {
   const status = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
+  // 导航函数随路由变化换引用；放进 ref，接收器只随身份生命周期重启，换页不重建。
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     if (status !== 'authenticated' || imLogoutInProgress() || imBridgeBlocked()) return;
@@ -37,14 +40,13 @@ export function useImLifecycle(): void {
       live = false;
       resetIm();
     };
-    // 返回原消息（FE_PLAN §5.3）：hostBridge 已按固定上游 origin 校验 deep_link，这里取 near 后的消息 id，
-    // 切到消息页并按锚点打开所在会话。
+    // 返回原消息（FE_PLAN §5.3）：hostBridge 已按固定上游 origin 校验 deep_link，这里取消息 id 与所在频道，
+    // 交给消息页的定位地址（ImWorkspace 读取后定位，找不到时提示）。
     const unregister = registerIMView(freeze, (link) => {
-      const near = /\/near\/(\d+)/.exec(new URL(link).hash);
-      if (!near || !isCurrent()) return;
-      navigate('/messages');
+      const target = zulipMessageTarget(new URL(link).hash);
+      if (!target || !isCurrent()) return;
+      navigateRef.current(messagePagePath(target));
       useAIDockStore.getState().closeDock();
-      void locateMessage(Number(near[1])).catch(() => undefined);
     });
     const start = async () => {
       try {
@@ -77,5 +79,5 @@ export function useImLifecycle(): void {
       setImUpstreamOrigin(null);
       resetIm();
     };
-  }, [status, generation, navigate]);
+  }, [status, generation]);
 }

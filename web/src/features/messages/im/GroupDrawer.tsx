@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { App as AntApp, Modal, Select, Switch } from 'antd';
 import { Icon } from '../../../shared/ui/Icon';
 import {
-  addStreamMembers, leaveStream, openConversation, readStreamFiles, readStreamMembers, setStreamFlag, useImStore,
+  addStreamMembers, leaveStream, loadStreamMembers, openConversation, readStreamFiles, setStreamFlag, useImStore,
 } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import type { ZulipMessage } from '../zulip/types';
 import { Avatar } from './Avatar';
 import {
-  conversationAvatar, conversationMuted, listTime, messageShape, personAvatar, userDept, userName,
+  conversationAvatar, listTime, messageShape, personAvatar, userDept, userName,
 } from './viewModel';
 import styles from './GroupDrawer.module.css';
 
@@ -29,26 +29,27 @@ export function GroupDrawer({ conversationKey, streamId, onClose }: {
   const state = useImStore();
   const sub = state.subscriptions[streamId];
   const conversation = state.conversations[conversationKey];
-  const [members, setMembers] = useState<Load<number[]>>({ status: 'loading' });
+  const [members, setMembers] = useState<'loading' | 'failed' | 'ready'>('loading');
   const [files, setFiles] = useState<Load<ZulipMessage[]> | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [adding, setAdding] = useState<number[] | null>(null);
 
-  // 成员随 subscription 事件里的 peer_add/peer_remove 更新时，以 store 里的订阅成员为准；首次打开先读一次。
+  // 打开时读一次成员记进订阅；之后成员变化由 peer_add/peer_remove 事件更新同一份订阅成员。
   useEffect(() => {
     let live = true;
-    readStreamMembers(streamId).then(
-      (ids) => live && setMembers({ status: 'ready', value: ids }),
-      () => live && setMembers({ status: 'failed' }),
+    setMembers('loading');
+    loadStreamMembers(streamId).then(
+      () => live && setMembers('ready'),
+      () => live && setMembers('failed'),
     );
     return () => {
       live = false;
     };
-  }, [streamId, sub?.subscribers]);
+  }, [streamId]);
 
   if (!sub || !conversation) return null;
 
-  const memberIds = members.status === 'ready' ? members.value : [];
+  const memberIds = members === 'ready' ? sub.subscribers ?? [] : [];
   const shown = showAll ? memberIds : memberIds.slice(0, GRID);
   const candidates = Object.values(state.users)
     .filter((user) => user.is_active && !user.is_bot && !memberIds.includes(user.user_id))
@@ -88,7 +89,7 @@ export function GroupDrawer({ conversationKey, streamId, onClose }: {
 
   const openFiles = () => {
     setFiles({ status: 'loading' });
-    readStreamFiles(conversationKey).then(
+    readStreamFiles(conversation).then(
       (value) => setFiles({ status: 'ready', value }),
       () => setFiles({ status: 'failed' }),
     );
@@ -140,15 +141,15 @@ export function GroupDrawer({ conversationKey, streamId, onClose }: {
       </header>
       <section className={styles.section}>
         <div className={styles.sectionHead}>
-          <span>群成员{members.status === 'ready' ? ` · ${memberIds.length}` : ''}</span>
+          <span>群成员{members === 'ready' ? ` · ${memberIds.length}` : ''}</span>
           {memberIds.length > GRID ? (
             <button className={styles.link} onClick={() => setShowAll((value) => !value)} type="button">
               {showAll ? '收起' : '查看全部'}
             </button>
           ) : null}
         </div>
-        {members.status === 'loading' ? <p className={styles.state} role="status">正在读取成员…</p> : null}
-        {members.status === 'failed' ? <p className={styles.state} role="alert">成员读取失败，请重试。</p> : null}
+        {members === 'loading' ? <p className={styles.state} role="status">正在读取成员…</p> : null}
+        {members === 'failed' ? <p className={styles.state} role="alert">成员读取失败，请重试。</p> : null}
         <ul className={styles.grid}>
           {shown.map((id) => (
             <li key={id}>
@@ -156,7 +157,7 @@ export function GroupDrawer({ conversationKey, streamId, onClose }: {
               <span>{userName(state, id)}</span>
             </li>
           ))}
-          {members.status === 'ready' ? (
+          {members === 'ready' ? (
             <li>
               <button aria-label="添加成员" className={styles.add} onClick={() => setAdding([])} type="button">
                 <Icon name="plus" size={18} />
@@ -182,7 +183,7 @@ export function GroupDrawer({ conversationKey, streamId, onClose }: {
         </button>
         <label className={styles.row}>
           静音此群
-          <Switch checked={conversationMuted(state, conversation)} onChange={(value) => toggle('is_muted', value)} size="small" />
+          <Switch checked={sub.is_muted} onChange={(value) => toggle('is_muted', value)} size="small" />
         </label>
         <label className={styles.row}>
           固定到列表顶部

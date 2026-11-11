@@ -443,6 +443,7 @@ export function openConversation(key: ConversationKey, anchorMessageId?: number,
   let state = useImStore.getState();
   // 离开按话题读取的会话、或要定位的消息可能不在当前话题时，取消话题筛选并丢掉按话题读的窗口。
   if (state.topicFilter && (state.topicFilter.key !== key || anchorMessageId !== undefined)) {
+    nextWindowRequest(state.topicFilter.key);
     useImStore.setState({ topicFilter: null, windows: withoutWindow(state.windows, state.topicFilter.key) });
     state = useImStore.getState();
   }
@@ -694,9 +695,10 @@ export function openMessage(message: ZulipMessage, fromSearch: boolean): void {
 
 /**
  * 返回原消息（AIDock「返回原消息」、消息链接）：按消息 id 找到它所在的会话，按锚点打开。已加载的窗口里有
- * 就直接用，否则以本人权限读这一条确定会话。找不到（已删除或无权查看）时返回 false。
+ * 就直接用，否则以本人权限读这一条确定会话。群消息带上频道条件读：空 narrow 不含本人入群前的共享历史。
+ * 找不到（已删除或无权查看）时返回 false。
  */
-export async function locateMessage(messageId: number): Promise<boolean> {
+export async function locateMessage(messageId: number, streamId: number | null): Promise<boolean> {
   const state = useImStore.getState();
   for (const [key, window] of Object.entries(state.windows)) {
     if (window?.messages.some((message) => message.id === messageId)) {
@@ -705,7 +707,10 @@ export async function locateMessage(messageId: number): Promise<boolean> {
     }
   }
   const { session } = state;
-  const result = await requireTransport().messages({ anchor: messageId, numBefore: 0, numAfter: 0, narrow: [] });
+  const result = await requireTransport().messages({
+    anchor: messageId, numBefore: 0, numAfter: 0,
+    narrow: streamId === null ? [] : [{ operator: 'channel', operand: streamId }],
+  });
   const message = result.messages.find((item) => item.id === messageId);
   if (!message || !isCurrent(session)) return false;
   openMessage(message, false);
@@ -752,8 +757,18 @@ export async function createGroup(name: string, userIds: number[]): Promise<void
 
 /* ---------- 群设置、联系人（lane 4）：只提交请求，界面以随后的 subscription 事件为准 ---------- */
 
-export function readStreamMembers(streamId: number): Promise<number[]> {
-  return requireTransport().streamMembers(streamId);
+/**
+ * 读群成员并记进订阅（register 不带 include_subscribers，订阅里起初没有成员）；之后由 peer_add/peer_remove
+ * 事件维护，群设置抽屉与成员数都读这一份。
+ */
+export async function loadStreamMembers(streamId: number): Promise<void> {
+  const { session } = useImStore.getState();
+  const subscribers = await requireTransport().streamMembers(streamId);
+  if (!isCurrent(session)) return;
+  useImStore.setState((state) => {
+    const sub = state.subscriptions[streamId];
+    return sub ? { subscriptions: { ...state.subscriptions, [streamId]: { ...sub, subscribers } } } : {};
+  });
 }
 
 export function setStreamFlag(streamId: number, property: 'is_muted' | 'pin_to_top', value: boolean): Promise<void> {
@@ -786,9 +801,7 @@ export function readUserGroups() {
 }
 
 /** 群文件：本群带附件的消息，最新 50 条。 */
-export async function readStreamFiles(key: ConversationKey): Promise<ZulipMessage[]> {
-  const conversation = useImStore.getState().conversations[key];
-  if (!conversation) return [];
+export async function readStreamFiles(conversation: Conversation): Promise<ZulipMessage[]> {
   const result = await requireTransport().messages({
     anchor: 'newest', numBefore: 50, numAfter: 0,
     narrow: [...conversationNarrow(conversation), { operator: 'has', operand: 'attachment' }],
@@ -802,11 +815,13 @@ export function uploadAttachment(file: File, onProgress: (ratio: number) => void
 
 /* ---------- 草稿（/drafts） ---------- */
 
-export function draftTarget(state: ImState, key: ConversationKey): Omit<ZulipDraft, 'content' | 'timestamp'> | null {
+export function draftTarget(
+  state: ImState, key: ConversationKey, topic = '',
+): Omit<ZulipDraft, 'content' | 'timestamp'> | null {
   const conversation = state.conversations[key];
   if (!conversation) return null;
   return conversation.kind === 'stream'
-    ? { type: 'stream', to: [conversation.streamId], topic: '' }
+    ? { type: 'stream', to: [conversation.streamId], topic }
     : { type: 'private', to: conversation.userIds, topic: '' };
 }
 
@@ -826,9 +841,11 @@ export function conversationDrafts(state: ImState, key: ConversationKey): Stored
 /**
  * 保存草稿：有 id 就改，没有就新建；内容为空时删除。返回服务端确认后的草稿 id（删除时为 null）。
  */
-export async function saveDraft(key: ConversationKey, draftId: number | null, content: string): Promise<number | null> {
+export async function saveDraft(
+  key: ConversationKey, draftId: number | null, content: string, topic = '',
+): Promise<number | null> {
   const state = useImStore.getState();
-  const target = draftTarget(state, key);
+  const target = draftTarget(state, key, topic);
   const api = requireTransport();
   if (!target) return draftId;
   if (!content.trim()) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ClipboardEvent, DragEvent, KeyboardEvent, PointerEvent } from 'react';
-import { Dropdown, Popover } from 'antd';
+import type { ClipboardEvent, DragEvent, KeyboardEvent, PointerEvent, ReactNode } from 'react';
+import { AutoComplete, Dropdown, Popover } from 'antd';
 import { ApiError } from '../../../api/mutator';
 import { Icon } from '../../../shared/ui/Icon';
 import { COMPOSER_HEIGHT, clampComposerHeight, readImPrefs, writeImPrefs } from '../zulip/imPrefs';
@@ -60,12 +60,20 @@ function mentionQuery(text: string, caret: number): { start: number; query: stri
  * 不发送；@ 候选、表情、格式片段、附件托盘（粘贴截图、拖入文件、预览、移除，点发送时才上传）；
  * 草稿按停顿 1.5 秒、切换会话、失焦保存并显示状态；↑ 编辑上一条。顶边可拖动调高并记住高度。
  */
-export function Composer({ conversationKey, enterSends, placeholder, topic }: {
+/** 旧群发送话题的设置（ChatPane 给出）：已知话题、当前筛选的话题、最近一条的话题、读取状态说明。 */
+export interface TopicSetting {
+  names: string[];
+  filter: string | null;
+  latest: string;
+  note: ReactNode;
+}
+
+export function Composer({ conversationKey, enterSends, placeholder, topic: topicSetting }: {
   conversationKey: ConversationKey;
   enterSends: boolean;
   placeholder: string;
-  /** 多话题群：发送到的话题，必须填写；其余会话不传。 */
-  topic?: string;
+  /** 需要选话题的旧群才传；发送话题必须填写，并随草稿保存。 */
+  topic?: TopicSetting;
 }) {
   const state = useImStore();
   const drafts = useMemo(() => conversationDrafts(state, conversationKey), [state, conversationKey]);
@@ -76,6 +84,9 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 发送话题：草稿里有就用草稿的，否则跟随筛选的话题或最近一条的话题，直到本人改过。
+  const [topic, setTopicState] = useState(() => slot.current.topic || topicSetting?.filter || topicSetting?.latest || '');
+  const topicTouched = useRef(slot.current.topic !== '');
   const [draftStatus, setDraftStatus] = useState<DraftStatus>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(null);
@@ -131,11 +142,31 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
   const persistDraft = () => {
     window.clearTimeout(idleTimer.current);
     const content = draftText();
-    if (content === slot.current.saved && slot.current.pending === null) return;
+    const current = slot.current;
+    if (content === current.saved && current.topic === current.savedTopic && current.pending === null) return;
     requestDraftSave(slot.current, content);
   };
   const persistRef = useRef(persistDraft);
   persistRef.current = persistDraft;
+
+  /** 改发送话题：记到当前草稿位，有正文时停顿后随草稿保存。`byUser` 为本人修改，之后不再自动跟随。 */
+  const changeTopic = (value: string, byUser: boolean) => {
+    if (byUser) topicTouched.current = true;
+    setTopicState(value);
+    slot.current.topic = value;
+    if (draftText() || slot.current.id !== null) {
+      window.clearTimeout(idleTimer.current);
+      idleTimer.current = window.setTimeout(() => persistRef.current(), DRAFT_IDLE_MS);
+    }
+  };
+  const filterTopic = topicSetting?.filter ?? null;
+  const latestTopic = topicSetting?.latest ?? '';
+  // 按话题看时发到这个话题；否则本人没改过就跟随最近一条消息的话题。
+  useEffect(() => {
+    if (filterTopic !== null) changeTopic(filterTopic, false);
+    else if (!topicTouched.current && latestTopic) changeTopic(latestTopic, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterTopic, latestTopic]);
 
   useEffect(() => {
     input.current?.focus();
@@ -166,10 +197,13 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
       refreshRef.current();
       return;
     }
-    if (server.content === current.saved) return;
-    const clean = latestText.current === current.saved;
+    if (server.content === current.saved && server.topic === current.savedTopic) return;
+    const clean = latestText.current === current.saved && current.topic === current.savedTopic;
     current.saved = server.content;
+    current.savedTopic = server.topic;
     if (clean) {
+      current.topic = server.topic;
+      setTopicState(server.topic);
       setText(server.content);
       latestText.current = server.content;
       if (server.content) unsent.set(conversationKey, server.content);
@@ -295,8 +329,8 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
   const submit = async () => {
     const content = text.trim();
     if (busy || (!content && attachments.length === 0)) return;
-    if (!editing && topic !== undefined && !topic.trim()) {
-      setError('这是多话题群，请先在上方选择或填写话题。');
+    if (!editing && topicSetting && !topic.trim()) {
+      setError('请先在上方选择或填写发送到的话题。');
       return;
     }
     setBusy(true);
@@ -318,7 +352,7 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
         }, signal);
         links.push(`[${result.filename}](${result.url})`);
       }
-      await sendMessage(conversationKey, [content, ...links].filter(Boolean).join('\n'), topic?.trim());
+      await sendMessage(conversationKey, [content, ...links].filter(Boolean).join('\n'), topicSetting ? topic.trim() : '');
       const sent = new Set(sending.map((item) => item.id));
       for (const item of sending) if (item.preview) URL.revokeObjectURL(item.preview);
       setAttachments((current) => current.filter((item) => !sent.has(item.id)));
@@ -430,6 +464,23 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
 
   const otherDrafts = drafts.filter((draft) => draft.id !== slot.current.id);
 
+  const topicBar = topicSetting ? (
+    <div className={styles.topicBar}>
+      <span>发送到话题</span>
+      <AutoComplete
+        aria-label="发送到话题"
+        className={styles.topicInput}
+        onChange={(value: string) => changeTopic(value, true)}
+        options={topicSetting.names.map((name) => ({ value: name }))}
+        placeholder="选择已有话题或输入新话题"
+        size="small"
+        value={topic}
+        variant="filled"
+      />
+      {topicSetting.note ? <span className={styles.topicNote}>{topicSetting.note}</span> : null}
+    </div>
+  ) : null;
+
   return (
     <div
       className={styles.composer}
@@ -443,6 +494,7 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
       }}
       onDrop={onDrop}
     >
+      {topicBar}
       <div
         aria-label="调整输入框高度"
         aria-orientation="horizontal"
@@ -508,6 +560,10 @@ export function Composer({ conversationKey, enterSends, placeholder, topic }: {
                 previous.onError = null;
                 slot.current = switchDraftSlot(conversationKey, draft);
                 attach(slot.current);
+                if (draft.topic) {
+                  topicTouched.current = true;
+                  setTopicState(draft.topic);
+                }
                 setText(draft.content);
                 latestText.current = draft.content;
                 unsent.set(conversationKey, draft.content);

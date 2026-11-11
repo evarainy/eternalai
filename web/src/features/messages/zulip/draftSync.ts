@@ -17,6 +17,9 @@ export interface DraftSlot {
   id: number | null;
   /** 服务端已确认的内容（id 为 null 时为空串）。 */
   saved: string;
+  /** 多话题群：这份草稿要发往的话题，与服务端已确认的话题。其余会话恒为空串。 */
+  topic: string;
+  savedTopic: string;
   /** 已请求保存、还没执行的内容。 */
   pending: string | null;
   running: boolean;
@@ -37,7 +40,8 @@ function isCurrent(session: number): boolean {
 
 function newSlot(key: ConversationKey, session: number, draft: StoredDraft | undefined): DraftSlot {
   return {
-    key, session, id: draft?.id ?? null, saved: draft?.content ?? '', pending: null, running: false, failed: false,
+    key, session, id: draft?.id ?? null, saved: draft?.content ?? '', topic: draft?.topic ?? '', savedTopic: draft?.topic ?? '',
+    pending: null, running: false, failed: false,
     chain: Promise.resolve(), onChange: null, onError: null,
   };
 }
@@ -68,17 +72,19 @@ async function runSave(slot: DraftSlot, failText: string | undefined): Promise<v
   if (slot.pending === null) return;
   const value = slot.pending;
   slot.pending = null;
-  if (!isCurrent(slot.session) || value === slot.saved) {
+  const topic = slot.topic;
+  if (!isCurrent(slot.session) || (value === slot.saved && topic === slot.savedTopic)) {
     slot.onChange?.();
     return;
   }
   slot.running = true;
   slot.onChange?.();
   try {
-    const id = await saveDraft(slot.key, slot.id, value);
+    const id = await saveDraft(slot.key, slot.id, value, topic);
     if (!isCurrent(slot.session)) return;
     slot.id = id;
     slot.saved = id === null ? '' : value;
+    slot.savedTopic = id === null ? '' : topic;
     slot.failed = false;
   } catch {
     if (!isCurrent(slot.session)) return;

@@ -80,7 +80,7 @@ export function MessageMenu({ children, conversationKey, message }: {
     } else if (key === 'select') {
       useSelection.getState().start(conversationKey, message.id);
     } else if (key === 'link') {
-      copy(messageLink(message.id), '已复制消息链接');
+      copy(messageLink(message.id, message.type === 'stream' ? message.stream_id : null), '已复制消息链接');
     } else if (key === 'edit') {
       readRawContent(message.id).then(
         (raw) => useComposerBridge.getState().startEditing(conversationKey, state.session, message.id, raw),

@@ -293,9 +293,13 @@ export function topicMuted(state: ImState, streamId: number, topic: string): boo
 export function streamTopicNames(state: ImState, conversation: Conversation): string[] {
   if (conversation.kind !== 'stream') return [];
   if (state.subscriptions[conversation.streamId]?.topics_policy === 'empty_topic_only') return [];
+  // Zulip 的话题不区分大小写：同名不同大小写算同一个话题，保留先读到的写法。
   const names = [...(state.streamTopics[conversation.streamId] ?? [])];
+  const seen = new Set(names.map((name) => name.toLowerCase()));
   for (const message of state.windows[conversation.key]?.messages ?? []) {
-    if (message.type === 'stream' && !names.includes(message.subject)) names.push(message.subject);
+    if (message.type !== 'stream' || seen.has(message.subject.toLowerCase())) continue;
+    seen.add(message.subject.toLowerCase());
+    names.push(message.subject);
   }
   return names.some((name) => name !== '') ? names : [];
 }

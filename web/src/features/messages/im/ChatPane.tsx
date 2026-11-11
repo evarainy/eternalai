@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AutoComplete, Drawer, Select } from 'antd';
+import { Drawer, Select } from 'antd';
 import { PersonalAgentPanel } from '../PersonalAgentPanel';
 import { Icon } from '../../../shared/ui/Icon';
 import { loadStreamTopics, setTopicFilter, useImStore } from '../zulip/imStore';
@@ -7,6 +7,7 @@ import { Avatar } from './Avatar';
 import { ChatSearch } from './ChatSearch';
 import { useComposerBridge } from './composerStore';
 import { Composer } from './Composer';
+import type { TopicSetting } from './Composer';
 import { GroupDrawer } from './GroupDrawer';
 import { useOwnAgentBots } from './ownAgents';
 import { ProfileCard } from './ProfileCard';
@@ -28,8 +29,10 @@ export function ChatPane() {
   const key = state.selected;
   const [searching, setSearching] = useState(false);
   const [panel, setPanel] = useState<'group' | 'agent' | null>(null);
-  const ownBots = useOwnAgentBots();
-  const [sendTopic, setSendTopic] = useState('');
+  const ownAgents = useOwnAgentBots();
+  // 旧群的话题读取状态（按群记）；失败时可重试。
+  const [topicStatus, setTopicStatus] = useState<Record<number, 'loading' | 'failed' | 'ready'>>({});
+  const [topicRetry, setTopicRetry] = useState(0);
 
   // 换会话时关掉搜索、清掉输入框的回复/编辑请求。
   useEffect(() => {
@@ -59,17 +62,33 @@ export function ChatPane() {
     return last?.type === 'stream' ? last.subject : '';
   })();
 
-  // 旧群（不是「只用空话题」）打开时读一次话题。读不到时只按已加载消息里的话题判断是否多话题。
+  // 旧群（不是「只用空话题」）打开时读一次话题。读到之前和读取失败时，发送必须明确选定话题。
+  const legacy = streamId !== null && topicsPolicy !== 'empty_topic_only';
   useEffect(() => {
-    if (streamId === null || topicsPolicy === 'empty_topic_only') return;
-    loadStreamTopics(streamId).catch(() => undefined);
-  }, [streamId, topicsPolicy]);
-
-  // 发送到的话题：正在按话题看时就是这个话题，否则沿用最近一条消息的话题；换会话或换筛选时重新取。
-  useEffect(() => {
-    setSendTopic(filterTopic ?? latestTopic);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, filterTopic, multiTopic]);
+    if (streamId === null || !legacy) return;
+    let live = true;
+    setTopicStatus((current) => ({ ...current, [streamId]: 'loading' }));
+    loadStreamTopics(streamId).then(
+      () => live && setTopicStatus((current) => ({ ...current, [streamId]: 'ready' })),
+      () => live && setTopicStatus((current) => ({ ...current, [streamId]: 'failed' })),
+    );
+    return () => {
+      live = false;
+    };
+  }, [streamId, legacy, topicRetry]);
+  const loadStatus = streamId === null ? 'ready' : topicStatus[streamId] ?? 'loading';
+  // 需要选话题：多话题群；话题还没确定的旧群；本群明确禁止空话题。
+  const needTopic = legacy && (multiTopic || loadStatus !== 'ready' || topicsPolicy === 'disable_empty_topic');
+  let topicNote = null;
+  if (needTopic && loadStatus === 'loading') topicNote = '正在读取本群话题…';
+  if (needTopic && loadStatus === 'failed') {
+    topicNote = (
+      <>本群话题读取失败，请填写话题<button onClick={() => setTopicRetry((value) => value + 1)} type="button">重试</button></>
+    );
+  }
+  const topicSetting: TopicSetting | undefined = needTopic
+    ? { names: topics.filter((topic) => topic !== ''), filter: filterTopic, latest: latestTopic, note: topicNote }
+    : undefined;
   if (!key || !conversation) {
     return <div className={styles.empty}>{state.phase === 'ready' ? '选择左侧的会话开始聊天' : ''}</div>;
   }
@@ -94,7 +113,9 @@ export function ChatPane() {
   }
 
   // 与本人 AI 助手的单聊：「更多」打开现有的个人助手面板（V3 入口，FE_PLAN §6 lane 4）。
-  const agentChat = single?.bot === true && ownBots.has(single.userId);
+  const agentChat = single?.bot === true && ownAgents.bots.has(single.userId);
+  // 助手列表读取失败时，机器人单聊的「更多」用来重试，不把失败当成「没有本人助手」。
+  const agentRetry = single?.bot === true && ownAgents.failed;
   const identity = (
     <>
       <Avatar avatar={avatar} />
@@ -143,9 +164,12 @@ export function ChatPane() {
           <button
             aria-label={streamId !== null ? '群设置' : agentChat ? '个人助手设置' : '更多'}
             className={styles.iconButton}
-            disabled={streamId === null && !agentChat}
-            onClick={() => setPanel(streamId !== null ? 'group' : 'agent')}
-            title={streamId !== null ? '群设置' : agentChat ? '个人助手资料与授权' : '更多'}
+            disabled={streamId === null && !agentChat && !agentRetry}
+            onClick={() => {
+              if (streamId === null && agentRetry) ownAgents.retry();
+              else setPanel(streamId !== null ? 'group' : 'agent');
+            }}
+            title={streamId !== null ? '群设置' : agentChat ? '个人助手资料与授权' : agentRetry ? '本人助手列表读取失败，点此重试' : '更多'}
             type="button"
           >
             <Icon name="more" size={20} strokeWidth={2.2} />
@@ -156,21 +180,6 @@ export function ChatPane() {
         {searching ? <ChatSearch conversationKey={key} onClose={() => setSearching(false)} /> : null}
         <MessageList conversationKey={key} messageWindow={state.windows[key]} state={state} />
       </div>
-      {multiTopic && !selecting ? (
-        <div className={styles.topicBar}>
-          <span>发送到话题</span>
-          <AutoComplete
-            aria-label="发送到话题"
-            className={styles.topicInput}
-            onChange={(value: string) => setSendTopic(value)}
-            options={topics.filter((topic) => topic !== '').map((topic) => ({ value: topic }))}
-            placeholder="选择已有话题或输入新话题"
-            size="small"
-            value={sendTopic}
-            variant="filled"
-          />
-        </div>
-      ) : null}
       {selecting
         ? <SelectionBar conversationKey={key} />
         : (
@@ -179,7 +188,7 @@ export function ChatPane() {
             enterSends={state.enterSends}
             key={key}
             placeholder={`发给 ${title}`}
-            topic={multiTopic ? sendTopic : undefined}
+            topic={topicSetting}
           />
         )}
       {panel === 'group' && streamId !== null

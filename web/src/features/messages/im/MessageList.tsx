@@ -49,7 +49,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
   const loaded = messageWindow?.messages ?? [];
   const messages = topicFilter === null
     ? loaded
-    : loaded.filter((message) => message.type === 'stream' && message.subject === topicFilter);
+    : loaded.filter((message) => message.type === 'stream' && message.subject.toLowerCase() === topicFilter.toLowerCase());
   const lastId = messages[messages.length - 1]?.id;
   const hasMessages = lastId !== undefined;
   const anchorId = state.anchor?.key === conversationKey ? state.anchor.messageId : null;
@@ -234,7 +234,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
 
   return (
     <>
-      {!messageWindow.foundNewest ? (
+      {!messageWindow.foundNewest || (state.anchor?.key === conversationKey && state.anchor.fromSearch) ? (
         <div className={styles.banner} role="status">
           <Icon name="search" size={14} />
           {state.anchor?.key === conversationKey && state.anchor.fromSearch ? '正在查看搜索结果所在位置' : '正在查看较早的位置'}
