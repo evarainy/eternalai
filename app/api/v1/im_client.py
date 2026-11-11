@@ -73,7 +73,6 @@ class IMClientStreamingResponse(StreamingResponse):
         revalidate: Callable[[], Awaitable[None]],
     ) -> None:
         super().__init__(response.body, status_code=response.status, headers=response.headers)
-        self.headers.update(_NO_STORE)
         self._stack, self._revalidate = stack, revalidate
         self._sent = 0
         self._result = "cancelled"
@@ -94,8 +93,6 @@ class IMClientStreamingResponse(StreamingResponse):
         try:
             async for chunk in self.body_iterator:
                 await self._revalidate()
-                if isinstance(chunk, str):
-                    chunk = chunk.encode(self.charset)
                 await send({"type": "http.response.body", "body": chunk, "more_body": True})
                 self._sent += len(chunk)
         except IMClientError as error:
@@ -145,7 +142,6 @@ def make_router(
         current = available()
         if kind == "api" and len(request.headers.getlist("content-type")) > 1:
             raise _denied()
-        lease = await current.acquire(principal)
         prefix = b"/api/v1/im-client/" + (b"zulip" if kind == "api" else b"files")
         raw_path = request.scope.get("raw_path", b"")
         if not raw_path.startswith(prefix + b"/"):
@@ -159,10 +155,20 @@ def make_router(
         lengths = request.headers.getlist("content-length")
         if len(lengths) == 1 and lengths[0].isascii() and lengths[0].isdecimal():
             headers["content-length"] = lengths[0]
-        async def request_body() -> AsyncIterator[bytes]:
-            async for chunk in request.stream():
-                yield chunk
+        buffered_body = None
+        if (kind == "api" and headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                != "multipart/form-data"):
+            buffered_body = await request.body()
             body_done.set()
+        lease = await current.acquire(principal)
+
+        async def request_body() -> AsyncIterator[bytes]:
+            if buffered_body is not None:
+                yield buffered_body
+            else:
+                async for chunk in request.stream():
+                    yield chunk
+                body_done.set()
 
         upstream = IMClientRequest(
             kind="api" if kind == "api" else "file", method=request.method, path=path,

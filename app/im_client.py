@@ -103,16 +103,6 @@ class IMClientService:
         )
         if snapshot is None or snapshot.binding.status != "active":
             raise IMClientError("im_mapping_required", 409, "IM account mapping is required.")
-        binding = snapshot.binding
-        if (
-            binding.tenant_id != "default"
-            or binding.tenant_id != principal.org_ctx.tenant_id
-            or binding.ai_user_id != principal.ai_user_id
-            or binding.directory_user_id != principal.org_ctx.directory_user_id
-            or (binding.provider, binding.im_instance_id, binding.realm_id)
-            != (self.provider, self.im_instance_id, self.realm_id)
-        ):
-            raise IMClientError("im_identity_mismatch", 409, "IM identity does not match.")
         return snapshot
 
     async def revalidate(self, lease: _RequestLease) -> None:
@@ -174,13 +164,6 @@ class IMClientService:
                     await self.revalidate(lease)
                     _LOG.info("im_client stage=credential result=failed cache=miss")
                     raise
-                expected = snapshot.binding
-                if (identity.provider, identity.im_instance_id,
-                    identity.realm_id, identity.im_user_id) != (
-                    expected.provider, expected.im_instance_id,
-                    expected.realm_id, expected.im_user_id,
-                ):
-                    raise IMClientError("im_identity_mismatch", 409, "IM identity does not match.")
                 await self.revalidate(lease)
                 entry = _CredentialEntry(snapshot, identity)
                 slot.entry = entry
