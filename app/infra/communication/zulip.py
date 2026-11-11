@@ -165,7 +165,6 @@ class _ClientScope:
 class _ClientCredentials:
     email: str = field(repr=False)
     key: SecretStr = field(repr=False)
-    user_id: int
     scopes: dict[str, _ClientScope] = field(default_factory=dict, repr=False)
 
 
@@ -437,7 +436,7 @@ class ZulipCommunicationAdapter:
                 key, email = payload.get("api_key"), payload.get("email")
                 if not isinstance(key, str) or not key or not isinstance(email, str) or not email:
                     raise _client_protocol_error()
-                credentials = _ClientCredentials(email, SecretStr(key), 0)
+                credentials = _ClientCredentials(email, SecretStr(key))
             finally:
                 await self._client_close(response)
             response = await self._client_send(
@@ -454,7 +453,6 @@ class ZulipCommunicationAdapter:
                 if (type(uid) is not int or uid <= 0 or str(uid) != binding.im_user_id
                         or me.get("is_bot") is not False or me.get("is_active") is not True):
                     raise IMClientError("im_identity_mismatch", 409, "IM identity does not match.")
-                credentials.user_id = uid
                 return IMReadIdentity(
                     "zulip", self._settings.im_instance_id, self._settings.realm_id,
                     str(uid), credentials,
@@ -638,9 +636,6 @@ class ZulipCommunicationAdapter:
                     form = _client_form(body)
                     if request.method == "POST" and "method" in form:
                         _match_client_endpoint(form["method"], request.path)
-            effective_method = form.get("method", request.method) if request.method == "POST" else (
-                request.method
-            )
             if endpoint == "/register":
                 try:
                     forwarded_query = self._client_url(
@@ -729,7 +724,7 @@ class ZulipCommunicationAdapter:
                                 or not math.isfinite(poll_timeout) or poll_timeout <= 0):
                             raise _client_protocol_error()
                         scope.queues[qid] = float(poll_timeout)
-                    if endpoint == "/events" and effective_method == "DELETE":
+                    if endpoint == "/events" and request.method == "DELETE":
                         scope.queues.pop(queue_id, None)
                     if upload and not isinstance(payload.get("url"), str):
                         raise _client_protocol_error()
