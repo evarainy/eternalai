@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { App as AntApp } from 'antd';
+import { sendToAi } from '../zulip/aiSource';
 import type { ConversationKey } from '../zulip/narrow';
 import { ForwardDialog } from './ForwardDialog';
 import type { ForwardMode } from './ForwardDialog';
@@ -7,12 +9,14 @@ import styles from './SelectionBar.module.css';
 
 /**
  * 多选时替换输入框的操作条（FE_PLAN §11）：逐条转发、合并转发、交给我的 AI、取消；Esc 退出多选。
- * 「交给我的 AI」等 V1 多条来源接口（P2-IM-V1-MULTISOURCE-001）上线后接入。
+ * 交给 AI 时所选各条作为一组来源（同一会话；旧的多话题群须同一话题）。
  */
 export function SelectionBar({ conversationKey }: { conversationKey: ConversationKey }) {
   const ids = useSelection((selection) => selection.ids);
   const clear = useSelection((selection) => selection.clear);
   const [mode, setMode] = useState<ForwardMode | null>(null);
+  const [sending, setSending] = useState(false);
+  const { message: toast } = AntApp.useApp();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -32,7 +36,21 @@ export function SelectionBar({ conversationKey }: { conversationKey: Conversatio
       </span>
       <button className={styles.action} disabled={empty} onClick={() => setMode('single')} type="button">逐条转发</button>
       <button className={styles.action} disabled={empty} onClick={() => setMode('merged')} type="button">合并转发</button>
-      <button className={styles.action} disabled title="多条交给我的 AI（后端接口上线后开放）" type="button">交给我的 AI</button>
+      <button
+        className={styles.action}
+        disabled={empty || sending}
+        onClick={() => {
+          setSending(true);
+          void sendToAi(conversationKey, ordered).then((failure) => {
+            setSending(false);
+            if (failure) void toast.error(failure);
+            else clear();
+          });
+        }}
+        type="button"
+      >
+        {sending ? '正在交给 AI…' : '交给我的 AI'}
+      </button>
       <button className={styles.cancel} onClick={clear} type="button">取消</button>
       {mode ? (
         <ForwardDialog
