@@ -1,0 +1,88 @@
+.card {
+  width: 300px;
+  padding: 6px 4px 4px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.head b {
+  color: #1f2430;
+  font-size: 17px;
+}
+
+.head p {
+  margin: 4px 0 0;
+  color: #5b6474;
+  font-size: 13px;
+}
+
+.presence {
+  margin-left: 8px;
+  color: #8a93a3;
+  font-size: 12px;
+}
+
+.presence[data-presence='active'] {
+  color: #1f9d55;
+}
+
+.rows {
+  display: grid;
+  margin: 12px 0 0;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.rows div {
+  display: flex;
+  gap: 18px;
+}
+
+.rows dt {
+  width: 56px;
+  flex: none;
+  color: #8a93a3;
+}
+
+.rows dd {
+  margin: 0;
+  color: #1f2430;
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.primary {
+  border: 0;
+  background: #2f6bff;
+  color: #fff;
+}
+
+.secondary {
+  border: 1px solid #dfe3ea;
+  background: #fff;
+  color: #1f2430;
+}

@@ -1,0 +1,202 @@
+/* 群设置抽屉（v3-3）：贴在聊天区右侧，盖住消息区与输入框 */
+.drawer {
+  position: absolute;
+  top: 62px;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  width: 345px;
+  max-width: 100%;
+  flex-direction: column;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: var(--chat);
+  box-shadow: -8px 0 24px rgb(20 40 80 / 8%);
+}
+
+.head,
+.subHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 16px 16px 20px;
+  background: #fff;
+}
+
+.subHead {
+  gap: 6px;
+  padding: 14px 16px;
+  font-weight: 600;
+}
+
+.titleBlock {
+  min-width: 0;
+  flex: 1;
+}
+
+.titleBlock h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.titleBlock p {
+  margin: 2px 0 0;
+  color: var(--ink3);
+  font-size: 12.5px;
+}
+
+.close,
+.back {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.back svg {
+  transform: rotate(90deg);
+}
+
+.close:hover,
+.back:hover {
+  background: var(--hover);
+}
+
+.section {
+  margin-top: 8px;
+  padding: 12px 20px;
+  background: #fff;
+}
+
+.sectionHead {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink3);
+  font-size: 12.5px;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.grid {
+  display: grid;
+  margin: 12px 0 4px;
+  padding: 0;
+  gap: 12px 6px;
+  grid-template-columns: repeat(5, 1fr);
+  list-style: none;
+}
+
+.grid li {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink2);
+  font-size: 12px;
+}
+
+.grid li span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1.5px dashed var(--line);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--ink3);
+  cursor: pointer;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.row svg {
+  color: var(--ink3);
+  transform: rotate(-90deg);
+}
+
+.leave {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  background: none;
+  color: #e5484d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+}
+
+.state {
+  margin: 10px 0;
+  color: var(--ink3);
+  font-size: 13px;
+}
+
+.files {
+  margin: 0;
+  padding: 4px 8px;
+  background: #fff;
+  list-style: none;
+}
+
+.files button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.files button:hover {
+  background: var(--sel);
+}
+
+.fileName {
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.files small {
+  color: var(--ink3);
+  font-size: 12px;
+}

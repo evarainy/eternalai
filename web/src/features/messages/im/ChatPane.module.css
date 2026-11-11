@@ -224,3 +224,19 @@
   right: 62px;
   bottom: 14px;
 }
+
+/* 单聊头部：头像与姓名整块可点，弹出资料卡（v3-4） */
+.identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}

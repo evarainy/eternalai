@@ -1,7 +1,7 @@
 import { ApiError, requestWithResponse } from '../../../api/mutator';
 import type {
   ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEventsResponse, ZulipMessage, ZulipMessagesQuery, ZulipMessagesResponse,
-  ZulipNarrowTerm,
+  ZulipNarrowTerm, ZulipTopic, ZulipUserGroup,
   ZulipRegisterResponse, ZulipSendRequest, ZulipUploadResult,
 } from './types';
 import { uploadFile } from './upload';
@@ -32,6 +32,19 @@ export interface ImTransport {
   /** 新群一律私密、历史对成员可见、只用空话题（FE_PLAN §9 第 1 件）。 */
   createGroup(name: string, userIds: number[]): Promise<{ id: number }>;
   upload(file: File, onProgress: (ratio: number) => void, signal: AbortSignal): Promise<ZulipUploadResult>;
+  /** 群成员（`GET /streams/{id}/members`）。 */
+  streamMembers(streamId: number): Promise<number[]>;
+  /** 本人的订阅属性：静音、固定到顶部（`POST /users/me/subscriptions/properties`）。 */
+  setSubscriptionProperty(streamId: number, property: 'is_muted' | 'pin_to_top', value: boolean): Promise<void>;
+  /** 把人加进群（`POST /users/me/subscriptions` 带 principals）。 */
+  addMembers(streamName: string, userIds: number[]): Promise<void>;
+  /** 本人退出群（`DELETE /users/me/subscriptions`）。 */
+  leaveStream(streamName: string): Promise<void>;
+  /** 某人所在、且本人有权看到的群（`GET /users/{id}/channels`）。 */
+  userChannels(userId: number): Promise<number[]>;
+  userGroups(): Promise<ZulipUserGroup[]>;
+  /** 群里的话题（`GET /users/me/{stream_id}/topics`），按最新消息倒序。 */
+  streamTopics(streamId: number): Promise<ZulipTopic[]>;
   /** 本人在线状态上报（合同 §3 允许清单 `POST /users/me/presence`）。 */
   reportPresence(status: 'active' | 'idle'): Promise<void>;
 }
@@ -186,6 +199,33 @@ export function createHttpTransport(): ImTransport {
       });
     },
     upload: uploadFile,
+    async streamMembers(streamId) {
+      return (await zulip<{ subscribers: number[] }>('GET', `/streams/${streamId}/members`)).subscribers;
+    },
+    async setSubscriptionProperty(streamId, property, value) {
+      await zulip<unknown>('POST', '/users/me/subscriptions/properties', {
+        form: formBody({ subscription_data: [{ stream_id: streamId, property, value }] }),
+      });
+    },
+    async addMembers(streamName, userIds) {
+      await zulip<unknown>('POST', '/users/me/subscriptions', {
+        form: formBody({ subscriptions: [{ name: streamName }], principals: userIds }),
+      });
+    },
+    async leaveStream(streamName) {
+      await zulip<unknown>('DELETE', '/users/me/subscriptions', { form: formBody({ subscriptions: [streamName] }) });
+    },
+    async userChannels(userId) {
+      return (await zulip<{ subscribed_channel_ids: number[] }>('GET', `/users/${userId}/channels`)).subscribed_channel_ids;
+    },
+    async userGroups() {
+      return (await zulip<{ user_groups: ZulipUserGroup[] }>('GET', '/user_groups')).user_groups;
+    },
+    async streamTopics(streamId) {
+      return (await zulip<{ topics: ZulipTopic[] }>('GET', `/users/me/${streamId}/topics`, {
+        query: { allow_empty_topic_name: true },
+      })).topics;
+    },
     async reportPresence(status) {
       await zulip<unknown>('POST', '/users/me/presence', {
         form: formBody({ status, ping_only: true, new_user_input: status === 'active' }),

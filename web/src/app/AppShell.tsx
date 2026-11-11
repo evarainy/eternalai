@@ -765,7 +765,7 @@ export function AppShell() {
               <div className={styles.popBody}>
                 <p className={styles.popEmpty}>这里现在是空的。</p>
                 <p className={styles.popHint}>
-                  系统还不会给你发提醒。
+                  系统还不会给你发提醒。单位消息的新消息与未读，看左侧「消息」上的数字。
                 </p>
                 <p className={styles.popHint}>
                   要办的事请看

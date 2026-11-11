@@ -23,7 +23,22 @@ export interface ZulipUser {
   avatar_url: string | null;
   is_active: boolean;
   is_bot: boolean;
+  /** 本人可见时才有的真实邮箱；不可见时 `email` 只是内部占位地址，不展示。 */
+  delivery_email?: string | null;
   profile_data?: Record<string, ZulipProfileValue>;
+}
+
+export interface ZulipUserGroup {
+  id: number;
+  name: string;
+  description: string;
+  members: number[];
+  is_system_group: boolean;
+}
+
+export interface ZulipTopic {
+  name: string;
+  max_id: number;
 }
 
 export interface ZulipProfileField {

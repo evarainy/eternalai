@@ -371,12 +371,13 @@ function onUserTopic(state: ImState, event: ZulipEvent): ImState {
   return { ...state, topicPolicies: { ...state.topicPolicies, [`${streamId}:${topic}`]: policy } };
 }
 
-export function profileFieldIds(fields: ZulipProfileField[]): Pick<ImState, 'deptFieldId' | 'titleFieldId'> {
-  const find = (name: string) => {
-    const field = fields.find((item) => item.name === name);
-    return field ? String(field.id) : null;
+export function profileFieldIds(
+  fields: ZulipProfileField[],
+): Pick<ImState, 'deptFieldId' | 'titleFieldId' | 'profileFieldByName'> {
+  const profileFieldByName = Object.fromEntries(fields.map((field) => [field.name, String(field.id)]));
+  return {
+    deptFieldId: profileFieldByName['部门'] ?? null, titleFieldId: profileFieldByName['职务'] ?? null, profileFieldByName,
   };
-  return { deptFieldId: find('部门'), titleFieldId: find('职务') };
 }
 
 function applyEvent(state: ImState, event: ZulipEvent): ImState {

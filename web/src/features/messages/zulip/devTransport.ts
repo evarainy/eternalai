@@ -320,6 +320,41 @@ export function createDevTransport(): ImTransport {
     },
     async deleteQueue() {},
     async reportPresence() {},
+    async streamMembers(streamId) {
+      return subscriptions.find((item) => item.stream_id === streamId)?.subscribers ?? [];
+    },
+    async setSubscriptionProperty(streamId, property, value) {
+      const sub = subscriptions.find((item) => item.stream_id === streamId);
+      if (sub) sub[property] = value;
+      emit({ type: 'subscription', op: 'update', stream_id: streamId, property, value });
+    },
+    async addMembers(streamName, userIds) {
+      const sub = subscriptions.find((item) => item.name === streamName);
+      if (!sub) return;
+      sub.subscribers = [...new Set([...(sub.subscribers ?? []), ...userIds])];
+      emit({ type: 'subscription', op: 'peer_add', stream_ids: [sub.stream_id], user_ids: userIds });
+    },
+    async leaveStream(streamName) {
+      const sub = subscriptions.find((item) => item.name === streamName);
+      if (!sub) return;
+      subscriptions = subscriptions.filter((item) => item !== sub);
+      emit({ type: 'subscription', op: 'remove', subscriptions: [{ stream_id: sub.stream_id, name: sub.name }] });
+    },
+    async userChannels(userId) {
+      return subscriptions.filter((item) => item.subscribers?.includes(userId)).map((item) => item.stream_id);
+    },
+    async userGroups() {
+      return [{ id: 1, name: '规划处', description: '合成用户组', members: [2, 3], is_system_group: false }];
+    },
+    async streamTopics(streamId) {
+      const topics = new Map<string, number>();
+      for (const message of messages) {
+        if (message.type === 'stream' && message.stream_id === streamId) {
+          topics.set(message.subject, Math.max(topics.get(message.subject) ?? 0, message.id));
+        }
+      }
+      return [...topics].map(([name, max_id]) => ({ name, max_id })).sort((a, b) => b.max_id - a.max_id);
+    },
     async messages(query) {
       const matchTerm = (message: ZulipMessage, term: ZulipNarrowTerm): boolean => {
         if (term.operator === 'channel') return message.type === 'stream' && message.stream_id === term.operand;

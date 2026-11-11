@@ -341,3 +341,12 @@
   font: inherit;
   font-size: 12.5px;
 }
+
+.avatarButton {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}

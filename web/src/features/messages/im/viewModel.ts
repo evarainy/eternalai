@@ -30,6 +30,23 @@ function profileValue(state: ImState, userId: number, fieldId: string | null): s
   return value ? value : null;
 }
 
+/** 按字段名称取自定义资料字段（例如「办公电话」）；组织里没有这个字段或此人没填时为 null。 */
+export function userProfileField(state: ImState, userId: number, name: string): string | null {
+  return profileValue(state, userId, state.profileFieldByName[name] ?? null);
+}
+
+/** 资料行：没有值的字段整行不显示（FE_PLAN §3 单聊头部与资料卡一行）。 */
+export function profileRows(state: ImState, userId: number): [string, string][] {
+  const user = state.users[userId];
+  const rows: [string, string | null | undefined][] = [
+    ['部门', userDept(state, userId)],
+    ['职务', userTitle(state, userId)],
+    ['办公电话', userProfileField(state, userId, '办公电话')],
+    ['邮箱', user?.delivery_email],
+  ];
+  return rows.filter((row): row is [string, string] => Boolean(row[1]));
+}
+
 export function userDept(state: ImState, userId: number): string | null {
   return profileValue(state, userId, state.deptFieldId);
 }

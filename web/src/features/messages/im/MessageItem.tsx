@@ -7,6 +7,7 @@ import type { ZulipMessage } from '../zulip/types';
 import { MessageMenu } from './MessageMenu';
 import { Avatar } from './Avatar';
 import { MessageBody } from './MessageBody';
+import { ProfileCard } from './ProfileCard';
 import { useSelection } from './selectionStore';
 import { clockTime, groupReactions, personAvatar, separatorTime, userDept, userName } from './viewModel';
 import styles from './MessageItem.module.css';
@@ -48,7 +49,13 @@ export function MessageItem({ conversationKey, highlighted, message, state }: {
       {selecting ? (
         <span aria-hidden="true" className={styles.check} data-checked={selected ? 'true' : 'false'} />
       ) : null}
-      <Avatar avatar={personAvatar(state, message.sender_id)} size={36} />
+      {mine || selecting ? <Avatar avatar={personAvatar(state, message.sender_id)} size={36} /> : (
+        <ProfileCard userId={message.sender_id}>
+          <button aria-label={`${userName(state, message.sender_id)}的资料`} className={styles.avatarButton} type="button">
+            <Avatar avatar={personAvatar(state, message.sender_id)} size={36} />
+          </button>
+        </ProfileCard>
+      )}
       <div className={styles.body} title={mine ? separatorTime(message.timestamp) : undefined}>
         {mine ? null : (
           <div className={styles.name}>

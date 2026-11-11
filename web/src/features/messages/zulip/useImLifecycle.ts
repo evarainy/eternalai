@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { configurationApiV1ImContextConfigurationGet } from '../../../generated/im-context/im-context';
+import { useAIDockStore } from '../../../stores/aiDockStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { configureIM, imBridgeBlocked, imLogoutInProgress, registerIMView } from '../hostBridge';
-import { disableIm, resetIm, setImRestart, startIm, useImStore } from './imStore';
+import { disableIm, locateMessage, resetIm, setImRestart, startIm, useImStore } from './imStore';
 import { setImUpstreamOrigin } from './links';
 import { createHttpTransport } from './transport';
 import type { ImTransport } from './transport';
@@ -25,6 +27,7 @@ const devTransport = import.meta.env.DEV && import.meta.env.VITE_IM_DEV_DATA ===
 export function useImLifecycle(): void {
   const status = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (status !== 'authenticated' || imLogoutInProgress() || imBridgeBlocked()) return;
@@ -34,8 +37,15 @@ export function useImLifecycle(): void {
       live = false;
       resetIm();
     };
-    // 返回原消息的同页定位入口在 lane 4 接入（FE_PLAN §5.3 最后一条）。
-    const unregister = registerIMView(freeze, () => undefined);
+    // 返回原消息（FE_PLAN §5.3）：hostBridge 已按固定上游 origin 校验 deep_link，这里取 near 后的消息 id，
+    // 切到消息页并按锚点打开所在会话。
+    const unregister = registerIMView(freeze, (link) => {
+      const near = /\/near\/(\d+)/.exec(new URL(link).hash);
+      if (!near || !isCurrent()) return;
+      navigate('/messages');
+      useAIDockStore.getState().closeDock();
+      void locateMessage(Number(near[1])).catch(() => undefined);
+    });
     const start = async () => {
       try {
         const config = await configurationApiV1ImContextConfigurationGet();
@@ -67,5 +77,5 @@ export function useImLifecycle(): void {
       setImUpstreamOrigin(null);
       resetIm();
     };
-  }, [status, generation]);
+  }, [status, generation, navigate]);
 }

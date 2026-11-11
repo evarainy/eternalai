@@ -42,6 +42,8 @@ export interface ImState {
   selfId: number;
   users: Record<number, ZulipUser>;
   deptFieldId: string | null;
+  /** 自定义资料字段：名称 → 字段 id（资料卡按名称取「办公电话」等）。 */
+  profileFieldByName: Record<string, string>;
   titleFieldId: string | null;
   subscriptions: Record<number, ZulipSubscription>;
   /** 话题偏好，键为 `群id:话题`：1 静音、2 取消静音、3 关注；与群静音一起决定未读是否计入。 */
@@ -74,7 +76,7 @@ export interface ImState {
 
 const EMPTY: Omit<ImState, 'session'> = {
   phase: 'idle', failure: null, offline: false, identity: null, queueId: null, selfId: 0, users: {},
-  deptFieldId: null, titleFieldId: null, subscriptions: {}, topicPolicies: {}, unreadTopics: {}, presences: {},
+  deptFieldId: null, titleFieldId: null, profileFieldByName: {}, subscriptions: {}, topicPolicies: {}, unreadTopics: {}, presences: {},
   presenceThreshold: 140, presencePingSeconds: 60, clock: 0,
   serverSkew: 0, enterSends: true, conversations: {}, latest: {}, order: {}, unread: {}, mentions: {}, windows: {},
   selected: null, anchor: null, drafts: {}, realmEmoji: [], maxUploadMib: 25, maxMessageLength: 10000, manualUnread: {},
@@ -629,6 +631,31 @@ export async function searchConversation(key: ConversationKey, query: string): P
   return result.messages.reverse();
 }
 
+/**
+ * 返回原消息（AIDock「返回原消息」、消息链接）：按消息 id 找到它所在的会话，按锚点打开。已加载的窗口里有
+ * 就直接用，否则以本人权限读这一条确定会话。找不到（已删除或无权查看）时返回 false。
+ */
+export async function locateMessage(messageId: number): Promise<boolean> {
+  const state = useImStore.getState();
+  for (const [key, window] of Object.entries(state.windows)) {
+    if (window?.messages.some((message) => message.id === messageId)) {
+      openConversation(key as ConversationKey, messageId);
+      return true;
+    }
+  }
+  const { session } = state;
+  const result = await requireTransport().messages({ anchor: messageId, numBefore: 0, numAfter: 0, narrow: [] });
+  const message = result.messages.find((item) => item.id === messageId);
+  if (!message || !isCurrent(session)) return false;
+  const conversation = messageConversation(message, useImStore.getState().selfId);
+  useImStore.setState((current) => ({
+    conversations: current.conversations[conversation.key]
+      ? current.conversations : { ...current.conversations, [conversation.key]: conversation },
+  }));
+  openConversation(conversation.key, messageId);
+  return true;
+}
+
 /** 单聊会话：已存在就沿用，否则先在列表里建一行；返回会话键，不打开。 */
 export function ensureDirect(userIds: number[]): ConversationKey {
   const state = useImStore.getState();
@@ -665,6 +692,47 @@ export async function createGroup(name: string, userIds: number[]): Promise<void
     order: { ...state.order, [conversation.key]: Math.max(0, ...Object.values(state.order).map((value) => value ?? 0)) },
   }));
   openConversation(conversation.key);
+}
+
+/* ---------- 群设置、联系人（lane 4）：只提交请求，界面以随后的 subscription 事件为准 ---------- */
+
+export function readStreamMembers(streamId: number): Promise<number[]> {
+  return requireTransport().streamMembers(streamId);
+}
+
+export function setStreamFlag(streamId: number, property: 'is_muted' | 'pin_to_top', value: boolean): Promise<void> {
+  return requireTransport().setSubscriptionProperty(streamId, property, value);
+}
+
+export function addStreamMembers(streamName: string, userIds: number[]): Promise<void> {
+  return requireTransport().addMembers(streamName, userIds);
+}
+
+export function leaveStream(streamName: string): Promise<void> {
+  return requireTransport().leaveStream(streamName);
+}
+
+export function readUserChannels(userId: number): Promise<number[]> {
+  return requireTransport().userChannels(userId);
+}
+
+export function readUserGroups() {
+  return requireTransport().userGroups();
+}
+
+export function readStreamTopics(streamId: number) {
+  return requireTransport().streamTopics(streamId);
+}
+
+/** 群文件：本群带附件的消息，最新 50 条。 */
+export async function readStreamFiles(key: ConversationKey): Promise<ZulipMessage[]> {
+  const conversation = useImStore.getState().conversations[key];
+  if (!conversation) return [];
+  const result = await requireTransport().messages({
+    anchor: 'newest', numBefore: 50, numAfter: 0,
+    narrow: [...conversationNarrow(conversation), { operator: 'has', operand: 'attachment' }],
+  });
+  return result.messages.reverse();
 }
 
 export function uploadAttachment(file: File, onProgress: (ratio: number) => void, signal: AbortSignal) {

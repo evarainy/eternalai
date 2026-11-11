@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 import { useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { Icon } from '../../../shared/ui/Icon';
 import { isMergedRecord } from '../zulip/forward';
@@ -27,6 +29,9 @@ purifier.addHook('afterSanitizeAttributes', (node) => {
     const rewritten = imFileUrl(href);
     if (rewritten) {
       node.setAttribute('href', rewritten);
+    } else if (/^https?:/i.test(href) && new URL(href).origin === window.location.origin) {
+      // 工作台自己的页面（送核卡片的「回到 EternalAI 核实」）：本页内跳转。
+      node.setAttribute('data-internal', 'true');
     } else if (/^https?:/i.test(href)) {
       node.setAttribute('target', '_blank');
       node.setAttribute('rel', 'noopener noreferrer');
@@ -80,8 +85,20 @@ function MergedRecord({ clean, mine }: { clean: string; mine: boolean }) {
   );
 }
 
+/** 点到净化时标记为工作台内部的链接时，在本页内跳转（例如打开送核抽屉）。 */
+function useInternalLinks() {
+  const navigate = useNavigate();
+  return (event: MouseEvent<HTMLDivElement>) => {
+    const link = (event.target as Element).closest('a[data-internal]');
+    if (!(link instanceof HTMLAnchorElement)) return;
+    event.preventDefault();
+    navigate(`${link.pathname}${link.search}`);
+  };
+}
+
 export function MessageBody({ html, mine }: { html: string; mine: boolean }) {
   const shape = useMemo(() => messageShape(html), [html]);
+  const onClick = useInternalLinks();
   const clean = useMemo(() => (shape.kind === 'html' ? purifier.sanitize(html, SANITIZE_OPTIONS) : ''), [html, shape]);
 
   if (shape.kind === 'file') {
@@ -114,6 +131,7 @@ export function MessageBody({ html, mine }: { html: string; mine: boolean }) {
   if (isMergedRecord(clean)) return <MergedRecord clean={clean} mine={mine} />;
   return (
     <div
+      onClick={onClick}
       className={styles.bubble}
       data-mine={mine ? 'true' : 'false'}
       // 已经过 DOMPurify 净化，这是本模块唯一的 HTML 插入点。
