@@ -76,6 +76,8 @@ export interface ZulipRegisterResponse {
   user_id: number;
   event_queue_longpoll_timeout_seconds: number;
   max_file_upload_size_mib: number;
+  /** 单条消息正文上限（Unicode 字符数），超出时服务端截断。 */
+  max_message_length?: number;
   realm_users: ZulipUser[];
   custom_profile_fields: ZulipProfileField[];
   subscriptions: ZulipSubscription[];

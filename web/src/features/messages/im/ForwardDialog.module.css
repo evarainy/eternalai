@@ -1,0 +1,27 @@
+.summary {
+  margin: 0 0 10px;
+  color: #5b6474;
+  font-size: 13px;
+}
+
+.search {
+  margin: 10px 0 8px;
+}
+
+.targets {
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.targets li {
+  padding: 4px 2px;
+}
+
+.target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

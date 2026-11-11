@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Icon } from '../../../shared/ui/Icon';
+import { isMergedRecord } from '../zulip/forward';
 import { imDownloadUrl, imFileUrl } from '../zulip/links';
 import { messageShape } from './viewModel';
 import styles from './MessageItem.module.css';
@@ -65,6 +66,20 @@ function fileLabel(ext: string): string {
   return ext ? ext.toUpperCase().slice(0, 4) : 'FILE';
 }
 
+/** 合并转发的「聊天记录」：默认折叠成卡片，点开看全部（FE_PLAN §11）。正文仍是同一份净化后的 HTML。 */
+function MergedRecord({ clean, mine }: { clean: string; mine: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.bubble} data-merged={open ? 'open' : 'closed'} data-mine={mine ? 'true' : 'false'}>
+      {/* 已经过 DOMPurify 净化。 */}
+      <div className={styles.mergedBody} dangerouslySetInnerHTML={{ __html: clean }} />
+      <button className={styles.mergedToggle} onClick={() => setOpen((value) => !value)} type="button">
+        {open ? '收起' : '展开全部'}
+      </button>
+    </div>
+  );
+}
+
 export function MessageBody({ html, mine }: { html: string; mine: boolean }) {
   const shape = useMemo(() => messageShape(html), [html]);
   const clean = useMemo(() => (shape.kind === 'html' ? purifier.sanitize(html, SANITIZE_OPTIONS) : ''), [html, shape]);
@@ -96,6 +111,7 @@ export function MessageBody({ html, mine }: { html: string; mine: boolean }) {
       ? <a className={styles.image} href={href} rel="noopener noreferrer" target="_blank" title={shape.title}>{image}</a>
       : <div className={styles.image}>{image}</div>;
   }
+  if (isMergedRecord(clean)) return <MergedRecord clean={clean} mine={mine} />;
   return (
     <div
       className={styles.bubble}

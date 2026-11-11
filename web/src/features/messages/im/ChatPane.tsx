@@ -6,6 +6,8 @@ import { ChatSearch } from './ChatSearch';
 import { useComposerBridge } from './composerStore';
 import { Composer } from './Composer';
 import { MessageList } from './MessageList';
+import { SelectionBar } from './SelectionBar';
+import { useSelection } from './selectionStore';
 import {
   PRESENCE_LABEL, conversationAvatar, conversationMemberCount, conversationTitle, userDept, userPresence, userTitle,
 } from './viewModel';
@@ -21,6 +23,7 @@ export function ChatPane() {
   useEffect(() => {
     setSearching(false);
     useComposerBridge.getState().reset();
+    if (useSelection.getState().key !== key) useSelection.getState().clear();
   }, [key]);
 
   // Ctrl+F（ImWorkspace 只在焦点处于 IM 区时转发）与输入框工具栏的「聊天记录」。
@@ -30,6 +33,7 @@ export function ChatPane() {
     return () => window.removeEventListener('eternalai:im-search', open);
   }, []);
 
+  const selecting = useSelection((selection) => selection.key !== null && selection.key === key);
   const conversation = key ? state.conversations[key] : undefined;
   if (!key || !conversation) {
     return <div className={styles.empty}>{state.phase === 'ready' ? '选择左侧的会话开始聊天' : ''}</div>;
@@ -78,7 +82,9 @@ export function ChatPane() {
         {searching ? <ChatSearch conversationKey={key} onClose={() => setSearching(false)} /> : null}
         <MessageList conversationKey={key} messageWindow={state.windows[key]} state={state} />
       </div>
-      <Composer conversationKey={key} enterSends={state.enterSends} key={key} placeholder={`发给 ${title}`} />
+      {selecting
+        ? <SelectionBar conversationKey={key} />
+        : <Composer conversationKey={key} enterSends={state.enterSends} key={key} placeholder={`发给 ${title}`} />}
     </>
   );
 }

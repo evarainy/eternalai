@@ -359,6 +359,15 @@ export function createDevTransport(): ImTransport {
       emit({ type: 'message', message: structuredClone(message), flags: ['read'] });
       return { id: message.id };
     },
+    async rawContents(messageIds) {
+      return messageIds.map((id) => {
+        const message = find(id);
+        return {
+          ...structuredClone(message),
+          content: rawById.get(id) ?? new DOMParser().parseFromString(message.content, 'text/html').body.textContent ?? '',
+        };
+      });
+    },
     async rawContent(messageId) {
       const message = find(messageId);
       return rawById.get(messageId) ?? new DOMParser().parseFromString(message.content, 'text/html').body.textContent ?? '';

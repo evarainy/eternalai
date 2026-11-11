@@ -1,6 +1,7 @@
 import { ApiError, requestWithResponse } from '../../../api/mutator';
 import type {
-  ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEventsResponse, ZulipMessagesQuery, ZulipMessagesResponse,
+  ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEventsResponse, ZulipMessage, ZulipMessagesQuery, ZulipMessagesResponse,
+  ZulipNarrowTerm,
   ZulipRegisterResponse, ZulipSendRequest, ZulipUploadResult,
 } from './types';
 import { uploadFile } from './upload';
@@ -19,6 +20,8 @@ export interface ImTransport {
   send(request: ZulipSendRequest): Promise<{ id: number }>;
   /** 编辑时取原文：同一 GET /messages 加 apply_markdown=false（合同 §3.2）。 */
   rawContent(messageId: number): Promise<string>;
+  /** 转发时批量取原文：12.3 `message_ids` 精确读取，带会话 narrow 以覆盖入群前的共享历史。 */
+  rawContents(messageIds: number[], narrow: ZulipNarrowTerm[]): Promise<ZulipMessage[]>;
   editMessage(messageId: number, content: string): Promise<void>;
   deleteMessage(messageId: number): Promise<void>;
   react(messageId: number, emoji: ZulipEmojiRef, add: boolean): Promise<void>;
@@ -135,6 +138,15 @@ export function createHttpTransport(): ImTransport {
       const message = result.messages.find((item) => item.id === messageId);
       if (!message) throw new ApiError(404, 'im_message_not_found', '这条消息已不存在或无权查看。');
       return message.content;
+    },
+    async rawContents(messageIds, narrow) {
+      const result = await zulip<{ messages: ZulipMessage[] }>('GET', '/messages', {
+        query: {
+          message_ids: JSON.stringify(messageIds), narrow: JSON.stringify(narrow), apply_markdown: false,
+          allow_empty_topic_name: true,
+        },
+      });
+      return result.messages;
     },
     async editMessage(messageId, content) {
       await zulip<unknown>('PATCH', `/messages/${messageId}`, { form: formBody({ content }) });

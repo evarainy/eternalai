@@ -9,6 +9,7 @@ import type { ConversationKey } from '../zulip/narrow';
 import { messageLink } from '../zulip/links';
 import type { ZulipMessage } from '../zulip/types';
 import { useComposerBridge } from './composerStore';
+import { useSelection } from './selectionStore';
 import { QUICK_REACTIONS, emojiChar, unicodeEmojiRef } from './emoji';
 import { messageText, userName } from './viewModel';
 import styles from './MessageMenu.module.css';
@@ -45,6 +46,7 @@ export function MessageMenu({ children, conversationKey, message }: {
     { key: 'star', label: starred ? '取消收藏' : '收藏', icon: <Icon name="star" size={16} /> },
     ...(mine ? [] : [{ key: 'unread', label: '标为未读', icon: <Icon name="mail" size={16} /> }]),
     { key: 'link', label: '复制消息链接', icon: <Icon name="link" size={16} /> },
+    { key: 'select', label: '多选', icon: <Icon name="checkdouble" size={16} /> },
     { type: 'divider' as const },
     {
       key: 'ai', label: '交给我的 AI', icon: <Icon name="spark" size={16} />, disabled: true,
@@ -71,6 +73,8 @@ export function MessageMenu({ children, conversationKey, message }: {
       run(() => toggleStar(message), '收藏没有成功，请重试');
     } else if (key === 'unread') {
       run(() => markUnread(conversationKey, message), '标为未读没有成功，请重试');
+    } else if (key === 'select') {
+      useSelection.getState().start(conversationKey, message.id);
     } else if (key === 'link') {
       copy(messageLink(message.id), '已复制消息链接');
     } else if (key === 'edit') {

@@ -1,11 +1,13 @@
 import { App as AntApp } from 'antd';
-import { toggleReaction } from '../zulip/imStore';
+import type { MouseEvent } from 'react';
+import { toggleReaction, useImStore } from '../zulip/imStore';
 import type { ImState } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import type { ZulipMessage } from '../zulip/types';
 import { MessageMenu } from './MessageMenu';
 import { Avatar } from './Avatar';
 import { MessageBody } from './MessageBody';
+import { useSelection } from './selectionStore';
 import { clockTime, groupReactions, personAvatar, separatorTime, userDept, userName } from './viewModel';
 import styles from './MessageItem.module.css';
 
@@ -20,14 +22,32 @@ export function MessageItem({ conversationKey, highlighted, message, state }: {
   const mine = message.sender_id === state.selfId;
   const dept = mine ? null : userDept(state, message.sender_id);
   const reactions = groupReactions(message, state.selfId);
+  const selecting = useSelection((selection) => selection.key === conversationKey);
+  const selected = useSelection((selection) => selection.ids.includes(message.id));
+
+  // 多选时点消息任意处即勾选（链接、表态都不触发），按住 Shift 连选。
+  const onPick = (event: MouseEvent) => {
+    if (!selecting) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const ordered = (useImStore.getState().windows[conversationKey]?.messages ?? []).map((item) => item.id);
+    useSelection.getState().toggle(message.id, event.shiftKey, ordered);
+  };
+
   return (
     <article
       aria-label={`${mine ? '我' : userName(state, message.sender_id)} ${separatorTime(message.timestamp)}`}
+      aria-selected={selecting ? selected : undefined}
       className={styles.message}
       data-message-id={message.id}
+      data-selecting={selecting ? 'true' : 'false'}
+      onClickCapture={onPick}
       data-highlighted={highlighted ? 'true' : 'false'}
       data-self={mine ? 'true' : 'false'}
     >
+      {selecting ? (
+        <span aria-hidden="true" className={styles.check} data-checked={selected ? 'true' : 'false'} />
+      ) : null}
       <Avatar avatar={personAvatar(state, message.sender_id)} size={36} />
       <div className={styles.body} title={mine ? separatorTime(message.timestamp) : undefined}>
         {mine ? null : (

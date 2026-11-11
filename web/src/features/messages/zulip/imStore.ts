@@ -67,6 +67,7 @@ export interface ImState {
   drafts: Partial<Record<number, StoredDraft>>;
   realmEmoji: ZulipRealmEmoji[];
   maxUploadMib: number;
+  maxMessageLength: number;
   /** 本人点过「标为未读」的消息：离开这个会话之前，自动标读不处理它们。 */
   manualUnread: Record<number, true>;
 }
@@ -76,7 +77,7 @@ const EMPTY: Omit<ImState, 'session'> = {
   deptFieldId: null, titleFieldId: null, subscriptions: {}, topicPolicies: {}, unreadTopics: {}, presences: {},
   presenceThreshold: 140, presencePingSeconds: 60, clock: 0,
   serverSkew: 0, enterSends: true, conversations: {}, latest: {}, order: {}, unread: {}, mentions: {}, windows: {},
-  selected: null, anchor: null, drafts: {}, realmEmoji: [], maxUploadMib: 25, manualUnread: {},
+  selected: null, anchor: null, drafts: {}, realmEmoji: [], maxUploadMib: 25, maxMessageLength: 10000, manualUnread: {},
 };
 
 export const useImStore = create<ImState>()(() => ({ ...EMPTY, session: 0 }));
@@ -163,6 +164,7 @@ function indexSnapshot(register: ZulipRegisterResponse): Partial<ImState> {
       .map((draft) => [draft.id, draft])),
     realmEmoji: Object.values(register.realm_emoji ?? {}).filter((emoji) => !emoji.deactivated),
     maxUploadMib: register.max_file_upload_size_mib,
+    maxMessageLength: register.max_message_length ?? 10000,
   };
 }
 
@@ -548,6 +550,18 @@ export async function sendMessage(key: ConversationKey, content: string): Promis
 
 export function readRawContent(messageId: number): Promise<string> {
   return requireTransport().rawContent(messageId);
+}
+
+/** 按 id 取一组消息的原文（转发用），按 id 升序返回；缺任何一条就报错，不拿剩下的几条当成功。 */
+export async function readRawMessages(key: ConversationKey, messageIds: number[]): Promise<ZulipMessage[]> {
+  const conversation = useImStore.getState().conversations[key];
+  if (!conversation) throw new ApiError(409, 'im_not_ready', '会话已不可用。');
+  const messages = await requireTransport().rawContents(messageIds, conversationNarrow(conversation));
+  const found = new Set(messages.map((message) => message.id));
+  if (messageIds.some((id) => !found.has(id))) {
+    throw new ApiError(404, 'im_message_not_found', '有消息已被撤回或无权查看，请重新选择。');
+  }
+  return [...messages].sort((a, b) => a.id - b.id);
 }
 
 /** 编辑。结果不明确时只读核对一次：取回原文与本次内容一致即算成功，否则抛 UnconfirmedResult，不重发。 */
