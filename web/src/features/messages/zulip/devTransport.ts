@@ -39,7 +39,7 @@ const USERS: ZulipUser[] = [
 function stream(id: number, name: string, subscribers: number[], extra: Partial<ZulipSubscription> = {}): ZulipSubscription {
   return {
     stream_id: id, name, description: '', invite_only: true, is_muted: false, pin_to_top: false,
-    color: '#76ce90', subscribers, ...extra,
+    color: '#76ce90', subscribers, topics_policy: 'empty_topic_only', ...extra,
   };
 }
 
@@ -48,6 +48,8 @@ const SEED_SUBSCRIPTIONS: ZulipSubscription[] = [
   stream(11, '安全生产检查小组', [1, 4, 8]),
   stream(12, '办公室全体', [1, 2, 3, 4, 5, 6, 7, 8], { is_muted: true }),
   stream(13, '财务审核群', [1, 3, 5], { is_muted: true }),
+  // 迁移来的旧群：沿用组织默认规则，按话题讨论（F41）。
+  stream(14, '规划业务交流', [1, 2, 4, 6], { topics_policy: 'inherit' }),
 ];
 
 const DAY = 86400;
@@ -110,10 +112,12 @@ export function createDevTransport(): ImTransport {
     wake?.();
   }
 
-  function streamMessage(streamId: number, sender: number, timestamp: number, content: string, flags: string[] = ['read']): void {
+  function streamMessage(
+    streamId: number, sender: number, timestamp: number, content: string, flags: string[] = ['read'], subject = '',
+  ): void {
     const sub = subscriptions.find((item) => item.stream_id === streamId);
     const message: ZulipStreamMessage = {
-      id: nextId++, type: 'stream', stream_id: streamId, display_recipient: sub?.name ?? '', subject: '',
+      id: nextId++, type: 'stream', stream_id: streamId, display_recipient: sub?.name ?? '', subject,
       sender_id: sender, sender_full_name: user(sender).full_name, content, timestamp,
       flags: sender === SELF ? ['read'] : flags, reactions: [],
     };
@@ -177,6 +181,10 @@ export function createDevTransport(): ImTransport {
     directMessage(3, [SELF], at(-1, 15, 2), upload('gh/i3', '2026年第四季度经费预算表.xlsx'));
     directMessage(9, [SELF], at(-3, 11, 0), p('已为你整理好会议纪要初稿，等你确认。'));
     streamMessage(13, 3, at(-3, 14, 10), p('报销单已退回，请补充发票原件。'), []);
+    streamMessage(14, 2, at(-2, 10, 5), p('控规调整的公示稿下周一挂网，请各自核对负责的地块。'), ['read'], '控规调整');
+    streamMessage(14, 4, at(-2, 10, 20), p('第 3、7 号地块的容积率我已经核过了。'), ['read'], '控规调整');
+    streamMessage(14, 6, at(-1, 14, 0), p('下周二的业务培训改在二楼小会议室。'), ['read'], '业务培训');
+    streamMessage(14, 2, at(-1, 15, 30), p('培训材料周一前发群里。'), ['read'], '业务培训');
     directMessage(7, [SELF], at(-3, 16, 45), p('收到，谢谢！'));
     directMessage(SELF, [5, 6], at(-4, 15, 30), p('周五的材料分工我整理好了，你们看下有没有遗漏。'));
 
@@ -343,6 +351,9 @@ export function createDevTransport(): ImTransport {
     async userChannels(userId) {
       return subscriptions.filter((item) => item.subscribers?.includes(userId)).map((item) => item.stream_id);
     },
+    async streamName(streamId) {
+      return subscriptions.find((item) => item.stream_id === streamId)?.name ?? `群 ${streamId}`;
+    },
     async userGroups() {
       return [{ id: 1, name: '规划处', description: '合成用户组', members: [2, 3], is_system_group: false }];
     },
@@ -368,6 +379,8 @@ export function createDevTransport(): ImTransport {
           const text = new DOMParser().parseFromString(message.content, 'text/html').body.textContent ?? '';
           return text.toLowerCase().includes(term.operand.toLowerCase());
         }
+        if (term.operator === 'has') return term.operand === 'attachment' && message.content.includes('/user_uploads/');
+        if (term.operator === 'topic') return message.type === 'stream' && message.subject === term.operand;
         return false;
       };
       const matched = messages.filter((message) => query.narrow.every((term) => matchTerm(message, term)));
@@ -387,7 +400,7 @@ export function createDevTransport(): ImTransport {
     },
     async send({ target, content }) {
       const timestamp = Math.floor(Date.now() / 1000);
-      if (target.type === 'stream') streamMessage(target.streamId, SELF, timestamp, render(content));
+      if (target.type === 'stream') streamMessage(target.streamId, SELF, timestamp, render(content), ['read'], target.topic);
       else directMessage(SELF, target.userIds, timestamp, render(content));
       const message = messages[messages.length - 1]!;
       rawById.set(message.id, content);

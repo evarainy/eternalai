@@ -57,6 +57,8 @@ export interface ZulipSubscription {
   pin_to_top: boolean;
   color: string;
   subscribers?: number[];
+  /** 本群的空话题规则（11.0 起）；新群为 `empty_topic_only`。 */
+  topics_policy?: 'inherit' | 'allow_empty_topic' | 'disable_empty_topic' | 'empty_topic_only';
 }
 
 export interface ZulipRecentPrivateConversation {
@@ -182,7 +184,8 @@ export type ZulipNarrowTerm =
   | { operator: 'dm'; operand: number[] }
   | { operator: 'search'; operand: string }
   | { operator: 'is'; operand: string }
-  | { operator: 'has'; operand: string };
+  | { operator: 'has'; operand: string }
+  | { operator: 'topic'; operand: string };
 
 export interface ZulipMessagesQuery {
   anchor: number | 'newest' | 'oldest' | 'first_unread';

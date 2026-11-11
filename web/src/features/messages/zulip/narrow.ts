@@ -33,9 +33,9 @@ export function conversationNarrow(conversation: Conversation): ZulipNarrowTerm[
     : [{ operator: 'dm', operand: conversation.userIds }];
 }
 
-/** 新群只用空话题（`topics_policy=empty_topic_only`）；旧的多话题群在 lane 4 接话题选择。 */
-export function conversationTarget(conversation: Conversation): ZulipSendTarget {
+/** 新群只用空话题（`topics_policy=empty_topic_only`）；旧的多话题群由发送人在输入框上方选定话题。 */
+export function conversationTarget(conversation: Conversation, topic = ''): ZulipSendTarget {
   return conversation.kind === 'stream'
-    ? { type: 'stream', streamId: conversation.streamId, topic: '' }
+    ? { type: 'stream', streamId: conversation.streamId, topic }
     : { type: 'direct', userIds: conversation.userIds };
 }

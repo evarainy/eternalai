@@ -319,6 +319,9 @@ function onStream(state: ImState, event: ZulipEvent): ImState {
   if (property === 'name' && typeof value === 'string') return updateSubscription(state, streamId, { name: value });
   if (property === 'description' && typeof value === 'string') return updateSubscription(state, streamId, { description: value });
   if (property === 'invite_only') return updateSubscription(state, streamId, { invite_only: value === true });
+  if (property === 'topics_policy' && typeof value === 'string') {
+    return updateSubscription(state, streamId, { topics_policy: value as ZulipSubscription['topics_policy'] });
+  }
   return state;
 }
 

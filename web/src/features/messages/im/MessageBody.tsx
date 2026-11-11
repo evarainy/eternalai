@@ -7,6 +7,7 @@ import { Icon } from '../../../shared/ui/Icon';
 import { isMergedRecord } from '../zulip/forward';
 import { imDownloadUrl, imFileUrl } from '../zulip/links';
 import { messageShape } from './viewModel';
+import type { FileKind } from './viewModel';
 import styles from './MessageItem.module.css';
 
 /**
@@ -71,6 +72,10 @@ function fileLabel(ext: string): string {
   return ext ? ext.toUpperCase().slice(0, 4) : 'FILE';
 }
 
+export function FileIcon({ ext, kind }: { ext: string; kind: FileKind }) {
+  return <div aria-hidden="true" className={styles.fileIcon} data-kind={kind}>{fileLabel(ext)}</div>;
+}
+
 /** 合并转发的「聊天记录」：默认折叠成卡片，点开看全部（FE_PLAN §11）。正文仍是同一份净化后的 HTML。 */
 function MergedRecord({ clean, mine }: { clean: string; mine: boolean }) {
   const [open, setOpen] = useState(false);
@@ -105,7 +110,7 @@ export function MessageBody({ html, mine }: { html: string; mine: boolean }) {
     const url = imFileUrl(shape.href);
     return (
       <div className={styles.file}>
-        <div className={styles.fileIcon} data-kind={shape.fileKind}>{fileLabel(shape.ext)}</div>
+        <FileIcon ext={shape.ext} kind={shape.fileKind} />
         <div className={styles.fileText}>
           <div className={styles.fileName} title={shape.name}>{shape.name}</div>
           <div className={styles.fileMeta}>{shape.ext ? `${shape.ext.toUpperCase()} 文件` : '文件'}</div>

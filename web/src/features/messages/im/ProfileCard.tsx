@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 import { Popover } from 'antd';
 import { Icon } from '../../../shared/ui/Icon';
-import { startDirect, useImStore } from '../zulip/imStore';
+import { useImStore } from '../zulip/imStore';
 import { Avatar } from './Avatar';
 import { PRESENCE_LABEL, personAvatar, profileRows, userDept, userName, userPresence, userTitle } from './viewModel';
-import { useImView } from './viewStore';
+import { chatWith, useImView } from './viewStore';
 import styles from './ProfileCard.module.css';
 
 function Card({ userId }: { userId: number }) {
@@ -31,7 +31,7 @@ function Card({ userId }: { userId: number }) {
       ) : null}
       <div className={styles.actions}>
         {userId !== state.selfId ? (
-          <button className={styles.primary} onClick={() => startDirect([userId])} type="button">
+          <button className={styles.primary} onClick={() => chatWith([userId])} type="button">
             <Icon name="chat" size={15} />发消息
           </button>
         ) : null}

@@ -4,7 +4,7 @@ import { applyEvents, profileFieldIds } from './events';
 import type { ImTransport } from './transport';
 import type {
   ImIdentity, ZulipDraft, ZulipEmojiRef, ZulipEvent, ZulipMessage, ZulipPresence, ZulipRealmEmoji, ZulipRegisterResponse,
-  ZulipSubscription, ZulipUser,
+  ZulipNarrowTerm, ZulipSubscription, ZulipUser,
 } from './types';
 import {
   conversationNarrow, conversationTarget, dmConversation, messageConversation, streamConversation,
@@ -65,13 +65,18 @@ export interface ImState {
   windows: Partial<Record<ConversationKey, MessageWindow>>;
   selected: ConversationKey | null;
   /** 打开会话时要定位的消息（搜索命中、返回原消息、消息链接）。 */
-  anchor: { key: ConversationKey; messageId: number } | null;
+  /** 按锚点打开的消息；`fromSearch` 时横幅写「正在查看搜索结果所在位置」。 */
+  anchor: { key: ConversationKey; messageId: number; fromSearch?: boolean } | null;
   drafts: Partial<Record<number, StoredDraft>>;
   realmEmoji: ZulipRealmEmoji[];
   maxUploadMib: number;
   maxMessageLength: number;
   /** 本人点过「标为未读」的消息：离开这个会话之前，自动标读不处理它们。 */
   manualUnread: Record<number, true>;
+  /** 群里已知的话题名（`GET /users/me/{stream_id}/topics`），按最新消息倒序；打开旧群时读取。 */
+  streamTopics: Record<number, string[]>;
+  /** 多话题群当前只看某个话题；窗口按这个话题读取。换会话时取消。 */
+  topicFilter: { key: ConversationKey; topic: string } | null;
 }
 
 const EMPTY: Omit<ImState, 'session'> = {
@@ -80,6 +85,7 @@ const EMPTY: Omit<ImState, 'session'> = {
   presenceThreshold: 140, presencePingSeconds: 60, clock: 0,
   serverSkew: 0, enterSends: true, conversations: {}, latest: {}, order: {}, unread: {}, mentions: {}, windows: {},
   selected: null, anchor: null, drafts: {}, realmEmoji: [], maxUploadMib: 25, maxMessageLength: 10000, manualUnread: {},
+  streamTopics: {}, topicFilter: null,
 };
 
 export const useImStore = create<ImState>()(() => ({ ...EMPTY, session: 0 }));
@@ -386,7 +392,7 @@ async function loadWindow(key: ConversationKey, session: number, anchor?: number
   try {
     const result = await transport.messages({
       anchor: anchor ?? 'newest', numBefore: anchor ? 30 : 60, numAfter: anchor ? 30 : 0,
-      narrow: conversationNarrow(conversation),
+      narrow: [...conversationNarrow(conversation), ...topicNarrow(key)],
     }, controller.signal);
     if (!latestRequest()) return;
     const replay = eventLog.filter((entry) => entry.seq > startSeq).flatMap((entry) => entry.events);
@@ -411,6 +417,17 @@ async function loadWindow(key: ConversationKey, session: number, anchor?: number
   }
 }
 
+function withoutWindow(windows: ImState['windows'], key: ConversationKey): ImState['windows'] {
+  const next = { ...windows };
+  delete next[key];
+  return next;
+}
+
+function topicNarrow(key: ConversationKey): ZulipNarrowTerm[] {
+  const filter = useImStore.getState().topicFilter;
+  return filter?.key === key ? [{ operator: 'topic', operand: filter.topic }] : [];
+}
+
 /** 每个定位意图都作废同一会话此前的读取（即使这次命中缓存、不发请求）。 */
 function nextWindowRequest(key: ConversationKey): number {
   const sequence = (windowRequests.get(key) ?? 0) + 1;
@@ -422,11 +439,16 @@ function nextWindowRequest(key: ConversationKey): number {
  * 打开会话。滚动定位的优先级（FE_PLAN §2.1）：明确锚点 > 记住的位置 > 最新；锚点不在已加载窗口里时
  * 按锚点重读窗口。换到别的会话时，上一会话里「标为未读」的保护随之结束。
  */
-export function openConversation(key: ConversationKey, anchorMessageId?: number): void {
-  const state = useImStore.getState();
+export function openConversation(key: ConversationKey, anchorMessageId?: number, fromSearch = false): void {
+  let state = useImStore.getState();
+  // 离开按话题读取的会话、或要定位的消息可能不在当前话题时，取消话题筛选并丢掉按话题读的窗口。
+  if (state.topicFilter && (state.topicFilter.key !== key || anchorMessageId !== undefined)) {
+    useImStore.setState({ topicFilter: null, windows: withoutWindow(state.windows, state.topicFilter.key) });
+    state = useImStore.getState();
+  }
   useImStore.setState({
     selected: key,
-    anchor: anchorMessageId ? { key, messageId: anchorMessageId } : null,
+    anchor: anchorMessageId ? { key, messageId: anchorMessageId, fromSearch } : null,
     manualUnread: state.selected === key ? state.manualUnread : {},
   });
   const existing = state.windows[key];
@@ -442,6 +464,21 @@ export function openConversation(key: ConversationKey, anchorMessageId?: number)
       });
     }
   }
+}
+
+/** 多话题群只看某个话题（null 为全部话题）：按新的 narrow 重读窗口。 */
+export function setTopicFilter(key: ConversationKey, topic: string | null): void {
+  const state = useImStore.getState();
+  useImStore.setState({ topicFilter: topic === null ? null : { key, topic }, windows: withoutWindow(state.windows, key), anchor: null });
+  void loadWindow(key, state.session);
+}
+
+/** 读群里的话题名并记下（打开旧群、转发前核对是否多话题）。 */
+export async function loadStreamTopics(streamId: number): Promise<string[]> {
+  const { session } = useImStore.getState();
+  const names = (await requireTransport().streamTopics(streamId)).map((topic) => topic.name);
+  if (isCurrent(session)) useImStore.setState((state) => ({ streamTopics: { ...state.streamTopics, [streamId]: names } }));
+  return names;
 }
 
 export function clearAnchor(): void {
@@ -527,7 +564,7 @@ const CONFIRM_WAIT_MS = 8000;
  * 结果不明确时不重发（合同 §3.2）：在事件流里等这次 local_id 回显的 message 事件，等到即算发出；
  * 等不到抛 UnconfirmedResult，由使用者看消息记录后自行决定。
  */
-export async function sendMessage(key: ConversationKey, content: string): Promise<void> {
+export async function sendMessage(key: ConversationKey, content: string, topic = ''): Promise<void> {
   const state = useImStore.getState();
   const conversation = state.conversations[key];
   if (!conversation || !state.queueId) throw new ApiError(409, 'im_not_ready', '消息还没有准备好。');
@@ -540,7 +577,7 @@ export async function sendMessage(key: ConversationKey, content: string): Promis
     });
   });
   try {
-    await requireTransport().send({ target: conversationTarget(conversation), content, queueId: state.queueId, localId });
+    await requireTransport().send({ target: conversationTarget(conversation, topic), content, queueId: state.queueId, localId });
   } catch (error) {
     if (definitiveFailure(error) || !isCurrent(state.session)) throw error;
     if (!echoed) await Promise.race([echo, new Promise((resolve) => window.setTimeout(resolve, CONFIRM_WAIT_MS))]);
@@ -631,6 +668,30 @@ export async function searchConversation(key: ConversationKey, query: string): P
   return result.messages.reverse();
 }
 
+export const SEARCH_LIMIT = 50;
+
+/**
+ * 全局搜索（FE_PLAN §3 搜索页一行）：本人可见的全部消息上加 search 词，`files` 时只要带附件的；
+ * 最新的 50 条，`more` 表示还有更早的命中。中文分词由服务端 PGroonga 负责。
+ */
+export async function searchMessages(query: string, files: boolean): Promise<{ messages: ZulipMessage[]; more: boolean }> {
+  const result = await requireTransport().messages({
+    anchor: 'newest', numBefore: SEARCH_LIMIT, numAfter: 0,
+    narrow: [{ operator: 'search', operand: query }, ...(files ? [{ operator: 'has' as const, operand: 'attachment' }] : [])],
+  });
+  return { messages: result.messages.reverse(), more: !result.found_oldest };
+}
+
+/** 按消息打开它所在的会话并定位：本人没打开过的私聊先在列表里登记一行。搜索命中与返回原消息共用。 */
+export function openMessage(message: ZulipMessage, fromSearch: boolean): void {
+  const conversation = messageConversation(message, useImStore.getState().selfId);
+  useImStore.setState((current) => ({
+    conversations: current.conversations[conversation.key]
+      ? current.conversations : { ...current.conversations, [conversation.key]: conversation },
+  }));
+  openConversation(conversation.key, message.id, fromSearch);
+}
+
 /**
  * 返回原消息（AIDock「返回原消息」、消息链接）：按消息 id 找到它所在的会话，按锚点打开。已加载的窗口里有
  * 就直接用，否则以本人权限读这一条确定会话。找不到（已删除或无权查看）时返回 false。
@@ -647,12 +708,7 @@ export async function locateMessage(messageId: number): Promise<boolean> {
   const result = await requireTransport().messages({ anchor: messageId, numBefore: 0, numAfter: 0, narrow: [] });
   const message = result.messages.find((item) => item.id === messageId);
   if (!message || !isCurrent(session)) return false;
-  const conversation = messageConversation(message, useImStore.getState().selfId);
-  useImStore.setState((current) => ({
-    conversations: current.conversations[conversation.key]
-      ? current.conversations : { ...current.conversations, [conversation.key]: conversation },
-  }));
-  openConversation(conversation.key, messageId);
+  openMessage(message, false);
   return true;
 }
 
@@ -712,16 +768,21 @@ export function leaveStream(streamName: string): Promise<void> {
   return requireTransport().leaveStream(streamName);
 }
 
-export function readUserChannels(userId: number): Promise<number[]> {
-  return requireTransport().userChannels(userId);
+/**
+ * 某人的「所在群」（FE_PLAN §3 联系人页一行）：`GET /users/{id}/channels` 只返回本人有权看到的群；
+ * 群名先取已有订阅，本人未加入的群再查 `GET /streams/{id}`。
+ */
+export async function readUserChannels(userId: number): Promise<{ streamId: number; name: string }[]> {
+  const api = requireTransport();
+  const ids = await api.userChannels(userId);
+  const subscriptions = useImStore.getState().subscriptions;
+  return Promise.all(ids.map(async (streamId) => ({
+    streamId, name: subscriptions[streamId]?.name ?? await api.streamName(streamId),
+  })));
 }
 
 export function readUserGroups() {
   return requireTransport().userGroups();
-}
-
-export function readStreamTopics(streamId: number) {
-  return requireTransport().streamTopics(streamId);
 }
 
 /** 群文件：本群带附件的消息，最新 50 条。 */

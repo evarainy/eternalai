@@ -4,7 +4,7 @@ import { clearAnchor, markVisibleRead, openConversation, retryConversation, retu
 import type { ImState, MessageWindow } from '../zulip/imStore';
 import type { ConversationKey } from '../zulip/narrow';
 import { MessageItem } from './MessageItem';
-import { needsSeparator, separatorTime } from './viewModel';
+import { needsSeparator, separatorTime, streamTopicNames } from './viewModel';
 import styles from './ChatPane.module.css';
 
 /** 每个会话离开时的滚动位置，只放内存（FE_PLAN §5.2「本机持久化」）。 */
@@ -42,7 +42,14 @@ export function MessageList({ conversationKey, state, messageWindow }: {
   const [unreadLine, setUnreadLine] = useState<number | null>(null);
   const visible = useRef(new Set<number>());
   const [dismissed, setDismissed] = useState<Record<number, true>>({});
-  const messages = messageWindow?.messages ?? [];
+  // 多话题群按话题看时，窗口里可能混进事件带来的其他话题消息，只显示这个话题的。
+  const topicFilter = state.topicFilter?.key === conversationKey ? state.topicFilter.topic : null;
+  const conversation = state.conversations[conversationKey];
+  const showTopic = topicFilter === null && conversation !== undefined && streamTopicNames(state, conversation).length > 0;
+  const loaded = messageWindow?.messages ?? [];
+  const messages = topicFilter === null
+    ? loaded
+    : loaded.filter((message) => message.type === 'stream' && message.subject === topicFilter);
   const lastId = messages[messages.length - 1]?.id;
   const hasMessages = lastId !== undefined;
   const anchorId = state.anchor?.key === conversationKey ? state.anchor.messageId : null;
@@ -230,7 +237,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
       {!messageWindow.foundNewest ? (
         <div className={styles.banner} role="status">
           <Icon name="search" size={14} />
-          正在查看较早的位置
+          {state.anchor?.key === conversationKey && state.anchor.fromSearch ? '正在查看搜索结果所在位置' : '正在查看较早的位置'}
           <button onClick={jumpToLatest} type="button">回到最新消息</button>
         </div>
       ) : null}
@@ -254,6 +261,7 @@ export function MessageList({ conversationKey, state, messageWindow }: {
                 highlighted={message.id === anchorId}
                 message={message}
                 state={state}
+                topic={showTopic && message.type === 'stream' ? message.subject : null}
               />
             </Fragment>
           ))}

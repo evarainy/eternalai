@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { onImReset } from '../zulip/imStore';
+import { onImReset, openConversation, startDirect } from '../zulip/imStore';
+import type { ConversationKey } from '../zulip/narrow';
 
 /**
  * 消息区当前看的是「消息」还是「联系人」页签（FE_PLAN §3「消息 / 联系人」切换），以及联系人页里选中的人。
@@ -20,3 +21,14 @@ export const useImView = create<ImView>()((set) => ({
 }));
 
 onImReset(() => useImView.setState({ tab: 'messages', contact: null }));
+
+/** 从联系人页、资料卡发起聊天：切回「消息」页签再打开会话。 */
+export function chatWith(userIds: number[]): void {
+  useImView.getState().showMessages();
+  startDirect(userIds);
+}
+
+export function showConversation(key: ConversationKey): void {
+  useImView.getState().showMessages();
+  openConversation(key);
+}

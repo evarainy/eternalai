@@ -60,10 +60,12 @@ function mentionQuery(text: string, caret: number): { start: number; query: stri
  * 不发送；@ 候选、表情、格式片段、附件托盘（粘贴截图、拖入文件、预览、移除，点发送时才上传）；
  * 草稿按停顿 1.5 秒、切换会话、失焦保存并显示状态；↑ 编辑上一条。顶边可拖动调高并记住高度。
  */
-export function Composer({ conversationKey, enterSends, placeholder }: {
+export function Composer({ conversationKey, enterSends, placeholder, topic }: {
   conversationKey: ConversationKey;
   enterSends: boolean;
   placeholder: string;
+  /** 多话题群：发送到的话题，必须填写；其余会话不传。 */
+  topic?: string;
 }) {
   const state = useImStore();
   const drafts = useMemo(() => conversationDrafts(state, conversationKey), [state, conversationKey]);
@@ -293,6 +295,10 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
   const submit = async () => {
     const content = text.trim();
     if (busy || (!content && attachments.length === 0)) return;
+    if (!editing && topic !== undefined && !topic.trim()) {
+      setError('这是多话题群，请先在上方选择或填写话题。');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -312,7 +318,7 @@ export function Composer({ conversationKey, enterSends, placeholder }: {
         }, signal);
         links.push(`[${result.filename}](${result.url})`);
       }
-      await sendMessage(conversationKey, [content, ...links].filter(Boolean).join('\n'));
+      await sendMessage(conversationKey, [content, ...links].filter(Boolean).join('\n'), topic?.trim());
       const sent = new Set(sending.map((item) => item.id));
       for (const item of sending) if (item.preview) URL.revokeObjectURL(item.preview);
       setAttachments((current) => current.filter((item) => !sent.has(item.id)));

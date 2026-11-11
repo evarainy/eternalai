@@ -106,6 +106,22 @@ export function conversationMemberCount(state: ImState, conversation: Conversati
   return state.subscriptions[conversation.streamId]?.subscribers?.length ?? null;
 }
 
+/**
+ * 联系人页「最近联系」（FE_PLAN §9 第 2 件，代替「常用联系人」）：最近有过单聊的人，按最近消息倒序。
+ * 不含本人和机器人。
+ */
+export function recentContacts(state: ImState, limit: number): number[] {
+  const rows: { userId: number; order: number }[] = [];
+  for (const conversation of Object.values(state.conversations)) {
+    if (conversation?.kind !== 'dm' || conversation.userIds.length !== 1) continue;
+    const userId = conversation.userIds[0]!;
+    const user = state.users[userId];
+    if (userId === state.selfId || !user || user.is_bot || !user.is_active) continue;
+    rows.push({ userId, order: state.order[conversation.key] ?? 0 });
+  }
+  return rows.sort((a, b) => b.order - a.order).slice(0, limit).map((row) => row.userId);
+}
+
 /* ---------- 时间 ---------- */
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -268,6 +284,25 @@ export function topicMuted(state: ImState, streamId: number, topic: string): boo
   const policy = state.topicPolicies[`${streamId}:${topic}`] ?? 0;
   if (policy === 1) return true;
   return (state.subscriptions[streamId]?.is_muted ?? false) && policy !== 2 && policy !== 3;
+}
+
+/**
+ * 旧的多话题群（F41）：本群不是「只用空话题」，且已知话题里有非空的。话题名取接口读到的，再补上已加载
+ * 消息里出现的；新群和单话题群返回空数组，不显示话题。
+ */
+export function streamTopicNames(state: ImState, conversation: Conversation): string[] {
+  if (conversation.kind !== 'stream') return [];
+  if (state.subscriptions[conversation.streamId]?.topics_policy === 'empty_topic_only') return [];
+  const names = [...(state.streamTopics[conversation.streamId] ?? [])];
+  for (const message of state.windows[conversation.key]?.messages ?? []) {
+    if (message.type === 'stream' && !names.includes(message.subject)) names.push(message.subject);
+  }
+  return names.some((name) => name !== '') ? names : [];
+}
+
+/** 空话题在界面上的叫法。 */
+export function topicLabel(topic: string): string {
+  return topic === '' ? '一般讨论' : topic;
 }
 
 /** 会话行是否显示为静音：看空话题（新群唯一的话题）。单聊不静音。 */

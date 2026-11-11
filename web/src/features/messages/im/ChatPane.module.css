@@ -240,3 +240,36 @@
   font: inherit;
   text-align: left;
 }
+
+/* 多话题群（F41）：标题旁的标签、头部话题筛选、输入框上方的发送话题 */
+.tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: 2px;
+}
+
+.topicFilter {
+  min-width: 120px;
+  max-width: 200px;
+  margin-right: 6px;
+}
+
+.topicBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink2);
+  font-size: 12.5px;
+}
+
+.topicInput {
+  width: 260px;
+}

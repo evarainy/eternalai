@@ -3,7 +3,8 @@ import { Icon } from '../../../shared/ui/Icon';
 import { openConversation, retryIm, useImStore } from '../zulip/imStore';
 import { Avatar } from './Avatar';
 import { NewChatButton } from './NewChatButton';
-import { conversationAvatar, conversationRows, imFailureText, unreadTotal, userPresence } from './viewModel';
+import { SearchResults } from './SearchResults';
+import { conversationAvatar, conversationRows, imFailureText, userPresence } from './viewModel';
 import type { ConversationRow } from './viewModel';
 import styles from './ConversationList.module.css';
 
@@ -13,8 +14,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'dm', label: '单聊' }, { key: 'group', label: '群聊' },
 ];
 
-function matches(row: ConversationRow, filter: Filter, query: string): boolean {
-  if (query && !row.title.toLowerCase().includes(query)) return false;
+function matches(row: ConversationRow, filter: Filter): boolean {
   if (filter === 'unread') return row.unread > 0;
   if (filter === 'mentions') return row.mentioned;
   if (filter === 'dm') return !row.isGroup;
@@ -27,9 +27,9 @@ export function ConversationList() {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const rows = useMemo(() => conversationRows(state), [state]);
-  // 静音会话不计入未读总数（FE_PLAN §3 第 1 行）。
-  const total = unreadTotal(state);
-  const visible = rows.filter((row) => matches(row, filter, query.trim().toLowerCase()));
+  const visible = rows.filter((row) => matches(row, filter));
+  // 输入框有字时整列换成搜索页（v3-5）；Esc 清空回到会话列表。
+  const words = query.trim();
 
   let body;
   if (state.phase === 'loading' || state.phase === 'idle') {
@@ -90,20 +90,15 @@ export function ConversationList() {
 
   return (
     <>
-      <div className={styles.top} role="tablist" aria-label="消息与联系人">
-        <button aria-selected="true" className={styles.topTab} role="tab" type="button">
-          消息{total > 0 ? <span className={styles.topCount}>{total > 99 ? '99+' : total}</span> : null}
-        </button>
-        <button aria-selected="false" className={styles.topTab} disabled role="tab" title="联系人页后续接入" type="button">
-          联系人
-        </button>
-      </div>
       <div className={styles.head}>
-        <label className={styles.search}>
+        <label className={styles.search} data-focus-ring="host">
           <Icon name="search" size={15} />
           <input
-            aria-label="搜索会话"
+            aria-label="搜索联系人、群、聊天记录"
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setQuery('');
+            }}
             placeholder="搜索联系人、群、聊天记录"
             type="search"
             value={query}
@@ -112,6 +107,8 @@ export function ConversationList() {
         <NewChatButton className={styles.iconButton ?? ''} />
       </div>
       {state.offline ? <p className={styles.offline} role="status">连接中断，正在重新连接…</p> : null}
+      {words && state.phase === 'ready' ? <SearchResults key={words} query={words} /> : (
+      <>
       <div className={styles.tabs} role="group" aria-label="筛选会话">
         {FILTERS.map((item) => (
           <button
@@ -126,6 +123,8 @@ export function ConversationList() {
         ))}
       </div>
       {body}
+      </>
+      )}
     </>
   );
 }

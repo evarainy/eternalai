@@ -43,6 +43,8 @@ export interface ImTransport {
   /** 某人所在、且本人有权看到的群（`GET /users/{id}/channels`）。 */
   userChannels(userId: number): Promise<number[]>;
   userGroups(): Promise<ZulipUserGroup[]>;
+  /** 群名（`GET /streams/{id}`）：本人未加入、但有权看到的群。 */
+  streamName(streamId: number): Promise<string>;
   /** 群里的话题（`GET /users/me/{stream_id}/topics`），按最新消息倒序。 */
   streamTopics(streamId: number): Promise<ZulipTopic[]>;
   /** 本人在线状态上报（合同 §3 允许清单 `POST /users/me/presence`）。 */
@@ -220,6 +222,9 @@ export function createHttpTransport(): ImTransport {
     },
     async userGroups() {
       return (await zulip<{ user_groups: ZulipUserGroup[] }>('GET', '/user_groups')).user_groups;
+    },
+    async streamName(streamId) {
+      return (await zulip<{ stream: { name: string } }>('GET', `/streams/${streamId}`)).stream.name;
     },
     async streamTopics(streamId) {
       return (await zulip<{ topics: ZulipTopic[] }>('GET', `/users/me/${streamId}/topics`, {

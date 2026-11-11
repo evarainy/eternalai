@@ -2,9 +2,13 @@ import { useEffect } from 'react';
 import type { KeyboardEvent } from 'react';
 import { openConversation, useImStore } from '../zulip/imStore';
 import { ChatPane } from './ChatPane';
+import { ContactDetail } from './ContactDetail';
+import { ContactList } from './ContactList';
 import { ConversationList } from './ConversationList';
 import { ImLayout } from './ImLayout';
+import { ListTabs } from './ListTabs';
 import { conversationRows } from './viewModel';
+import { useImView } from './viewStore';
 import styles from './ImLayout.module.css';
 
 /**
@@ -14,6 +18,7 @@ import styles from './ImLayout.module.css';
 export function ImWorkspace() {
   const phase = useImStore((state) => state.phase);
   const selected = useImStore((state) => state.selected);
+  const tab = useImView((view) => view.tab);
 
   // 首次就绪时打开最上面的会话，之后保持用户的选择。
   useEffect(() => {
@@ -23,8 +28,15 @@ export function ImWorkspace() {
     if (first) openConversation(first.key);
   }, [phase, selected]);
 
+  // 按锚点打开消息（返回原消息、消息链接）时，从联系人页签切回消息页签。
+  const anchor = useImStore((state) => state.anchor);
+  useEffect(() => {
+    if (anchor) useImView.getState().showMessages();
+  }, [anchor]);
+
   // 快捷键只在焦点处于 IM 区时生效（FE_PLAN §3「快捷键」）：Ctrl+F 会话内搜索，Alt+↑/↓ 切换会话。
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (tab !== 'messages') return;
     if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent('eternalai:im-search'));
@@ -43,7 +55,10 @@ export function ImWorkspace() {
   return (
     <div className={styles.page} onKeyDown={onKeyDown}>
       <h1 className={styles.srOnly}>消息</h1>
-      <ImLayout chat={<ChatPane />} list={<ConversationList />} />
+      <ImLayout
+        chat={tab === 'contacts' ? <ContactDetail /> : <ChatPane />}
+        list={<><ListTabs />{tab === 'contacts' ? <ContactList /> : <ConversationList />}</>}
+      />
     </div>
   );
 }

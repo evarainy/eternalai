@@ -4,8 +4,8 @@ import { imFileUrl } from '../zulip/links';
 import type { ConversationAvatar, PresenceState } from './viewModel';
 import styles from './Avatar.module.css';
 
-type AvatarSize = 40 | 36 | 28 | 56;
-const SIZE_CLASS: Record<AvatarSize, string> = { 40: '', 36: styles.s36!, 28: styles.s28!, 56: styles.s56! };
+type AvatarSize = 40 | 36 | 28 | 56 | 72;
+const SIZE_CLASS: Record<AvatarSize, string> = { 40: '', 36: styles.s36!, 28: styles.s28!, 56: styles.s56!, 72: styles.s72! };
 
 /**
  * 头像只是装饰：名字由旁边的文字承担，所以固定 aria-hidden。图片地址只认改写到代理入口的

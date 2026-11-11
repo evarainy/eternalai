@@ -3,7 +3,7 @@ import { Alert, App as AntApp, Checkbox, Input, Modal } from 'antd';
 import { ApiError } from '../../../api/mutator';
 import { MERGED_TITLE, mergedForward, messageLength, singleForward } from '../zulip/forward';
 import type { ForwardSource } from '../zulip/forward';
-import { UnconfirmedResult, ensureDirect, readRawMessages, sendMessage, useImStore } from '../zulip/imStore';
+import { UnconfirmedResult, ensureDirect, loadStreamTopics, readRawMessages, sendMessage, useImStore } from '../zulip/imStore';
 import { dmConversation } from '../zulip/narrow';
 import type { ConversationKey } from '../zulip/narrow';
 import { Avatar } from './Avatar';
@@ -50,6 +50,8 @@ export function ForwardDialog({ conversationKey, messageIds, mode, onClose, onSe
   const [query, setQuery] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // 目标里有多话题群时的提示；改选目标后清除，不像发送失败那样锁住发送。
+  const [topicBlock, setTopicBlock] = useState<string | null>(null);
   const idsKey = messageIds.join(',');
 
   useEffect(() => {
@@ -103,9 +105,27 @@ export function ForwardDialog({ conversationKey, messageIds, mode, onClose, onSe
   }, [state, query]);
 
   const toggleTarget = (target: Target) => {
+    setTopicBlock(null);
     setTargets((current) => (current.some((item) => item.key === target.key)
       ? current.filter((item) => item.key !== target.key)
       : [...current, target]));
+  };
+
+  /**
+   * 转发只发到空话题；目标里有旧的多话题群时先拦下，请本人进群选话题再发（F41：不静默发到空话题）。
+   * 只核对不是「只用空话题」的群，一个都不发。
+   */
+  const multiTopicTargets = async (): Promise<string[]> => {
+    const current = useImStore.getState();
+    const names: string[] = [];
+    for (const target of targets) {
+      const conversation = current.conversations[target.key];
+      if (conversation?.kind !== 'stream') continue;
+      if (current.subscriptions[conversation.streamId]?.topics_policy === 'empty_topic_only') continue;
+      const topics = await loadStreamTopics(conversation.streamId);
+      if (topics.some((topic) => topic !== '')) names.push(target.title);
+    }
+    return names;
   };
 
   const send = async () => {
@@ -115,6 +135,11 @@ export function ForwardDialog({ conversationKey, messageIds, mode, onClose, onSe
     let sent = 0;
     const total = contents.length * targets.length;
     try {
+      const blocked = await multiTopicTargets();
+      if (blocked.length > 0) {
+        setTopicBlock(`「${blocked.join('」「')}」是多话题群，请取消勾选后再发送，或进群选好话题后单独发送；本次没有发出任何消息。`);
+        return;
+      }
       for (const target of targets) {
         const key = target.userId === null ? target.key : ensureDirect([target.userId]);
         for (const content of contents) {
@@ -138,7 +163,7 @@ export function ForwardDialog({ conversationKey, messageIds, mode, onClose, onSe
   return (
     <Modal
       confirmLoading={sending}
-      okButtonProps={{ disabled: !contents || tooLong || loadError !== null || targets.length === 0 || sendError !== null }}
+      okButtonProps={{ disabled: !contents || tooLong || loadError !== null || targets.length === 0 || sendError !== null || topicBlock !== null }}
       okText={targets.length > 0 ? `发送到 ${targets.length} 个会话` : '发送'}
       onCancel={sending ? undefined : onClose}
       onOk={() => void send()}
@@ -172,6 +197,7 @@ export function ForwardDialog({ conversationKey, messageIds, mode, onClose, onSe
         />
       ) : null}
       {sendError ? <Alert showIcon title={sendError} type="error" /> : null}
+      {topicBlock ? <Alert showIcon title={topicBlock} type="warning" /> : null}
       <Input
         allowClear
         aria-label="搜索要转发到的会话或联系人"

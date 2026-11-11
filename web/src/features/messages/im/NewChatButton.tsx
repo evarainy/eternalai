@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { App as AntApp, Dropdown, Form, Input, Modal, Select } from 'antd';
 import { Icon } from '../../../shared/ui/Icon';
-import { createGroup, startDirect, useImStore } from '../zulip/imStore';
+import { createGroup, useImStore } from '../zulip/imStore';
 import { userDept } from './viewModel';
+import { chatWith } from './viewStore';
 
 type Dialog = 'direct' | 'group' | null;
 
@@ -10,7 +11,7 @@ type Dialog = 'direct' | 'group' | null;
  * 「＋」：发起单聊、新建群（FE_PLAN §3）。单聊直接打开会话；新建群由本人在对话框里确认后才提交，
  * 新群一律私密（FE_PLAN §9 第 1 件），对话框里写明。
  */
-export function NewChatButton({ className }: { className: string }) {
+export function NewChatButton({ className, directOnly = false }: { className: string; directOnly?: boolean }) {
   const { message: toast } = AntApp.useApp();
   const state = useImStore();
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -47,6 +48,11 @@ export function NewChatButton({ className }: { className: string }) {
 
   return (
     <>
+      {directOnly ? (
+        <button aria-label="添加联系人" className={className} onClick={() => setDialog('direct')} title="添加联系人（发起单聊）" type="button">
+          <Icon name="useradd" size={17} />
+        </button>
+      ) : (
       <Dropdown
         menu={{
           items: [{ key: 'direct', label: '发起单聊' }, { key: 'group', label: '新建群' }],
@@ -58,13 +64,14 @@ export function NewChatButton({ className }: { className: string }) {
           <Icon name="plus" size={17} />
         </button>
       </Dropdown>
+      )}
       <Modal
         destroyOnHidden
         okButtonProps={{ disabled: person === null }}
         okText="开始聊天"
         onCancel={close}
         onOk={() => {
-          if (person !== null) startDirect([person]);
+          if (person !== null) chatWith([person]);
           close();
         }}
         open={dialog === 'direct'}

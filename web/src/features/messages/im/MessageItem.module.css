@@ -350,3 +350,12 @@
   background: none;
   cursor: pointer;
 }
+
+/* 多话题群看全部话题时，每条消息标出所属话题（F41） */
+.topic {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+}

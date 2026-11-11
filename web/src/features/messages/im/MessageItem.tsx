@@ -9,15 +9,17 @@ import { Avatar } from './Avatar';
 import { MessageBody } from './MessageBody';
 import { ProfileCard } from './ProfileCard';
 import { useSelection } from './selectionStore';
-import { clockTime, groupReactions, personAvatar, separatorTime, userDept, userName } from './viewModel';
+import { clockTime, groupReactions, personAvatar, separatorTime, topicLabel, userDept, userName } from './viewModel';
 import styles from './MessageItem.module.css';
 
 /** 单条消息：「自己」按真实 sender_id 判断（FE_PLAN §3）；发送人旁的部门没有值时不显示。 */
-export function MessageItem({ conversationKey, highlighted, message, state }: {
+export function MessageItem({ conversationKey, highlighted, message, state, topic }: {
   conversationKey: ConversationKey;
   highlighted: boolean;
   message: ZulipMessage;
   state: ImState;
+  /** 多话题群看全部话题时标出每条消息的话题；其余为 null。 */
+  topic: string | null;
 }) {
   const { message: toast } = AntApp.useApp();
   const mine = message.sender_id === state.selfId;
@@ -57,11 +59,12 @@ export function MessageItem({ conversationKey, highlighted, message, state }: {
         </ProfileCard>
       )}
       <div className={styles.body} title={mine ? separatorTime(message.timestamp) : undefined}>
-        {mine ? null : (
+        {mine ? (topic !== null ? <div className={styles.name}><span className={styles.topic}>{topicLabel(topic)}</span></div> : null) : (
           <div className={styles.name}>
             <b>{userName(state, message.sender_id)}</b>
             {dept ? <span className={styles.dept}>{dept}</span> : null}
             {clockTime(message.timestamp)}
+            {topic !== null ? <span className={styles.topic}>{topicLabel(topic)}</span> : null}
           </div>
         )}
         <MessageMenu conversationKey={conversationKey} message={message}>
