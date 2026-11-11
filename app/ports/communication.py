@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncContextManager, Literal, Protocol
+from typing import Annotated, AsyncContextManager, Literal, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +30,28 @@ class IMSelection(BaseModel):
     im_instance_id: str = Field(min_length=1)
     realm_id: str = Field(min_length=1)
     im_user_id: str = Field(min_length=1)
-    message_id: str = Field(min_length=1)
+    message_ids: tuple[
+        Annotated[str, Field(strict=True, min_length=1, max_length=20, pattern="^[0-9]+$")], ...
+    ] = Field(
+        min_length=1,
+        max_length=50,
+        json_schema_extra={"uniqueItems": True},
+        description=(
+            "Positive ASCII decimal message IDs. Leading zeros are normalized; "
+            "numeric aliases count as duplicates and are rejected. Returned in numeric order."
+        ),
+    )
     conversation_ref: str = Field(min_length=1, repr=False)
+
+    @field_validator("message_ids")
+    @classmethod
+    def normalize_message_ids(cls, message_ids: tuple[str, ...]) -> tuple[str, ...]:
+        ids = sorted(int(message_id) for message_id in message_ids)
+        if ids[0] == 0:
+            raise ValueError("message IDs must be positive")
+        if len(set(ids)) != len(ids):
+            raise ValueError("message IDs must be unique after normalization")
+        return tuple(str(message_id) for message_id in ids)
 
 
 @dataclass(frozen=True, slots=True)

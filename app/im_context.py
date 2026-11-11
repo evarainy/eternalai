@@ -44,7 +44,6 @@ class _Reference:
     login: str = field(repr=False)
     session: str = field(repr=False)
     selection: IMSelection = field(repr=False)
-    message_ids: tuple[str, ...]
     expires_at: datetime
 
 
@@ -152,20 +151,14 @@ class IMContextService:
             self._check_identity(binding, identity)
             _LOG.info("im_stage stage=identity result=verified")
             anchor = await self._reader.read_anchor(identity, selection)
-            if (
-                anchor.message_id != selection.message_id
-                or anchor.conversation_ref != selection.conversation_ref
-            ):
+            if anchor.message_id != selection.message_ids[-1]:
                 raise IMContextError("im_source_not_found", 404)
             result = await self._reader.read_context(identity, selection)
-        ids = [m.message_id for m in result.messages]
-        if (
-            not result.found_anchor
-            or not 1 <= len(ids) <= 4
-            or len(set(ids)) != len(ids)
-            or ids[-1] != selection.message_id
-            or any(m.conversation_ref != selection.conversation_ref for m in result.messages)
-        ):
+        ids = tuple(m.message_id for m in result.messages)
+        if ids != selection.message_ids:
+            # Only an ordered proper subset means selected messages became unreadable.
+            if ids == tuple(mid for mid in selection.message_ids if mid in ids):
+                raise IMContextError("im_source_not_found", 404)
             raise IMContextError("im_source_changed")
         _LOG.info("im_stage stage=context result=read count=%s", len(ids))
         return result
@@ -185,6 +178,8 @@ class IMContextService:
         binding = await self._binding(principal)
         result = await self._read(binding, selection)
         await self._session(principal, bound_session)
+        if await self._binding(principal) != binding:
+            raise IMContextError("im_identity_mismatch")
         self._sweep()
         reference = _Reference(
             principal.org_ctx.tenant_id,
@@ -192,7 +187,6 @@ class IMContextService:
             login,
             session,
             selection,
-            tuple(m.message_id for m in result.messages),
             expires,
         )
         ref_id = secrets.token_urlsafe(32)
@@ -219,9 +213,9 @@ class IMContextService:
             raise IMContextError("im_source_expired")
         binding = await self._binding(principal)
         result = await self._read(binding, ref.selection)
-        if tuple(m.message_id for m in result.messages) != ref.message_ids:
-            raise IMContextError("im_source_changed")
         await self._session(principal, bound_session)
+        if await self._binding(principal) != binding:
+            raise IMContextError("im_identity_mismatch")
         if ref.expires_at <= datetime.now(UTC):
             raise IMContextError("im_source_expired")
         _LOG.info("im_stage stage=revalidate result=verified")

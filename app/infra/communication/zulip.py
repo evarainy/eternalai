@@ -889,15 +889,18 @@ class ZulipCommunicationAdapter:
 
     async def read_anchor(self, identity: IMReadIdentity, selection: IMSelection) -> IMMessage:
         batch = cast(_Batch, identity.handle)
-        mid = self._number(selection.message_id)
+        if not batch.human_active:
+            raise IMContextError("im_identity_mismatch")
+        mid = selection.message_ids[-1]
         result = await self._request(
-            batch.client, "GET", f"/api/v1/messages/{mid}", params={"apply_markdown": "false"}
+            batch.client, "GET", f"/api/v1/messages/{mid}",
+            params={"apply_markdown": "false", "allow_empty_topic_name": "true"},
         )
         return self._message(result.get("message"), selection, batch.user_id)
 
     async def read_context(self, identity: IMReadIdentity, selection: IMSelection) -> IMReadContext:
         batch = cast(_Batch, identity.handle)
-        mid = self._number(selection.message_id)
+        mid = selection.message_ids[-1]
         # The preceding anchor read established the canonical conversation; never accept raw narrow.
         conversation = json.loads(selection.conversation_ref)
         if conversation["type"] == "stream":
@@ -912,34 +915,36 @@ class ZulipCommunicationAdapter:
                 + "".join({"%": ".", ".": ".2E"}.get(c, c)
                           for c in quote(conversation["topic"], safe=""))
                 + "/near/"
-                + str(mid)
+                + mid
             )
         else:
             narrow = [{"operator": "dm", "operand": conversation["to_user_ids"]}]
             fragment = (
-                "narrow/dm/" + ",".join(map(str, conversation["to_user_ids"])) + "/near/" + str(mid)
+                "narrow/dm/" + ",".join(map(str, conversation["to_user_ids"])) + "/near/" + mid
             )
         result = await self._request(
             batch.client,
             "GET",
             "/api/v1/messages",
             params={
-                "anchor": str(mid),
-                "num_before": "3",
-                "num_after": "0",
-                "include_anchor": "true",
+                "message_ids": json.dumps([
+                    int(message_id) for message_id in selection.message_ids
+                ]),
                 "narrow": json.dumps(narrow),
                 "apply_markdown": "false",
+                "allow_empty_topic_name": "true",
             },
         )
         raw = result.get("messages")
-        if not isinstance(raw, list) or any(
-            not isinstance(m, dict) or type(m.get("id")) is not int or m["id"] > mid for m in raw
-        ):
+        if not isinstance(raw, list):
             raise IMContextError("im_source_changed")
-        messages = tuple(self._message(m, selection, batch.user_id) for m in raw)
+        messages = tuple(sorted(
+            (self._message(m, selection, batch.user_id) for m in raw),
+            key=lambda message: int(message.message_id),
+        ))
         return IMReadContext(
-            messages, result.get("found_anchor") is True, self._settings.origin + "/#" + fragment
+            messages, any(message.message_id == mid for message in messages),
+            self._settings.origin + "/#" + fragment,
         )
 
 
