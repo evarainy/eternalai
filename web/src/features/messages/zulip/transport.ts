@@ -48,7 +48,13 @@ export const REGISTER_EVENT_TYPES = [
   'custom_profile_fields', 'realm_emoji',
 ] as const;
 
-const REGISTER_CLIENT_CAPABILITIES = { empty_topic_name: true, simplified_presence_events: true };
+/**
+ * 合同 v2.3 §3.1：12.3 的 `notification_settings_null` 是必填项（上游注释称其「误设为必填」），
+ * 取 false 即服务端缺省行为；另两项是本前端实际依赖的能力。
+ */
+const REGISTER_CLIENT_CAPABILITIES = {
+  notification_settings_null: false, empty_topic_name: true, simplified_presence_events: true,
+};
 
 /** Zulip 的复合参数值本身是 JSON 字符串；整体按表单编码，经 `rawBody` 发送（合同 §1）。 */
 function formBody(fields: Record<string, string | number | boolean | object | null | undefined>): URLSearchParams {

@@ -266,7 +266,8 @@ async function connect(session: number, rebuild: boolean): Promise<void> {
     } catch (error) {
       if (!isCurrent(session) || signal.aborted) return;
       const code = failureCode(error);
-      if (FATAL_CODES.has(code) || (!rebuild && attempt >= 2)) {
+      // 上游明确拒绝（4xx）重试也不会好转，直接停在失败说明。
+      if (FATAL_CODES.has(code) || definitiveFailure(error) || (!rebuild && attempt >= 2)) {
         useImStore.setState({ phase: 'failed', failure: code, offline: false });
         return;
       }
