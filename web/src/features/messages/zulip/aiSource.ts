@@ -40,21 +40,24 @@ function failureText(error: unknown): string {
   return '交给 AI 没有成功，请稍后重试。';
 }
 
-/** 返回 null 表示已交给 AI；否则返回给使用者看的原因。 */
-export async function sendToAi(key: ConversationKey, messageIds: number[]): Promise<string | null> {
+/** `ok`：已交给 AI；`stale`：被更新的一次发起或身份变化作废；其余为给使用者看的原因。 */
+export type SendToAiResult = { kind: 'ok' } | { kind: 'stale' } | { kind: 'failed'; text: string };
+
+export async function sendToAi(key: ConversationKey, messageIds: number[]): Promise<SendToAiResult> {
+  // 每次发起都作废上一轮（含在途的），并清掉 Dock 里的旧来源：失败时不能沿用上一组。
+  const current = ++sequence;
+  useAIDockStore.getState().setIMSource(null);
   const state = useImStore.getState();
   const identity = state.identity;
-  if (!identity) return '消息还没有准备好，请稍后再试。';
+  if (!identity) return { kind: 'failed', text: '消息还没有准备好，请稍后再试。' };
   const loaded = new Map((state.windows[key]?.messages ?? []).map((message) => [message.id, message]));
   const messages = messageIds.map((id) => loaded.get(id)).filter((message): message is ZulipMessage => message !== undefined);
-  if (messages.length !== messageIds.length) return '所选消息已不在当前窗口，请重新选择。';
+  if (messages.length !== messageIds.length) return { kind: 'failed', text: '所选消息已不在当前窗口，请重新选择。' };
   const ref = conversationRef(messages, state.selfId);
-  if (!ref) return '旧群里请只选同一话题的消息交给 AI。';
+  if (!ref) return { kind: 'failed', text: '旧群里请只选同一话题的消息交给 AI。' };
 
   const generation = useAuthStore.getState().generation;
-  const dock = useAIDockStore.getState();
-  const sessionId = dock.ensureSession();
-  const current = ++sequence;
+  const sessionId = useAIDockStore.getState().ensureSession();
   try {
     const source = await selectApiV1ImContextSourcesPost({
       provider: identity.provider,
@@ -66,14 +69,12 @@ export async function sendToAi(key: ConversationKey, messageIds: number[]): Prom
       session_id: sessionId,
     });
     if (useAuthStore.getState().generation !== generation || current !== sequence
-      || useAIDockStore.getState().sessionId !== sessionId) return null;
+      || useAIDockStore.getState().sessionId !== sessionId) return { kind: 'stale' };
     useAIDockStore.getState().setIMSource({ source, authGeneration: generation, sessionId });
     useAIDockStore.getState().openDock();
-    return null;
+    return { kind: 'ok' };
   } catch (error) {
-    if (current === sequence && useAuthStore.getState().generation === generation) {
-      useAIDockStore.getState().setIMSource(null);
-    }
-    return failureText(error);
+    if (current !== sequence || useAuthStore.getState().generation !== generation) return { kind: 'stale' };
+    return { kind: 'failed', text: failureText(error) };
   }
 }

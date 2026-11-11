@@ -25,3 +25,30 @@
   align-items: center;
   gap: 8px;
 }
+
+.preview {
+  max-height: 180px;
+  margin: 0 0 8px;
+  padding: 8px 10px 8px 28px;
+  overflow-y: auto;
+  border-radius: 8px;
+  background: #f5f7fa;
+  font-size: 12.5px;
+}
+
+.preview li + li {
+  margin-top: 6px;
+}
+
+.preview span {
+  color: #8a93a3;
+}
+
+.preview p {
+  margin: 2px 0 0;
+  color: #3b4250;
+}
+
+.preview .files {
+  color: #5b6474;
+}

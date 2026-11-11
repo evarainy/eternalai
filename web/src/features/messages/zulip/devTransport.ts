@@ -211,7 +211,7 @@ export function createDevTransport(): ImTransport {
     const now = Math.floor(Date.now() / 1000);
     return {
       queue_id: 'dev-queue', last_event_id: -1, user_id: SELF, event_queue_longpoll_timeout_seconds: 90,
-      max_file_upload_size_mib: 25, realm_users: USERS,
+      max_file_upload_size_mib: 25, max_message_length: 10000, realm_users: USERS,
       custom_profile_fields: [
         { id: DEPT_FIELD, name: '部门', type: 1, order: 1 },
         { id: TITLE_FIELD, name: '职务', type: 1, order: 2 },

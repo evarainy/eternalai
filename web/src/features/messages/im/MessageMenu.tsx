@@ -74,8 +74,8 @@ export function MessageMenu({ children, conversationKey, message }: {
     } else if (key === 'unread') {
       run(() => markUnread(conversationKey, message), '标为未读没有成功，请重试');
     } else if (key === 'ai') {
-      void sendToAi(conversationKey, [message.id]).then((failure) => {
-        if (failure) void toast.error(failure);
+      void sendToAi(conversationKey, [message.id]).then((result) => {
+        if (result.kind === 'failed') void toast.error(result.text);
       });
     } else if (key === 'select') {
       useSelection.getState().start(conversationKey, message.id);

@@ -164,7 +164,7 @@ function indexSnapshot(register: ZulipRegisterResponse): Partial<ImState> {
       .map((draft) => [draft.id, draft])),
     realmEmoji: Object.values(register.realm_emoji ?? {}).filter((emoji) => !emoji.deactivated),
     maxUploadMib: register.max_file_upload_size_mib,
-    maxMessageLength: register.max_message_length ?? 10000,
+    maxMessageLength: register.max_message_length,
   };
 }
 
@@ -629,14 +629,19 @@ export async function searchConversation(key: ConversationKey, query: string): P
   return result.messages.reverse();
 }
 
-/** 发起单聊：会话已存在就直接打开，否则先在列表里建一行。 */
-export function startDirect(userIds: number[]): void {
+/** 单聊会话：已存在就沿用，否则先在列表里建一行；返回会话键，不打开。 */
+export function ensureDirect(userIds: number[]): ConversationKey {
   const state = useImStore.getState();
   const conversation = dmConversation(userIds, state.selfId);
   if (!state.conversations[conversation.key]) {
     useImStore.setState({ conversations: { ...state.conversations, [conversation.key]: conversation } });
   }
-  openConversation(conversation.key);
+  return conversation.key;
+}
+
+/** 发起单聊：会话已存在就直接打开，否则先在列表里建一行。 */
+export function startDirect(userIds: number[]): void {
+  openConversation(ensureDirect(userIds));
 }
 
 /** 新建群：由本人确认后才提交（FE_PLAN §3「＋」一行）。成功后先在本地登记，随后的 subscription 事件校正。 */

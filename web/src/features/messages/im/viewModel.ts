@@ -125,6 +125,12 @@ export function separatorTime(timestamp: number): string {
   return `${dayLabel(timestamp)} ${clockTime(timestamp)}`;
 }
 
+/** 写进转发正文的绝对时间「2026年11月11日 09:26」：正文是持久的，不能用相对日期。 */
+export function absoluteTime(timestamp: number): string {
+  const date = new Date(timestamp * 1000);
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${clockTime(timestamp)}`;
+}
+
 /** 与上一条相隔 1 小时以上或跨天时显示时间分隔；每条消息的时分已在发送人旁显示。 */
 export function needsSeparator(previous: ZulipMessage | undefined, current: ZulipMessage): boolean {
   if (!previous) return true;

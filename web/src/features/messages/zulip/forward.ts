@@ -3,13 +3,13 @@
  * （12.3 `web/src/compose_reply.ts::quote_messages`）。这里沿用：
  *
  * - 原文用 ```quote 围栏引用，围栏长度比原文里最长的反引号串多一位，原文里的代码块不会破坏边界。
- * - 原文里的 @提及改成静默提及（`@_**…**`、`@_*…*`），转发不再重复通知被提到的人。
+ * - 原文原样放进 quote 块：Zulip 把引用块里的提及渲染为静默提及，转发不会再次通知被提到的人。
  * - 附件保留原始 `/user_uploads/...` 链接：发出后由 Zulip 关联到新消息，收件人按新消息的权限读取。
  */
 
 export interface ForwardSource {
   senderName: string;
-  /** 已格式化好的时间文字。 */
+  /** 已格式化好的绝对时间（年月日 时分）：写进持久正文，不能用「今天/昨天」。 */
   time: string;
   /** 编辑时取回的原始 Markdown。 */
   raw: string;
@@ -21,14 +21,10 @@ function escapeMarkdown(text: string): string {
   return text.replace(/([\\*_`[\]])/g, '\\$1');
 }
 
-function silenceMentions(raw: string): string {
-  return raw.replace(/@(?!_)(\*\*?)/g, '@_$1');
-}
-
 function quoted(raw: string): string {
   const longest = Math.max(2, ...(raw.match(/`+/g) ?? []).map((run) => run.length));
   const fence = '`'.repeat(longest + 1);
-  return `${fence}quote\n${silenceMentions(raw)}\n${fence}`;
+  return `${fence}quote\n${raw}\n${fence}`;
 }
 
 function heading(source: ForwardSource): string {

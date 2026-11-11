@@ -52,10 +52,11 @@ export function SelectionBar({ conversationKey }: { conversationKey: Conversatio
         disabled={empty || sending}
         onClick={() => {
           setSending(true);
-          void sendToAi(conversationKey, ordered).then((failure) => {
+          void sendToAi(conversationKey, ordered).then((result) => {
             setSending(false);
-            if (failure) void toast.error(failure);
-            else clear();
+            if (result.kind === 'failed') void toast.error(result.text);
+            // 只清理本次发起时的这一轮选择：期间换了会话或重新选过就不动。
+            else if (result.kind === 'ok' && useSelection.getState().key === conversationKey) clear();
           });
         }}
         type="button"
@@ -63,7 +64,7 @@ export function SelectionBar({ conversationKey }: { conversationKey: Conversatio
         {sending ? '正在交给 AI…' : '交给我的 AI'}
       </button>
       <button className={styles.cancel} onClick={clear} type="button">取消</button>
-      {mode ? (
+      {mode && !empty ? (
         <ForwardDialog
           conversationKey={conversationKey}
           messageIds={ordered}
