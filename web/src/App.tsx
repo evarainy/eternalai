@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { ComponentType } from 'react';
 import ConfigProvider from 'antd/es/config-provider';
 import zhCN from 'antd/locale/zh_CN';
@@ -25,9 +25,10 @@ import type { LazyRouteComponents } from './app/lazyRoutes';
 import { useReauthRestore } from './app/reauthRestore';
 import { RouteLoadBoundary } from './app/RouteLoadingFallback';
 import { useAppSessionRenewal, useSessionKeepalive } from './app/sessionKeepalive';
-import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
+import { WORKBENCH_BUTTON_CONFIG, buildWorkbenchTheme } from './app/theme';
 import { getReturnPath } from './pages/loginNavigation';
 import { useAIDockStore } from './stores/aiDockStore';
+import { applyAppearance, resolveFxMode, useAppearanceStore } from './stores/appearanceStore';
 import { useAuthStore } from './stores/authStore';
 
 const queryClient = new QueryClient({
@@ -146,11 +147,23 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
     LazyWorkObjectSeriesPage,
     LazyWorkObjectsPage,
   } = routes;
+  // 外观选择（皮肤、字号、时钟、动效）写到 <html> 上，登录页也跟着变；antd 的字号与动效同步切换。
+  const skin = useAppearanceStore((state) => state.skin);
+  const size = useAppearanceStore((state) => state.size);
+  const clock = useAppearanceStore((state) => state.clock);
+  const fx = useAppearanceStore((state) => state.fx);
+  useEffect(() => {
+    applyAppearance({ skin, size, clock, fx });
+  }, [skin, size, clock, fx]);
+  const fxMode = resolveFxMode(fx);
+  const theme = useMemo(() => buildWorkbenchTheme(size, fxMode), [size, fxMode]);
+  const wave = useMemo(() => ({ disabled: fxMode === 'lite' }), [fxMode]);
   return (
     <ConfigProvider
       button={WORKBENCH_BUTTON_CONFIG}
       locale={zhCN}
-      theme={workbenchTheme}
+      theme={theme}
+      wave={wave}
     >
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>

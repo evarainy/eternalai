@@ -15,6 +15,7 @@ import { DISPATCH_KINDS, EMPTY_DRAFT, REMINDER_CHOICES, loadDraft, saveDraft, cl
 import type { DispatchDraft, DispatchKind } from './dispatchDraft';
 import AttachmentsPanel from './AttachmentsPanel';
 import type { AttachmentView } from './AttachmentsPanel';
+import { PageFrame } from '../../shared/ui/PageFrame';
 import styles from './WorkDispatchPage.module.css';
 import { Icon } from '../../shared/ui/Icon';
 
@@ -201,8 +202,7 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
     const ok = saveDraft({ ...draft, ...(choice ? { dueInstant: choice.instant, dueZone: zone, dueOffset: choice.offset } : {}) }, token);
     setNoticeError(!ok); setNotice(ok ? '草稿已暂存；刷新、关闭页面或退出登录会丢失。下次需重新选择对象和附件。' : '草稿未保存，请核对登录状态。');
   };
-  return <div className={styles.page}>
-    {!series ? <div className={styles.toolbar}><h1>任务交办</h1><Link to="/work-object-series">周期任务规则</Link></div> : null}
+  const body = <div className={styles.page}>
     <section className={styles.panel}>
       <div className={styles.draftNotice}>发布前请核对要求与目标。草稿仅在本次会话内暂存，刷新后需到工作事项核对先前发布结果。 <Link to="/work-objects">核对工作事项</Link></div>
       <div className={styles.form}>
@@ -293,4 +293,13 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
       {notice ? <p aria-label="交办状态" className={styles.notice} role={noticeError ? 'alert' : 'status'}>{notice}</p> : null}
     </section>
   </div>;
+  // 周期规则编辑器把这张表单嵌在自己的页面里，那时页头由周期任务页提供。
+  return series ? body : (
+    <PageFrame
+      actions={<Link className="wb-btn wb-btn-quiet" to="/work-object-series">周期任务规则</Link>}
+      title="任务交办"
+    >
+      {body}
+    </PageFrame>
+  );
 }

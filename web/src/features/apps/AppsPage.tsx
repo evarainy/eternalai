@@ -7,6 +7,7 @@ import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import { Icon } from '../../shared/ui/Icon';
 import type { IconName } from '../../shared/ui/Icon';
+import { PageFrame } from '../../shared/ui/PageFrame';
 import { useAuthStore } from '../../stores/authStore';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
 import { McpConnectionsPanel } from './McpConnectionsPanel';
@@ -84,25 +85,17 @@ export default function AppsPage() {
   const navigation = oaWorkbenchNavigation();
 
   return (
+    <PageFrame
+      actions={(
+        <Button onClick={() => setDialogOpen(true)} type="primary">
+          <Icon name="plus" size={17} strokeWidth={2.1} />
+          新建应用
+        </Button>
+      )}
+      title="软件中心"
+    >
     <div className={styles.page}>
       <section className={styles.panel}>
-        <header className={styles.head}>
-          <div className={styles.headCopy}>
-            <h1 className={styles.title}>软件中心</h1>
-            <p className={styles.aux}>
-              单位在用的系统、单位发的软件、你自己的功能，都在这一页。
-            </p>
-          </div>
-          <Button
-            className={styles.newButton}
-            onClick={() => setDialogOpen(true)}
-            type="primary"
-          >
-            <Icon name="plus" size={19} strokeWidth={2.1} />
-            新建应用
-          </Button>
-        </header>
-
         <div className={styles.sections}>
           <McpConnectionsPanel />
           <McpOperationPanel />
@@ -201,5 +194,6 @@ export default function AppsPage() {
 
       <NewSoftwareDialog onClose={() => setDialogOpen(false)} open={dialogOpen} />
     </div>
+    </PageFrame>
   );
 }

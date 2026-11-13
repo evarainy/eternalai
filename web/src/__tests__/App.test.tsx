@@ -686,6 +686,7 @@ describe('application authentication boundary', () => {
       ['任务证据', '/admin/tasks'],
       ['账号绑定', '/admin/bindings'],
     ]) {
+      if (name === '功能管理') fireEvent.click(screen.getByRole('button', { name: '管理页面' }));
       expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
     }
     expect(screen.queryByText('当前位置')).not.toBeInTheDocument();

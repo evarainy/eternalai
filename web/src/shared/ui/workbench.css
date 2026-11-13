@@ -1,0 +1,490 @@
+/*
+ * 工作台共用的界面元件（全局类，前缀 `wb-`）：按钮、分段、标签、搜索框、印章、页头、AI 彩色边。
+ * 页面自己的版式写在各自的 CSS Module 里；这里只放两个以上页面都用的东西。
+ *
+ * 动画只动 transform 与 opacity；关着的浮层用 `visibility: hidden` 退出绘制。
+ */
+
+.wb-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-grow {
+  flex: 1;
+}
+
+/* ── 按钮：一个视图只有一枚实心主按钮，其余是描边或文字按钮 ── */
+.wb-btn {
+  display: inline-flex;
+  height: 2.4rem;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 1rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.933rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-ctl);
+  transition: transform 0.12s, border-color 0.15s, background-color 0.15s;
+}
+
+.wb-btn:hover {
+  border-color: rgb(16 26 46 / 32%);
+}
+
+.wb-btn:active {
+  transform: scale(0.97);
+}
+
+.wb-btn:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
+.wb-btn-primary {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), 0 8px 16px -8px rgb(36 80 200 / 70%);
+}
+
+.wb-btn-primary:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.wb-btn-primary:disabled {
+  color: #fff;
+}
+
+.wb-btn-quiet {
+  color: var(--text-2);
+  background: none;
+  border-color: transparent;
+}
+
+.wb-btn-quiet:hover {
+  background: var(--paper-2);
+  border-color: transparent;
+}
+
+.wb-btn-ink {
+  color: #fff;
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.wb-btn-ink:hover {
+  background: #1f2a40;
+  border-color: #1f2a40;
+}
+
+/* 督办：朱红只在「要紧」和「亲手授权」时出现。先点一次变成确认，再点才执行。 */
+.wb-btn-urge {
+  color: var(--seal);
+  border-color: rgb(201 58 38 / 35%);
+}
+
+.wb-btn-urge:hover {
+  background: var(--seal-soft);
+  border-color: rgb(201 58 38 / 35%);
+}
+
+.wb-btn-urge[data-sure='true'] {
+  color: #fff;
+  background: var(--seal);
+  border-color: var(--seal);
+  box-shadow: 0 8px 16px -8px rgb(201 58 38 / 70%);
+}
+
+.wb-btn-sm {
+  height: 2.1rem;
+  padding: 0 0.8rem;
+}
+
+.wb-btn-icon {
+  width: 2.1rem;
+  height: 2.1rem;
+  justify-content: center;
+  padding: 0;
+}
+
+/* ── 分段 ── */
+.wb-seg {
+  display: inline-flex;
+  padding: 3px;
+  background: var(--paper-2);
+  border-radius: 12px;
+}
+
+.wb-seg > button,
+.wb-seg > a {
+  display: inline-flex;
+  height: 2.2rem;
+  align-items: center;
+  padding: 0 0.95rem;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.933rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  transition: background-color 0.18s, color 0.18s;
+}
+
+.wb-seg > [aria-selected='true'],
+.wb-seg > [aria-pressed='true'],
+.wb-seg > [aria-current='page'] {
+  color: var(--text);
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 26 46 / 14%), 0 0 0 1px var(--line);
+}
+
+.wb-seg i {
+  margin-left: 0.35rem;
+  color: var(--text-3);
+  font-style: normal;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 标签 ── */
+.wb-tag {
+  display: inline-flex;
+  height: 1.5rem;
+  flex: none;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+
+.wb-tag-hot {
+  color: var(--seal);
+  background: var(--seal-soft);
+}
+
+.wb-tag-warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.wb-tag-info {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.wb-tag-ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.wb-tag-mute {
+  color: var(--text-2);
+  background: var(--paper-3);
+}
+
+.wb-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--ok);
+  border-radius: 50%;
+}
+
+.wb-dot[data-tone='warn'] {
+  background: var(--warn-mark);
+}
+
+.wb-dot[data-tone='hot'] {
+  background: var(--seal);
+}
+
+.wb-dot[data-tone='mute'] {
+  background: var(--text-3);
+}
+
+/* ── 页头里的搜索框 ── */
+.wb-field {
+  display: flex;
+  min-width: 17rem;
+  height: 2.4rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.8rem;
+  color: var(--text-3);
+  background: var(--paper-2);
+  border-radius: var(--r-ctl);
+  transition: box-shadow 0.15s, background-color 0.15s;
+}
+
+.wb-field:focus-within {
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring);
+}
+
+.wb-field input {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  background: none;
+  border: 0;
+  outline: 0;
+}
+
+.wb-kbd {
+  padding: 3px 5px;
+  color: var(--text-3);
+  font: 600 11px/1 sans-serif;
+  background: var(--paper);
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+
+/* ── 印：只在用户亲手授权的那一下出现 ── */
+.wb-stamp {
+  display: inline-block;
+  flex: none;
+  padding: 0.1rem 0.55rem 0.1rem 0.75rem;
+  color: var(--seal);
+  font-size: 0.867rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  white-space: nowrap;
+  border: 2px solid var(--seal);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 2px #fff, inset 0 0 0 3px var(--seal);
+  opacity: 0.92;
+  transform: rotate(-5deg);
+  animation: wb-stamp 0.36s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+
+@keyframes wb-stamp {
+  from {
+    opacity: 0;
+    transform: rotate(-14deg) scale(1.9);
+  }
+
+  to {
+    opacity: 0.92;
+    transform: rotate(-5deg) scale(1);
+  }
+}
+
+/* ── 玻璃：只给浮在内容之上的一层 ── */
+.wb-glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(22px) saturate(1.7);
+  box-shadow: var(--glass-edge), var(--float);
+}
+
+html[data-fx='lite'] .wb-glass {
+  background: #f7f9fd;
+  backdrop-filter: none;
+}
+
+/* ── 页面骨架：页头不动，正文自己滚 ── */
+.wb-page {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.wb-page-head {
+  display: flex;
+  min-height: 3.2rem;
+  flex: none;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 22px 44px 0;
+}
+
+.wb-page-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.wb-rule {
+  position: relative;
+  height: 1px;
+  flex: none;
+  margin: 14px 44px 0;
+  background: var(--line);
+}
+
+.wb-rule::before {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 30px;
+  height: 2px;
+  content: '';
+  background: var(--seal);
+}
+
+.wb-page-body {
+  min-height: 0;
+  flex: 1;
+  padding: 18px 44px 110px;
+  overflow: auto;
+  background: var(--paper);
+}
+
+.wb-page-body[data-flush='true'] {
+  padding-bottom: 18px;
+}
+
+html[data-clock='dial'] .wb-page-body {
+  padding-top: 54px;
+}
+
+.wb-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.55rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+  white-space: nowrap;
+}
+
+.wb-enter {
+  animation: wb-rise 0.34s var(--ease) both;
+}
+
+.wb-enter:nth-child(2) {
+  animation-delay: 0.04s;
+}
+
+.wb-enter:nth-child(3) {
+  animation-delay: 0.08s;
+}
+
+.wb-enter:nth-child(4) {
+  animation-delay: 0.12s;
+}
+
+@keyframes wb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html[data-fx='lite'] .wb-enter,
+html[data-fx='lite'] .wb-stamp {
+  animation: none;
+}
+
+@media (max-width: 1100px) {
+  .wb-page-head,
+  .wb-page-body {
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+
+  .wb-rule {
+    margin-right: 28px;
+    margin-left: 28px;
+  }
+}
+
+/*
+ * ── AI 入口的统一记号：一圈缓慢旋转的多色细边 ──
+ * 只用在「对 AI 说话」的输入框上。做法是一张固定的渐变图在旋转（只动 transform，由显卡合成），
+ * 外面用圆角裁掉，中间盖一块白底。14 秒一圈，点进去时加速一倍。
+ */
+.wb-ring {
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  border: 2px solid transparent;
+}
+
+.wb-ringfx {
+  position: absolute;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: inherit;
+  inset: -2px;
+}
+
+.wb-ringfx > i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 130%;
+  margin: -65% 0 0 -65%;
+  background: conic-gradient(
+    #3f74ff,
+    #8b5cf6,
+    #ec5f9b,
+    #f5a524,
+    #12b5a5,
+    #3f74ff,
+    #8b5cf6,
+    #ec5f9b,
+    #f5a524,
+    #12b5a5,
+    #3f74ff
+  );
+  aspect-ratio: 1;
+  animation: wb-spin 14s linear infinite;
+  will-change: transform;
+}
+
+.wb-ring:focus-within .wb-ringfx > i {
+  animation-duration: 7s;
+}
+
+.wb-ringfx::after {
+  position: absolute;
+  content: '';
+  background: #fff;
+  border-radius: inherit;
+  inset: 2px;
+}
+
+@keyframes wb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+html[data-fx='lite'] .wb-ringfx > i {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-ringfx > i {
+    animation: none;
+  }
+}

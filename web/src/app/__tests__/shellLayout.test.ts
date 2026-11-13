@@ -3,9 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   IDENTITY_FALLBACK_LINES,
-  MINIMUM_TARGET_SIZE,
+  RAIL_WIDTH,
+  RAIL_ITEM_HEIGHT,
+  USER_MENU_HORIZONTAL_PADDING,
   USER_MENU_WIDTH,
-  collapsedNavigationTargetWidth,
   singleLineTextWidth,
 } from '../shellLayout';
 
@@ -16,18 +17,20 @@ function readSource(relativePath: string): string {
   );
 }
 
-describe('AppShell sizing after the 2026-11-11 topbar removal', () => {
+describe('AppShell fixed rail and settings menu sizing', () => {
   it('keeps every fail-closed identity line on a single line of the user menu', () => {
     expect(IDENTITY_FALLBACK_LINES.length).toBeGreaterThan(0);
     for (const line of IDENTITY_FALLBACK_LINES) {
-      expect(singleLineTextWidth(line)).toBeLessThanOrEqual(USER_MENU_WIDTH);
+      expect(singleLineTextWidth(line)).toBeLessThanOrEqual(USER_MENU_WIDTH - USER_MENU_HORIZONTAL_PADDING);
     }
   });
 
-  it('keeps collapsed navigation targets at or above the decided minimum size', () => {
-    expect(collapsedNavigationTargetWidth()).toBeGreaterThanOrEqual(
-      MINIMUM_TARGET_SIZE,
-    );
+  it('uses a fixed 76px rail with 58px navigation items', () => {
+    expect(RAIL_WIDTH).toBe(76);
+    expect(RAIL_ITEM_HEIGHT).toBe(58);
+    const shellCss = readSource('../AppShell.module.css');
+    expect(/\.shell\s*\{([^}]*)\}/.exec(shellCss)?.[1]).toContain(`grid-template-columns: ${RAIL_WIDTH}px minmax(0, 1fr)`);
+    expect(/\.railLink\s*\{([^}]*)\}/.exec(shellCss)?.[1]).toContain(`height: ${RAIL_ITEM_HEIGHT}px`);
   });
 });
 

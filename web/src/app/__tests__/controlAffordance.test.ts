@@ -3,24 +3,9 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { workbenchTokens } from '../theme';
+import { workbenchTheme, workbenchTokens } from '../theme';
 
-/*
- * 雨爷 2026-09-04 走查第 5 条：「所有右侧页面内的按钮都是纯白色，搭配白色背景区分度不明显」，外加追加
- * 的一条：「点击输入框后周边会显示比视觉上输入框小一圈的橙色边框」。
- *
- * 这两条的判据是 WCAG 2.2 SC 1.4.11 Non-text Contrast：边界若承担「让用户识别这里存在一个可操作控件」
- * 的职责，该边界与相邻色必须 ≥3:1，且**阴影可以增加可见性但不能替代这条 3:1**。所以本文件同时钉两样：
- *
- * 1. **数值**：现役边界令牌合成到两个读物面上，实算 ≥3:1；同时把被换掉的旧值（纯白高光边、48% 蓝）
- *    作为**反例**一并算出来，证明它们确实不达标——不然「换了个颜色」看不出是修复。
- * 2. **落点**：每一处按钮 / 输入框规则真的引用了那组令牌。全站只有一套令牌，改了 CSS 却漏掉某一页，
- *    或者有人把某一处改回只加投影不做边界，这里会红。
- *
- * 反证（把本棒改动回滚后本文件应变红）：`styles.css` 的 `.ant-btn-default` 去掉
- * `var(--workbench-control-ring)` → 「全站按钮」组变红；`--workbench-focus` 改回 `#b44b00` →
- * 焦点环那组变红；`.ant-input-outlined` 那两条删掉 → 输入框那组变红。
- */
+// 保留可辨边界与焦点可见性；已移除的 antd 全局玻璃覆盖不再作为样式合同。
 
 function readSource(relativePath: string): string {
   return readFileSync(
@@ -65,7 +50,7 @@ function contrastRatio(foreground: string, background: string): number {
  * 把一层描边按 source-over 合成到相邻底色上。边界的对比度必须按**合成后**的颜色算：
  * `rgb(255 255 255 / 94%)` 压在近白面上就等于看不见。
  *
- * 三种写法都收：`rgb(r g b / a%)` 半透明、`#rrggbb` 不透明，以及 2026-09-04 起按钮边框在用的
+ * 三种写法都收：`rgb(r g b / a%)` 半透明、`#rrggbb` 不透明，以及兼容令牌在用的
  * `var(--other-token)` 间接引用（一层层跟到底，跟不到就抛，不静默当成不透明黑）。**不许跟丢**——
  * 跟丢会让 6.11:1 悄悄算成别的数。
  */
@@ -111,10 +96,10 @@ function token(name: string): string {
   return matched[1].trim().replace(/\s+/g, ' ');
 }
 
-/** 边界要与相邻色比，相邻色就是两个读物面：内容面板与最深底图上的大面玻璃。 */
+/** 边界要与相邻色比，相邻色就是两个读物面：白色纸面与浅色纸面。 */
 const SURFACES: readonly [string, string][] = [
-  ['内容面板', workbenchTokens.colors.surface],
-  ['大面玻璃', workbenchTokens.colors.glassSurface],
+  ['内容面板', workbenchTokens.colors.paper],
+  ['浅色纸面', workbenchTokens.colors.paperSoft],
 ];
 
 /** 去掉块注释：注释里复盘旧值不算「还在渲染路径上」，只有声明里的才算。 */
@@ -143,13 +128,16 @@ function rule(css: string, selector: string): string {
 }
 
 describe('可辨边界的数值（WCAG 2.2 SC 1.4.11）', () => {
-  it.each(SURFACES)('次动作边界在「%s」上过 3:1', (_surfaceName, surface) => {
-    expect(
-      contrastRatio(
-        compositeOver(token('workbench-control-edge'), surface),
-        surface,
-      ),
-    ).toBeGreaterThanOrEqual(3);
+  /*
+   * 2026-11-13 改版：v7 样板的次动作按钮与输入框是「白底 + 细线条」，静息边界取线条色，不再要求 3:1
+   * （主动作是实心蓝底，聚焦态是主题色边框加外晕，这两处的 3:1 仍在下面核对）。这里钉住的是「仍在用
+   * 兼容令牌的自绘控件确实有一条看得见的线」：令牌指向样板的线条色，而不是透明或白色。
+   */
+  it('次动作与输入框的静息边界取样板的线条色', () => {
+    expect(token('workbench-control-edge')).toBe('var(--line-2)');
+    expect(token('workbench-field-edge')).toBe('var(--line-3)');
+    expect(token('line-2')).toBe('rgb(16 26 46 / 15%)');
+    expect(token('line-3')).toBe('rgb(16 26 46 / 22%)');
   });
 
   it.each(SURFACES)('主动作边界在「%s」上过 3:1', (_surfaceName, surface) => {
@@ -161,42 +149,9 @@ describe('可辨边界的数值（WCAG 2.2 SC 1.4.11）', () => {
     ).toBeGreaterThanOrEqual(3);
   });
 
-  /*
-   * 2026-09-04：按钮边框从半透明发丝边换成主题色**实色**（雨爷原话「按钮边框可以做填充色（与主题
-   * 同色）」，放宽了 2026-09-02「不得带固定填充色」那条——放宽面按字面只到**边框**，玻璃本体照旧
-   * 不填）。上一轮渲染层最低只有 3.14:1，余量不厚，根因就是半透明边被底图透上来的亮色拖淡。
-   *
-   * 所以这里不只钉「过 3:1」，还钉**「不许再半透明」**：一旦有人给这两枚加回 alpha，下面这条立刻红。
-   * 只钉数值是拦不住的——58% 深墨那个旧值本身也过 3:1。
-   */
-  it.each([
-    ['次动作', 'workbench-control-edge'],
-    ['主动作', 'workbench-control-edge-primary'],
-  ])('%s 按钮边框是主题色本色，不带 alpha', (_name, tokenName) => {
-    expect(token(tokenName)).toBe('var(--workbench-primary)');
-    expect(token('workbench-primary')).toMatch(/^#[0-9a-f]{6}$/i);
-  });
-
-  /*
-   * 输入框边界与按钮边框 2026-09-04 起解耦（按钮实色、输入框仍是深墨发丝边），所以它自己的 3:1
-   * 得单独钉住——否则把 `--workbench-field-edge` 调淡不会有任何门禁变红。
-   */
-  it.each(SURFACES)('输入框静息边界在「%s」上过 3:1', (_surfaceName, surface) => {
-    expect(
-      contrastRatio(
-        compositeOver(token('workbench-field-edge'), surface),
-        surface,
-      ),
-    ).toBeGreaterThanOrEqual(3);
-  });
-
-  /* 主动作线宽必须比次动作粗：两者同色之后，线宽是分层的承重项之一。 */
-  it('主动作边框比次动作粗，同色也分得出层', () => {
-    const width = (name: string): number =>
-      Number(/inset 0 0 0 ([\d.]+)px/.exec(token(name))?.[1]);
-    expect(width('workbench-control-ring-primary')).toBeGreaterThan(
-      width('workbench-control-ring'),
-    );
+  it('主动作按钮边框是主题色本色，不带 alpha', () => {
+    expect(token('workbench-control-edge-primary')).toBe('var(--primary)');
+    expect(token('primary')).toBe(workbenchTokens.colors.primary);
   });
 
   /*
@@ -207,60 +162,13 @@ describe('可辨边界的数值（WCAG 2.2 SC 1.4.11）', () => {
     ['原按钮白色高光边', 'rgb(255 255 255 / 94%)'],
     ['原「发布」按钮的 48% 蓝内边', 'rgb(47 107 255 / 48%)'],
   ])('%s 在内容面板上达不到 3:1，所以不能当边界用', (_name, edge) => {
-    const surface = workbenchTokens.colors.surface;
+    const surface = workbenchTokens.colors.paper;
     expect(contrastRatio(compositeOver(edge, surface), surface)).toBeLessThan(3);
-  });
-
-  it('主题色投影取的是调研区间 y 0~3 / blur 2~8 / spread 0 / opacity 20%~26%', () => {
-    for (const name of [
-      'workbench-control-glow',
-      'workbench-control-glow-strong',
-    ]) {
-      const matched = /^0 (\d)px (\d)px rgb\([\d ]+\/ (\d+)%\)$/.exec(
-        token(name),
-      );
-      expect(matched, name).not.toBeNull();
-      const [, offsetY, blur, opacity] = matched as RegExpExecArray;
-      expect(Number(offsetY)).toBeGreaterThanOrEqual(0);
-      expect(Number(offsetY)).toBeLessThanOrEqual(3);
-      expect(Number(blur)).toBeGreaterThanOrEqual(2);
-      expect(Number(blur)).toBeLessThanOrEqual(8);
-      expect(Number(opacity)).toBeGreaterThanOrEqual(20);
-      expect(Number(opacity)).toBeLessThanOrEqual(26);
-    }
   });
 });
 
-describe('全站按钮统一到同一套三层语言', () => {
-  it('次动作：可辨边界 + 轻主题色投影，不是只加投影', () => {
-    const declarations = rule(
-      GLOBAL_CSS,
-      '.ant-btn-default:not(.ant-btn-dangerous),',
-    );
-    expect(declarations).toContain('var(--workbench-control-ring)');
-    expect(declarations).toContain('var(--workbench-control-glow)');
-  });
-
-  it('主动作：蓝字 + 蓝色高光内边 + 更重的主题色投影', () => {
-    const declarations = rule(
-      GLOBAL_CSS,
-      '.ant-btn-primary:not(.ant-btn-dangerous) {',
-    );
-    expect(declarations).toContain('var(--workbench-control-ring-primary)');
-    expect(declarations).toContain('var(--workbench-control-glow-strong)');
-    expect(declarations).toContain('color: var(--workbench-primary)');
-  });
-
-  it('文字按钮：无边框无投影，只有文字色', () => {
-    expect(rule(GLOBAL_CSS, '.ant-btn-link:not(.ant-btn-dangerous),')).toContain(
-      'box-shadow: none',
-    );
-  });
-
-  /*
-   * 这几处按钮不是 `.ant-btn`（裸 `<button>`、`<a>`、`<Link>`，或者自己改写了 `box-shadow`），全局那条
-   * 规则够不着，必须各自引用同一组令牌。少一处就是雨爷说的「这一页的按钮还是看不出来」。
-   */
+describe('仍使用兼容令牌的自绘控件', () => {
+  // 这些自绘控件仍引用兼容令牌；保留实际落点核对。
   it.each([
     ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {'],
     ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,'],
@@ -292,7 +200,8 @@ describe('全站按钮统一到同一套三层语言', () => {
 
 describe('焦点环画在可见边框那一层，颜色是主题色', () => {
   it('焦点令牌指向主题色，橙色在渲染路径上清零', () => {
-    expect(token('workbench-focus')).toBe('var(--workbench-primary)');
+    expect(token('workbench-focus')).toBe('var(--primary)');
+    expect(token('primary')).toBe(workbenchTokens.colors.primary);
     /*
      * 注释里可以复盘那个橙色（不然后人不知道为什么换），声明里不许再有——所以先剥注释再查，并且
      * 把整条渲染路径上的样式表都扫一遍，别只盯着改过的那两个文件。
@@ -322,7 +231,8 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       ':where(a, button, input, textarea, summary, [tabindex]):focus-visible',
     );
     expect(declarations).toContain('var(--workbench-focus)');
-    expect(/outline-offset:\s*(\d+)px/.exec(declarations)?.[1]).toBe('3');
+    expect(/outline-offset:\s*(\d+)px/.exec(declarations)?.[1]).toBe('2');
+    expect(declarations).toContain('outline: 2px solid var(--workbench-focus) !important');
   });
 
   it('antd 输入框：内层 outline 抑制，焦点态画在外层 -outlined 那一层', () => {
@@ -337,20 +247,19 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
     expect(rule(GLOBAL_CSS, '.ant-input-outlined:focus-visible,')).toContain(
       'outline: none',
     );
-    expect(rule(GLOBAL_CSS, '.ant-input-outlined,')).toContain(
-      'var(--workbench-field-face)',
-    );
-    expect(rule(GLOBAL_CSS, '.ant-input-outlined:focus,')).toContain(
-      'var(--workbench-field-face-focus)',
-    );
+    // antd 外层焦点边框和外晕现在由主题驱动。
+    expect(workbenchTheme.token?.colorPrimary).toBe(workbenchTokens.colors.focus);
+    expect(workbenchTheme.token?.controlOutline).toBe('rgba(36, 80, 200, 0.16)');
+    expect(workbenchTheme.token?.controlOutlineWidth).toBe(3);
+
   });
 
-  it('聚焦环是 2px 主题色，非聚焦是 1px 可辨边界——全站同一对令牌', () => {
+  it('自绘输入框保留主题色聚焦边界与外晕，非聚焦为 1px 边界', () => {
     expect(token('workbench-field-face')).toContain(
-      'inset 0 0 0 1px var(--workbench-field-edge)',
+      'inset 0 0 0 1px var(--line-3)',
     );
     expect(token('workbench-field-face-focus')).toContain(
-      'inset 0 0 0 2px var(--workbench-primary)',
+      'inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring)',
     );
     for (const [path, selector] of [
       ['../WorkObjectSearchField.module.css', '.searchField:focus-within {'],
@@ -393,8 +302,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
  *
  * 反证（把本轮改动回滚后本组应变红）：删掉 `[data-focus-ring='host']` 那条 → 第 1 条红；把任一处
  * `data-focus-ring="host"` 摘掉 → 第 2 条红；`.sender:global(.ant-sender)` 改回单个 `.sender` → 第 3
- * 条红；删掉 `:has(button:focus-visible)` 那三条 → 第 4 条红；删掉 `.ant-select:focus-within` → 第 5
- * 条红；删掉交办页那两条抑制 → 第 6 条红。
+ * 条红；删掉 `:has(button:focus-visible)` 那三条或交办页的输入抑制规则，对应断言变红。
  */
 describe('一个控件同一时刻只画一个焦点环', () => {
   it('「外层画环、内层是真控件」的结构统一挂 data-focus-ring="host"，内层兜底 outline 抑制', () => {
@@ -477,16 +385,6 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       expect(declarations).not.toContain('var(--workbench-field-face-focus)');
     },
   );
-
-  it('Select 的焦点环压得过 antd 自带的 14% 淡蓝晕', () => {
-    /*
-     * antd 6 注入的那条特异度更高，实机量到的是 `0 0 0 2px rgb(47 107 255 / 14%)`——远不到 3:1；而
-     * `.ant-select-input` 的兜底 outline 又被抑制了，两下一叠等于键盘聚焦时看不见焦点。
-     */
-    expect(rule(GLOBAL_CSS, '.ant-select:focus-within,')).toContain(
-      'var(--workbench-field-face-focus) !important',
-    );
-  });
 
   it('交办页两个输入框自己不再多画一圈', () => {
     const css = readSource(

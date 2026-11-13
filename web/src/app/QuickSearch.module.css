@@ -1,0 +1,116 @@
+/* 搜索面板：毛玻璃浮层。只在打开时渲染，进场只动 transform 与 opacity。 */
+.scrim {
+  position: fixed;
+  z-index: 40;
+  background: rgb(10 16 29 / 30%);
+  animation: fade 0.2s both;
+  inset: 0;
+}
+
+.palette {
+  position: fixed;
+  z-index: 41;
+  top: 13vh;
+  left: 50%;
+  width: min(620px, 92vw);
+  padding-bottom: 10px;
+  overflow: hidden;
+  border-radius: 20px;
+  transform: translateX(-50%);
+  animation: drop 0.22s var(--ease) both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-8px) scale(0.97);
+  }
+}
+
+:global(html[data-fx='lite']) .scrim,
+:global(html[data-fx='lite']) .palette {
+  animation: none;
+}
+
+.inputRow {
+  display: flex;
+  height: 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--line);
+}
+
+/* 焦点落在面板里唯一的输入框上；底边换成操作色表示正在输入。 */
+.inputRow:focus-within {
+  border-bottom-color: var(--primary);
+}
+
+.inputRow input {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.13rem;
+  background: none;
+  border: 0;
+  outline: 0;
+}
+
+.group {
+  padding: 10px 20px 4px;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.item {
+  display: flex;
+  width: calc(100% - 16px);
+  height: 44px;
+  align-items: center;
+  gap: 12px;
+  margin: 0 8px;
+  padding: 0 12px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+}
+
+.item > svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+.item > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item:hover,
+.item[data-primary='true'] {
+  background: rgb(255 255 255 / 85%);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.item em {
+  color: var(--text-3);
+  font-size: 0.867rem;
+  font-style: normal;
+}

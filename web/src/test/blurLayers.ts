@@ -39,7 +39,7 @@ const cssModuleMaps = import.meta.glob<Record<string, string>>(
 );
 
 /** 非 CSS Module 的全局样式表；里面的 class 名不做哈希。 */
-const GLOBAL_STYLESHEETS = ['styles.css'] as const;
+const GLOBAL_STYLESHEETS = ['styles.css', 'shared/ui/workbench.css'] as const;
 
 /** 运行时注入样式的来源标记；它没有对应的源文件路径。 */
 export const RUNTIME_STYLE_SOURCE = '(runtime <style>)';

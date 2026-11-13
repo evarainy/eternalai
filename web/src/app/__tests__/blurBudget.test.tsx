@@ -13,7 +13,6 @@ import WorkObjectsPage from '../../pages/WorkObjectsPage';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useNavigationStore } from '../../stores/navigationStore';
 import {
   blurDeclaringSelectors,
   describeBlurLayers,
@@ -184,9 +183,8 @@ beforeEach(() => {
   apiMocks.getWorkObject.mockReset();
   apiMocks.getWorkObject.mockResolvedValue(null);
   window.localStorage.clear();
-  useNavigationStore.setState({ collapsed: false });
   useAuthStore.setState({ generation: 1, status: 'authenticated' });
-  useAppearanceStore.setState({ background: 'bgA' });
+  useAppearanceStore.setState({ skin: 'ink', size: 'm', clock: 'digit', fx: null });
   useAIDockStore.setState({
     contextNotice: null,
     draft: '',
@@ -199,15 +197,7 @@ beforeEach(() => {
   });
 });
 
-/*
- * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」的模糊层预算：单屏带 `backdrop-filter` 的元素不得超过
- * 6 个，且只用于左导航、顶栏、内容面板、浮动窗、悬浮按钮这类大面。
- *
- * 下面的每屏断言都钉死**具体是哪几个面**，不是只写一个上限：
- * - 多加一层（例如给按钮或图标底座加模糊）→ 列表多出一项 → 变红；
- * - 把玻璃材质整体回滚 → 列表变空 → 同样变红。
- * 这样才满足「把本棒的视觉改动全部回滚，这个检查还会绿吗」的覆盖判据。
- */
+// 按真实渲染集合核对预算，包含 wb-glass 全局规则和仍在用的页面、Dock 样式。
 
 describe('blur-layer detector', () => {
   it('reads declarations, not occurrences of the string', () => {
@@ -234,18 +224,18 @@ describe('blur-layer detector', () => {
   });
 
   it('resolves declared class names to the names that reach the DOM', async () => {
-    renderScreen('/work-objects');
+    renderScreen('/chat');
     await screen.findByTestId('user-bar');
 
     const sidebarLayer = findBlurLayers(shellElement()).find(
-      (layer) => layer.declaredSelector === '.sidebar',
+      (layer) => layer.declaredSelector === '.sessionRail',
     );
     expect(sidebarLayer).toBeDefined();
-    expect(sidebarLayer?.file).toBe('app/AppShell.module.css');
+    expect(sidebarLayer?.file).toBe('pages/ChatPage.module.css');
     expect(sidebarLayer?.element).toBe(
-      screen.getByRole('complementary', { name: '主导航' }),
+      screen.getByRole('complementary', { name: '我问过的' }),
     );
-    expect(sidebarLayer?.matchSelector).not.toBe('.sidebar');
+    expect(sidebarLayer?.matchSelector).not.toBe('.sessionRail');
     expect(sidebarLayer?.element.matches(sidebarLayer.matchSelector)).toBe(true);
   });
 
@@ -263,7 +253,7 @@ describe('blur-layer detector', () => {
 });
 
 describe('per-screen blur-layer budget', () => {
-  it('keeps the work-objects screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
+  it('keeps the work-objects screen on its floating glass entry', async () => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -271,8 +261,7 @@ describe('per-screen blur-layer budget', () => {
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -283,7 +272,6 @@ describe('per-screen blur-layer budget', () => {
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .sidebar',
       'pages/ChatPage.module.css .sessionRail',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
@@ -300,13 +288,12 @@ describe('per-screen blur-layer budget', () => {
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
       'app/AIDock.module.css .dock',
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('adds no blur layer when a user-bar popover is open on top of everything else', async () => {
+  it('adds one glass layer within budget when settings opens above the Dock', async () => {
     useAIDockStore.setState({ lastOpenMode: 'pinned', mode: 'pinned' });
     renderScreen('/work-objects');
     await waitFor(() =>
@@ -316,23 +303,18 @@ describe('per-screen blur-layer budget', () => {
     const before = describeBlurLayers(shellElement());
 
     fireEvent.click(screen.getByTestId('user-bar-identity'));
-    fireEvent.click(screen.getByText('风格'));
-    expect(screen.getByRole('region', { name: '界面风格' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '设置' })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
-    expect(after).toEqual(before);
+    expect(after).toEqual([...before, 'shared/ui/workbench.css .wb-glass'].sort());
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  /*
-   * 2026-09-04 把用户菜单与系统状态改成了画板的 268px / 384px 弹出层。弹出层承载正文，按落盘的
-   * 玻璃约束**不许买模糊**——弹层各开一次，列表都不能多出一项。2026-11-11 去顶栏后弹层由个人栏打开，
-   * 系统状态从用户菜单里进入。
-   */
+  // 设置与系统状态共用一层毛玻璃浮层，打开后仍不得超过预算。
   it.each([
-    ['用户菜单', ['user-bar-identity']],
+    ['设置', ['user-bar-identity']],
     ['系统状态', ['user-bar-identity', 'user-menu-system-status']],
-  ])('adds no blur layer when the %s popover is open', async (region, triggers) => {
+  ])('adds one glass layer within budget when the %s popover is open', async (region, triggers) => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -345,30 +327,28 @@ describe('per-screen blur-layer budget', () => {
     expect(screen.getByRole('region', { name: region })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
-    expect(after).toEqual(before);
+    expect(after).toEqual([...before, 'shared/ui/workbench.css .wb-glass'].sort());
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the dispatch draft screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
+  it('keeps the dispatch draft screen on its floating glass entry', async () => {
     renderScreen('/work-dispatch');
     await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the software-centre screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
+  it('keeps the software-centre screen on its floating glass entry', async () => {
     renderScreen('/apps');
     await screen.findByTestId('oa-status');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -418,10 +398,9 @@ describe('per-screen blur-layer budget', () => {
         .sort(),
     ).toEqual([
       'app/AIDock.module.css .dock',
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
       'pages/ChatPage.module.css .sessionRail',
       'pages/LoginPage.module.css .card',
+      'shared/ui/workbench.css .wb-glass',
     ]);
   });
 
