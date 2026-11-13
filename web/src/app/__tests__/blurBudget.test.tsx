@@ -32,12 +32,18 @@ const apiMocks = vi.hoisted(() => ({
   syncWorkObjects: vi.fn(),
   bindPassword: vi.fn(),
   unbindPassword: vi.fn(),
+  readWorkQueue: vi.fn(),
 }));
 
 vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
   bindPasswordApiV1CredentialBindingsTargetSystemPut: apiMocks.bindPassword,
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
   unbindPasswordApiV1CredentialBindingsTargetSystemDelete: apiMocks.unbindPassword,
+}));
+
+vi.mock('../../features/work-dispatch/workObjectLifecycleApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../features/work-dispatch/workObjectLifecycleApi')>(),
+  readWorkQueue: apiMocks.readWorkQueue,
 }));
 
 vi.mock('../../generated/me/me', () => ({
@@ -176,6 +182,8 @@ beforeEach(() => {
   });
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
+  apiMocks.readWorkQueue.mockReset();
+  apiMocks.readWorkQueue.mockResolvedValue({ ...workObjectList(), items: [] });
   apiMocks.listWorkObjects.mockReset();
   apiMocks.listWorkObjects.mockResolvedValue(workObjectList());
   apiMocks.syncWorkObjects.mockReset();
@@ -223,20 +231,18 @@ describe('blur-layer detector', () => {
     ]);
   });
 
-  it('resolves declared class names to the names that reach the DOM', async () => {
-    renderScreen('/chat');
-    await screen.findByTestId('user-bar');
-
-    const sidebarLayer = findBlurLayers(shellElement()).find(
-      (layer) => layer.declaredSelector === '.sessionRail',
+  it('resolves declared class names to the names that reach the DOM', () => {
+    const root = renderLoginScreen();
+    const cardLayer = findBlurLayers(root).find(
+      (layer) => layer.declaredSelector === '.card',
     );
-    expect(sidebarLayer).toBeDefined();
-    expect(sidebarLayer?.file).toBe('pages/ChatPage.module.css');
-    expect(sidebarLayer?.element).toBe(
-      screen.getByRole('complementary', { name: '我问过的' }),
+    expect(cardLayer).toBeDefined();
+    expect(cardLayer?.file).toBe('pages/LoginPage.module.css');
+    expect(cardLayer?.element).toBe(
+      screen.getByRole('heading', { name: '欢迎回来' }).parentElement,
     );
-    expect(sidebarLayer?.matchSelector).not.toBe('.sessionRail');
-    expect(sidebarLayer?.element.matches(sidebarLayer.matchSelector)).toBe(true);
+    expect(cardLayer?.matchSelector).not.toBe('.card');
+    expect(cardLayer?.element.matches(cardLayer.matchSelector)).toBe(true);
   });
 
   /*
@@ -271,10 +277,11 @@ describe('per-screen blur-layer budget', () => {
     await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
-    expect(layers).toEqual([
-      'pages/ChatPage.module.css .sessionRail',
-    ]);
+    expect(layers).toEqual([]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+    fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
+    expect(screen.getByRole('complementary', { name: '我问过的' })).toBeInTheDocument();
+    expect(describeBlurLayers(shellElement())).toEqual([]);
   });
 
   it('keeps the enlarged floating panel within budget on top of a content panel', async () => {
@@ -398,7 +405,6 @@ describe('per-screen blur-layer budget', () => {
         .sort(),
     ).toEqual([
       'app/AIDock.module.css .dock',
-      'pages/ChatPage.module.css .sessionRail',
       'pages/LoginPage.module.css .card',
       'shared/ui/workbench.css .wb-glass',
     ]);
@@ -408,15 +414,13 @@ describe('per-screen blur-layer budget', () => {
    * 上面那条按文件钉，这一条按**渲染出来的那一屏**钉：主内容区 `<main id="main-content">` 里不许有
    * 模糊层。两条角度不同——文件那条防「新写一条模糊规则」，这条防「把某个大面挪进内容区」。
    *
-   * AI 助手页的左栏 `.sessionRail` 是唯一留在内容区里的模糊面，理由写在这里而不是留成默契：它是
-   * 定高的会话导航栏（`height` 由外壳给定、内部自己滚动），不随文档流伸长，也不承载正文，与左导航
-   * 同类。哪天它改成随内容伸长，这条就该跟着改。
+   * AI 助手页的案头、线程、输入框与按需展开的历史面板同样不买模糊。
    */
   it.each([
     ['/work-dispatch', [] as string[]],
     ['/apps', [] as string[]],
     ['/work-objects', [] as string[]],
-    ['/chat', ['pages/ChatPage.module.css .sessionRail']],
+    ['/chat', [] as string[]],
   ])('keeps the main content region of %s free of scroll-bound blur', async (path, expected) => {
     renderScreen(path);
     await screen.findByTestId('user-bar');

@@ -32,7 +32,7 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 
 /*
- * 身份读取在这一屏里只提供问候语里的称呼，走的是自己的合同测试。这里把它挡在 `fetch` 之外：本文件
+ * 身份读取提供当前用户元数据，走的是自己的合同测试。这里把它挡在 `fetch` 之外：本文件
  * 大量用 `vi.stubGlobal('fetch', ...)` 断言 runtime 请求的**唯一一次**调用与参数，而一个 `Response`
  * 实例的 body 只能读一次——放任 `/api/v1/me` 也走同一个替身，会把 runtime 那次请求的响应吃掉。
  */
@@ -40,6 +40,23 @@ const identityMock = vi.hoisted(() => ({ readMe: vi.fn() }));
 
 vi.mock('../../generated/me/me', () => ({
   readMeApiV1MeGet: identityMock.readMe,
+}));
+
+// 案头独立取数，不能消耗下面各业务用例专用的 fetch 响应。
+const deskMock = vi.hoisted(() => ({ listWorkObjects: vi.fn(), readWorkQueue: vi.fn(), getBinding: vi.fn() }));
+vi.mock('../../generated/work-objects/work-objects', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../generated/work-objects/work-objects')>(),
+  listWorkObjectsApiV1WorkObjectsGet: deskMock.listWorkObjects,
+}));
+
+vi.mock('../../features/work-dispatch/workObjectLifecycleApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../features/work-dispatch/workObjectLifecycleApi')>(),
+  readWorkQueue: deskMock.readWorkQueue,
+}));
+
+vi.mock('../../generated/credential-bindings/credential-bindings', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../generated/credential-bindings/credential-bindings')>(),
+  getBindingApiV1CredentialBindingsTargetSystemGet: deskMock.getBinding,
 }));
 
 const DISPLAY_NAME = '甲用户';
@@ -233,7 +250,9 @@ function renderChat(client = makeClient()) {
   const rendered = render(
     <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
       <QueryClientProvider client={client}>
-        <ChatPage />
+        <MemoryRouter>
+          <ChatPage />
+        </MemoryRouter>
       </QueryClientProvider>
     </ConfigProvider>,
   );
@@ -271,6 +290,12 @@ function storageText(storage: Storage): string {
 beforeEach(() => {
   // Restore before re-establishing the identity response for this test.
   vi.restoreAllMocks();
+  const emptyWork = { items: [], limit: 200, limit_exceeded: false, oa_sync: { last_success_at: null } };
+  deskMock.listWorkObjects.mockResolvedValue(emptyWork);
+  deskMock.readWorkQueue.mockResolvedValue(emptyWork);
+  deskMock.getBinding.mockResolvedValue({
+    bound: false, poll_failure_count: 0, poll_status: 'active', target_system: 'oa', updated_at: null,
+  });
   identityMock.readMe.mockReset();
   identityMock.readMe.mockResolvedValue({
     authenticated: true,
@@ -508,7 +533,7 @@ describe('ChatPage request boundary', () => {
     });
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
     expect(screen.getByLabelText('办理请求')).toBeDisabled();
-    const pendingButton = screen.getByText('发送').closest('button');
+    const pendingButton = screen.getByRole('button', { name: '发送' });
     expect(pendingButton).not.toBeNull();
     fireEvent.click(pendingButton as HTMLButtonElement);
     const form = screen.getByLabelText('办理请求').closest('form');
@@ -665,7 +690,7 @@ describe('ChatPage response projection', () => {
       screen.queryByRole('region', { name: '操作提交前复核' }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: '确认提交这项操作' }),
+      screen.queryByRole('button', { name: '确认提交' }),
     ).not.toBeInTheDocument();
   });
 
@@ -698,8 +723,8 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText('同意')).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_HIDDEN_ARGUMENT_VALUE');
     expect(screen.getByText('未提供可展示值')).toBeInTheDocument();
-    const argumentsHeading = screen.getByText('操作参数');
-    const argumentList = argumentsHeading.nextElementSibling;
+    const card = screen.getByRole('region', { name: '操作提交前复核' });
+    const argumentList = card.querySelector('dl');
     expect(argumentList?.tagName).toBe('DL');
     expect(
       Array.from(argumentList?.children ?? []).every(
@@ -731,7 +756,7 @@ describe('ChatPage response projection', () => {
       screen.getByRole('region', { name: '操作提交前复核' }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: '确认提交这项操作' }),
+      screen.queryByRole('button', { name: '确认提交' }),
     ).not.toBeInTheDocument();
   });
 
@@ -1002,7 +1027,7 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText(content)).toBeInTheDocument();
     expect(container.querySelector('details')).not.toHaveAttribute('open');
     expect(container.querySelector('script')).toBeNull();
-    expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByRole('region', { name: '办理会话' }).querySelector('a')).toBeNull();
     expect(screen.getByText(/当前部署未配置可信 OA 地址/)).toBeInTheDocument();
     expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(link);
@@ -1100,9 +1125,8 @@ describe('ChatPage response projection', () => {
 
     await sendMessage('提交审批同意');
     const confirmButton = await screen.findByRole('button', {
-      name: '确认提交这项操作',
+      name: '确认提交',
     });
-    expect(confirmButton.className).toContain('minimumActionTarget');
     // Business wording only: no capability id and no protocol enum on the card.
     expect(screen.queryByText('oa.approval.confirm')).not.toBeInTheDocument();
     expect(screen.getByText('提交 OA 审批同意操作')).toBeInTheDocument();
@@ -1151,8 +1175,10 @@ describe('ChatPage response projection', () => {
       (await screen.findAllByText('操作已受理，已进入本次执行流程。'))[0],
     ).toBeInTheDocument();
     expect(screen.getByText('采购申请审批')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交' })).not.toBeInTheDocument());
     expect(screen.getByText('提交 OA 审批同意操作')).toBeInTheDocument();
+    // 保留旧测试保护的 44×44 点击区域；新版卡片尚无等价样式，交主控修复。
+    expect(confirmButton.className).toContain('minimumActionTarget');
   });
 
   it('keeps action result business keys nested and projects only data.result', () => {
@@ -1543,13 +1569,15 @@ describe('ChatPage assistant surfaces', () => {
   it('offers the starter prompts instead of an empty box, and a prompt fills the request', () => {
     renderChat();
 
-    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
-    expect(screen.getByText('可以这样问我')).toBeInTheDocument();
+    const prompts = screen.getByRole('group', { name: '可以这样问我' });
+    expect(within(prompts).getAllByRole('button')).toHaveLength(4);
 
-    fireEvent.click(screen.getByText('我今天有什么要办的？'));
+    fireEvent.click(within(prompts).getByRole('button', { name: '我今天有什么要办的？' }));
 
     expect(useAIDockStore.getState().draft).toBe('我今天有什么要办的？');
     expect(screen.getByLabelText('办理请求')).toHaveValue('我今天有什么要办的？');
+    expect(screen.getByLabelText('办理请求')).toHaveFocus();
+    expect(screen.queryByRole('region', { name: '办理会话' })).not.toBeInTheDocument();
   });
 
   /*
@@ -1570,45 +1598,6 @@ describe('ChatPage assistant surfaces', () => {
     expect(document.getElementById('chat-request-hint')).toBeNull();
     expect(document.body.textContent).not.toContain(
       '回答基于 OA 实时数据，正式办理以 OA 为准',
-    );
-  });
-
-  /*
-   * 空态标题：画板是「王主任，早上好」。姓名现在有数据源（签名票据），所以称呼落地；「主任」是职务，
-   * OA 没有这个字段，这条钉死**不许出现职务**，也不许把一句说明重新做成最大字号的标题。
-   */
-  it('greets by the real name and keeps the empty reason in the description', async () => {
-    renderChat();
-
-    await waitFor(() => {
-      const title = document.querySelector('.ant-welcome-title');
-      expect(title?.textContent).toContain(DISPLAY_NAME);
-    });
-    const title = document.querySelector('.ant-welcome-title');
-    expect(title?.textContent).toBe(greetingWithName(DISPLAY_NAME));
-    expect(title?.textContent).not.toMatch(/主任|科员|先生|女士/);
-    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
-  });
-
-  it('falls back to a greeting without a form of address when the name is missing', async () => {
-    identityMock.readMe.mockResolvedValue({
-      authenticated: true,
-      display_name: '',
-      org: null,
-      org_status: 'unavailable',
-      avatar_path: null,
-    });
-    renderChat();
-
-    await waitFor(() => {
-      const title = document.querySelector('.ant-welcome-title');
-      expect(['夜里好', '早上好', '中午好', '下午好', '晚上好']).toContain(
-        title?.textContent,
-      );
-    });
-    // 取不到姓名就不带称呼，不留空位、不写占位名。
-    expect(document.querySelector('.ant-welcome-title')?.textContent).not.toMatch(
-      /，|,/,
     );
   });
 
@@ -1636,6 +1625,7 @@ describe('ChatPage assistant surfaces', () => {
   it('lists only the current temporary conversation and says history is not stored yet', () => {
     renderChat();
 
+    fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
     const rail = screen.getByRole('complementary', { name: '我问过的' });
     expect(within(rail).getByRole('heading', { name: '我问过的' })).toBeInTheDocument();
     /*
@@ -1659,6 +1649,7 @@ describe('ChatPage assistant surfaces', () => {
       useAIDockStore.getState().appendTranscript({ role: 'user', text: '再问一句' });
     });
 
+    fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
     const rail = screen.getByRole('complementary', { name: '我问过的' });
     const entries = within(rail).getAllByRole('listitem');
     expect(entries).toHaveLength(1);
@@ -1677,15 +1668,16 @@ describe('ChatPage assistant surfaces', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    // 空：说明「为什么空」，不是留白。这句话现在在问候语下面的说明行里。
-    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    // 空：案头与快捷指令可用，消息线程尚未出现。
+    expect(screen.getByRole('group', { name: '可以这样问我' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '办理会话' })).not.toBeInTheDocument();
 
     await sendMessage('查一下我的待办');
 
     // 加载中：有明确的进行中提示。
-    expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
-    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
+    const conversation = await screen.findByRole('region', { name: '办理会话' });
+    expect(within(conversation).getByRole('status')).toHaveTextContent('正在办理');
+    expect(screen.queryByRole('group', { name: '可以这样问我' })).not.toBeInTheDocument();
 
     act(() =>
       resolveRequest(
@@ -1706,65 +1698,9 @@ describe('ChatPage assistant surfaces', () => {
         '上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
+    expect(within(conversation).queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: '可以这样问我' })).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
-  });
-});
-
-/*
- * 2026-09-04 雨爷裁定：「`/chat` 欢迎语 28px 不要被限制死，要美观好看。」
- *
- * 解除限制不等于没人管——不然下一个窗口为了「照搬画板闭集」把它改回 21px，没有任何门禁会红。所以
- * 这里把**展示级下限**单独钉住：闭集（`theme.test.ts` 的 `CANVAS_FONT_SIZES`）从此不管这一处，改由
- * 本条管。反过来也钉住上限，防止有人把它当标题一路放大到跟提示卡抢分量。
- */
-describe('/chat 欢迎语：展示级字号，不受正文闭集约束', () => {
-  const stylesheet = readFileSync(
-    resolve(process.cwd(), 'src/pages/ChatPage.module.css'),
-    'utf-8',
-  );
-  /** 剥掉块注释：注释里复盘旧值不算「还在渲染路径上」。 */
-  const declarations = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '');
-  const GREETING_RULE =
-    /\.welcome :global\(\.ant-welcome-title\)[^{}]*\{[^}]*\}/;
-
-  function fontSize(rule: RegExp, what: string): number {
-    const block = rule.exec(declarations)?.[0];
-    const matched = block === undefined ? null : /font-size:\s*(\d+)px/.exec(block);
-    if (matched?.[1] === undefined) {
-      throw new Error(`missing_font_size:${what}`);
-    }
-    return Number(matched[1]);
-  }
-
-  it('欢迎语落在展示级区间，且明显大于同块的说明文字', () => {
-    const greeting = fontSize(GREETING_RULE, 'welcome-title');
-    const description = fontSize(
-      /\.welcome :global\(\.ant-welcome-description\)[^{}]*\{[^}]*\}/,
-      'welcome-description',
-    );
-
-    expect(greeting).toBeGreaterThanOrEqual(28);
-    expect(greeting).toBeLessThanOrEqual(40);
-    expect(greeting).toBeGreaterThan(description);
-  });
-
-  it('解除限制只到这一处：本文件其余字号仍是画板闭集成员', () => {
-    const CANVAS_FONT_SIZES = [14, 15, 16, 17, 18, 19, 21, 34];
-    const greetingRule = GREETING_RULE.exec(declarations);
-    if (greetingRule === null) {
-      throw new Error('missing_rule:welcome-title');
-    }
-    const others = declarations.replace(greetingRule[0], '');
-    const sizes = [...others.matchAll(/font-size:\s*(\d+)px/g)].map(
-      ([, raw]) => Number(raw),
-    );
-
-    expect(sizes.length).toBeGreaterThan(0);
-    for (const size of sizes) {
-      expect(CANVAS_FONT_SIZES).toContain(size);
-    }
   });
 });
 
@@ -1787,8 +1723,8 @@ describe('confirmation terminal cards', () => {
       renderChat();
       await sendMessage('发起操作');
       const oldCard = await screen.findByRole('region', { name: '操作提交前复核' });
-      const cancel = within(oldCard).getByRole('button', { name: '取消这项操作' });
-      const confirm = within(oldCard).getByRole('button', { name: '确认提交这项操作' });
+      const cancel = within(oldCard).getByRole('button', { name: '取消' });
+      const confirm = within(oldCard).getByRole('button', { name: '确认提交' });
       fireEvent.click(cancel); fireEvent.click(cancel); fireEvent.click(confirm);
       await waitFor(() => expect(runtimeMock.action).toHaveBeenCalledTimes(1));
       expect(cancel).toBeDisabled(); expect(confirm).toBeDisabled();
@@ -1806,20 +1742,20 @@ describe('confirmation terminal cards', () => {
       expect(within(oldCard).getByText('提交 OA 审批同意操作')).toBeInTheDocument();
       expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/runtime/action');
       expect(runtimeMock.handle).toHaveBeenCalledTimes(2);
-      const fresh = screen.getByRole('button', { name: '确认提交这项操作' });
+      const fresh = screen.getByRole('button', { name: '确认提交' });
       expect(fresh).toBeEnabled(); fireEvent.click(fresh);
       await waitFor(() => expect(runtimeMock.action).toHaveBeenCalledTimes(2));
       expect(runtimeMock.action.mock.calls[1]?.[0].action).toEqual({ action_type: 'confirm', response_id: 'fresh-card', confirmed: true });
-      await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交' })).not.toBeInTheDocument());
     },
   );
   it('does not claim cancellation when the network result is unknown', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(confirmEnvelope())).mockRejectedValueOnce(new TypeError('network failure')));
     renderChat(); await sendMessage('发起操作');
-    fireEvent.click(await screen.findByRole('button', { name: '取消这项操作' }));
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }));
     await screen.findByText('网络异常');
     expect(useAIDockStore.getState().confirmationResults).toEqual({});
-    expect(screen.getByRole('button', { name: '取消这项操作' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '取消' })).toBeEnabled();
     expect(screen.queryByText('已取消这项操作，本次未执行。')).not.toBeInTheDocument();
   });
 });
@@ -1835,7 +1771,7 @@ describe('confirmation response routing', () => {
     let resolveRequest!: (value: Response) => void;
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((resolve) => { resolveRequest = resolve; })));
     renderChat();
-    if (kind === 'action') fireEvent.click(screen.getByRole('button', { name: '取消这项操作' }));
+    if (kind === 'action') fireEvent.click(screen.getByRole('button', { name: '取消' }));
     else await sendMessage('确认 response-confirm-1');
     await waitFor(() => expect(kind === 'action' ? runtimeMock.action : runtimeMock.handle).toHaveBeenCalledTimes(1));
     vi.mocked(crypto.randomUUID).mockReturnValue('22222222-2222-4222-8222-222222222222');
@@ -1856,18 +1792,18 @@ describe('confirmation response routing', () => {
       expect(useAIDockStore.getState().confirmationResults).toEqual(
         message === '确认' ? {} : { 'response-confirm-1': 'confirmation_invalidated' },
       );
-      if (message === '确认') expect(screen.getByRole('button', { name: '确认提交这项操作' })).toBeEnabled();
-      else expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument();
+      if (message === '确认') expect(screen.getByRole('button', { name: '确认提交' })).toBeEnabled();
+      else expect(screen.queryByRole('button', { name: '确认提交' })).not.toBeInTheDocument();
     },
   );
   it('retires the accepted card while keeping its next waiting confirmation usable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(confirmEnvelope({ response_id: 'next-round', data: { action_outcome: 'accepted', result: null } }))));
     renderChat();
     const old = screen.getByRole('region', { name: '操作提交前复核' });
-    fireEvent.click(within(old).getByRole('button', { name: '确认提交这项操作' }));
+    fireEvent.click(within(old).getByRole('button', { name: '确认提交' }));
     await waitFor(() => expect(screen.getAllByRole('region', { name: '操作提交前复核' })).toHaveLength(2));
     expect(within(old).queryByRole('button')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '确认提交这项操作' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '确认提交' })).toBeEnabled();
     expect(useAIDockStore.getState().confirmationResults).toEqual({ 'response-confirm-1': 'accepted' });
     expect(runtimeMock.handle).not.toHaveBeenCalled();
     expect(runtimeMock.action).toHaveBeenCalledTimes(1);

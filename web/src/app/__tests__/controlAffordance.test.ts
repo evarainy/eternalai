@@ -172,7 +172,6 @@ describe('仍使用兼容令牌的自绘控件', () => {
   it.each([
     ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {'],
     ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,'],
-    ['AI 助手左栏「新对话」', '../../pages/ChatPage.module.css', '.newSessionButton {'],
     ['浮动面板「知道了」', '../AIDock.module.css', '.noticeButton {'],
     ['占位页动作', '../../shared/ui/PlaceholderPage.module.css', '.action {'],
     ['工作事项分段控件', '../../pages/WorkObjectsPage.module.css', '.segmented {'],
@@ -263,10 +262,6 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
     );
     for (const [path, selector] of [
       ['../WorkObjectSearchField.module.css', '.searchField:focus-within {'],
-      [
-        '../../pages/ChatPage.module.css',
-        '.sender:global(.ant-sender):focus-within {',
-      ],
       ['../../pages/LoginPage.module.css', '.form :global(.ant-input):focus,'],
       [
         '../../features/work-dispatch/WorkDispatchPage.module.css',
@@ -288,22 +283,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
   });
 });
 
-/*
- * 2026-09-04 第三次走查，雨爷截图 `C:.png`：AI 助手页的输入框聚焦后是**两个框叠着**——外层蓝色圆角
- * 框（`.sender:focus-within`，对的），内层一圈内缩、无圆角的框（错的）。
- *
- * 实机 `getComputedStyle` 量到的内层那圈是：`outline: 3px solid rgb(36,80,200)`、`outline-offset: -1px`、
- * `border-radius: 0`，落在 `.ant-sender-input` 这个 textarea 上，也就是上面那条兜底环。第二轮修的时候
- * 抑制清单是**按 antd 类名逐个列**的，`@ant-design/x` 的 `.ant-sender-input` 一个也对不上，于是漏了。
- *
- * 截图里那圈是橙色 `rgb(180,75,0)`（逐像素取样得到，正是已下线的 `#b44b00`），但现役令牌与 dev server
- * 实际响应都已经是 `#2450c8`——那是雨爷浏览器里的**旧样式**，不是仓库里还有橙色。所以本组不再钉颜色
- * （颜色由上面那条「橙色清零」守卫管），只钉**结构**：一个控件同一时刻只画一个环。
- *
- * 反证（把本轮改动回滚后本组应变红）：删掉 `[data-focus-ring='host']` 那条 → 第 1 条红；把任一处
- * `data-focus-ring="host"` 摘掉 → 第 2 条红；`.sender:global(.ant-sender)` 改回单个 `.sender` → 第 3
- * 条红；删掉 `:has(button:focus-visible)` 那三条或交办页的输入抑制规则，对应断言变红。
- */
+// 输入框的兜底 outline 由 host 抑制，外层承担可见聚焦态；按钮继续使用全局键盘焦点环。
 describe('一个控件同一时刻只画一个焦点环', () => {
   it('「外层画环、内层是真控件」的结构统一挂 data-focus-ring="host"，内层兜底 outline 抑制', () => {
     expect(
@@ -326,6 +306,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       '../WorkObjectSearchField.module.css',
       '.searchField:focus-within {',
       'data-focus-ring="host"',
+      'var(--workbench-field-face-focus)',
     ],
     [
       '交办页「交办对象」凹槽',
@@ -333,32 +314,36 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '.chipWell:focus-within {',
       'role="group" aria-label="交办对象（目录选择）"',
+      'var(--workbench-field-face-focus)',
     ],
     [
       'AI 助手页输入卡',
       '../../pages/ChatPage.tsx',
       '../../pages/ChatPage.module.css',
-      '.sender:global(.ant-sender):focus-within {',
+      '.composer:focus-within {',
       'data-focus-ring="host"',
+      '0 0 0 4px rgb(139 92 246 / 14%)',
     ],
-  ])('%s：焦点标记符合当前控件结构，子树里也确实有人画环', (_name, tsx, css, selector, structure) => {
+  ])('%s：焦点标记符合当前控件结构，子树里也确实有人画环', (_name, tsx, css, selector, structure, focusDeclaration) => {
     expect(readSource(tsx)).toContain(structure);
     if (structure === 'role="group" aria-label="交办对象（目录选择）"') {
       expect(readSource(tsx)).not.toContain('data-focus-ring="host"');
     }
-    expect(rule(readSource(css), selector)).toContain(
-      'var(--workbench-field-face-focus)',
-    );
+    expect(rule(readSource(css), selector)).toContain(focusDeclaration);
   });
 
-  it('AI 助手输入卡的规则要两个类才压得过 @ant-design/x 自己那条 .ant-sender', () => {
+  it('AI 助手原生输入卡由外层彩色边画环，textarea 不叠内框', () => {
+    const tsx = readSource('../../pages/ChatPage.tsx');
     const css = readSource('../../pages/ChatPage.module.css');
-    expect(css).toContain('.sender:global(.ant-sender) {');
-    // 只写一个类时实机生效的是 antd-x 的 `1px solid rgb(0 0 0 / 10%)`，压在白面上只有 1.2:1。
-    expect(withoutComments(css)).not.toMatch(/(?:^|\})\s*\.sender\s*\{/);
-    expect(rule(css, '.sender:global(.ant-sender) {')).toContain(
-      'var(--workbench-field-face)',
-    );
+    const shared = readSource('../../shared/ui/workbench.css');
+    expect(tsx).toContain('className={`${styles.composer} wb-ring`}');
+    expect(tsx).toContain('data-focus-ring="host"');
+    expect(tsx).toContain('<textarea');
+    expect(rule(css, '.input {')).toContain('outline: 0');
+    expect(rule(css, '.input {')).toContain('border: 0');
+    expect(rule(shared, '.wb-ring {')).toContain('border: 2px solid transparent');
+    expect(rule(shared, '.wb-ringfx > i {')).toContain('background: conic-gradient(');
+    expect(rule(shared, '.wb-ring:focus-within .wb-ringfx > i {')).toContain('animation-duration: 7s');
   });
 
   it.each([
@@ -367,11 +352,6 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       '交办页「交办对象」凹槽',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '.chipWell:focus-within:has(button:focus-visible) {',
-    ],
-    [
-      'AI 助手页输入卡',
-      '../../pages/ChatPage.module.css',
-      '.sender:global(.ant-sender):focus-within:has(button:focus-visible) {',
     ],
   ])(
     '%s：里面的按钮拿到焦点时凹槽那圈收回去，一次只留一个环',

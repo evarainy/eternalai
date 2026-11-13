@@ -1,13 +1,12 @@
 /// <reference types="vite/client" />
 
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentProps, FormEvent, KeyboardEvent } from 'react';
-import { Conversations, Prompts, Sender, Welcome } from '@ant-design/x';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Alert, Button, Checkbox, Input, Space, Typography } from 'antd';
-import type { TextAreaRef } from 'antd/es/input/TextArea';
+import { Alert, Button, Checkbox, Space, Typography } from 'antd';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
+import { Desk, DeskSide } from '../features/desk/Desk';
 import { DeliveryComposerButton } from '../features/messages/DeliveryComposer';
 import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
@@ -76,7 +75,7 @@ import {
 import type { UserAction } from '../generated/runtime/runtime.schemas';
 import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
-import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
+import { useIdentityQuery } from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
 import { ChatAttachmentBar } from '../features/chat-upload/ChatAttachmentBar';
 import {
@@ -87,7 +86,6 @@ import {
 } from '../features/chat-upload/chatUploadApi';
 import { useChatAttachments } from '../features/chat-upload/useChatAttachments';
 import type { ChatAttachment } from '../stores/aiDockStore';
-import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
@@ -411,11 +409,9 @@ const UNSUCCESSFUL_KINDS: ReadonlySet<PresentationKind> = new Set<PresentationKi
   'request_error',
 ]);
 
-/**
- * 提示词卡。2026-08-27「低数字素养用户的界面硬约束」§二 的缓解模式要求给可见示例，不能只留一个空
- * 白输入框；这里的四条主问句与副说明都逐字照 `Chat.dc.html` 定稿。
- */
 const COLLECTION_UPDATED_NOTICE = '原追问已更新，请按最新的追问补充信息。';
+
+/** 快捷指令：没有对话时排在输入框上方，点一下把这句话填进输入框。副说明是悬停提示。 */
 
 const STARTER_PROMPTS = [
   {
@@ -439,29 +435,6 @@ const STARTER_PROMPTS = [
     description: '看看我现在会哪些事',
   },
 ] as const;
-
-type RequestTextAreaProps = ComponentProps<typeof Input.TextArea>;
-
-/**
- * `Sender` 会把传给它的 `id` / `aria-*` 同时贴到外层容器和内部 textarea 上，于是一个标签会指向两个
- * 元素。这里只在真正的输入框上挂名称，容器保持干净，`getByLabelText` 也只会命中输入框本身。
- *
- * 2026-09-04：可见标签「办理请求」按返修要求删掉（画板 `Chat.dc.html` 上没有这一行），无障碍名称
- * 改由 `aria-label` 承担，读屏软件听到的仍是「办理请求」；`aria-describedby` 指向的那行底注同轮删除，
- * 属性一并去掉，避免指向一个不存在的 id。
- */
-const RequestTextArea = forwardRef<TextAreaRef, RequestTextAreaProps>(
-  function RequestTextArea(props, ref) {
-    return (
-      <Input.TextArea
-        {...props}
-        aria-label="办理请求"
-        id="chat-request"
-        ref={ref}
-      />
-    );
-  },
-);
 
 /** The three values the confirmation fills, under the D manifest's business names. */
 function FillConfirmationFields({ fields }: { fields: BrowserFillFields | null }) {
@@ -547,7 +520,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const outcome = responseId === null ? undefined : confirmationResults[responseId];
     return outcome === undefined ? null : userActionOutcomeMessages[outcome];
   };
-  const identity = useCurrentIdentity();
   const identityQuery = useIdentityQuery();
   const { data: me, refetch: refetchMe } = identityQuery;
   const authStatus = useAuthStore((state) => state.status);
@@ -563,6 +535,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserOptIn, setBrowserOptIn] = useState(false);
   const chatAttachments = useChatAttachments();
   const [attachmentsToggled, setAttachmentsToggled] = useState(false);
+  // 对话中右侧的案头可以收起；「历史对话」是输入框底栏打开的小面板。
+  const [deskSideOpen, setDeskSideOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 案头上的数字、卡片和快捷指令都只做一件事：把一句现成的话填进输入框，由用户自己发出去。
+  const askFromDesk = useCallback((question: string) => {
+    setDraft(question);
+    inputRef.current?.focus();
+  }, [setDraft]);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
   // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
@@ -986,10 +967,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     },
   });
 
-  // 新内容到达时滚到对话区底部；用户已向上翻看（离底部超过阈值）则不拉回。
+  // 新内容到达时滚到对话区底部；用户已向上翻看（离底部超过阈值）则不拉回。没有对话时这一格放的是案头，不滚。
   useEffect(() => {
     const element = transcriptRef.current;
-    if (element !== null && stickToBottom.current) element.scrollTop = element.scrollHeight;
+    const hasThread = transcript.length > 0 || mutation.isPending || browserTarget !== null
+      || pendingSubmission !== null || retrySubmission !== null;
+    if (element !== null && hasThread && stickToBottom.current) element.scrollTop = element.scrollHeight;
   }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission]);
 
   const submit = (retry?: ChatSubmission) => {
@@ -1095,19 +1078,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     && !browserSubmissionBlocked && requestMetadataReady && !chatAttachments.busy
     && (attachmentsAllowed || chatAttachments.attachments.length === 0);
 
-  /**
-   * `Sender` 自带的 Enter 发送依赖其默认发送按钮回填的内部状态；这里用 `footer` 自绘按钮，该状态
-   * 永远停在初始值，Enter 因此发不出去。改由本处接管：Enter 发送，Shift/Ctrl/Alt/Meta+Enter 换行，
-   * 输入法组字（`isComposing` / `keyCode 229`）时不发送；可否发送与「发送」按钮的禁用条件一致。
-   * 返回 `false` 让 `Sender` 跳过它自己的 Enter 处理。
-   */
-  const handleRequestKeyDown = (event: KeyboardEvent): false | undefined => {
-    if (event.key !== 'Enter') return undefined;
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
-    if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false;
+  /** Enter 发送，Shift/Ctrl/Alt/Meta+Enter 换行；输入法组字（`isComposing` / `keyCode 229`）时不发送。 */
+  const handleRequestKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
     event.preventDefault();
     if (canSend) submit();
-    return false;
   };
 
   const lastEntry = transcript.at(-1);
@@ -1116,297 +1093,334 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     lastEntry.role === 'assistant' &&
     UNSUCCESSFUL_KINDS.has(lastEntry.presentationKind);
 
+  // 线程里只要有任何要给用户看的东西（消息、进行中的任务、待恢复的作业），就是「对话中」；否则案头铺满。
+  const inConversation = transcript.length > 0 || mutation.isPending
+    || visibleBrowserTarget !== null || pendingSubmission !== null || retrySubmission !== null
+    || reportJobIds.length > 0 || pendingSheetFills.length > 0
+    || (!browserIdentityReady && browserTarget !== null);
+  const composerOpen = draft.trim() !== '' || attachmentsOpen || historyOpen;
+
   return (
-    <div className={styles.page}>
-      {/*
-        左栏「我问过的」。2026-09-02 裁决把它从工作事项页迁到这里，但 2026-08-27 §一/§六 同时裁定
-        会话持久化整体归 P3——P2 不扩 sessions 表、不建会话 API。因此这里只列**本次**临时会话，并
-        如实写明历史存不起来，不做刷新即失效却看起来像历史的列表。
-      */}
-      <aside aria-label="我问过的" className={styles.sessionRail}>
-        <Button block className={styles.newSessionButton} onClick={startFreshSession}>
-          新对话
-        </Button>
-        <h2 className={styles.railTitle}>我问过的</h2>
-        {transcript.length === 0 ? null : (
-          <Conversations
-            activeKey="current"
-            aria-label="当前对话"
-            items={[{ key: 'current', label: '本次对话' }]}
-          />
-        )}
-        {/*
-          2026-09-04 返修：左栏原来三行说明（「现在没有正在进行的对话。」「以前问过的还存不起来，
-          刷新就没了。」「要留档请到「工作事项」里办。」）砍成**一行**。留下的是那条真限制——历史
-          存不起来；「现在没有对话」由空列表本身表明，不用再写一句。
-        */}
-        <p className={styles.railText}>以前问过的存不起来，刷新就没了。</p>
-      </aside>
+    <div
+      className={styles.page}
+      data-mode={inConversation ? 'chat' : 'desk'}
+      data-side={deskSideOpen ? 'true' : 'false'}
+    >
+      {/* 所在页由左侧窄栏高亮表明，标题只留给读屏软件定位，不占版面。 */}
+      <h1 className={styles.pageTitle}>AI 助手</h1>
 
-      <div className={styles.main}>
-        {/*
-          2026-09-03：删掉「把要办的事说清楚 / 写清对象、时间和想要的结果」这一组说明；所在页由
-          左导航高亮表明，标题只留给读屏软件定位，不占版面。
-        */}
-        <h1 className={styles.pageTitle}>AI 助手</h1>
-
-        <section className={styles.conversation} aria-label="办理会话">
-          <div
-            className={styles.transcript}
-            ref={transcriptRef}
-            onScroll={(event) => {
-              const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
-              stickToBottom.current = scrollHeight - scrollTop - clientHeight < 80;
-            }}
-            aria-live="polite"
-            aria-busy={mutation.isPending}
+      {inConversation ? (
+        <div className={styles.pageTools}>
+          <button
+            aria-pressed={deskSideOpen}
+            className="wb-btn wb-btn-quiet wb-btn-sm"
+            onClick={() => setDeskSideOpen((open) => !open)}
+            title="显示或收起右侧案头"
+            type="button"
           >
-            {transcript.length === 0 ? (
-              <div className={styles.emptyState}>
-                {/*
-                  画板是「王主任，早上好」。姓名现在有数据源（`GET /api/v1/me` 的 display_name，
-                  来自服务端签名的会话票据），所以称呼落地；「主任」是职务，OA 没有这个字段，不编。
-                  取不到姓名时退回不带称呼的问候。版式（60px 图标 + 大字标题 + 一句 17px 说明）
-                  照画板。原来标题位放的是「这里现在是空的，因为你还没有问过。」——把一句说明做成了
-                  全页最大字号的标题。那句实话没有删，收进了下面这行说明里。
-                */}
-                <Welcome
-                  className={styles.welcome}
-                  variant="borderless"
-                  icon={<Icon name="spark" size={26} strokeWidth={1.9} />}
-                  title={greetingWithName(identity.displayName)}
-                  description="这里还没有对话。我能帮你查 OA 里的待办和系统消息，说人话就行。"
-                />
-                <Prompts
-                  className={styles.prompts}
-                  items={STARTER_PROMPTS.map((prompt) => ({ ...prompt }))}
-                  onItemClick={(info) => {
-                    const label = info.data.label;
-                    setDraft(typeof label === 'string' ? label : '');
-                  }}
-                  title="可以这样问我"
-                />
-              </div>
-            ) : (
-              <ol className={styles.messageList}>
-                {transcript.map((entry, index) => (
-                  <li
-                    className={`${styles.messageRow} ${
-                      entry.role === 'user' ? styles.userRow : styles.assistantRow
-                    }`}
-                    key={`${entry.role}-${index}`}
-                  >
-                    <article
-                      className={`${styles.message} ${
-                        entry.role === 'user'
-                          ? styles.userMessage
-                          : styles[entry.presentationKind]
+            <Icon name="panel" size={17} />
+            案头
+          </button>
+        </div>
+      ) : null}
+
+      <div
+        className={styles.scroll}
+        ref={transcriptRef}
+        onScroll={(event) => {
+          const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+          stickToBottom.current = scrollHeight - scrollTop - clientHeight < 80;
+        }}
+      >
+        {!inConversation ? (
+          <div className={styles.deskWrap}>
+            <Desk onAsk={askFromDesk} />
+          </div>
+        ) : (
+          <div className={styles.chatWrap} data-side={deskSideOpen ? 'true' : 'false'}>
+            <section
+              aria-busy={mutation.isPending}
+              aria-label="办理会话"
+              aria-live="polite"
+              className={styles.thread}
+            >
+              {transcript.length === 0 ? null : (
+                <ol className={styles.messageList}>
+                  {transcript.map((entry, index) => (
+                    <li
+                      className={`${styles.messageRow} ${
+                        entry.role === 'user' ? styles.userRow : styles.assistantRow
                       }`}
+                      key={`${entry.role}-${index}`}
                     >
-                      <div className={styles.messageMeta}>
-                        <Text strong>{entry.role === 'user' ? '你' : 'EternalAI'}</Text>
+                      <article
+                        className={`${styles.message} ${
+                          entry.role === 'user'
+                            ? styles.userMessage
+                            : styles[entry.presentationKind]
+                        }`}
+                      >
                         {entry.role === 'assistant' ? (
-                          <Text className={styles.statusLabel}>
-                            {presentationLabels[entry.presentationKind]}
-                          </Text>
+                          <span aria-hidden="true" className={styles.aiMark}>
+                            <Icon name="sparkle" size={15} strokeWidth={2} />
+                          </span>
                         ) : null}
-                      </div>
-                      <p className={styles.messageText}>{entry.text}</p>
-                      {entry.role === 'user' && entry.attachments?.length ? (
-                        <ul aria-label="附件" className={styles.messageAttachments}>
-                          {entry.attachments.map((attachment) => (
-                            <li key={attachment.artifact_id}>
-                              <a href={attachmentDownloadUrl(attachment.artifact_id)} download>
-                                {attachment.filename}
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
-                        <ReportJobCard jobId={entry.reportJobId} />
-                      ) : null}
-                      {entry.role === 'assistant' && entry.sheetFillPlan !== undefined
-                        && entry.reportJobId === undefined && entry.responseId !== null ? (
-                        <SheetFillPlanCard
-                          key={`${authGeneration}/${entry.responseId}`}
-                          plan={entry.sheetFillPlan}
-                          responseId={entry.responseId}
-                          sessionId={currentSessionId}
-                          recoveryScope={recoveryScope}
-                          cancelled={entry.sheetFillCancelled === true}
-                          onAccepted={(jobId) => acceptSheetFill(entry.responseId!, jobId)}
-                          onCancel={() => settleSheetFill(entry.responseId!, 'cancelled')}
-                        />
-                      ) : null}
-                      {entry.role === 'assistant' && entry.presentationKind === 'completed'
-                        && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
-                        && entry.text.trim() ? (
-                        <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
-                          text={entry.text} attachments={deliveryAttachments} />
-                      ) : null}
-                      {entry.role === 'assistant' ? (
-                        <AssistantDetails
-                          entry={entry}
-                          onAction={submitConfirmation}
-                          terminalNotice={confirmationNotice(entry.responseId)}
-                        />
-                      ) : null}
-                    </article>
-                  </li>
-                ))}
-              </ol>
-            )}
+                        <div className={styles.messageMeta}>
+                          <span className={styles.speaker}>{entry.role === 'user' ? '你' : 'EternalAI'}</span>
+                          {entry.role === 'assistant' ? (
+                            <span className={styles.statusLabel}>
+                              {presentationLabels[entry.presentationKind]}
+                            </span>
+                          ) : null}
+                        </div>
+                        {entry.role === 'user' && entry.attachments?.length ? (
+                          <ul aria-label="附件" className={styles.messageAttachments}>
+                            {entry.attachments.map((attachment) => (
+                              <li key={attachment.artifact_id}>
+                                <a href={attachmentDownloadUrl(attachment.artifact_id)} download>
+                                  {attachment.filename}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p className={styles.messageText}>{entry.text}</p>
+                        {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
+                          <ReportJobCard jobId={entry.reportJobId} />
+                        ) : null}
+                        {entry.role === 'assistant' && entry.sheetFillPlan !== undefined
+                          && entry.reportJobId === undefined && entry.responseId !== null ? (
+                          <SheetFillPlanCard
+                            key={`${authGeneration}/${entry.responseId}`}
+                            plan={entry.sheetFillPlan}
+                            responseId={entry.responseId}
+                            sessionId={currentSessionId}
+                            recoveryScope={recoveryScope}
+                            cancelled={entry.sheetFillCancelled === true}
+                            onAccepted={(jobId) => acceptSheetFill(entry.responseId!, jobId)}
+                            onCancel={() => settleSheetFill(entry.responseId!, 'cancelled')}
+                          />
+                        ) : null}
+                        {entry.role === 'assistant' && entry.presentationKind === 'completed'
+                          && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
+                          && entry.text.trim() ? (
+                          <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
+                            text={entry.text} attachments={deliveryAttachments} />
+                        ) : null}
+                        {entry.role === 'assistant' ? (
+                          <AssistantDetails
+                            entry={entry}
+                            onAction={submitConfirmation}
+                            terminalNotice={confirmationNotice(entry.responseId)}
+                          />
+                        ) : null}
+                      </article>
+                    </li>
+                  ))}
+                </ol>
+              )}
 
-            {reportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
-              <ReportJobCard key={jobId} jobId={jobId} onDismiss={() => {
-                forgetReportJob(recoveryScope, jobId);
-                setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
-              }} />
-            ))}
-            {pendingSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
-              .map((item) => (
-                <SheetFillPlanCard
-                  key={`${authGeneration}/${item.responseId}`}
-                  plan={item.plan}
-                  responseId={item.responseId}
-                  sessionId={item.sessionId}
-                  recoveryScope={recoveryScope}
-                  onAccepted={(jobId) => acceptSheetFill(item.responseId, jobId)}
-                  onDismiss={() => {
-                    forgetPendingSheetFill(recoveryScope, item.responseId);
-                    setPendingSheetFills(recoveryScope === null ? []
-                      : loadPendingSheetFills(recoveryScope));
-                  }}
-                />
+              {reportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
+                <ReportJobCard key={jobId} jobId={jobId} onDismiss={() => {
+                  forgetReportJob(recoveryScope, jobId);
+                  setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
+                }} />
               ))}
-            {visibleBrowserTarget === null ? null : (
-              <BrowserRunMonitor
-                key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}
-                target={visibleBrowserTarget}
-                onTerminal={setBrowserTerminal}
-                onHandoff={setBrowserHandoff}
-                fillStopMode={activeSkillId === 'd_form_fill_stop'}
-                onRecoverOriginal={visibleBrowserTarget.originalSubmission === null ? null : () => {
-                  const original = visibleBrowserTarget.originalSubmission;
-                  if (original !== null) submit(original);
-                }}
-                recovering={mutation.isPending}
-                recoveryRevision={browserRecoveryRevision}
-              />
-            )}
-            {!browserIdentityReady && browserTarget !== null ? (
-              <Alert type="warning" showIcon title="正在核对浏览器任务身份"
-                action={<Button onClick={recheckBrowserIdentity}>重试核对</Button>} />
-            ) : null}
-            {browserStorageError && visibleBrowserTarget !== null ? (
-              <Alert type="warning" showIcon title="刷新后可能无法恢复此浏览器任务" />
-            ) : null}
-            {pendingSubmission !== null && submissionIsCurrent(pendingSubmission) ? (
-              <Alert type="info" showIcon title="浏览器任务正在准备，尚未生成运行记录"
-                action={<Button disabled={mutation.isPending || !browserIdentityReady}
-                  onClick={() => submit(pendingSubmission)}>继续检查</Button>} />
-            ) : null}
-            {retrySubmission !== null && submissionIsCurrent(retrySubmission) ? (
-              <Alert type="warning" showIcon title={browserTarget?.originalSubmission === retrySubmission
-                ? '原任务恢复结果尚未确认，可重试原请求' : '提交结果尚未确认，可使用原请求继续检查'}
-                action={<Button disabled={mutation.isPending || !browserIdentityReady}
-                  onClick={() => submit(retrySubmission)}>检查原请求</Button>} />
-            ) : null}
+              {pendingSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
+                .map((item) => (
+                  <SheetFillPlanCard
+                    key={`${authGeneration}/${item.responseId}`}
+                    plan={item.plan}
+                    responseId={item.responseId}
+                    sessionId={item.sessionId}
+                    recoveryScope={recoveryScope}
+                    onAccepted={(jobId) => acceptSheetFill(item.responseId, jobId)}
+                    onDismiss={() => {
+                      forgetPendingSheetFill(recoveryScope, item.responseId);
+                      setPendingSheetFills(recoveryScope === null ? []
+                        : loadPendingSheetFills(recoveryScope));
+                    }}
+                  />
+                ))}
+              {visibleBrowserTarget === null ? null : (
+                <BrowserRunMonitor
+                  key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}
+                  target={visibleBrowserTarget}
+                  onTerminal={setBrowserTerminal}
+                  onHandoff={setBrowserHandoff}
+                  fillStopMode={activeSkillId === 'd_form_fill_stop'}
+                  onRecoverOriginal={visibleBrowserTarget.originalSubmission === null ? null : () => {
+                    const original = visibleBrowserTarget.originalSubmission;
+                    if (original !== null) submit(original);
+                  }}
+                  recovering={mutation.isPending}
+                  recoveryRevision={browserRecoveryRevision}
+                />
+              )}
+              {!browserIdentityReady && browserTarget !== null ? (
+                <Alert type="warning" showIcon title="正在核对浏览器任务身份"
+                  action={<Button onClick={recheckBrowserIdentity}>重试核对</Button>} />
+              ) : null}
+              {browserStorageError && visibleBrowserTarget !== null ? (
+                <Alert type="warning" showIcon title="刷新后可能无法恢复此浏览器任务" />
+              ) : null}
+              {pendingSubmission !== null && submissionIsCurrent(pendingSubmission) ? (
+                <Alert type="info" showIcon title="浏览器任务正在准备，尚未生成运行记录"
+                  action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                    onClick={() => submit(pendingSubmission)}>继续检查</Button>} />
+              ) : null}
+              {retrySubmission !== null && submissionIsCurrent(retrySubmission) ? (
+                <Alert type="warning" showIcon title={browserTarget?.originalSubmission === retrySubmission
+                  ? '原任务恢复结果尚未确认，可重试原请求' : '提交结果尚未确认，可使用原请求继续检查'}
+                  action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                    onClick={() => submit(retrySubmission)}>检查原请求</Button>} />
+              ) : null}
 
-            {mutation.isPending ? (
-              <div className={styles.pendingNotice} role="status">
-                <span className={styles.pendingDot} aria-hidden="true" />
-                正在办理，请稍候…
+              {mutation.isPending ? (
+                <div className={styles.pendingNotice} role="status">
+                  <span className={styles.pendingDot} aria-hidden="true" />
+                  正在办理，请稍候…
+                </div>
+              ) : null}
+
+              {lastEntryFailed && !mutation.isPending
+                && visibleBrowserTarget === null && pendingSubmission === null ? (
+                <p className={styles.failureNotice}>
+                  上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
+                </p>
+              ) : null}
+            </section>
+            {deskSideOpen ? (
+              <div className={styles.sideSlot}>
+                <DeskSide onAsk={askFromDesk} />
               </div>
-            ) : null}
-
-            {lastEntryFailed && !mutation.isPending
-              && visibleBrowserTarget === null && pendingSubmission === null ? (
-              <p className={styles.failureNotice}>
-                上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
-              </p>
             ) : null}
           </div>
+        )}
+      </div>
 
-          {/*
-            2026-09-04 返修第 4 条：删掉底注「回答基于 OA 实时数据，正式办理以 OA 为准」，也删掉输入框
-            上方那个可见标签「办理请求」（画板 `Chat.dc.html` 上没有这一行）。无障碍名称没有丢，改由
-            输入框自己的 `aria-label` 承担。输入框同轮放大：起始 1 行改 3 行，边界改成可辨边界。
-
-            「一屏内看得见输入框」仍不靠估算高度，靠结构：`.transcript` 是唯一可伸缩可滚动的一格，
-            `.composer` 是 `flex:none`，所以输入框放大只会挤压对话区，不会被顶出视口。
-          */}
-          <form
-            className={styles.composer}
-            data-focus-ring="host"
-            onSubmit={handleSubmit}
-          >
-            {authStatus === 'authenticated' && !requestMetadataReady ? (
-              <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
-                action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
+      {/*
+        输入框浮在页面底部正中：平时收成一行，点进去或有内容时展开。外面那圈缓慢旋转的彩色细边
+        是「对 AI 说话」的统一记号。快捷指令在没有对话时排在它上方，一直看得到。
+      */}
+      <div className={styles.composerDock}>
+        <div className={styles.composerNotices}>
+          {authStatus === 'authenticated' && !requestMetadataReady ? (
+            <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
+              action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
+          ) : null}
+          {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
+        </div>
+        {inConversation ? null : (
+          <div aria-label="可以这样问我" className={styles.chips} role="group">
+            {STARTER_PROMPTS.map((prompt) => (
+              <button key={prompt.key} onClick={() => askFromDesk(prompt.label)} title={prompt.description} type="button">
+                {prompt.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {historyOpen ? (
+          /*
+            「我问过的」。会话持久化整体归后续阶段，这里只列本次临时会话，并如实写明历史存不起来，
+            不做刷新即失效却看起来像历史的列表。
+          */
+          <aside aria-label="我问过的" className={styles.history}>
+            <h2>我问过的</h2>
+            {transcript.length === 0 ? null : <ul aria-label="当前对话"><li>本次对话</li></ul>}
+            <p>以前问过的存不起来，刷新就没了。</p>
+          </aside>
+        ) : null}
+        <form
+          className={`${styles.composer} wb-ring`}
+          data-focus-ring="host"
+          data-open={composerOpen ? 'true' : 'false'}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) inputRef.current?.focus();
+          }}
+          onSubmit={handleSubmit}
+        >
+          <span aria-hidden="true" className="wb-ringfx"><i /></span>
+          {attachmentsOpen ? (
+            <div className={styles.attachments}>
+              <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
+              {deliveryAttachments.length > 0 ? <DeliveryComposerButton
+                key={`${authGeneration}/${currentSessionId}/attachments`}
+                text="" attachments={deliveryAttachments} /> : null}
+            </div>
+          ) : null}
+          <textarea
+            aria-label="办理请求"
+            className={styles.input}
+            disabled={mutation.isPending}
+            id="chat-request"
+            onChange={(event) => {
+              const value = event.target.value;
+              setDraft(value);
+              if (retrySubmission !== null && value.trim() !== retrySubmission.message) {
+                setRetrySubmission(null);
+              }
+            }}
+            onKeyDown={handleRequestKeyDown}
+            placeholder="交代一件事，或者问个问题"
+            ref={inputRef}
+            rows={1}
+            value={draft}
+          />
+          <div className={styles.composerBar}>
+            <button
+              aria-label="添加表格"
+              aria-pressed={attachmentsOpen}
+              className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.clip}`}
+              disabled={!attachmentsAllowed || mutation.isPending}
+              onClick={() => { setAttachmentsToggled((open) => !open); }}
+              title="添加表格"
+              type="button"
+            >
+              <Icon name="paperclip" size={17} />
+              <span>添加表格</span>
+            </button>
+            <button
+              aria-expanded={historyOpen}
+              className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.barExtra}`}
+              onClick={() => setHistoryOpen((open) => !open)}
+              type="button"
+            >
+              <Icon name="history" size={17} />
+              历史对话
+            </button>
+            {inConversation ? (
+              <button
+                className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.barExtra}`}
+                onClick={startFreshSession}
+                type="button"
+              >
+                <Icon name="plus" size={17} />
+                新对话
+              </button>
             ) : null}
-            {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
-            <Sender
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              className={styles.sender}
-              components={{ input: RequestTextArea }}
-              disabled={mutation.isPending}
-              header={
-                <Sender.Header
-                  title="附件"
-                  open={attachmentsOpen}
-                  onOpenChange={setAttachmentsToggled}
-                  closable={chatAttachments.attachments.length === 0
-                    && chatAttachments.uploads.length === 0}
-                  forceRender
-                >
-                  <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
-                  {deliveryAttachments.length > 0 ? <DeliveryComposerButton
-                    key={`${authGeneration}/${currentSessionId}/attachments`}
-                    text="" attachments={deliveryAttachments} /> : null}
-                </Sender.Header>
-              }
-              footer={
-                <div className={styles.composerActions}>
-                  <Button
-                    className={styles.composerAttachButton}
-                    disabled={!attachmentsAllowed || mutation.isPending}
-                    aria-pressed={attachmentsOpen}
-                    onClick={() => { setAttachmentsToggled((open) => !open); }}
-                  >
-                    添加表格
-                  </Button>
-                  {browserAvailable && browserIdentityReady && activeSkillId !== 'd_form_fill_stop' ? (
-                    <Checkbox checked={browserOptIn} onChange={(event) => {
-                      setBrowserOptIn(event.target.checked);
-                    }}>
-                      使用浏览器只读技能
-                    </Checkbox>
-                  ) : null}
-                  <Button
-                    type="primary"
-                    htmlType="submit"
-                    loading={mutation.isPending}
-                    disabled={!canSend}
-                  >
-                    发送
-                  </Button>
-                </div>
-              }
-              onChange={(value) => {
-                setDraft(value);
-                if (retrySubmission !== null && value.trim() !== retrySubmission.message) {
-                  setRetrySubmission(null);
-                }
-              }}
-              onKeyDown={handleRequestKeyDown}
-              placeholder="问点什么，比如：我今天有什么要办的"
-              suffix={false}
-              value={draft}
-            />
-          </form>
-        </section>
+            {browserAvailable && browserIdentityReady && activeSkillId !== 'd_form_fill_stop' ? (
+              <span className={styles.barExtra}>
+                <Checkbox checked={browserOptIn} onChange={(event) => {
+                  setBrowserOptIn(event.target.checked);
+                }}>
+                  使用浏览器只读技能
+                </Checkbox>
+              </span>
+            ) : null}
+            <span className={styles.hint}>Enter 发送</span>
+            <button
+              aria-label="发送"
+              className={`wb-btn wb-btn-primary ${styles.send}`}
+              data-loading={mutation.isPending ? 'true' : 'false'}
+              disabled={!canSend}
+              title="发送"
+              type="submit"
+            >
+              <Icon name={mutation.isPending ? 'retry' : 'up'} size={18} strokeWidth={2} />
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

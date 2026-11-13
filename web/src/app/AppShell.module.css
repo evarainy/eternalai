@@ -245,16 +245,6 @@
   padding-top: 128px;
 }
 
-/* 助手页：对话区自己滚，外壳只留出时钟和四周的位置。 */
-.shell[data-route='assistant'] .content {
-  padding: 74px 24px 16px;
-  background: var(--desk);
-}
-
-:global(html[data-clock='dial']) .shell[data-route='assistant'] .content {
-  padding-top: 132px;
-}
-
 /* ── 窄栏底部的浮层：设置、管理、系统状态、通知 ── */
 .popover {
   position: fixed;
@@ -263,11 +253,8 @@
   left: 84px;
   display: flex;
   width: 268px;
-  max-height: calc(100vh - 28px);
   flex-direction: column;
   padding: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
   font-size: 0.933rem;
   border-radius: 18px;
   transform-origin: 0 100%;
@@ -284,6 +271,16 @@
 
 .popover[data-panel='admin'] {
   width: 220px;
+}
+
+/* 窗口矮到放不下时才允许浮层自己滚；这时改成实色、不模糊，滚动区域不带毛玻璃。 */
+@media (max-height: 560px) {
+  .popover {
+    max-height: calc(100vh - 28px);
+    overflow-y: auto;
+    background: #f7f9fd;
+    backdrop-filter: none;
+  }
 }
 
 @keyframes popIn {

@@ -101,11 +101,12 @@
   margin-top: 16px;
 }
 
+/* 确认与取消是不可撤回操作的入口，点击区域不小于 44×44。 */
 .minimumActionTarget {
   min-width: 44px;
   min-height: 44px;
   padding-inline: 20px;
-  border-radius: 10px;
+  border-radius: var(--r-ctl);
   font-weight: 700;
 }
 
@@ -189,4 +190,136 @@
   .actionRow :global(.ant-btn) {
     width: 100%;
   }
+}
+
+/*
+ * 对话里的确认卡：写清楚即将执行什么、填了什么值；用户点了才执行，后端受理后盖「已确认」章并折成一行。
+ * 取消后只留一行灰字，不盖章。
+ */
+.kcard {
+  position: relative;
+  margin: 0.2rem 0 0.6rem;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  box-shadow: 0 14px 34px -24px rgb(10 16 29 / 40%);
+}
+
+:global(html[data-fx='lite']) .kcard {
+  box-shadow: none;
+}
+
+.kcardHead {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1.1rem;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.kcardTitle {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 1rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kcardHead small {
+  flex: none;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.kcardPill {
+  display: inline-flex;
+  height: 1.5rem;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+  padding: 0 0.6rem;
+  color: var(--primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.kcardStamp {
+  margin-left: auto;
+}
+
+.kcardFields {
+  display: grid;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 1rem 1.1rem 0.9rem;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+}
+
+.kcardFields > div {
+  display: contents;
+}
+
+.kcardFields dt {
+  color: var(--text-3);
+}
+
+.kcardFields dd {
+  margin: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.kcardNote {
+  margin: 0;
+  padding: 0 1.1rem 0.9rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.kcardActions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1.1rem 1.1rem;
+}
+
+/* 已确认：盖章并折成一行，下面留一句结果。 */
+.kcard[data-state='done'] .kcardFields {
+  display: none;
+}
+
+.kcard[data-state='done'] .kcardNote {
+  padding-top: 0.7rem;
+  color: var(--text-2);
+}
+
+/* 已取消或没有执行：不再是一张待办的卡。 */
+.kcard[data-state='off'],
+.kcard[data-state='void'] {
+  box-shadow: none;
+}
+
+.kcard[data-state='off'] .kcardHead,
+.kcard[data-state='void'] .kcardHead {
+  color: var(--text-3);
+  background: none;
+}
+
+.kcard[data-state='off'] .kcardFields {
+  display: none;
+}
+
+.kcard[data-state='off'] .kcardNote {
+  padding-top: 0.7rem;
+}
+
+.kcard[data-state='void'] .kcardNote {
+  color: var(--warn);
 }
