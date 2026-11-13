@@ -64,7 +64,8 @@ function todayEvents(items: readonly WorkItem[], now: Date): TodayEvent[] {
 interface EventCluster {
   left: number;
   overdue: boolean;
-  events: TodayEvent[];
+  /** 至少一件。 */
+  events: [TodayEvent, ...TodayEvent[]];
 }
 
 /** 挨在一起的事合成一个点：同一钟点的几件事、晚上 8 点以后贴在右端的事，都点得到。 */
@@ -132,7 +133,6 @@ export function WorkOverview({
             <i className={styles.now} style={{ left: `${nowLeft}%` }} title={`现在 ${formatClock(now.getTime())}`} />
             {clusters.map((cluster, index) => {
               const first = cluster.events[0];
-              if (first === undefined) return null;
               const single = cluster.events.length === 1;
               const name = single
                 ? `${formatClock(first.due)} ${first.title}`

@@ -489,6 +489,9 @@
   color: var(--text);
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
+  /* 画在发布行下面那块纸色遮盖之上：发布、暂存的结果提示不能被盖住。 */
+  position: relative;
+  z-index: 2;
   background: var(--warn-soft);
   border-radius: 0 0 var(--r-card) var(--r-card);
 }

@@ -101,29 +101,35 @@ export function DispatchStatus({ newHref }: { newHref: string }) {
   const submitted = summary.tasks.reduce((sum, task) => sum + task.done, 0);
   const targets = summary.tasks.reduce((sum, task) => sum + task.total, 0);
 
+  // 有上一次的数据时刷新失败：照常显示上一次的情况，但要说明这不是刚读到的，并给重试。
+  const stale = query.isError ? (
+    <p className={styles.stale} role="alert">
+      <Icon name="alert" size={16} />
+      刚才刷新没有成功，下面是上一次读到的情况。
+      <button className="wb-btn wb-btn-sm" onClick={() => void query.refetch()} type="button">重试</button>
+    </p>
+  ) : null;
+
   if (summary.active === 0) {
     return (
-      <div className={styles.state}>
-        <Icon name="check" size={24} />
-        <b>现在没有交办出去、还在办的事</b>
-        <span>交办一件事后，这里能看到谁办完了、谁还没办。</span>
-        <Link className="wb-btn wb-btn-primary" to={newHref}>
-          <Icon name="plus" size={16} />
-          新建交办
-        </Link>
+      <div className={styles.status}>
+        {stale}
+        <div className={styles.state}>
+          <Icon name="check" size={24} />
+          <b>现在没有交办出去、还在办的事</b>
+          <span>交办一件事后，这里能看到谁办完了、谁还没办。</span>
+          <Link className="wb-btn wb-btn-primary" to={newHref}>
+            <Icon name="plus" size={16} />
+            新建交办
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
     <div className={styles.status}>
-      {query.isError ? (
-        <p className={styles.stale} role="alert">
-          <Icon name="alert" size={16} />
-          刚才刷新没有成功，下面是上一次读到的情况。
-          <button className="wb-btn wb-btn-sm" onClick={() => void query.refetch()} type="button">重试</button>
-        </p>
-      ) : null}
+      {stale}
       <div className={styles.overview}>
         <section className={styles.ov}>
           <header><h2>我交办的</h2><small>进行中</small></header>

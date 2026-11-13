@@ -254,6 +254,7 @@
 /* 读取中、取不到、没有内容：位置固定在正文上方，不跳动。 */
 .state {
   display: flex;
+  width: 100%;
   max-width: 1100px;
   min-height: 16rem;
   flex-direction: column;
