@@ -7,6 +7,7 @@
 }
 
 .ov {
+  position: relative;
   display: flex;
   min-width: 0;
   height: 9.2rem;
@@ -109,6 +110,84 @@
 
 .event:hover {
   transform: scale(1.15);
+}
+
+/* 几件事合成的点：大一圈，里面写件数。 */
+.event[data-many='true'] {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-width: 2px;
+  place-items: center;
+}
+
+.event b {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.event[data-many='true'] span {
+  top: 20px;
+}
+
+.event[data-many='true'][data-up='true'] span {
+  top: auto;
+  bottom: 20px;
+}
+
+/* 点开合成的点：列出这几件事，各点各的。浮在卡片上方，实色底。 */
+.pick {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  left: 50%;
+  width: max-content;
+  max-width: min(26rem, 80vw);
+  max-height: 11rem;
+  margin: 0;
+  padding: 0.3rem;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-ctl);
+  box-shadow: var(--float);
+  transform: translateX(-50%);
+}
+
+.pick button {
+  display: flex;
+  width: 100%;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  overflow: hidden;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.933rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+
+.pick button:hover {
+  background: var(--paper-2);
+}
+
+.pick button span {
+  flex: none;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.pick button[data-hot='true'] span {
+  color: var(--seal);
 }
 
 /* ── 未来 7 天：七根柱子 ── */

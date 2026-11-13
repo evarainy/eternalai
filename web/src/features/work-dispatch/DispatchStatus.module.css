@@ -229,6 +229,23 @@
   border-radius: 3px;
 }
 
+.stale {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  color: var(--text);
+  font-size: 0.933rem;
+  background: var(--warn-soft);
+  border-radius: var(--r-ctl);
+}
+
+.stale :global(.wb-btn) {
+  margin-left: auto;
+}
+
 .none {
   margin: 0.4rem 0 0;
   color: var(--text-3);

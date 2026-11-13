@@ -424,6 +424,21 @@
   box-shadow: inset 0 1px 0 var(--line);
 }
 
+/*
+ * 页面底部给「问 AI」浮钮留了一段空白，吸底的发布行停在这段空白上方。用一块纸色把发布行下面
+ * 那一条盖住，表单不会从发布行底下露出半截来。
+ */
+.footer::after {
+  position: absolute;
+  top: 100%;
+  right: -1px;
+  left: -1px;
+  height: 110px;
+  content: '';
+  pointer-events: none;
+  background: var(--paper);
+}
+
 .footerCopy {
   display: grid;
   min-width: 0;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   countNextSevenDays,
   formatClock,
@@ -22,8 +22,10 @@ interface ListSlice {
 /** 时间线画 8 点到 20 点；更早或更晚到期的事贴在两端。 */
 const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 20;
-/** 到期的事多于这个数，钟点上下错开也排不下，只画点，钟点留给悬停提示。 */
+/** 时间线上的点多于这个数，钟点上下错开也排不下，只画点，钟点留给悬停提示。 */
 const MAX_LABELLED_EVENTS = 6;
+/** 两件事在时间线上相距不到这么多（占整条线的百分比）就合成一个点，点开再选。 */
+const CLUSTER_GAP = 3;
 
 function dayPosition(timestamp: number, dayStart: number): number {
   const from = dayStart + DAY_START_HOUR * 3_600_000;
@@ -59,6 +61,27 @@ function todayEvents(items: readonly WorkItem[], now: Date): TodayEvent[] {
     .sort((a, b) => a.due - b.due);
 }
 
+interface EventCluster {
+  left: number;
+  overdue: boolean;
+  events: TodayEvent[];
+}
+
+/** 挨在一起的事合成一个点：同一钟点的几件事、晚上 8 点以后贴在右端的事，都点得到。 */
+function clusterEvents(events: readonly TodayEvent[]): EventCluster[] {
+  const clusters: EventCluster[] = [];
+  for (const event of events) {
+    const last = clusters[clusters.length - 1];
+    if (last !== undefined && event.left - last.left < CLUSTER_GAP) {
+      last.events.push(event);
+      last.overdue = last.overdue || event.overdue;
+    } else {
+      clusters.push({ left: event.left, overdue: event.overdue, events: [event] });
+    }
+  }
+  return clusters;
+}
+
 function Skeleton() {
   return (
     <div aria-label="正在读取" className={styles.skeleton} role="status">
@@ -78,6 +101,9 @@ export function WorkOverview({
 }) {
   const now = useDeskNow();
   const events = useMemo(() => (open === undefined ? [] : todayEvents(open.items, now)), [open, now]);
+  const clusters = useMemo(() => clusterEvents(events), [events]);
+  const [pickedLeft, setPickedLeft] = useState<number | null>(null);
+  const picked = clusters.find((cluster) => cluster.left === pickedLeft && cluster.events.length > 1);
   const columns = useMemo(() => (open === undefined ? [] : countNextSevenDays(open.items, now)), [open, now]);
   const done = useMemo(() => (completed === undefined ? null : summarizeCompleted(completed.items)), [completed]);
   const weekTotal = columns.reduce((sum, column) => sum + column.value, 0);
@@ -85,7 +111,7 @@ export function WorkOverview({
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
   const nowLeft = dayPosition(now.getTime(), dayStart.getTime());
-  const labelled = events.length <= MAX_LABELLED_EVENTS;
+  const labelled = clusters.length <= MAX_LABELLED_EVENTS;
 
   return (
     <div className={styles.overview}>
@@ -93,28 +119,58 @@ export function WorkOverview({
         <header>
           <h2>今天</h2>
           {open === undefined ? null : (
-            <small>{events.length === 0 ? '没有到期的事' : `${open.truncated ? '至少 ' : ''}${events.length} 件到期`}</small>
+            <small>
+              {events.length === 0
+                ? open.truncated ? '已读取的部分里没有到期的事' : '没有到期的事'
+                : `${open.truncated ? '至少 ' : ''}${events.length} 件到期`}
+            </small>
           )}
         </header>
         {open === undefined ? <Skeleton /> : (
           <div className={styles.track}>
             <i className={styles.past} style={{ width: `${nowLeft}%` }} />
             <i className={styles.now} style={{ left: `${nowLeft}%` }} title={`现在 ${formatClock(now.getTime())}`} />
-            {events.map((event, index) => (
-              <button
-                aria-label={`${formatClock(event.due)} ${event.title}`}
-                className={styles.event}
-                data-hot={event.overdue ? 'true' : 'false'}
-                data-up={index % 2 === 1 ? 'true' : 'false'}
-                key={event.id}
-                onClick={() => onOpen(event.id)}
-                style={{ left: `${event.left}%` }}
-                title={`${formatClock(event.due)} ${event.title}`}
-                type="button"
-              >
-                {labelled ? <span className="wb-num">{formatClock(event.due)}</span> : null}
-              </button>
-            ))}
+            {clusters.map((cluster, index) => {
+              const first = cluster.events[0];
+              if (first === undefined) return null;
+              const single = cluster.events.length === 1;
+              const name = single
+                ? `${formatClock(first.due)} ${first.title}`
+                : `${formatClock(first.due)} 前后 ${cluster.events.length} 件事`;
+              return (
+                <button
+                  aria-expanded={single ? undefined : picked === cluster}
+                  aria-label={name}
+                  className={styles.event}
+                  data-hot={cluster.overdue ? 'true' : 'false'}
+                  data-many={single ? 'false' : 'true'}
+                  data-up={index % 2 === 1 ? 'true' : 'false'}
+                  key={first.id}
+                  onClick={() => {
+                    if (single) onOpen(first.id);
+                    else setPickedLeft(picked === cluster ? null : cluster.left);
+                  }}
+                  style={{ left: `${cluster.left}%` }}
+                  title={name}
+                  type="button"
+                >
+                  {single ? null : <b className="wb-num">{cluster.events.length}</b>}
+                  {labelled ? <span className="wb-num">{formatClock(first.due)}</span> : null}
+                </button>
+              );
+            })}
+            {picked === undefined ? null : (
+              <ul aria-label="这个时间前后到期的事" className={styles.pick}>
+                {picked.events.map((event) => (
+                  <li key={event.id}>
+                    <button data-hot={event.overdue ? 'true' : 'false'} onClick={() => onOpen(event.id)} type="button">
+                      <span className="wb-num">{formatClock(event.due)}</span>
+                      {event.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </section>

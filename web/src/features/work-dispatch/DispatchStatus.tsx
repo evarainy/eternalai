@@ -117,6 +117,13 @@ export function DispatchStatus({ newHref }: { newHref: string }) {
 
   return (
     <div className={styles.status}>
+      {query.isError ? (
+        <p className={styles.stale} role="alert">
+          <Icon name="alert" size={16} />
+          刚才刷新没有成功，下面是上一次读到的情况。
+          <button className="wb-btn wb-btn-sm" onClick={() => void query.refetch()} type="button">重试</button>
+        </p>
+      ) : null}
       <div className={styles.overview}>
         <section className={styles.ov}>
           <header><h2>我交办的</h2><small>进行中</small></header>
@@ -157,7 +164,9 @@ export function DispatchStatus({ newHref }: { newHref: string }) {
       </div>
 
       {tasks.length === 0 ? (
-        <p className={styles.none}>{`没有${FILTER_LABELS[filter]}的交办。`}</p>
+        <p className={styles.none}>
+          {truncated ? `已读取的部分里没有${FILTER_LABELS[filter]}的交办。` : `没有${FILTER_LABELS[filter]}的交办。`}
+        </p>
       ) : (
         <ul className={styles.rows}>
           {tasks.map((task) => {
