@@ -39,6 +39,11 @@ vi.mock('../generated/me/me', () => ({
   readMeApiV1MeGet: apiMocks.readMe,
 }));
 
+vi.mock('../features/work-dispatch/workObjectLifecycleApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../features/work-dispatch/workObjectLifecycleApi')>(),
+  readWorkQueue: async () => ({ items: [], limit: 200, limit_exceeded: false }),
+}));
+
 vi.mock('../generated/im-context/im-context', async (importOriginal) => ({
   ...await importOriginal<typeof import('../generated/im-context/im-context')>(),
   configurationApiV1ImContextConfigurationGet: apiMocks.imConfiguration,
@@ -443,6 +448,7 @@ describe('application authentication boundary', () => {
     expect(loadDraft(b).title).toBe('');
     expect(loadNewSoftwareDraft(b).name).toBe('');
     fireEvent.click(await screen.findByRole('link', { name: '任务交办' }));
+    fireEvent.click(within(await screen.findByRole('navigation', { name: '任务交办' })).getByRole('link', { name: '新建交办' }));
     expect(await screen.findByLabelText('标题')).toHaveValue('');
   });
 
@@ -478,7 +484,7 @@ describe('application authentication boundary', () => {
 
   it('clears_drafts_through_a_current_generation_fetch_401', async () => {
     useAuthStore.getState().markAuthenticated();
-    window.history.pushState({}, '', '/work-dispatch');
+    window.history.pushState({}, '', '/work-dispatch?tab=new');
     const mounted = render(
       <App
         routes={staticAppRoutes({ LazyWorkDispatchPage: WorkDispatchPage })}
@@ -716,9 +722,9 @@ describe('application authentication boundary', () => {
    * 任务交办与软件中心不再是占位页：前者是九类字段的交办草稿表单，后者是业务系统卡片列表。这里只钉
    * 「路由挂的是那一页、且仍在同一个外壳里」，页面自身的合同各由自己的测试文件承担。
    */
-  it('mounts the dispatch draft form at /work-dispatch instead of a placeholder', async () => {
+  it('mounts the dispatch draft form at /work-dispatch?tab=new instead of a placeholder', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
-    window.history.pushState({}, '', '/work-dispatch');
+    window.history.pushState({}, '', '/work-dispatch?tab=new');
     render(
       <App
         routes={staticAppRoutes({ LazyWorkDispatchPage: WorkDispatchPage })}

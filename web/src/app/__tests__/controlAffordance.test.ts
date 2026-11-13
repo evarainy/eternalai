@@ -167,31 +167,35 @@ describe('可辨边界的数值（WCAG 2.2 SC 1.4.11）', () => {
   });
 });
 
-describe('仍使用兼容令牌的自绘控件', () => {
-  // 这些自绘控件仍引用兼容令牌；保留实际落点核对。
+describe('自绘控件的边界与动作层级', () => {
+  // 沿用兼容令牌的控件保留原落点；新版控件核对 v7 的纸面与细线。
   it.each([
-    ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {'],
-    ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,'],
-    ['浮动面板「知道了」', '../AIDock.module.css', '.noticeButton {'],
-    ['占位页动作', '../../shared/ui/PlaceholderPage.module.css', '.action {'],
-    ['工作事项分段控件', '../../pages/WorkObjectsPage.module.css', '.segmented {'],
-  ])('%s 带可辨边界', (_name, path, selector) => {
-    expect(rule(readSource(path), selector)).toContain(
-      'var(--workbench-control-ring)',
-    );
+    ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {', ['var(--workbench-control-ring)']],
+    ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,', ['background: var(--paper)', 'border: 1px solid var(--line-2)']],
+    ['浮动面板「知道了」', '../AIDock.module.css', '.noticeButton {', ['var(--workbench-control-ring)']],
+    ['占位页动作', '../../shared/ui/PlaceholderPage.module.css', '.action {', ['var(--workbench-control-ring)']],
+    ['工作事项分段控件', '../../pages/WorkObjectsPage.module.css', '.segmented {', ['background: var(--paper-2)']],
+  ] as const)('%s 带可辨边界', (_name, path, selector, expected) => {
+    const css = readSource(path);
+    for (const declaration of expected) expect(rule(css, selector)).toContain(declaration);
+    if (selector === '.segmented {') {
+      const selected = rule(css, '.segmented :global(.ant-radio-button-wrapper-checked) {');
+      expect(selected).toContain('background: #fff !important');
+      expect(selected).toContain('0 0 0 1px var(--line)');
+    }
   });
 
   it.each([
-    ['软件中心「去绑账号」', '../../features/apps/AppsPage.module.css', '.bindLink {'],
+    ['软件中心「去绑账号」', '../../features/apps/AppsPage.module.css', '.bindLink {', ['background: var(--primary)', 'color: #fff', 'border-color: var(--primary)']],
     [
       '交办页「发布」',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       ':global(.ant-btn).publishButton.publishButton {',
+      ['var(--workbench-control-ring-primary)', 'var(--workbench-control-glow-strong)'],
     ],
-  ])('%s 用的是主动作那一组令牌，不是各页手写一套', (_name, path, selector) => {
+  ] as const)('%s 用的是主动作那一组令牌，不是各页手写一套', (_name, path, selector, expected) => {
     const declarations = rule(readSource(path), selector);
-    expect(declarations).toContain('var(--workbench-control-ring-primary)');
-    expect(declarations).toContain('var(--workbench-control-glow-strong)');
+    for (const declaration of expected) expect(declarations).toContain(declaration);
     // 手写的 48% 蓝内边（1.88:1）不许再出现。
     expect(declarations).not.toContain('rgb(47 107 255 / 48%)');
   });

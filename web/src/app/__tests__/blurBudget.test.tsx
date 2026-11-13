@@ -339,7 +339,7 @@ describe('per-screen blur-layer budget', () => {
   });
 
   it('keeps the dispatch draft screen on its floating glass entry', async () => {
-    renderScreen('/work-dispatch');
+    renderScreen('/work-dispatch?tab=new');
     await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
@@ -417,7 +417,7 @@ describe('per-screen blur-layer budget', () => {
    * AI 助手页的案头、线程、输入框与按需展开的历史面板同样不买模糊。
    */
   it.each([
-    ['/work-dispatch', [] as string[]],
+    ['/work-dispatch?tab=new', [] as string[]],
     ['/apps', [] as string[]],
     ['/work-objects', [] as string[]],
     ['/chat', [] as string[]],

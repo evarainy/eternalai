@@ -251,7 +251,7 @@ function TasksCard({ onAsk, size }: CardProps) {
   return (
     <DeskCard
       ask="我交办的事里哪些还没办完？"
-      foot={<Link className={styles.more} to="/work-dispatch">去交办<Icon name="right" size={15} /></Link>}
+      foot={<Link className={styles.more} to="/work-dispatch">全部交办<Icon name="right" size={15} /></Link>}
       onAsk={onAsk}
       size={size}
       sub={summary === null ? undefined : `进行中${more ? '至少' : ''} ${summary.active} 项`}

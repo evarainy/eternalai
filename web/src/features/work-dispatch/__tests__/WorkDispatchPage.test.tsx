@@ -38,7 +38,7 @@ function renderPage(client = new QueryClient({ defaultOptions: { queries: { retr
   return render(
     <QueryClientProvider client={client}><ConfigProvider button={WORKBENCH_BUTTON_CONFIG} theme={{ token: { motion: false } }}>
       <AntApp>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={['/work-dispatch?tab=new']}>
           <WorkDispatchPage />
         </MemoryRouter>
       </AntApp>
@@ -55,10 +55,13 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('WorkDispatchPage form', () => {
-  it('locks the single-entry section order and visible structured labels', async () => {
+  it('locks the composer section order and visible structured labels within the new tab navigation', async () => {
     const { container } = renderPage();
     expect(screen.getByRole('heading', { name: '任务交办' })).toBeVisible();
     expect(screen.getByRole('link', { name: '周期任务规则' })).toHaveAttribute('href', '/work-object-series');
+    const navigation = screen.getByRole('navigation', { name: '任务交办' });
+    expect(within(navigation).getByRole('link', { name: '交办情况' })).toHaveAttribute('href', '/work-dispatch');
+    expect(within(navigation).getByRole('link', { name: '新建交办' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByRole('tab')).toBeNull();
     expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent)).toEqual(['基本信息', '交办对象', '办理要求与回执材料']);
     const ordered = container.querySelectorAll('h2');
@@ -285,7 +288,7 @@ it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on
     }, [current]);
     return <WorkDispatchPage />;
   }
-  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><Host /></MemoryRouter></QueryClientProvider>);
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/work-dispatch?tab=new']}><Host /></MemoryRouter></QueryClientProvider>);
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'private-A' } });
   fireEvent.change(screen.getByLabelText('办理要求与交付物'), { target: { value: 'chip-A' } });
   fireEvent.click(screen.getByRole('button', { name: '暂存草稿' }));

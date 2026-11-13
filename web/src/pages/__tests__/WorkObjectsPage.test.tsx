@@ -1133,7 +1133,7 @@ describe('internal dispatch integration at fetch boundary', () => {
         : new JsonResponse(JSON.stringify(listResponse({ items: [internal] }))));
     });
     const client = makeClient();
-    const dispatch = render(<QueryClientProvider client={client}><MemoryRouter><WorkDispatchPage /></MemoryRouter></QueryClientProvider>);
+    const dispatch = render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/work-dispatch?tab=new']}><WorkDispatchPage /></MemoryRouter></QueryClientProvider>);
     expect(await screen.findByRole('alert')).toHaveTextContent('目录已过期'); dispatch.unmount();
     const list = renderPage(client);
     await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('1'));

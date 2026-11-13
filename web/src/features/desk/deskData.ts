@@ -193,6 +193,9 @@ export interface SentTask {
   /** 右上角那句状态：超期几天、今天到期，或截止日期。 */
   state: string;
   tone: 'hot' | 'warn' | 'plain';
+  /** 截止时间与交办时间（毫秒）；没有或读不出来时是 null。 */
+  due: number | null;
+  created: number | null;
 }
 
 export interface SentSummary {
@@ -236,6 +239,8 @@ export function summarizeSent(items: readonly WorkItem[], now: Date): SentSummar
         total: relations.length,
         state,
         tone,
+        due,
+        created: item.created_at == null || Number.isNaN(Date.parse(item.created_at)) ? null : Date.parse(item.created_at),
       };
       return { task, due: due ?? Number.POSITIVE_INFINITY };
     })

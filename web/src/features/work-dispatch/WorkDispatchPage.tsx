@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Checkbox, Input, Radio, Select } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/mutator';
 import { useReauthForm } from '../../app/reauthRestore';
 import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
@@ -16,6 +16,7 @@ import type { DispatchDraft, DispatchKind } from './dispatchDraft';
 import AttachmentsPanel from './AttachmentsPanel';
 import type { AttachmentView } from './AttachmentsPanel';
 import { PageFrame } from '../../shared/ui/PageFrame';
+import { DispatchStatus } from './DispatchStatus';
 import styles from './WorkDispatchPage.module.css';
 import { Icon } from '../../shared/ui/Icon';
 
@@ -24,10 +25,34 @@ type Submission = { body: DispatchRequest; key: string; uncertain: boolean };
 const labelOf = (option: DispatchOption) => option.kind === 'user'
   ? `${option.display_name}（${option.department_display_name}，目录编号 ${option.directory_user_id}）` : option.department_display_name;
 
+const STATUS_HREF = '/work-dispatch';
+const NEW_HREF = '/work-dispatch?tab=new';
+
+/**
+ * 任务交办：默认看「交办情况」，「新建交办」是第二个标签（地址带 `?tab=new`）。
+ * 新建表单打开过一次后一直留着，切去看交办情况再回来，没存的内容还在。
+ */
 export default function WorkDispatchPage() {
   const token = useDraftSession();
   const queryClient = useQueryClient();
-  return token === null ? null : <DispatchComposer key={`${token.generation}:${token.revision}`} token={token}
+  const [searchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'new' ? 'new' : 'status';
+  const [composerOpened, setComposerOpened] = useState(tab === 'new');
+  if (tab === 'new' && !composerOpened) setComposerOpened(true);
+  if (token === null) return null;
+  return <PageFrame
+    actions={<>
+      <Link className="wb-btn wb-btn-quiet" to="/work-object-series">周期任务规则</Link>
+      {tab === 'status' ? <Link className="wb-btn wb-btn-primary" to={NEW_HREF}><Icon name="plus" size={16} />新建交办</Link> : null}
+    </>}
+    lead={<nav aria-label="任务交办" className="wb-seg">
+      <Link aria-current={tab === 'status' ? 'page' : undefined} to={STATUS_HREF}>交办情况</Link>
+      <Link aria-current={tab === 'new' ? 'page' : undefined} to={NEW_HREF}>新建交办</Link>
+    </nav>}
+    title="任务交办"
+  >
+    {tab === 'status' ? <DispatchStatus newHref={NEW_HREF} /> : null}
+    {composerOpened ? <div hidden={tab !== 'new'}><DispatchComposer key={`${token.generation}:${token.revision}`} token={token}
     onSubmit={async (request, key) => {
       const result = await postDispatch(request, key);
       const count = request.dispatch_mode === 'collaborative' ? 1 : request.targets.length;
@@ -38,7 +63,8 @@ export default function WorkDispatchPage() {
         catch { return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。列表刷新失败，请到工作事项重新读取。`; }
       }
       return `${result.replayed ? '已确认原提交' : '已发布'}，共 ${result.created_count} 条工作事项。`;
-    }} />;
+    }} /></div> : null}
+  </PageFrame>;
 }
 
 export interface DispatchComposerProps {
@@ -293,13 +319,6 @@ export function DispatchComposer({ token, initialRequest, initialAttachments = [
       {notice ? <p aria-label="交办状态" className={styles.notice} role={noticeError ? 'alert' : 'status'}>{notice}</p> : null}
     </section>
   </div>;
-  // 周期规则编辑器把这张表单嵌在自己的页面里，那时页头由周期任务页提供。
-  return series ? body : (
-    <PageFrame
-      actions={<Link className="wb-btn wb-btn-quiet" to="/work-object-series">周期任务规则</Link>}
-      title="任务交办"
-    >
-      {body}
-    </PageFrame>
-  );
+  // 页头由外面的页面提供：任务交办页，或嵌着这张表单的周期任务页。
+  return body;
 }

@@ -7,7 +7,8 @@
  */
 .page {
   --top: 166px;
-  --u: clamp(92px, calc((100vh - 16px - var(--top) - 138px - 70px) / 6), 126px);
+  /* 下限 84px：1440×900 的屏上六个单位连同下面的输入框正好放进一屏。 */
+  --u: clamp(84px, calc((100vh - 16px - var(--top) - 138px - 70px) / 6), 126px);
 
   position: relative;
   display: flex;
@@ -195,6 +196,12 @@
   min-width: 0;
   max-width: 40em;
   grid-column: 2;
+}
+
+/* 回复下面的动作按钮（例如「发给同事核实」）按文字宽度排在左边，不拉成一整条。 */
+.message > :global(.ant-btn) {
+  margin-top: 0.55rem;
+  justify-self: start;
 }
 
 /* 用户的一条：右对齐的气泡，附件排在气泡上面。 */
