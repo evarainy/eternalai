@@ -13,6 +13,7 @@ import { accessLost, logDispatchFailure, seriesFailure } from './dispatchErrors'
 import { browserZone, validTimeZone, zonedTimestamp } from './dispatchTime';
 import { getSeries, listSeries, saveSeries, setSeriesEnabled, seriesHistory, seriesOccurrences } from './seriesApi';
 import type { SeriesHistoryItem, SeriesOccurrence, SeriesPage, SeriesRequest, SeriesView } from './seriesApi';
+import { PageFrame } from '../../shared/ui/PageFrame';
 import styles from './WorkObjectSeriesPage.module.css';
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -110,11 +111,15 @@ function SeriesPageContent({ token }: { token: DraftSessionToken }) {
       setNotice(seriesFailure(error));
     } finally { toggleSending.current = false; if (alive.current) setToggleBusy(false); }
   };
-  return <div className={styles.page}>
-    {!detail ? <EmptySeriesContext /> : null}
-    <div className={styles.toolbar}><h1>周期任务</h1><Link to="/work-dispatch">单次任务交办</Link>
+  return <PageFrame
+    actions={<>
+      <Link className="wb-btn wb-btn-quiet" to="/work-dispatch">单次任务交办</Link>
+      <Button loading={loading} onClick={() => void loadList()}>重新读取</Button>
       <Button type="primary" onClick={() => { detailSequence.current += 1; setCreating(true); setEditing(false); setDetail(null); setTogglePending(null); }}>创建周期规则</Button>
-      <Button loading={loading} onClick={() => void loadList()}>重新读取</Button></div>
+    </>}
+    title="周期任务"
+  ><div className={styles.page}>
+    {!detail ? <EmptySeriesContext /> : null}
     <p className={styles.caption}>规则修改仅影响以后生成的事项；上一期未办结，下一期仍按时生成。关闭期间不补发，启用期间漏期按计划日补齐。</p>
     {notice ? <p role="status" className={styles.notice}>{notice}</p> : null}
     <section className={styles.panel}>
@@ -154,7 +159,7 @@ function SeriesPageContent({ token }: { token: DraftSessionToken }) {
       <SeriesHistory key={`${detail.series.series_id}:${detail.series.version}`} seriesId={detail.series.series_id} token={token} includeRuleHistory
         onOpenWorkObject={(id) => navigate(`/work-objects?work_object_id=${encodeURIComponent(id)}`)} onAccessLost={clearPrivate} />
     </section> : null}
-  </div>;
+  </div></PageFrame>;
 }
 
 function SeriesEditor({ token, existing, onSaved, onCancel, onAccessLost }: {

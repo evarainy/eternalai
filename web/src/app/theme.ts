@@ -1,144 +1,171 @@
 import type { ThemeConfig } from 'antd';
 
 /**
- * 底图预设。2026-09-02「视觉方向改为 iOS 26 玻璃拟态」要求换底图不动任何组件，因此底图只是外壳
- * 根节点上的一个 class，组件一律靠玻璃材质与底图透出取色，不写死填充色。
+ * 工作台视觉基座：墨、纸、印（2026-11-13 雨爷确认 v7 样板）。
+ *
+ * - 墨：左侧窄栏与外框，实色，只放导航；皮肤只换它的颜色。
+ * - 纸：白色内容面，所有内容写在纸上。
+ * - 印：朱红，只表示「超期 / 未读」和「用户亲手授权」，别处不用。
+ *
+ * 蓝色是唯一的操作色，蓝与朱红都不随皮肤变。
  */
-export const BACKGROUND_PRESETS = ['bgA', 'bgB', 'bgC'] as const;
+export const SKINS = ['ink', 'rose', 'sage', 'graphite', 'light'] as const;
 
-export type BackgroundPreset = (typeof BACKGROUND_PRESETS)[number];
+export type Skin = (typeof SKINS)[number];
 
-export const DEFAULT_BACKGROUND_PRESET: BackgroundPreset = 'bgA';
+export const DEFAULT_SKIN: Skin = 'ink';
 
-/** 面向用户的底图名称；不用「预设 A」这类系统术语。 */
-export const BACKGROUND_PRESET_LABELS: Record<BackgroundPreset, string> = {
-  bgA: '蓝紫',
-  bgB: '暖橙',
-  bgC: '青绿',
+/** 面向用户的皮肤名称。 */
+export const SKIN_LABELS: Record<Skin, string> = {
+  ink: '墨',
+  rose: '樱',
+  sage: '竹',
+  graphite: '玄',
+  light: '素',
 };
 
+/** 设置菜单里皮肤圆点的颜色，取各皮肤外框的代表色。 */
+export const SKIN_SWATCHES: Record<Skin, string> = {
+  ink: '#101a30',
+  rose: '#f3cbd7',
+  sage: '#c6dfd1',
+  graphite: '#1e2026',
+  light: '#dde3ee',
+};
+
+export const FONT_SIZES = ['m', 'l'] as const;
+
+export type FontSize = (typeof FONT_SIZES)[number];
+
+export const DEFAULT_FONT_SIZE: FontSize = 'm';
+
+export const FONT_SIZE_LABELS: Record<FontSize, string> = { m: '标准', l: '大' };
+
+/** 根字号。界面尺寸一律用 rem，跟着这两档整体缩放；即时消息区内部用 px，不跟随。 */
+export const FONT_SIZE_PX: Record<FontSize, number> = { m: 15, l: 17 };
+
+export const CLOCK_STYLES = ['digit', 'dial'] as const;
+
+export type ClockStyle = (typeof CLOCK_STYLES)[number];
+
+export const CLOCK_STYLE_LABELS: Record<ClockStyle, string> = { digit: '数字', dial: '表盘' };
+
+export const FX_MODES = ['full', 'lite'] as const;
+
+export type FxMode = (typeof FX_MODES)[number];
+
+export const FX_MODE_LABELS: Record<FxMode, string> = { full: '标准', lite: '精简' };
+
 /**
- * 单屏允许携带 `backdrop-filter` 的元素数量上限。
+ * 单屏允许携带 `backdrop-filter` 的元素数量上限（2026-09-02 实测边界，沿用）。
  *
- * 2026-09-02 裁决把这条定为硬约束，数字来自出稿时的实测边界（每个按钮图标各加一层 → 单屏 40 余层，
- * 整块画布渲染不出来；KPI 卡各带一层 → 单屏 9 层，该屏单独崩），且实测发生在 x86 + 新版 Chrome 上，
- * ARM 麒麟终端只会更紧，不得放宽。`web/src/app/__tests__/blurBudget.test.tsx` 在真实渲染结果上执行
- * 该上限。
+ * 新外壳只有四处毛玻璃，而且都是浮在内容之上的那一层：问 AI 浮钮、问 AI 面板、设置菜单、搜索面板。
+ * 内容面与卡片一律实色。`web/src/app/__tests__/blurBudget.test.tsx` 在真实渲染结果上执行该上限。
  */
 export const BLUR_LAYER_BUDGET = 6;
 
 /**
- * antd 默认会给「恰好两个汉字」的按钮文字中间插一个真空格（`发布` → `发 布`）。那是给通用中文排版做的
- * 视觉修饰，但在这套界面里它同时改掉了**读屏软件念出来的按钮名**，也让按钮上的字看起来像断开的两个词。
- * 一律关掉。
+ * antd 默认会给「恰好两个汉字」的按钮文字中间插一个真空格（`发布` → `发 布`），这会改掉读屏软件念出来的
+ * 按钮名。一律关掉。
  */
 export const WORKBENCH_BUTTON_CONFIG = { autoInsertSpace: false } as const;
 
-/**
- * 玻璃面在最深底图上的**合成底色**，作为对比度基准。
- *
- * 这两个值不是「画出来的颜色」，而是把 CSS 里的半透明面与三套底图中最深的一套（`bgA`：四层彩色
- * radial 全部叠满后的 `rgb(114, 165, 252)`）做 source-over 合成后的最坏结果：
- *
- * - `surface`   = `rgba(255,255,255,.86)`（内容面板）叠在该底色上 → `rgb(235, 242, 255)`
- * - `glassSurface` = `rgba(255,255,255,.58)`（左导航 / 顶栏这类大面玻璃）叠在该底色上 → `rgb(196, 217, 254)`
- *
- * 玻璃底的对比度不可预测，所以正文与辅助文字的对比度一律按这两个**最坏底色**核，而不是按看起来
- * 差不多的浅色核。`backdrop-filter` 只做模糊与饱和度调整，不改变合成后的平均亮度，因此不参与该核算。
- */
 export const workbenchTokens = {
-  bodyFontSize: 19,
-  auxiliaryFontSize: 16,
-  captionFontSize: 14,
-  lineHeight: 1.45,
-  minimumTargetSize: 44,
-  /** 承载正文的面板必须垫足够不透明的底，画稿用的就是这一档。 */
-  panelFill: 'rgba(255, 255, 255, 0.86)',
-  /** 左导航 / 顶栏这类大面玻璃。 */
-  glassFill: 'rgba(255, 255, 255, 0.58)',
-  /** 浮动窗与顶栏这类需要更实一点的大面玻璃。 */
-  glassFillRaised: 'rgba(255, 255, 255, 0.66)',
-  /**
-   * 三套底图各自「彩色 radial 全部叠满」时的最深底色，按 source-over 逐层合成算出。这是玻璃面下方
-   * 可能出现的最暗背景；`bgA` 是三者中最暗的，因此对比度一律按它核。
-   */
-  backgroundFloors: {
-    bgA: '#72a5fc',
-    bgB: '#f7b5a1',
-    bgC: '#8ad6cc',
-  },
+  bodyFontSize: FONT_SIZE_PX.m,
+  lineHeight: 1.6,
+  /** 标准字号下控件高度（2.4rem）。 */
+  controlHeight: 36,
+  fontFamily:
+    "'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif",
   colors: {
-    surface: '#ebf2ff',
-    glassSurface: '#c4d9fe',
-    text: '#161d2e',
-    textSecondary: '#454e66',
-    placeholder: '#4f5872',
+    paper: '#ffffff',
+    paperSoft: '#f5f6f8',
+    paperMuted: '#eceef2',
+    line: 'rgba(16, 26, 46, 0.08)',
+    lineStrong: 'rgba(16, 26, 46, 0.15)',
+    fieldBorder: 'rgba(16, 26, 46, 0.22)',
+    text: '#121a2b',
+    textSecondary: '#465066',
+    textTertiary: '#657086',
+    /** 唯一的操作色。 */
     primary: '#2450c8',
-    /*
-     * 2026-09-04：焦点环原来是 `#b44b00`——暖纸色系被弃用时漏掉的一处橙色，玻璃换血把 background /
-     * surface / primary 都换了，唯独它没换，于是每个输入框一聚焦就弹一圈橙。按 2026-09-02 裁决，
-     * `colorPrimary` 保留为语义强调色（链接、焦点环、语义提示），焦点环正是它该用的地方。
-     * **必须与 `primary` 同值**，`theme.test.ts` 有守卫钉住这条，别只改一头。
-     */
+    primarySoft: '#eaf0ff',
+    /** 焦点环与操作色同值。 */
     focus: '#2450c8',
-    success: '#0b5c2b',
-    warning: '#8c4a00',
-    error: '#a8231c',
-    neutral: '#4f5872',
+    /** 印：超期、未读、亲手授权。 */
+    seal: '#c93a26',
+    sealSoft: '#fdefeb',
+    success: '#1a7f45',
+    warning: '#9a5b06',
   },
 } as const;
 
-export const workbenchTheme: ThemeConfig = {
-  token: {
-    borderRadius: 14,
-    colorBgBase: '#eef2fc',
-    colorBgContainer: workbenchTokens.panelFill,
-    colorBgElevated: 'rgba(255, 255, 255, 0.94)',
-    colorBgLayout: 'transparent',
-    colorBorderSecondary: 'rgba(22, 29, 46, 0.10)',
-    colorError: workbenchTokens.colors.error,
-    colorPrimary: workbenchTokens.colors.primary,
-    colorPrimaryBg: 'rgba(47, 107, 255, 0.14)',
-    colorPrimaryBgHover: 'rgba(47, 107, 255, 0.20)',
-    colorPrimaryBorder: 'rgba(47, 107, 255, 0.42)',
-    colorSuccess: workbenchTokens.colors.success,
-    colorText: workbenchTokens.colors.text,
-    colorTextPlaceholder: workbenchTokens.colors.placeholder,
-    colorTextSecondary: workbenchTokens.colors.textSecondary,
-    colorWarning: workbenchTokens.colors.warning,
-    controlHeight: 48,
-    controlHeightLG: 52,
-    controlHeightSM: workbenchTokens.minimumTargetSize,
-    fontFamily:
-      "'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif",
-    fontSize: workbenchTokens.bodyFontSize,
-    fontSizeSM: workbenchTokens.auxiliaryFontSize,
-    lineHeight: workbenchTokens.lineHeight,
-    motion: false,
-  },
-  components: {
-    Button: {
-      controlHeight: 48,
-      controlHeightLG: 52,
-      controlHeightSM: workbenchTokens.minimumTargetSize,
-      fontWeight: 650,
+/**
+ * antd 主题。字号两档与动效开关由外观设置决定，所以是函数而不是常量。
+ *
+ * `motion: false` 用于「动效：精简」——老电脑、远程桌面和没有显卡加速的机器。
+ */
+export function buildWorkbenchTheme(size: FontSize, fx: FxMode): ThemeConfig {
+  const fontSize = FONT_SIZE_PX[size];
+  const scale = fontSize / FONT_SIZE_PX.m;
+  const px = (value: number) => Math.round(value * scale);
+  const { colors } = workbenchTokens;
+  return {
+    token: {
+      borderRadius: 10,
+      borderRadiusLG: 16,
+      borderRadiusSM: 6,
+      colorBgBase: colors.paper,
+      colorBgContainer: colors.paper,
+      colorBgElevated: colors.paper,
+      colorBgLayout: 'transparent',
+      colorBorder: colors.fieldBorder,
+      colorBorderSecondary: colors.line,
+      colorError: colors.seal,
+      colorLink: colors.primary,
+      colorPrimary: colors.primary,
+      colorSuccess: colors.success,
+      colorText: colors.text,
+      colorTextPlaceholder: colors.textTertiary,
+      colorTextSecondary: colors.textSecondary,
+      colorTextTertiary: colors.textTertiary,
+      colorWarning: colors.warning,
+      controlHeight: px(workbenchTokens.controlHeight),
+      controlHeightLG: px(40),
+      controlHeightSM: px(32),
+      controlOutline: 'rgba(36, 80, 200, 0.16)',
+      controlOutlineWidth: 3,
+      fontFamily: workbenchTokens.fontFamily,
+      fontSize,
+      fontSizeLG: px(16),
+      fontSizeSM: px(13),
+      lineHeight: workbenchTokens.lineHeight,
+      motion: fx === 'full',
     },
-    Menu: {
-      collapsedIconSize: 20,
-      itemHeight: 48,
+    components: {
+      Button: {
+        fontWeight: 600,
+        primaryShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 8px 16px -8px rgba(36, 80, 200, 0.7)',
+        defaultShadow: 'none',
+        dangerShadow: 'none',
+      },
+      Modal: {
+        borderRadiusLG: 20,
+      },
+      Table: {
+        cellFontSize: fontSize,
+        cellFontSizeMD: fontSize,
+        cellFontSizeSM: px(14),
+        cellPaddingBlock: px(11),
+        cellPaddingInline: px(14),
+        headerBg: colors.paperSoft,
+        headerColor: colors.textTertiary,
+        headerSplitColor: 'transparent',
+        rowHoverBg: colors.paperSoft,
+      },
     },
-    Pagination: {
-      itemSize: workbenchTokens.minimumTargetSize,
-      itemSizeSM: workbenchTokens.minimumTargetSize,
-    },
-    Table: {
-      cellFontSize: workbenchTokens.bodyFontSize,
-      cellFontSizeMD: workbenchTokens.bodyFontSize,
-      cellFontSizeSM: workbenchTokens.auxiliaryFontSize,
-      cellPaddingBlock: 16,
-      cellPaddingInline: 16,
-      headerBg: 'rgba(22, 29, 46, 0.045)',
-      headerColor: workbenchTokens.colors.text,
-    },
-  },
-};
+  };
+}
+
+/** 默认外观（标准字号、标准动效）下的主题，供不关心外观设置的调用方与测试使用。 */
+export const workbenchTheme: ThemeConfig = buildWorkbenchTheme(DEFAULT_FONT_SIZE, 'full');

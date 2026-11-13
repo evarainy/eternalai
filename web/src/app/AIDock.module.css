@@ -258,3 +258,9 @@
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
 }
+
+/* 动效：精简——问 AI 面板改实色，不做模糊。 */
+:global(html[data-fx='lite']) .dock {
+  background: #f7f9fd;
+  backdrop-filter: none;
+}

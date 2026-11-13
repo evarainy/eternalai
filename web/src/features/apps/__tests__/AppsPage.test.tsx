@@ -223,7 +223,7 @@ describe('AppsPage backend gaps', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('oa-status')).toHaveTextContent('已绑定'));
     expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent))
-      .toEqual(['业务服务连接', '查看原操作', '业务系统', '单位软件', '我的功能']);
+      .toEqual(['业务系统', '单位软件', '我的功能', '业务服务连接', '查看原操作']);
     for (const text of [
       '财务系统、公文交换平台、督查督办系统还没有接进来，请照原来的方式打开。',
       '单位发布的软件还没有接进来，这里暂时不能显示；要装什么软件，先找信息中心。',
@@ -350,11 +350,13 @@ describe('AppsPage vocabulary', () => {
     },
   );
 
-  it('draws its icons as inline stroke SVG instead of text glyphs', async () => {
-    const { container } = renderPage();
+  it('uses an aria-hidden OA stamp and inline stroke SVG for its action icon', async () => {
+    renderPage();
     await screen.findByTestId('oa-status');
 
-    const icon = container.querySelector('svg');
+    const stamp = within(oaCard()).getByText('文');
+    expect(stamp).toHaveAttribute('aria-hidden', 'true');
+    const icon = within(oaCard()).getByRole('link', { name: '打开' }).querySelector('svg');
     expect(icon).not.toBeNull();
     expect(icon?.getAttribute('stroke')).toBe('currentColor');
     expect(icon?.getAttribute('fill')).toBe('none');
@@ -368,34 +370,27 @@ describe('AppsPage vocabulary', () => {
     expect(screen.getByRole('button', { name: /新建应用/ })).toBeInTheDocument();
   });
 
-  /*
-   * 雨爷 2026-09-04 走查第 3 条：「整个纯白的的底，按钮在这个页面下也不明显。」这条钉死改后的两点，
-   * 都会被回滚打红：
-   *
-   * 1. 卡片**不是纯白**——底不再是 `rgb(255 255 255 / 52%)` 那种只有白的填充，而且有一道看得见的
-   *    深色描边把它从面板上分出来；
-   * 2. 卡片上的动作按钮带**可辨边界 + 主题色投影**（WCAG 2.2 SC 1.4.11：阴影不能替代 3:1 的边界），
-   *    不是只有一圈白色高光。
-   */
-  it('lifts the system card off the panel instead of leaving it white on white', () => {
+  // v7：纸面卡以细线与投影分层；打开是白底次动作，去绑账号是实心蓝底主动作。
+  it('separates the paper system card and distinguishes secondary and primary actions', () => {
     const css = readSource('../AppsPage.module.css');
 
     const card = /\.appCard\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(card).not.toContain('background: rgb(255 255 255 / 52%)');
-    expect(card).toContain('rgb(226 234 250 / 76%)');
-    expect(card).toContain('inset 0 0 0 1px rgb(22 29 46 / 14%)');
+    expect(card).toContain('background: var(--paper)');
+    expect(card).toContain('border: 1px solid var(--line)');
+    expect(card).toContain('box-shadow: var(--card-shadow)');
 
     const action = /\.openLink,\s*\.bindLink\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(action).toContain('var(--workbench-control-ring)');
-    expect(action).toContain('var(--workbench-control-glow)');
+    expect(action).toContain('background: var(--paper)');
+    expect(action).toContain('border: 1px solid var(--line-2)');
 
     // 第一条是 `.openLink, .bindLink` 合并规则，第二条才是「去绑账号」自己的主动作规则。
     const bindRules = [...css.matchAll(/\.bindLink\s*\{([^}]*)\}/g)].map(
       (match) => match[1],
     );
     expect(bindRules).toHaveLength(2);
-    expect(bindRules[1]).toContain('var(--workbench-control-ring-primary)');
-    expect(bindRules[1]).toContain('var(--workbench-control-glow-strong)');
+    expect(bindRules[1]).toContain('background: var(--primary)');
+    expect(bindRules[1]).toContain('color: #fff');
+    expect(bindRules[1]).toContain('border-color: var(--primary)');
   });
 });
 

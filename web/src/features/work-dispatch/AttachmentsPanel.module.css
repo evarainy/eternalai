@@ -2,3 +2,6 @@
 .files { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .files li { display: flex; justify-content: space-between; align-items: center; gap: 12px; overflow-wrap: anywhere; }
 .upload { display: grid; gap: 6px; font-size: 13px; color: var(--text-secondary, #65718a); }
+.upload input[type='file'] { color: var(--text-3); font: inherit; font-size: 0.867rem; }
+.upload input[type='file']::file-selector-button { height: 2.2rem; margin-right: 0.7rem; padding: 0 0.9rem; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; background: var(--paper); border: 1px solid var(--line-2); border-radius: var(--r-ctl); }
+.upload input[type='file']::file-selector-button:hover { background: var(--paper-2); }

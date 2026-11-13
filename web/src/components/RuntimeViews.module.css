@@ -1,7 +1,14 @@
+/*
+ * 对话里的结果列表（待办记录、系统消息）：一张纸面卡片，标题行在上，每条记录一行、细线隔开。
+ * 记录的各项事实排成紧凑的两列，正文和「去 OA 查看」跟在后面。
+ */
 .panel {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--chat-color-border);
+  margin-top: 0.75rem;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
 }
 
 .panelHeading {
@@ -9,33 +16,38 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 0.65rem 1.1rem;
+  border-bottom: 1px solid var(--line);
 }
 
 .panelTitle {
   margin: 0;
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
+  color: var(--text-2);
+  font-size: 0.867rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.06em;
 }
 
 .incomplete {
   flex: none;
-  color: var(--chat-color-warning);
-  font-size: var(--workbench-font-auxiliary);
+  padding: 0.1rem 0.6rem;
+  color: var(--warn);
+  font-size: 0.8rem;
   font-weight: 700;
+  background: var(--warn-soft);
+  border-radius: 999px;
 }
 
 .incompleteNotice {
   display: grid;
-  gap: 6px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  color: var(--chat-color-text);
-  background: var(--chat-color-primary-soft);
-  border-left: 4px solid var(--chat-color-warning);
-  border-radius: 8px;
-  font-size: var(--workbench-font-auxiliary);
+  gap: 4px;
+  padding: 0.7rem 1.1rem;
+  color: var(--text);
+  font-size: 0.867rem;
   line-height: var(--workbench-line-height);
+  background: var(--warn-soft);
+  border-bottom: 1px solid var(--line);
 }
 
 .incompleteNotice ul {
@@ -43,112 +55,82 @@
   padding-left: 1.4em;
 }
 
-.reviewSummary {
-  margin: 0 0 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: var(--workbench-line-height);
-}
-
-.facts,
-.argumentList,
 .recordFacts {
   display: grid;
-  grid-template-columns: minmax(108px, 0.4fr) minmax(0, 1fr);
-  gap: 8px 16px;
+  gap: 0.2rem 1rem;
   margin: 0;
+  font-size: 0.867rem;
+  grid-template-columns: max-content minmax(0, 1fr);
 }
 
-.facts dt,
-.argumentList dt,
 .recordFacts dt {
-  color: var(--chat-color-text-secondary);
-  font-weight: 650;
+  color: var(--text-3);
 }
 
-.facts dd,
-.argumentList dd,
 .recordFacts dd {
   margin: 0;
+  color: var(--text-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.arguments {
-  margin-top: 14px;
-  padding: 12px;
-  background: var(--chat-color-bg-soft);
-  border-radius: 12px;
-}
-
-.argumentsTitle {
-  display: block;
-  margin-bottom: 9px;
-  font-size: var(--workbench-font-auxiliary);
-}
-
-.argumentList > div {
-  display: contents;
 }
 
 .fieldValueUnavailable {
   color: var(--chat-color-text-secondary);
 }
 
-.actionRow {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
-}
-
+/* 确认与取消是不可撤回操作的入口，点击区域不小于 44×44。 */
 .minimumActionTarget {
   min-width: 44px;
   min-height: 44px;
   padding-inline: 20px;
-  border-radius: 10px;
+  border-radius: var(--r-ctl);
   font-weight: 700;
 }
 
 .recordList {
-  display: grid;
-  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .record {
-  padding: 14px;
-  background: var(--chat-color-bg-soft);
-  border: 1px solid var(--chat-color-border);
-  border-radius: 12px;
+  padding: 0.8rem 1.1rem 0.85rem;
+}
+
+.record + .record {
+  border-top: 1px solid var(--line);
 }
 
 .recordTitle {
-  margin: 0 0 10px;
-  font-size: var(--workbench-font-body);
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
 .content {
-  margin: 12px 0 0;
-  padding-top: 12px;
+  margin: 0.6rem 0 0;
+  padding-top: 0.6rem;
+  color: var(--text-2);
+  font-size: 0.933rem;
+  line-height: var(--workbench-line-height);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border-top: 1px solid var(--chat-color-border);
-  line-height: var(--workbench-line-height);
+  border-top: 1px dashed var(--line-2);
 }
 
 .contentDetails {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--chat-color-border);
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--line-2);
 }
 
 .contentDetails summary {
-  color: var(--chat-color-primary);
+  color: var(--primary);
+  font-size: 0.933rem;
+  font-weight: 600;
   cursor: pointer;
-  font-weight: 700;
 }
 
 .contentDetails .content {
@@ -157,36 +139,150 @@
 
 .oaLink {
   display: inline-flex;
-  align-items: center;
   min-width: 44px;
   min-height: 44px;
-  margin-top: 10px;
-  color: var(--chat-color-primary);
-  font-weight: 700;
+  align-items: center;
+  margin-top: 0.3rem;
+  color: var(--primary);
+  font-size: 0.933rem;
+  font-weight: 600;
 }
 
 .navigationNotice {
-  margin: 10px 0 0;
-  color: var(--chat-color-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  margin: 0.5rem 0 0;
+  color: var(--text-3);
+  font-size: 0.867rem;
   line-height: var(--workbench-line-height);
 }
 
-@media (max-width: 560px) {
-  .facts,
-  .argumentList,
-  .recordFacts {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
+/*
+ * 对话里的确认卡：写清楚即将执行什么、填了什么值；用户点了才执行，后端受理后盖「已确认」章并折成一行。
+ * 取消后只留一行灰字，不盖章。
+ */
+.kcard {
+  position: relative;
+  margin: 0.2rem 0 0.6rem;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  box-shadow: 0 14px 34px -24px rgb(10 16 29 / 40%);
+}
 
-  .facts dd,
-  .argumentList dd,
-  .recordFacts dd {
-    margin-bottom: 8px;
-  }
+:global(html[data-fx='lite']) .kcard {
+  box-shadow: none;
+}
 
-  .actionRow :global(.ant-btn) {
-    width: 100%;
-  }
+.kcardHead {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1.1rem;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.kcardTitle {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 1rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kcardHead small {
+  flex: none;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.kcardPill {
+  display: inline-flex;
+  height: 1.5rem;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+  padding: 0 0.6rem;
+  color: var(--primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.kcardStamp {
+  margin-left: auto;
+}
+
+.kcardFields {
+  display: grid;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 1rem 1.1rem 0.9rem;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+}
+
+.kcardFields > div {
+  display: contents;
+}
+
+.kcardFields dt {
+  color: var(--text-3);
+}
+
+.kcardFields dd {
+  margin: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.kcardNote {
+  margin: 0;
+  padding: 0 1.1rem 0.9rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.kcardActions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1.1rem 1.1rem;
+}
+
+/* 已确认：盖章并折成一行，下面留一句结果。 */
+.kcard[data-state='done'] .kcardFields {
+  display: none;
+}
+
+.kcard[data-state='done'] .kcardNote {
+  padding-top: 0.7rem;
+  color: var(--text-2);
+}
+
+/* 已取消或没有执行：不再是一张待办的卡。 */
+.kcard[data-state='off'],
+.kcard[data-state='void'] {
+  box-shadow: none;
+}
+
+.kcard[data-state='off'] .kcardHead,
+.kcard[data-state='void'] .kcardHead {
+  color: var(--text-3);
+  background: none;
+}
+
+.kcard[data-state='off'] .kcardFields {
+  display: none;
+}
+
+.kcard[data-state='off'] .kcardNote {
+  padding-top: 0.7rem;
+}
+
+.kcard[data-state='void'] .kcardNote {
+  color: var(--warn);
 }

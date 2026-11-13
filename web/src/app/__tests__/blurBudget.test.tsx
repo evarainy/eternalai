@@ -13,7 +13,6 @@ import WorkObjectsPage from '../../pages/WorkObjectsPage';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useNavigationStore } from '../../stores/navigationStore';
 import {
   blurDeclaringSelectors,
   describeBlurLayers,
@@ -33,12 +32,18 @@ const apiMocks = vi.hoisted(() => ({
   syncWorkObjects: vi.fn(),
   bindPassword: vi.fn(),
   unbindPassword: vi.fn(),
+  readWorkQueue: vi.fn(),
 }));
 
 vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
   bindPasswordApiV1CredentialBindingsTargetSystemPut: apiMocks.bindPassword,
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
   unbindPasswordApiV1CredentialBindingsTargetSystemDelete: apiMocks.unbindPassword,
+}));
+
+vi.mock('../../features/work-dispatch/workObjectLifecycleApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../features/work-dispatch/workObjectLifecycleApi')>(),
+  readWorkQueue: apiMocks.readWorkQueue,
 }));
 
 vi.mock('../../generated/me/me', () => ({
@@ -177,6 +182,8 @@ beforeEach(() => {
   });
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
+  apiMocks.readWorkQueue.mockReset();
+  apiMocks.readWorkQueue.mockResolvedValue({ ...workObjectList(), items: [] });
   apiMocks.listWorkObjects.mockReset();
   apiMocks.listWorkObjects.mockResolvedValue(workObjectList());
   apiMocks.syncWorkObjects.mockReset();
@@ -184,9 +191,8 @@ beforeEach(() => {
   apiMocks.getWorkObject.mockReset();
   apiMocks.getWorkObject.mockResolvedValue(null);
   window.localStorage.clear();
-  useNavigationStore.setState({ collapsed: false });
   useAuthStore.setState({ generation: 1, status: 'authenticated' });
-  useAppearanceStore.setState({ background: 'bgA' });
+  useAppearanceStore.setState({ skin: 'ink', size: 'm', clock: 'digit', fx: null });
   useAIDockStore.setState({
     contextNotice: null,
     draft: '',
@@ -199,15 +205,7 @@ beforeEach(() => {
   });
 });
 
-/*
- * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」的模糊层预算：单屏带 `backdrop-filter` 的元素不得超过
- * 6 个，且只用于左导航、顶栏、内容面板、浮动窗、悬浮按钮这类大面。
- *
- * 下面的每屏断言都钉死**具体是哪几个面**，不是只写一个上限：
- * - 多加一层（例如给按钮或图标底座加模糊）→ 列表多出一项 → 变红；
- * - 把玻璃材质整体回滚 → 列表变空 → 同样变红。
- * 这样才满足「把本棒的视觉改动全部回滚，这个检查还会绿吗」的覆盖判据。
- */
+// 按真实渲染集合核对预算，包含 wb-glass 全局规则和仍在用的页面、Dock 样式。
 
 describe('blur-layer detector', () => {
   it('reads declarations, not occurrences of the string', () => {
@@ -233,20 +231,18 @@ describe('blur-layer detector', () => {
     ]);
   });
 
-  it('resolves declared class names to the names that reach the DOM', async () => {
-    renderScreen('/work-objects');
-    await screen.findByTestId('user-bar');
-
-    const sidebarLayer = findBlurLayers(shellElement()).find(
-      (layer) => layer.declaredSelector === '.sidebar',
+  it('resolves declared class names to the names that reach the DOM', () => {
+    const root = renderLoginScreen();
+    const cardLayer = findBlurLayers(root).find(
+      (layer) => layer.declaredSelector === '.card',
     );
-    expect(sidebarLayer).toBeDefined();
-    expect(sidebarLayer?.file).toBe('app/AppShell.module.css');
-    expect(sidebarLayer?.element).toBe(
-      screen.getByRole('complementary', { name: '主导航' }),
+    expect(cardLayer).toBeDefined();
+    expect(cardLayer?.file).toBe('pages/LoginPage.module.css');
+    expect(cardLayer?.element).toBe(
+      screen.getByRole('heading', { name: '欢迎回来' }).parentElement,
     );
-    expect(sidebarLayer?.matchSelector).not.toBe('.sidebar');
-    expect(sidebarLayer?.element.matches(sidebarLayer.matchSelector)).toBe(true);
+    expect(cardLayer?.matchSelector).not.toBe('.card');
+    expect(cardLayer?.element.matches(cardLayer.matchSelector)).toBe(true);
   });
 
   /*
@@ -263,7 +259,7 @@ describe('blur-layer detector', () => {
 });
 
 describe('per-screen blur-layer budget', () => {
-  it('keeps the work-objects screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
+  it('keeps the work-objects screen on its floating glass entry', async () => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -271,8 +267,7 @@ describe('per-screen blur-layer budget', () => {
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -282,11 +277,11 @@ describe('per-screen blur-layer budget', () => {
     await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
-    expect(layers).toEqual([
-      'app/AppShell.module.css .sidebar',
-      'pages/ChatPage.module.css .sessionRail',
-    ]);
+    expect(layers).toEqual([]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+    fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
+    expect(screen.getByRole('complementary', { name: '我问过的' })).toBeInTheDocument();
+    expect(describeBlurLayers(shellElement())).toEqual([]);
   });
 
   it('keeps the enlarged floating panel within budget on top of a content panel', async () => {
@@ -300,13 +295,12 @@ describe('per-screen blur-layer budget', () => {
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
       'app/AIDock.module.css .dock',
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('adds no blur layer when a user-bar popover is open on top of everything else', async () => {
+  it('adds one glass layer within budget when settings opens above the Dock', async () => {
     useAIDockStore.setState({ lastOpenMode: 'pinned', mode: 'pinned' });
     renderScreen('/work-objects');
     await waitFor(() =>
@@ -316,23 +310,18 @@ describe('per-screen blur-layer budget', () => {
     const before = describeBlurLayers(shellElement());
 
     fireEvent.click(screen.getByTestId('user-bar-identity'));
-    fireEvent.click(screen.getByText('风格'));
-    expect(screen.getByRole('region', { name: '界面风格' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '设置' })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
-    expect(after).toEqual(before);
+    expect(after).toEqual([...before, 'shared/ui/workbench.css .wb-glass'].sort());
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  /*
-   * 2026-09-04 把用户菜单与系统状态改成了画板的 268px / 384px 弹出层。弹出层承载正文，按落盘的
-   * 玻璃约束**不许买模糊**——弹层各开一次，列表都不能多出一项。2026-11-11 去顶栏后弹层由个人栏打开，
-   * 系统状态从用户菜单里进入。
-   */
+  // 设置与系统状态共用一层毛玻璃浮层，打开后仍不得超过预算。
   it.each([
-    ['用户菜单', ['user-bar-identity']],
+    ['设置', ['user-bar-identity']],
     ['系统状态', ['user-bar-identity', 'user-menu-system-status']],
-  ])('adds no blur layer when the %s popover is open', async (region, triggers) => {
+  ])('adds one glass layer within budget when the %s popover is open', async (region, triggers) => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -345,30 +334,28 @@ describe('per-screen blur-layer budget', () => {
     expect(screen.getByRole('region', { name: region })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());
-    expect(after).toEqual(before);
+    expect(after).toEqual([...before, 'shared/ui/workbench.css .wb-glass'].sort());
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the dispatch draft screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
-    renderScreen('/work-dispatch');
+  it('keeps the dispatch draft screen on its floating glass entry', async () => {
+    renderScreen('/work-dispatch?tab=new');
     await screen.findByTestId('user-bar');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the software-centre screen on the stationary surfaces (topbar removed 2026-11-11)', async () => {
+  it('keeps the software-centre screen on its floating glass entry', async () => {
     renderScreen('/apps');
     await screen.findByTestId('oa-status');
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
+      'shared/ui/workbench.css .wb-glass',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -418,10 +405,8 @@ describe('per-screen blur-layer budget', () => {
         .sort(),
     ).toEqual([
       'app/AIDock.module.css .dock',
-      'app/AppShell.module.css .floatingEntry',
-      'app/AppShell.module.css .sidebar',
-      'pages/ChatPage.module.css .sessionRail',
       'pages/LoginPage.module.css .card',
+      'shared/ui/workbench.css .wb-glass',
     ]);
   });
 
@@ -429,15 +414,13 @@ describe('per-screen blur-layer budget', () => {
    * 上面那条按文件钉，这一条按**渲染出来的那一屏**钉：主内容区 `<main id="main-content">` 里不许有
    * 模糊层。两条角度不同——文件那条防「新写一条模糊规则」，这条防「把某个大面挪进内容区」。
    *
-   * AI 助手页的左栏 `.sessionRail` 是唯一留在内容区里的模糊面，理由写在这里而不是留成默契：它是
-   * 定高的会话导航栏（`height` 由外壳给定、内部自己滚动），不随文档流伸长，也不承载正文，与左导航
-   * 同类。哪天它改成随内容伸长，这条就该跟着改。
+   * AI 助手页的案头、线程、输入框与按需展开的历史面板同样不买模糊。
    */
   it.each([
-    ['/work-dispatch', [] as string[]],
+    ['/work-dispatch?tab=new', [] as string[]],
     ['/apps', [] as string[]],
     ['/work-objects', [] as string[]],
-    ['/chat', ['pages/ChatPage.module.css .sessionRail']],
+    ['/chat', [] as string[]],
   ])('keeps the main content region of %s free of scroll-bound blur', async (path, expected) => {
     renderScreen(path);
     await screen.findByTestId('user-bar');

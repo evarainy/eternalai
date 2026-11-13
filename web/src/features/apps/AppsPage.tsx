@@ -7,6 +7,7 @@ import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import { Icon } from '../../shared/ui/Icon';
 import type { IconName } from '../../shared/ui/Icon';
+import { PageFrame } from '../../shared/ui/PageFrame';
 import { useAuthStore } from '../../stores/authStore';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
 import { McpConnectionsPanel } from './McpConnectionsPanel';
@@ -14,7 +15,7 @@ import { McpOperationPanel } from './McpOperationPanel';
 import styles from './AppsPage.module.css';
 
 /**
- * 软件中心，形态照定稿画板 `_scratch/design/glass/Apps.dc.html`。
+ * 软件中心。版式照 v7 样板：纸面上分区，每个系统一张卡，图标是单字方印。
  *
  * **只有一张卡是真的**：OA 办公系统。它的绑定状态取自 `credential-bindings` 的真实结果，「打开」走的是
  * 系统消息深链用的同一条 origin + 路径前缀校验（`oaWorkbenchNavigation`），新窗口打开；是否需要重新
@@ -84,28 +85,18 @@ export default function AppsPage() {
   const navigation = oaWorkbenchNavigation();
 
   return (
+    <PageFrame
+      actions={(
+        <Button onClick={() => setDialogOpen(true)} type="primary">
+          <Icon name="plus" size={17} strokeWidth={2.1} />
+          新建应用
+        </Button>
+      )}
+      title="软件中心"
+    >
     <div className={styles.page}>
       <section className={styles.panel}>
-        <header className={styles.head}>
-          <div className={styles.headCopy}>
-            <h1 className={styles.title}>软件中心</h1>
-            <p className={styles.aux}>
-              单位在用的系统、单位发的软件、你自己的功能，都在这一页。
-            </p>
-          </div>
-          <Button
-            className={styles.newButton}
-            onClick={() => setDialogOpen(true)}
-            type="primary"
-          >
-            <Icon name="plus" size={19} strokeWidth={2.1} />
-            新建应用
-          </Button>
-        </header>
-
         <div className={styles.sections}>
-          <McpConnectionsPanel />
-          <McpOperationPanel />
           <section className={styles.section}>
             <div className={styles.sectionHead}>
               <h2>业务系统</h2>
@@ -115,9 +106,7 @@ export default function AppsPage() {
             </div>
             <div className={styles.cardGrid}>
               <article className={styles.appCard}>
-                <span className={styles.appMark}>
-                  <Icon name="file" size={24} strokeWidth={1.9} />
-                </span>
+                <span aria-hidden="true" className={styles.appMark}>文</span>
                 <div className={styles.appBody}>
                   <div className={styles.appTitleLine}>
                     <span className={styles.appName}>OA 办公系统</span>
@@ -196,10 +185,13 @@ export default function AppsPage() {
               你自己的功能还没有接进来，这里暂时不能显示；要查 OA 待办和消息，请到「AI 助手」里直接问。
             </p>
           </section>
+          <McpConnectionsPanel />
+          <McpOperationPanel />
         </div>
       </section>
 
       <NewSoftwareDialog onClose={() => setDialogOpen(false)} open={dialogOpen} />
     </div>
+    </PageFrame>
   );
 }

@@ -1,0 +1,329 @@
+/* 交办情况：统计带 + 筛选 + 任务行。都是纸面上的实色，没有模糊。 */
+.status {
+  display: flex;
+  max-width: 1100px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.overview {
+  display: grid;
+  width: 100%;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+.ov {
+  min-width: 0;
+  padding: 0.95rem 1.2rem 1.05rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+}
+
+.ov header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.ov h2 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.867rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.ov small {
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+.kpis {
+  display: flex;
+  gap: 2.2rem;
+}
+
+.kpis b {
+  display: block;
+  color: var(--text);
+  font-size: 1.87rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.kpis span {
+  color: var(--text-3);
+  font-size: 0.867rem;
+  white-space: nowrap;
+}
+
+.kpis [data-hot='true'] b {
+  color: var(--seal);
+}
+
+.meter p {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.45rem 0 0.45rem;
+  font-size: 0.933rem;
+}
+
+.meter p span {
+  color: var(--text-3);
+}
+
+.meter div {
+  height: 8px;
+  overflow: hidden;
+  background: var(--ok-soft);
+  border-radius: 4px;
+}
+
+.meter div i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  border-radius: 4px;
+}
+
+.ovNote {
+  margin: 0.55rem 0 0;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.rows {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+}
+
+.rows li + li {
+  border-top: 1px solid var(--line);
+}
+
+.row {
+  display: grid;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.85rem 1.1rem 0.85rem 1.2rem;
+  color: inherit;
+  text-decoration: none;
+  grid-template-columns: 5.6rem minmax(0, 1fr) minmax(9rem, 15rem) auto;
+}
+
+.rows li:first-child .row {
+  border-radius: var(--r-card) var(--r-card) 0 0;
+}
+
+.rows li:last-child .row {
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+
+.row:hover {
+  background: var(--paper-2);
+}
+
+.row > svg {
+  color: var(--text-3);
+}
+
+.due {
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.due small {
+  display: block;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.due[data-hot='true'],
+.due[data-hot='true'] small {
+  color: var(--seal);
+}
+
+.text {
+  min-width: 0;
+}
+
+.text b,
+.text small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text b {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.row:hover .text b {
+  color: var(--primary);
+}
+
+.text small {
+  margin-top: 0.1rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.progress {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.progressText {
+  color: var(--text-2);
+  font-size: 0.867rem;
+  white-space: nowrap;
+}
+
+.cells {
+  display: flex;
+  gap: 3px;
+}
+
+.cells i {
+  height: 5px;
+  flex: 1;
+  background: var(--paper-3);
+  border-radius: 3px;
+}
+
+.cells i[data-on='true'] {
+  background: var(--primary);
+}
+
+.bar {
+  height: 5px;
+  overflow: hidden;
+  background: var(--paper-3);
+  border-radius: 3px;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+}
+
+.stale {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  color: var(--text);
+  font-size: 0.933rem;
+  background: var(--warn-soft);
+  border-radius: var(--r-ctl);
+}
+
+.stale :global(.wb-btn) {
+  margin-left: auto;
+}
+
+.none {
+  margin: 0.4rem 0 0;
+  color: var(--text-3);
+}
+
+/* 读取中、取不到、没有内容：位置固定在正文上方，不跳动。 */
+.state {
+  display: flex;
+  width: 100%;
+  max-width: 1100px;
+  min-height: 16rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  color: var(--text-2);
+  text-align: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+
+.state > svg {
+  color: var(--text-3);
+}
+
+.state b {
+  font-size: 1rem;
+}
+
+.state span {
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.state :global(.wb-btn) {
+  margin-top: 0.6rem;
+}
+
+.skeleton {
+  max-width: 1100px;
+  padding: 1.2rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+
+.skeleton i {
+  display: block;
+  height: 0.9rem;
+  margin: 0.7rem 0;
+  background: var(--paper-3);
+  border-radius: 4px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton i:nth-child(2) { width: 72%; }
+.skeleton i:nth-child(3) { width: 88%; }
+.skeleton i:nth-child(4) { width: 52%; }
+
+@keyframes pulse {
+  50% { opacity: 0.45; }
+}
+
+:global(html[data-fx='lite']) .skeleton i {
+  animation: none;
+}
+
+@media (max-width: 900px) {
+  .overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .row {
+    grid-template-columns: 5rem minmax(0, 1fr) auto;
+  }
+
+  .progress {
+    display: none;
+  }
+}

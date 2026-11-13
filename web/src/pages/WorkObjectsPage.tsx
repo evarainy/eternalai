@@ -34,6 +34,8 @@ import type {
   WorkObjectListResponseItemsItem,
 } from '../generated/work-objects/work-objects.schemas';
 import { Icon } from '../shared/ui/Icon';
+import { PageFrame } from '../shared/ui/PageFrame';
+import { WorkOverview } from '../features/desk/WorkOverview';
 import type { IconName } from '../shared/ui/Icon';
 import { QueryTable } from '../shared/ui/QueryTable';
 import { useAIDockStore } from '../stores/aiDockStore';
@@ -728,7 +730,6 @@ export default function WorkObjectsPage() {
           <Button
             className={styles.actionButton}
             onClick={() => openTask(item.work_object_id)}
-            type="primary"
           >
             {handlingActionLabels[item.handling_action]}
           </Button>
@@ -775,23 +776,29 @@ export default function WorkObjectsPage() {
     syncError instanceof ApiError && syncError.code === 'oa_binding_scope_required';
 
   return (
+    <PageFrame
+      actions={(
+        <>
+          <Link className="wb-btn wb-btn-quiet" to="/work-dispatch?tab=new">创建任务</Link>
+          <Link className="wb-btn wb-btn-quiet" to="/work-object-series">周期任务</Link>
+          <Button onClick={() => { setPrivateCleared(false); void Promise.all([listQuery.refetch(), historyQuery.refetch(), completedQuery.refetch()]); }}>重新读取事项</Button>
+        </>
+      )}
+      title="工作事项"
+    >
     <Space
       className={styles.page}
       data-density={dockMode === 'pinned' ? 'compact' : 'comfortable'}
       orientation="vertical"
       size="large"
     >
-      {/*
-        画板上没有独立的大标题块，也没有页面内的凭证卡：所在页由左导航高亮表明，OA 凭证状态与
-        「重新绑定」入口都在顶栏系统状态面板与 `/admin/bindings`。这里只保留一个不占版面的
-        标题，供读屏软件定位本页。
-      */}
-      <h1 className={styles.pageTitle}>工作事项</h1>
-
-      <div className={styles.internalToolbar}><Link to="/work-dispatch">创建任务</Link><Link to="/work-object-series">周期任务</Link>
-        <Button onClick={() => { setPrivateCleared(false); void Promise.all([listQuery.refetch(), historyQuery.refetch(), completedQuery.refetch()]); }}>重新读取事项</Button></div>
-      {privateCleared ? <Alert type="warning" title="当前访问已失效，已清除事项、计数与上下文引用。请重新读取核对。" />
-        : <InternalWorkQueues key={authGeneration} generation={authGeneration} onOpen={openTask} onAccessLost={clearPrivate} />}
+      {privateCleared ? <Alert type="warning" title="当前访问已失效，已清除事项、计数与上下文引用。请重新读取核对。" /> : (
+        <WorkOverview
+          completed={completedQuery.isSuccess ? { items: completedQuery.data.items, truncated: completedQuery.data.limit_exceeded } : undefined}
+          onOpen={openTask}
+          open={listQuery.isSuccess ? { items: listQuery.data.items, truncated: listQuery.data.limit_exceeded } : undefined}
+        />
+      )}
 
       {syncReadError?.generation === authGeneration ? <Alert type="error" title={syncReadError.message} /> : null}
       {completedQuery.error ? <Alert type="error" title="已完成事项读取失败" /> : null}
@@ -931,6 +938,10 @@ export default function WorkObjectsPage() {
         </details>
       ) : null}
 
+      {/* 我发出的、部门待分配等内部队列排在自己的事项后面：先看要我办的，再看我管的。 */}
+      {privateCleared ? null
+        : <InternalWorkQueues key={authGeneration} generation={authGeneration} onOpen={openTask} onAccessLost={clearPrivate} />}
+
       <Drawer
         title="工作事项详情"
         open={!!selectedWorkObjectId && !privateCleared}
@@ -1063,6 +1074,7 @@ export default function WorkObjectsPage() {
         ) : null}
       </Drawer>
     </Space>
+    </PageFrame>
   );
 }
 

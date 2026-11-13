@@ -3,6 +3,7 @@ import { Button } from 'antd';
 import type { UserAction } from '../generated/runtime/runtime.schemas';
 import type { ConfirmCardView } from '../contracts/runtimeProjection';
 import { fieldLabel, operationName, targetSystemLabels } from '../contracts/businessLabels';
+import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
 import styles from './RuntimeViews.module.css';
 
 interface ConfirmCardProps {
@@ -39,63 +40,73 @@ export function ConfirmCard({
     }
   };
 
+  // 印只在用户亲手确认、并且后端已受理的那一下出现；取消和其他结果不盖章。
+  const accepted = terminalNotice === userActionOutcomeMessages.accepted;
+  const cancelled = terminalNotice === userActionOutcomeMessages.cancelled;
+  const settled = terminalNotice !== null;
+
   return (
-    <section className={styles.panel} aria-label="操作提交前复核">
-      <div className={styles.panelHeading}>
-        <h3 className={styles.panelTitle}>提交前请逐项复核</h3>
+    <section
+      aria-label="操作提交前复核"
+      className={styles.kcard}
+      data-state={accepted ? 'done' : cancelled ? 'off' : settled ? 'void' : 'pending'}
+    >
+      <div className={styles.kcardHead}>
+        <h3 className={styles.kcardTitle}>{operationName(confirm.operationSummary)}</h3>
+        <small>{confirm.targetSystem === null ? '未指定目标系统' : targetSystemLabels[confirm.targetSystem]}</small>
+        {accepted ? <span className={`wb-stamp ${styles.kcardStamp}`}>已确认</span> : null}
+        {settled || responseId === null ? null : <span className={styles.kcardPill}>等你确认</span>}
       </div>
-      <p className={styles.reviewSummary}>{operationName(confirm.operationSummary)}</p>
-      <dl className={styles.facts}>
-        <dt>目标系统</dt>
-        <dd>{confirm.targetSystem === null ? '未指定' : targetSystemLabels[confirm.targetSystem]}</dd>
+
+      <dl className={styles.kcardFields}>
+        {confirm.fieldNames.map((fieldName) =>
+          displayedNames.has(fieldName) ? (
+            <div key={fieldName}>
+              <dt>{fieldLabel(fieldName)}</dt>
+              <dd>{confirm.displayedArgumentValues[fieldName]}</dd>
+            </div>
+          ) : (
+            <div key={fieldName}>
+              <dt>{fieldLabel(fieldName)}</dt>
+              <dd className={styles.fieldValueUnavailable}>未提供可展示值</dd>
+            </div>
+          ),
+        )}
+        {displayedEntries
+          .filter(([fieldName]) => !confirm.fieldNames.includes(fieldName))
+          .map(([fieldName, fieldValue]) => (
+            <div key={fieldName}>
+              <dt>{fieldLabel(fieldName)}</dt>
+              <dd>{fieldValue}</dd>
+            </div>
+          ))}
       </dl>
 
-      <div className={styles.arguments}>
-        <strong className={styles.argumentsTitle}>操作参数</strong>
-        <dl className={styles.argumentList}>
-          {confirm.fieldNames.map((fieldName) =>
-            displayedNames.has(fieldName) ? (
-              <div key={fieldName}>
-                <dt>{fieldLabel(fieldName)}</dt>
-                <dd>{confirm.displayedArgumentValues[fieldName]}</dd>
-              </div>
-            ) : (
-              <div key={fieldName}>
-                <dt>{fieldLabel(fieldName)}</dt>
-                <dd className={styles.fieldValueUnavailable}>未提供可展示值</dd>
-              </div>
-            ),
-          )}
-          {displayedEntries
-            .filter(([fieldName]) => !confirm.fieldNames.includes(fieldName))
-            .map(([fieldName, fieldValue]) => (
-              <div key={fieldName}>
-                <dt>{fieldLabel(fieldName)}</dt>
-                <dd>{fieldValue}</dd>
-              </div>
-            ))}
-        </dl>
-      </div>
-
-      {terminalNotice !== null ? <p role="status">{terminalNotice}</p> : responseId === null ? null : (
-        <div className={styles.actionRow}>
-          <Button
-            type="primary"
-            className={styles.minimumActionTarget}
-            disabled={isSubmitting}
-            loading={isSubmitting}
-            onClick={() => void submitConfirmation('confirm')}
-          >
-            确认提交这项操作
-          </Button>
-          <Button
-            className={styles.minimumActionTarget}
-            disabled={isSubmitting}
-            onClick={() => void submitConfirmation('cancel')}
-          >
-            取消这项操作
-          </Button>
-        </div>
+      {terminalNotice !== null ? (
+        <p className={styles.kcardNote} role="status">{terminalNotice}</p>
+      ) : responseId === null ? null : (
+        <>
+          <p className={styles.kcardNote}>提交前请逐项核对。点「确认提交」后才会执行。</p>
+          <div className={styles.kcardActions}>
+            <Button
+              className={styles.minimumActionTarget}
+              type="primary"
+              disabled={isSubmitting}
+              loading={isSubmitting}
+              onClick={() => void submitConfirmation('confirm')}
+            >
+              确认提交
+            </Button>
+            <Button
+              className={styles.minimumActionTarget}
+              type="text"
+              disabled={isSubmitting}
+              onClick={() => void submitConfirmation('cancel')}
+            >
+              取消
+            </Button>
+          </div>
+        </>
       )}
     </section>
   );

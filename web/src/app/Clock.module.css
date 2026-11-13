@@ -1,0 +1,155 @@
+/* 时钟：纸面顶部正中，日期在时间下面。 */
+
+/* 窄屏时，除助手页外不显示时钟，把页头宽度还给标题和工具。 */
+@media (max-width: 1180px) {
+  .clock[data-narrow='hide'] {
+    display: none !important;
+  }
+}
+
+.clock {
+  position: absolute;
+  z-index: 4;
+  top: 7px;
+  left: 50%;
+  display: block;
+  padding: 5px 18px 6px;
+  color: var(--text);
+  font: inherit;
+  line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: 0;
+  border-radius: 14px;
+  transform: translateX(-50%);
+  transition: background-color 0.15s;
+}
+
+.clock:hover {
+  background: rgb(16 26 46 / 5%);
+}
+
+.digits {
+  position: relative;
+  display: inline-block;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.digits b {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.colon {
+  display: inline-block;
+  margin: 0 0.05em;
+  transform: translateY(-0.09em);
+  animation: blink 2s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.digits i {
+  position: absolute;
+  bottom: 0.22rem;
+  left: 100%;
+  margin-left: 0.3rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.date {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.weekday {
+  margin-left: 1em;
+}
+
+.clock[data-style='dial'] {
+  top: 3px;
+  padding: 2px 12px 4px;
+}
+
+.clock[data-style='dial'] .date {
+  margin-top: 2px;
+}
+
+.dial {
+  display: block;
+  width: 104px;
+  height: 104px;
+  margin: 0 auto;
+}
+
+.dial circle {
+  fill: #fff;
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.tick {
+  stroke: var(--text-3);
+  stroke-linecap: round;
+  stroke-width: 1.1;
+}
+
+.tickBold {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.dial text {
+  font: 600 12px var(--font-num);
+  fill: var(--text-2);
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.dial text.numeralBold {
+  font-weight: 700;
+  fill: var(--text);
+}
+
+.hourHand {
+  stroke: var(--text);
+  stroke-linecap: round;
+  stroke-width: 4.2;
+}
+
+.minuteHand {
+  stroke: var(--text);
+  stroke-linecap: round;
+  stroke-width: 2.8;
+}
+
+.secondHand {
+  stroke: var(--primary);
+  stroke-linecap: round;
+  stroke-width: 1.2;
+}
+
+.dial circle.hub {
+  fill: var(--primary);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+:global(html[data-fx='lite']) .colon {
+  animation: none;
+}

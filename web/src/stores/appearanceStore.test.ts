@@ -1,43 +1,43 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BACKGROUND_PRESETS, DEFAULT_BACKGROUND_PRESET } from '../app/theme';
+import { SKINS, DEFAULT_SKIN } from '../app/theme';
 import { APPEARANCE_STORAGE_KEY, useAppearanceStore } from './appearanceStore';
 
-describe('appearance background store', () => {
+describe('appearance skin store', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useAppearanceStore.setState({ background: DEFAULT_BACKGROUND_PRESET });
+    useAppearanceStore.setState({ skin: DEFAULT_SKIN, size: 'm', clock: 'digit', fx: null });
   });
 
-  it('starts on the default preset', () => {
-    expect(useAppearanceStore.getState().background).toBe(
-      DEFAULT_BACKGROUND_PRESET,
+  it('starts on the default skin', () => {
+    expect(useAppearanceStore.getState().skin).toBe(
+      DEFAULT_SKIN,
     );
-    expect(BACKGROUND_PRESETS).toContain(DEFAULT_BACKGROUND_PRESET);
+    expect(SKINS).toContain(DEFAULT_SKIN);
   });
 
-  it('persists every offered preset so the choice survives a reload', () => {
-    for (const preset of BACKGROUND_PRESETS) {
-      useAppearanceStore.getState().setBackground(preset);
+  it('persists every offered skin so the choice survives a reload', () => {
+    for (const skin of SKINS) {
+      useAppearanceStore.getState().setSkin(skin);
 
-      expect(useAppearanceStore.getState().background).toBe(preset);
+      expect(useAppearanceStore.getState().skin).toBe(skin);
       const stored = window.localStorage.getItem(APPEARANCE_STORAGE_KEY);
       expect(stored).not.toBeNull();
       expect(JSON.parse(stored ?? '{}')).toMatchObject({
-        state: { background: preset },
+        state: { skin },
       });
     }
   });
 
-  it('falls back to the default when storage holds an unknown preset', () => {
+  it('falls back to the default when storage holds an unknown skin', () => {
     window.localStorage.setItem(
       APPEARANCE_STORAGE_KEY,
-      JSON.stringify({ state: { background: 'bgZ' }, version: 0 }),
+      JSON.stringify({ state: { skin: 'unknown' }, version: 0 }),
     );
 
     useAppearanceStore.persist.rehydrate();
 
-    expect(useAppearanceStore.getState().background).toBe(
-      DEFAULT_BACKGROUND_PRESET,
+    expect(useAppearanceStore.getState().skin).toBe(
+      DEFAULT_SKIN,
     );
   });
 });

@@ -1,0 +1,329 @@
+/* 工作事项页顶部的概览带：三张实色卡，等高。 */
+.overview {
+  display: grid;
+  width: 100%;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr);
+}
+
+.ov {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 9.2rem;
+  flex-direction: column;
+  padding: 0.85rem 1.2rem 0.95rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+}
+
+.ov header {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.ov h2 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.867rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.ov small {
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+/* ── 今天的时间线：一条线，左边一段是已经过去的，圆点是到期的事 ── */
+.track {
+  position: relative;
+  height: 4px;
+  margin: auto 1.4rem;
+  background: var(--paper-3);
+  border-radius: 2px;
+}
+
+.past {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--line-3);
+  border-radius: 2px;
+}
+
+.now {
+  position: absolute;
+  top: -7px;
+  width: 2px;
+  height: 18px;
+  margin-left: -1px;
+  background: var(--text);
+  border-radius: 1px;
+}
+
+.event {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  padding: 0;
+  cursor: pointer;
+  background: var(--primary);
+  border: 3px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.event[data-hot='true'] {
+  background: var(--seal);
+  box-shadow: 0 0 0 1px var(--seal);
+}
+
+.event span {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* 相邻两件事的钟点上下错开，挨得近也不叠在一起。 */
+.event[data-up='true'] span {
+  top: auto;
+  bottom: 16px;
+}
+
+.event[data-hot='true'] span {
+  color: var(--seal);
+}
+
+.event:hover {
+  transform: scale(1.15);
+}
+
+/* 几件事合成的点：大一圈，里面写件数。 */
+.event[data-many='true'] {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-width: 2px;
+  place-items: center;
+}
+
+.event b {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.event[data-many='true'] span {
+  top: 20px;
+}
+
+.event[data-many='true'][data-up='true'] span {
+  top: auto;
+  bottom: 20px;
+}
+
+/* 点开合成的点：列出这几件事，各点各的。浮在卡片上方，实色底。 */
+.pick {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  left: 50%;
+  width: max-content;
+  max-width: min(26rem, 80vw);
+  max-height: 11rem;
+  margin: 0;
+  padding: 0.3rem;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-ctl);
+  box-shadow: var(--float);
+  transform: translateX(-50%);
+}
+
+.pick button {
+  display: flex;
+  width: 100%;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  overflow: hidden;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.933rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+
+.pick button:hover {
+  background: var(--paper-2);
+}
+
+.pick button span {
+  flex: none;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.pick button[data-hot='true'] span {
+  color: var(--seal);
+}
+
+/* ── 未来 7 天：七根柱子 ── */
+.columns {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.columns > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.columnBar {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding-top: 1rem;
+}
+
+.columnBar em {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.columnBar i {
+  width: 100%;
+  max-width: 24px;
+  min-height: 2px;
+  flex: none;
+  background: var(--primary);
+  border-radius: 4px 4px 0 0;
+}
+
+.columnLabel {
+  flex: none;
+  padding-top: 4px;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+  border-top: 1px solid var(--line-2);
+}
+
+.columns [data-today='true'] em,
+.columns [data-today='true'] .columnLabel {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* ── 近 30 天办结：大数字和按期办结的进度条 ── */
+.figure {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.figure b {
+  font-size: 1.87rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.figure span {
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.meter p {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.933rem;
+}
+
+.meter p span {
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.meter div {
+  height: 8px;
+  overflow: hidden;
+  background: var(--ok-soft);
+  border-radius: 4px;
+}
+
+.meter div i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  border-radius: 4px;
+}
+
+.skeleton i {
+  display: block;
+  height: 0.8rem;
+  margin: 0.7rem 0;
+  background: var(--paper-3);
+  border-radius: 4px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton i:nth-child(2) {
+  width: 64%;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.45; }
+}
+
+:global(html[data-fx='lite']) .skeleton i {
+  animation: none;
+}
+
+@media (max-width: 1100px) {
+  .overview {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .ov:last-child {
+    display: none;
+  }
+}

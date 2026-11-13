@@ -24,7 +24,6 @@ import type { MeResponse } from '../../generated/me/me.schemas';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
 import { useAuthStore } from '../../stores/authStore';
-import { useNavigationStore } from '../../stores/navigationStore';
 import { AppShell } from '../AppShell';
 import {
   DEPARTMENT_UNAVAILABLE_LINE,
@@ -200,8 +199,7 @@ function resetStores(): void {
   apiMocks.readMe.mockReset();
   apiMocks.readMe.mockResolvedValue(meResponse());
   window.localStorage.clear();
-  useNavigationStore.setState({ collapsed: false });
-  useAppearanceStore.setState({ background: 'bgA' });
+  useAppearanceStore.setState({ skin: 'ink', size: 'm', clock: 'digit', fx: null });
   useAuthStore.setState({ generation: 1, status: 'authenticated' });
   useAIDockStore.setState({
     contextNotice: null,
@@ -301,6 +299,7 @@ describe('AppShell and singleton AI Dock', () => {
       '11111111-1111-4111-8111-111111111111',
     );
     expect(useAIDockStore.getState().mode).toBe('drawer');
+    fireEvent.click(screen.getByRole('button', { name: '管理页面' }));
     expect(screen.getByRole('link', { name: '任务证据' })).toHaveAttribute(
       'aria-current',
       'page',
@@ -337,7 +336,7 @@ describe('AppShell and singleton AI Dock', () => {
       target: { value: '　 OA-WF-001  ReVIEW﻿' },
     });
     expect(input).toHaveAttribute('placeholder', '搜索工作事项、文件编号、责任人');
-    fireEvent.click(screen.getByRole('button', { name: /搜\s*索/ }));
+    fireEvent.submit(input.closest('form')!);
 
     expect(screen.getByText('搜索结果页 ?q=oa-wf-001+review')).toBeInTheDocument();
     expect(screen.getByLabelText('要 AI 帮什么')).toHaveValue('');
@@ -387,31 +386,25 @@ describe('AppShell and singleton AI Dock', () => {
 describe('AppShell primary navigation', () => {
   beforeEach(resetStores);
 
-  it('lays out the six decided primary items in order above the admin group', () => {
+  it('lays out five primary items in order with a separate admin entry', () => {
     renderShell();
-
     const navigation = screen.getByRole('navigation', { name: '工作区' });
     const links = within(navigation).getAllByRole('link');
-    expect(
-      links.slice(0, 6).map((link) => [
-        link.getAttribute('aria-label'),
-        link.getAttribute('href'),
-      ]),
-    ).toEqual([
+    expect(links.map((link) => [link.getAttribute('aria-label'), link.getAttribute('href')])).toEqual([
       ['AI 助手', '/chat'],
+      ['消息', '/messages'],
       ['工作事项', '/work-objects'],
       ['任务交办', '/work-dispatch'],
-      ['周期任务', '/work-object-series'],
       ['软件中心', '/apps'],
-      ['消息', '/messages'],
     ]);
-
-    const adminSummary = within(navigation).getByTitle('管理页面');
-    const lastPrimaryLink = links.at(5);
-    expect(lastPrimaryLink).toBeDefined();
-    const relativePosition =
-      lastPrimaryLink?.compareDocumentPosition(adminSummary) ?? 0;
-    expect(relativePosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const admin = screen.getByRole('button', { name: '管理页面' });
+    expect(links[4]!.compareDocumentPosition(admin) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(admin);
+    const panel = screen.getByRole('region', { name: '管理页面' });
+    expect(panel).toHaveAttribute('data-panel', 'admin');
+    expect(within(panel).getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '/admin/registry', '/admin/tasks', '/admin/bindings',
+    ]);
   });
 
   it('renders the product mark as a plain label that cannot be clicked', () => {
@@ -420,35 +413,17 @@ describe('AppShell primary navigation', () => {
     expect(screen.queryByRole('link', { name: /EternalAI/ })).not.toBeInTheDocument();
     const brand = screen.getByTestId('app-brand');
     expect(brand.tagName).toBe('DIV');
-    expect(within(brand).getByText('EternalAI')).toBeInTheDocument();
+    expect(within(brand).getByText('EternalAI 办事工作台')).toBeInTheDocument();
     expect(within(brand).queryByRole('link')).not.toBeInTheDocument();
     expect(within(brand).queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('collapses to an icon rail, persists the choice, and keeps accessible names', () => {
+  it('keeps accessible names and hover labels on the fixed rail', () => {
     renderShell();
-
-    const sidebar = screen.getByRole('complementary', { name: '主导航' });
-    expect(sidebar).toHaveAttribute('data-collapsed', 'false');
-    expect(within(sidebar).getByText('工作事项')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '收起导航' }));
-
-    expect(sidebar).toHaveAttribute('data-collapsed', 'true');
-    expect(within(sidebar).queryByText('工作事项')).not.toBeInTheDocument();
+    const rail = screen.getByRole('complementary', { name: '主导航' });
     for (const label of ['AI 助手', '工作事项', '任务交办', '软件中心', '消息']) {
-      const link = within(sidebar).getByRole('link', { name: label });
-      expect(link).toHaveAttribute('title', label);
+      expect(within(rail).getByRole('link', { name: label })).toHaveAttribute('title', label);
     }
-    expect(useNavigationStore.getState().collapsed).toBe(true);
-    expect(window.localStorage.getItem('eternalai-navigation-collapsed')).toContain(
-      '"collapsed":true',
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: '展开导航' }));
-
-    expect(sidebar).toHaveAttribute('data-collapsed', 'false');
-    expect(useNavigationStore.getState().collapsed).toBe(false);
   });
 
   it('renders the persistent floating AI entry everywhere except the AI assistant page', () => {
@@ -477,27 +452,32 @@ describe('AppShell user bar', () => {
 
   function openUserMenu(): HTMLElement {
     fireEvent.click(screen.getByTestId('user-bar-identity'));
-    return screen.getByRole('region', { name: '用户菜单' });
+    return screen.getByRole('region', { name: '设置' });
   }
 
-  it('no longer renders a topbar and puts the identity and bell at the bottom of the sidebar', () => {
+  it('puts admin, settings and avatar in the rail footer and notifications in settings', () => {
     renderShell();
-
     expect(screen.queryByTestId('app-topbar')).not.toBeInTheDocument();
     expect(screen.queryByRole('banner')).not.toBeInTheDocument();
-    const sidebar = screen.getByRole('complementary', { name: '主导航' });
-    const userBar = within(sidebar).getByTestId('user-bar');
-    expect(within(userBar).getByTestId('user-bar-identity')).toBeInTheDocument();
-    expect(within(userBar).getByRole('button', { name: '通知' })).toBeInTheDocument();
     expect(screen.queryByText('当前位置')).not.toBeInTheDocument();
+    const rail = screen.getByRole('complementary', { name: '主导航' });
+    const footer = within(rail).getByTestId('user-bar');
+    expect(within(footer).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      '管理页面', '设置', '设置',
+    ]);
+    expect(within(footer).getByTestId('user-bar-identity')).toBeInTheDocument();
+    fireEvent.click(within(footer).getByTestId('rail-settings'));
+    expect(screen.getByRole('region', { name: '设置' })).toHaveAttribute('data-panel', 'user');
+    expect(screen.getByTestId('user-menu-notifications')).toHaveTextContent('通知');
   });
 
-  it('shows the real name and department in the user bar', async () => {
+  it('shows the real name and department in settings and the name on the avatar', async () => {
     renderShell();
-
     const identity = screen.getByTestId('user-bar-identity');
-    await waitFor(() => expect(identity).toHaveTextContent(DISPLAY_NAME));
-    expect(identity).toHaveTextContent(DEPARTMENT_NAME);
+    await waitFor(() => expect(identity).toHaveAccessibleName(`设置：${DISPLAY_NAME}`));
+    const menu = openUserMenu();
+    expect(within(menu).getByText(DISPLAY_NAME)).toBeInTheDocument();
+    expect(within(menu).getByTestId('user-menu-meta')).toHaveTextContent(`${DEPARTMENT_NAME} · ${JOB_TITLE_UNAVAILABLE_LINE}`);
   });
 
   it('drops to the name alone when the department cannot be read, and says nothing else', async () => {
@@ -507,9 +487,9 @@ describe('AppShell user bar', () => {
     renderShell();
 
     const identity = screen.getByTestId('user-bar-identity');
-    await waitFor(() => expect(identity).toHaveTextContent(DISPLAY_NAME));
+    await waitFor(() => expect(identity).toHaveAccessibleName(`设置：${DISPLAY_NAME}`));
     // 个人栏取不到部门时不加一个字的提示——说明留给用户菜单。
-    expect(identity.textContent).toBe(`${DISPLAY_NAME.slice(0, 1)}${DISPLAY_NAME}`);
+    expect(identity.textContent).toBe(DISPLAY_NAME.slice(0, 1));
     expect(identity.textContent).not.toContain('取不到');
   });
 
@@ -532,7 +512,7 @@ describe('AppShell user bar', () => {
     const image = await screen.findByTestId('user-bar-avatar-image');
     // 前端只看到常量路径；OA 主机地址与照片相对路径都留在后端。
     expect(image).toHaveAttribute('src', '/api/v1/me/avatar');
-    expect(trigger).toHaveAccessibleName(`用户菜单：${DISPLAY_NAME}`);
+    expect(trigger).toHaveAccessibleName(`设置：${DISPLAY_NAME}`);
 
     fireEvent.error(image);
 
@@ -577,26 +557,16 @@ describe('AppShell user bar', () => {
     );
   });
 
-  it('lists the five v3 rows, keeps identity switching honest, and logs out from the menu', async () => {
+  it('offers appearance and status settings, keeps bindings in admin, and logs out', async () => {
     renderShell();
-
     expect(screen.queryByRole('button', { name: /退出登录/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '管理页面' }));
+    const admin = screen.getByRole('region', { name: '管理页面' });
+    expect(within(admin).getByRole('link', { name: '账号绑定' })).toHaveAttribute('href', '/admin/bindings');
     const menu = openUserMenu();
-    for (const label of ['搜索工作事项', '切换身份', '风格', '系统状态', '退出登录']) {
+    for (const label of ['皮肤', '字号', '时钟', '动效', '通知', '系统状态', '退出登录']) {
       expect(within(menu).getByText(label)).toBeInTheDocument();
     }
-    // 雨爷 2026-11-11：切换身份保留入口、功能后做；不做一个点了没反应的按钮。
-    const switchRow = within(menu).getByText('切换身份').closest('[data-inert]');
-    expect(switchRow).toHaveAttribute('data-inert', 'true');
-    expect(switchRow).toHaveTextContent('后续开放');
-    expect(within(menu).queryByRole('button', { name: /切换身份/ })).not.toBeInTheDocument();
-    // 账号绑定仍从左导航的管理页面进入。
-    const sidebar = screen.getByRole('complementary', { name: '主导航' });
-    expect(within(sidebar).getByRole('link', { name: '账号绑定' })).toHaveAttribute(
-      'href',
-      '/admin/bindings',
-    );
-
     const logout = within(menu).getByRole('button', { name: /退出登录/ });
     expect(logout).toHaveTextContent('只退工作台');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
@@ -605,25 +575,17 @@ describe('AppShell user bar', () => {
     fetchSpy.mockRestore();
   });
 
-  it('switches the background image from the style row and remembers the choice', () => {
+  it('switches the skin in settings and remembers the choice', () => {
     renderShell();
-    expect(shellElement()).toHaveAttribute('data-background', 'bgA');
-
     const menu = openUserMenu();
-    fireEvent.click(within(menu).getByText('风格'));
-
-    const panel = screen.getByRole('region', { name: '界面风格' });
-    const warm = within(panel).getByRole('button', { name: '暖橙' });
-    expect(warm).toHaveAttribute('aria-pressed', 'false');
-
-    fireEvent.click(warm);
-
-    expect(warm).toHaveAttribute('aria-pressed', 'true');
-    expect(useAppearanceStore.getState().background).toBe('bgB');
-    expect(shellElement()).toHaveAttribute('data-background', 'bgB');
-    expect(
-      window.localStorage.getItem('eternalai-appearance-background'),
-    ).toContain('"background":"bgB"');
+    const skins = within(menu).getByRole('group', { name: '皮肤' });
+    expect(within(skins).getByRole('button', { name: '墨' })).toHaveAttribute('aria-pressed', 'true');
+    const rose = within(skins).getByRole('button', { name: '樱' });
+    expect(rose).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(rose);
+    expect(rose).toHaveAttribute('aria-pressed', 'true');
+    expect(useAppearanceStore.getState().skin).toBe('rose');
+    expect(window.localStorage.getItem('eternalai-appearance')).toContain('"skin":"rose"');
   });
 
   it('flags invalid OA credentials on the user bar without opening the menu', async () => {
@@ -631,16 +593,16 @@ describe('AppShell user bar', () => {
     renderShell();
 
     const trigger = await screen.findByRole('button', {
-      name: `用户菜单：${DISPLAY_NAME}，系统状态 1 项需要处理`,
+      name: `设置：${DISPLAY_NAME}，系统状态 1 项需要处理`,
     });
     expect(within(trigger).getByTestId('user-bar-status-dot')).toHaveAttribute(
       'data-status-kind',
       'attention',
     );
-    expect(screen.getByRole('button', { name: '通知' }).textContent).not.toContain('1');
 
     fireEvent.click(trigger);
-    const menu = screen.getByRole('region', { name: '用户菜单' });
+    const menu = screen.getByRole('region', { name: '设置' });
+    expect(within(menu).getByTestId('user-menu-notifications')).toHaveTextContent('通知暂无');
     expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('1 个不正常');
     fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
 
@@ -693,7 +655,7 @@ describe('AppShell user bar', () => {
     renderShell();
 
     const trigger = await screen.findByRole('button', {
-      name: `用户菜单：${DISPLAY_NAME}，系统状态暂时无法判断`,
+      name: `设置：${DISPLAY_NAME}，系统状态暂时无法判断`,
     });
     expect(within(trigger).getByTestId('user-bar-status-dot')).toHaveAttribute(
       'data-status-kind',
@@ -701,7 +663,7 @@ describe('AppShell user bar', () => {
     );
 
     fireEvent.click(trigger);
-    const menu = screen.getByRole('region', { name: '用户菜单' });
+    const menu = screen.getByRole('region', { name: '设置' });
     expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('读不到');
     fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
 
@@ -724,9 +686,10 @@ describe('AppShell user bar', () => {
   it('explains why the notification panel is empty and what to do instead', () => {
     renderShell();
 
-    fireEvent.click(screen.getByRole('button', { name: '通知' }));
+    fireEvent.click(screen.getByTestId('user-bar-identity'));
+    fireEvent.click(screen.getByTestId('user-menu-notifications'));
 
-    expect(screen.getByText('这里现在是空的。')).toBeInTheDocument();
+    expect(screen.getByText('暂无通知。')).toBeInTheDocument();
     expect(screen.getByText('系统还不会给你发提醒。')).toBeInTheDocument();
     const panel = screen.getByRole('region', { name: '通知' });
     expect(within(panel).getByRole('link', { name: '工作事项' })).toHaveAttribute(
@@ -768,7 +731,8 @@ describe('AppShell user bar popovers', () => {
 
     const popover = screen.getByTestId('shell-popover');
     expect(popover).toHaveAttribute('data-panel', 'user');
-    expect(popoverRule('user')).toContain('width: 268px');
+    const css = readSource('../AppShell.module.css');
+    expect(/\.popover\s*\{([^}]*)\}/.exec(css)?.[1]).toContain('width: 268px');
     // 弹层打开时主内容仍在，且弹层不是主内容的祖先——它是覆盖层，不是新的页面区块。
     expect(screen.getByText('事项页面')).toBeInTheDocument();
     expect(popover.contains(screen.getByTestId('app-main'))).toBe(false);
@@ -807,7 +771,8 @@ describe('AppShell user bar popovers', () => {
     const css = readSource('../AppShell.module.css');
     for (const kind of ['normal', 'attention', 'unchecked']) {
       expect(css).toContain(`.statusDot[data-status-kind='${kind}']`);
-      expect(css).toContain(`.signalDot[data-status-kind='${kind}']`);
+      const dotRule = new RegExp(`\\.statusDot\\[data-status-kind='${kind}'\\][^{]*\\{([^}]*)\\}`).exec(css)?.[1];
+      expect(dotRule).toContain(kind === 'normal' ? 'var(--ok)' : kind === 'attention' ? 'var(--seal)' : 'var(--text-3)');
     }
   });
 
@@ -828,7 +793,7 @@ describe('AppShell user bar popovers', () => {
       expect(dot).toHaveAttribute('aria-hidden', 'true');
       // 颜色之外仍有文字：可见的「系统状态」四个字与状态摘要。
       expect(row).toHaveTextContent('系统状态');
-      expect(row.querySelector('svg')).toBeNull();
+      expect(dot.querySelector('svg')).toBeNull();
     },
   );
 
@@ -859,34 +824,27 @@ describe('AppShell user bar popovers', () => {
   });
 
   /*
-   * 雨爷 2026-09-04 第二次走查要求的搜索框形态（带可见文字的「搜索」按钮、左侧装饰图标、46px 凹槽内
-   * 垂直居中、可辨边界）随搜索框一起迁到 `WorkObjectSearchField`，在 Ctrl K 弹窗里核对。
+   * Ctrl K 已改为自绘搜索浮层：保留带名称的输入、唯一搜索动作及外层焦点指示，
+   * 不再要求旧 WorkObjectSearchField 的 46px 凹槽与表单内提交键。
    */
-  it('keeps the labelled search button aligned inside the 46px well', async () => {
+  it('keeps search accessible in the custom dialog with an outer focus indicator', async () => {
     renderShell('/admin/tasks');
     fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
-
-    const submit = await screen.findByRole('button', { name: '搜索' });
-    expect(submit.tagName).toBe('BUTTON');
-    expect(submit).toHaveAttribute('type', 'submit');
-    expect(submit.textContent).toBe('搜索');
-
-    const field = submit.parentElement;
-    expect(field?.tagName).toBe('FORM');
-    expect(field).toContainElement(screen.getByLabelText('搜索工作事项'));
-    expect(within(field as HTMLElement).getAllByRole('button', { name: '搜索' })).toHaveLength(1);
-
-    const css = readSource('../WorkObjectSearchField.module.css');
-    const fieldRule = /\.searchField\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(fieldRule).toContain('height: 46px');
-    expect(fieldRule).toContain('align-items: center');
-    expect(fieldRule).toContain('var(--workbench-field-face)');
-
-    const submitRule = /\.searchSubmit\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(submitRule).toContain('align-self: center');
-    expect(submitRule).toContain('var(--workbench-control-ring)');
-    expect(submitRule).toContain('var(--workbench-control-glow)');
-    expect(css).not.toContain('ant-input-group-addon');
+    const dialog = await screen.findByRole('dialog', { name: '快速搜索' });
+    expect(dialog).toHaveAttribute('data-testid', 'quick-search');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveClass('wb-glass');
+    const form = within(dialog).getByRole('search');
+    expect(form.tagName).toBe('FORM');
+    expect(form).toHaveAttribute('data-focus-ring', 'host');
+    const input = within(form).getByLabelText('搜索工作事项');
+    expect(input).toHaveFocus();
+    expect(within(dialog).getAllByRole('button', { name: '打开搜索页 Enter' })).toHaveLength(1);
+    const css = readSource('../QuickSearch.module.css');
+    expect(/\.inputRow\s*\{([^}]*)\}/.exec(css)?.[1]).toContain('align-items: center');
+    expect(/\.inputRow:focus-within\s*\{([^}]*)\}/.exec(css)?.[1]).toContain('border-bottom-color: var(--primary)');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('quick-search')).not.toBeInTheDocument();
   });
 });
 
