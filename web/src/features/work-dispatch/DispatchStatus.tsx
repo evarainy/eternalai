@@ -3,8 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Icon } from '../../shared/ui/Icon';
 import { useAuthStore } from '../../stores/authStore';
-import { formatClock, summarizeSent, useDeskNow } from '../desk/deskData';
-import type { SentTask } from '../desk/deskData';
+import { formatClock, summarizeSent, useMinuteNow } from '../../shared/work/workSummaries';
+import type { SentTask } from '../../shared/work/workSummaries';
 import { readWorkQueue } from './workObjectLifecycleApi';
 import styles from './DispatchStatus.module.css';
 
@@ -60,7 +60,7 @@ function Progress({ done, total }: { done: number; total: number }) {
 export function DispatchStatus({ newHref }: { newHref: string }) {
   const generation = useAuthStore((state) => state.generation);
   const [filter, setFilter] = useState<Filter>('active');
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const query = useQuery({
     queryKey: ['work-dispatch', generation, 'sent-active'] as const,
     queryFn: () => readWorkQueue({ queue: 'mine_sent', completion: 'active' }),

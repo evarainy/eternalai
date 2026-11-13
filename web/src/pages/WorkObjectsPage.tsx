@@ -35,7 +35,7 @@ import type {
 } from '../generated/work-objects/work-objects.schemas';
 import { Icon } from '../shared/ui/Icon';
 import { PageFrame } from '../shared/ui/PageFrame';
-import { WorkOverview } from './WorkOverview';
+import { WorkOverview } from '../features/desk/WorkOverview';
 import type { IconName } from '../shared/ui/Icon';
 import { QueryTable } from '../shared/ui/QueryTable';
 import { useAIDockStore } from '../stores/aiDockStore';

@@ -18,7 +18,7 @@ import {
   summarizeCompleted,
   summarizeSent,
   useCompletedWork,
-  useDeskNow,
+  useMinuteNow,
   useOpenWork,
   useSentWork,
 } from './deskData';
@@ -170,7 +170,7 @@ type CardProps = { onAsk: Ask; size: CardSize | 'auto' };
 
 function TodoCard({ onAsk, size }: CardProps) {
   const query = useOpenWork();
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const groups = useMemo(
     () => (query.data === undefined ? null : groupByDue(query.data.items, now)),
     [query.data, now],
@@ -242,7 +242,7 @@ function TypesCard({ onAsk, size }: CardProps) {
 
 function TasksCard({ onAsk, size }: CardProps) {
   const query = useSentWork();
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const summary = useMemo(
     () => (query.data === undefined ? null : summarizeSent(query.data.items, now)),
     [query.data, now],
@@ -294,7 +294,7 @@ function TasksCard({ onAsk, size }: CardProps) {
 
 function WeekCard({ onAsk, size }: CardProps) {
   const query = useOpenWork();
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const columns = useMemo(
     () => (query.data === undefined ? [] : countNextSevenDays(query.data.items, now)),
     [query.data, now],
@@ -339,7 +339,7 @@ function OaCard({ onAsk, size }: CardProps) {
     queryFn: () => getBinding('oa'),
   });
   const navigation = oaWorkbenchNavigation();
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const sync = work.data?.oa_sync;
   const synced = sync?.last_success_at ?? null;
   const needsBinding = binding.data !== undefined
@@ -460,7 +460,7 @@ interface Stat {
 function useStats(): Stat[] {
   const open = useOpenWork();
   const completed = useCompletedWork();
-  const now = useDeskNow();
+  const now = useMinuteNow();
   return useMemo(() => {
     const groups = open.data === undefined ? null : groupByDue(open.data.items, now);
     const stats: Stat[] = [

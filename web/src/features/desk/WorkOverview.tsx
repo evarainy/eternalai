@@ -3,10 +3,10 @@ import {
   countNextSevenDays,
   formatClock,
   summarizeCompleted,
-  useDeskNow,
+  useMinuteNow,
   workItemTitle,
-} from '../features/desk/deskData';
-import type { WorkItem } from '../features/desk/deskData';
+} from '../../shared/work/workSummaries';
+import type { WorkItem } from '../../shared/work/workSummaries';
 import styles from './WorkOverview.module.css';
 
 /**
@@ -100,7 +100,7 @@ export function WorkOverview({
   onOpen: (workObjectId: string) => void;
   open: ListSlice | undefined;
 }) {
-  const now = useDeskNow();
+  const now = useMinuteNow();
   const events = useMemo(() => (open === undefined ? [] : todayEvents(open.items, now)), [open, now]);
   const clusters = useMemo(() => clusterEvents(events), [events]);
   const [pickedLeft, setPickedLeft] = useState<number | null>(null);
