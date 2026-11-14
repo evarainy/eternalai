@@ -6,7 +6,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Alert, Button, Checkbox, Space, Typography } from 'antd';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
-import { Desk, DeskSide } from '../features/desk/Desk';
+import { Desk } from '../features/desk/Desk';
 import { DeliveryComposerButton } from '../features/messages/DeliveryComposer';
 import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
@@ -535,9 +535,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserOptIn, setBrowserOptIn] = useState(false);
   const chatAttachments = useChatAttachments();
   const [attachmentsToggled, setAttachmentsToggled] = useState(false);
-  // 对话中右侧的案头可以收起；「历史对话」是输入框底栏打开的小面板。
-  const [deskSideOpen, setDeskSideOpen] = useState(true);
+  // 对话是摊在案头上的一张纸：可以收起回到案头，对话还在，随时再摊开。
+  const chatSheetOpen = useAIDockStore((state) => state.chatSheetOpen);
+  const setChatSheetOpen = useAIDockStore((state) => state.setChatSheetOpen);
+  // 「历史对话」是输入框底栏打开的小面板。
   const [historyOpen, setHistoryOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const deskRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 案头上的数字、卡片和快捷指令都只做一件事：把一句现成的话填进输入框，由用户自己发出去。
   const askFromDesk = useCallback((question: string) => {
@@ -967,13 +971,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     },
   });
 
-  // 新内容到达时滚到对话区底部；用户已向上翻看（离底部超过阈值）则不拉回。没有对话时这一格放的是案头，不滚。
+  // 新内容到达、或对话层重新摊开时滚到对话底部；用户已向上翻看（离底部超过阈值）则不拉回。
   useEffect(() => {
     const element = transcriptRef.current;
     const hasThread = transcript.length > 0 || mutation.isPending || browserTarget !== null
       || pendingSubmission !== null || retrySubmission !== null;
     if (element !== null && hasThread && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission]);
+  }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
 
   const submit = (retry?: ChatSubmission) => {
     const message = retry?.message ?? draft.trim();
@@ -1093,51 +1097,99 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     lastEntry.role === 'assistant' &&
     UNSUCCESSFUL_KINDS.has(lastEntry.presentationKind);
 
-  // 线程里只要有任何要给用户看的东西（消息、进行中的任务、待恢复的作业），就是「对话中」；否则案头铺满。
+  // 只要有任何要给用户看的东西（消息、进行中的任务、待恢复的作业），就有一张对话纸。
   const inConversation = transcript.length > 0 || mutation.isPending
     || visibleBrowserTarget !== null || pendingSubmission !== null || retrySubmission !== null
     || reportJobIds.length > 0 || pendingSheetFills.length > 0
     || (!browserIdentityReady && browserTarget !== null);
+  const sheetShown = inConversation && chatSheetOpen;
   const composerOpen = draft.trim() !== '' || attachmentsOpen || historyOpen;
+  const topic = transcript.find((entry) => entry.role === 'user')?.text ?? null;
+  const askedCount = transcript.filter((entry) => entry.role === 'user').length;
+
+  // Esc 收起对话层。焦点在别的浮层（设置、搜索）里时不管，那些浮层自己处理 Esc。
+  useEffect(() => {
+    if (!sheetShown) return undefined;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Node && target !== document.body
+          && pageRef.current?.contains(target) !== true) return;
+      setHistoryOpen(false);
+      setChatSheetOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [sheetShown, setChatSheetOpen]);
+
+  // 对话纸摊开时，后面的案头既不进读屏的树，也不能被 Tab 到；组件照常挂着。
+  useEffect(() => {
+    if (deskRef.current !== null) deskRef.current.inert = sheetShown;
+  }, [sheetShown]);
 
   return (
     <div
       className={styles.page}
-      data-mode={inConversation ? 'chat' : 'desk'}
-      data-side={deskSideOpen ? 'true' : 'false'}
+      data-mode={sheetShown ? 'chat' : 'desk'}
+      ref={pageRef}
     >
       {/* 所在页由左侧窄栏高亮表明，标题只留给读屏软件定位，不占版面。 */}
       <h1 className={styles.pageTitle}>AI 助手</h1>
 
-      {inConversation ? (
-        <div className={styles.pageTools}>
-          <button
-            aria-pressed={deskSideOpen}
-            className="wb-btn wb-btn-quiet wb-btn-sm"
-            onClick={() => setDeskSideOpen((open) => !open)}
-            title="显示或收起右侧案头"
-            type="button"
-          >
-            <Icon name="panel" size={17} />
-            案头
-          </button>
+      {/* 案头一直在；对话纸摊开时它退到后面。 */}
+      <div className={styles.scroll} ref={deskRef}>
+        <div className={styles.deskWrap}>
+          <Desk onAsk={askFromDesk} />
         </div>
-      ) : null}
+      </div>
 
-      <div
-        className={styles.scroll}
-        ref={transcriptRef}
-        onScroll={(event) => {
-          const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
-          stickToBottom.current = scrollHeight - scrollTop - clientHeight < 80;
-        }}
-      >
-        {!inConversation ? (
-          <div className={styles.deskWrap}>
-            <Desk onAsk={askFromDesk} />
-          </div>
-        ) : (
-          <div className={styles.chatWrap} data-side={deskSideOpen ? 'true' : 'false'}>
+      {/*
+        对话纸：摊在案头上的一层。消息只在纸里滚，不带动页面；点纸外、按 Esc 或右上角收起，
+        回到案头。收起只是藏起来，进行中的任务照常跑，所以这一层不卸载。
+      */}
+      {inConversation ? (
+        <div className={styles.layer} hidden={!chatSheetOpen}>
+          <button
+            aria-label="收起对话，回到案头"
+            className={styles.veil}
+            onClick={() => setChatSheetOpen(false)}
+            tabIndex={-1}
+            type="button"
+          />
+          <div className={styles.sheet}>
+            <header className={styles.sheetHead}>
+              <span aria-hidden="true" className={styles.sheetMark}>
+                <Icon name="sparkle" size={15} strokeWidth={2} />
+              </span>
+              <h2 className={styles.sheetTitle}>对话</h2>
+              {topic === null ? null : <span className={styles.sheetTopic}>{topic}</span>}
+              <span className="wb-grow" />
+              <button
+                className="wb-btn wb-btn-quiet wb-btn-sm"
+                onClick={startFreshSession}
+                type="button"
+              >
+                <Icon name="plus" size={17} />
+                新对话
+              </button>
+              <button
+                className="wb-btn wb-btn-sm"
+                onClick={() => setChatSheetOpen(false)}
+                title="收起对话，回到案头（Esc）"
+                type="button"
+              >
+                <Icon name="panel" size={17} />
+                回到案头
+              </button>
+            </header>
+            <div
+              className={styles.sheetBody}
+              ref={transcriptRef}
+              onScroll={(event) => {
+                const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+                stickToBottom.current = scrollHeight - scrollTop - clientHeight < 80;
+              }}
+            >
             <section
               aria-busy={mutation.isPending}
               aria-label="办理会话"
@@ -1290,14 +1342,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 </p>
               ) : null}
             </section>
-            {deskSideOpen ? (
-              <div className={styles.sideSlot}>
-                <DeskSide onAsk={askFromDesk} />
-              </div>
-            ) : null}
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       {/*
         输入框浮在页面底部正中：平时收成一行，点进去或有内容时展开。外面那圈缓慢旋转的彩色细边
@@ -1311,7 +1359,18 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
         </div>
-        {inConversation ? null : (
+        {inConversation && !chatSheetOpen ? (
+          <button className={styles.resume} onClick={() => setChatSheetOpen(true)} type="button">
+            <span aria-hidden="true" className={styles.resumeDot} data-busy={mutation.isPending ? 'true' : 'false'} />
+            <b>回到对话</b>
+            <span className={styles.resumeTopic}>
+              {mutation.isPending ? '正在办理…' : topic ?? '有一件事在等你处理'}
+            </span>
+            {askedCount > 1 ? <small className="wb-num">{`${askedCount} 问`}</small> : null}
+            <Icon name="up" size={15} strokeWidth={2} />
+          </button>
+        ) : null}
+        {sheetShown ? null : (
           <div aria-label="可以这样问我" className={styles.chips} role="group">
             {STARTER_PROMPTS.map((prompt) => (
               <button key={prompt.key} onClick={() => askFromDesk(prompt.label)} title={prompt.description} type="button">
@@ -1389,7 +1448,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               <Icon name="history" size={17} />
               历史对话
             </button>
-            {inConversation ? (
+            {inConversation && !chatSheetOpen ? (
               <button
                 className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.barExtra}`}
                 onClick={startFreshSession}

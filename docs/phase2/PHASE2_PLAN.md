@@ -962,6 +962,15 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 真实验收环境缺项 | 验收环境未启用组织目录同步（新建交办的目录选择返回 503，未验）、未启动后台 worker；验收账号当前分类无事项，详情抽屉与时间线点选未实测；流畅度没有帧率实测；目标浏览器下限 Chrome 130 未在该版本实测（本机 Chrome 157） | 具备目录同步与 worker 的验收环境；Electron 封装 | 目标机 Docker 阶段验收 | 在目录同步可用的环境完成新建交办全流程；有事项的账号验详情抽屉与时间线；目标机实测滚动与切页帧率及最低浏览器版本 | 仓库外 `workbench-ui-20261112/env/ACCEPTANCE_REPORT.md`「已知环境缺项与未验证项」 |
 | 视觉裁决未登记 | 「墨、纸、印」方向、其推翻的 2026-09-02 / 09-04 / 11-11 旧视觉裁决，以及「按钮与输入框边线照 v7、不再要求 3:1」均为雨爷 2026-11-13 已决，尚未写入 DECISIONS | 无 | 后续 GOV-SYNC 棒 | `docs/phase2/DECISIONS.md` 登记该裁决及被推翻条目 | 仓库外登记稿 `DECISIONS_登记稿_20261113.md` |
 
+### 工作台前端改版第二棒 `P2-FE-WORKBENCH-V4-002` 新增欠债（2026-11-14）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 登录后的页面未做真实验收 | 验收期间（2026-11-14 04:36–09:23）OA 服务端对登录握手不响应，工作台无法登录；对话纸、软件中心、账号绑定、任务交办只有静态评审与既有测试，未在真实环境实测 | OA 恢复可登录 | 本棒合并前补验；合并前仍未恢复则由雨爷决定 | 用 `round2/r2acc.py` 在 5183 以本人会话完成各项只读验收并更新验收报告 | 仓库外 `workbench-ui-20261112/round2/ACCEPTANCE_r1.md` |
+| 软件中心四个业务系统只有占位，OA 方印不免登 | 财务软件、综合业务平台、数据中台、执法办案平台尚无接入代码，雨爷 2026-11-14 定先做占位、后续单独接入；OA 单点登录另行接入 | 各系统的接入代码与地址；OA 单点登录接入 | 待分配 | 四枚方印可点并进入对应系统，OA 方印点开后落在已登录的页面；或确认不接并移除占位 | `web/src/features/apps/AppsPage.tsx::SYSTEMS`、`::openSystem` |
+| 账号绑定页的 OA 账号卡仍是旧组件 | 该卡是提交 OA 密码的表单，重写后须用真实账号验证绑定、解绑、启用自动登录，本棒没有这项授权，故原样嵌入，样式与新页面不一致 | 雨爷对真实绑定与解绑验证的授权 | 待分配（工作台第二期） | OA 账号卡按新版式重写并以真实账号验证三种操作 | `web/src/features/apps/AccountBindingsPage.tsx`、`web/src/components/OACredentialBindingCard.tsx` |
+| 添加软件对话框、周期任务页其余部分仍用旧样式变量 | 本棒只重写走查点名的页面；对话框样式只是原样拆到独立文件 | 无 | 待分配（工作台第二期） | 两处改为新版式，不再引用 `--workbench-*` 别名 | `web/src/features/apps/NewSoftwareDialog.module.css`、`web/src/features/work-dispatch/WorkObjectSeriesPage.module.css` |
+
 ## 6. P2 不做什么
 
 

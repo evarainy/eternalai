@@ -17,7 +17,7 @@ import {
   saveNewSoftwareDraft,
 } from './newSoftwareDraft';
 import type { NewSoftwareDraft } from './newSoftwareDraft';
-import styles from './AppsPage.module.css';
+import styles from './NewSoftwareDialog.module.css';
 
 /**
  * 「新建应用」弹窗，形态照定稿画板 `_scratch/design/glass/AppNew.dc.html`。

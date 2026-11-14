@@ -1,9 +1,10 @@
 /*
- * 助手页 = 案头 + 对话（2026-11-13 改版）。
+ * 助手页 = 案头 + 对话纸。
  *
- * - 没有对话时，案头铺满：浅灰桌面上摆着卡片，输入框收成一行浮在底部正中，快捷指令排在它上方。
- * - 对话中：对话在左，案头收到右侧一栏（300px），可以收起。
- * - 整页只有 `.scroll` 这一格滚动，底色不透明；输入框浮在它上面，下方内容经渐隐带淡出。
+ * - 案头一直铺在底下：浅灰桌面上摆着卡片，输入框收成一行浮在底部正中，快捷指令排在它上方。
+ * - 发出一句话后，对话作为一张纸摊在案头上（`.layer`）。消息只在纸里滚（`.sheetBody`），
+ *   不带动页面；收起后回到案头，对话还在，输入框上方留一枚「回到对话」。
+ * - 滚动区底色都不透明；纸的出场只动 transform 与 opacity。
  */
 .page {
   --top: 166px;
@@ -53,10 +54,6 @@
   background: linear-gradient(to bottom, transparent, var(--desk) 42%);
 }
 
-.page[data-mode='chat']::after {
-  height: 120px;
-}
-
 .scroll {
   display: flex;
   min-height: 0;
@@ -90,10 +87,6 @@
   padding-top: 132px;
 }
 
-:global(html[data-clock='dial']) .chatWrap {
-  padding-top: 138px;
-}
-
 :global(html[data-clock='dial']) .page::before {
   height: 150px;
   background: linear-gradient(to bottom, var(--desk) 88%, transparent);
@@ -109,36 +102,125 @@
   }
 }
 
-/* ── 对话中：对话在左，案头在右 ── */
-.pageTools {
+/* ── 对话纸：摊在案头上的一层 ── */
+.layer {
   position: absolute;
-  z-index: 4;
-  top: 18px;
-  right: 24px;
+  z-index: 3;
   display: flex;
-  gap: 6px;
+  justify-content: center;
+  padding: 70px 28px 0;
+  inset: 0;
 }
 
-.chatWrap {
-  display: grid;
-  width: 100%;
-  max-width: 1180px;
-  align-items: start;
-  gap: 40px;
-  margin: 0 auto;
-  padding-top: 74px;
-  grid-template-columns: minmax(0, 1fr) 300px;
+.layer[hidden] {
+  display: none;
 }
 
-.chatWrap[data-side='false'] {
-  grid-template-columns: minmax(0, 1fr);
+:global(html[data-clock='dial']) .layer {
+  padding-top: 134px;
 }
 
-.sideSlot {
-  position: sticky;
-  top: 74px;
-  height: calc(100vh - 16px - 74px - 150px);
+/* 纸外的案头退到一层薄雾后面：看得见还在，点一下就回去。不用模糊，只是一层半透明的桌面色。 */
+.veil {
+  position: absolute;
+  padding: 0;
+  cursor: pointer;
+  background: var(--desk);
+  border: 0;
+  opacity: 0.82;
+  animation: veil-in 0.22s ease-out both;
+  inset: 0;
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  width: min(940px, 100%);
   min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+  border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+  box-shadow: 0 0 0 1px var(--line), 0 -18px 50px -26px rgb(10 16 29 / 38%);
+  animation: sheet-in 0.3s var(--ease) both;
+}
+
+@keyframes veil-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+}
+
+:global(html[data-fx='lite']) .veil,
+:global(html[data-fx='lite']) .sheet {
+  animation: none;
+}
+
+.sheetHead {
+  display: flex;
+  min-height: 3.5rem;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheetMark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  color: #fff;
+  background: var(--text);
+  border-radius: 9px;
+  place-items: center;
+}
+
+.sheetTitle {
+  flex: none;
+  margin: 0;
+  font-size: 1.067rem;
+  font-weight: 800;
+}
+
+.sheetTopic {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 0.933rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 整页只有这一格随对话滚动；滚到头不把滚动传给外面。 */
+.sheetBody {
+  min-height: 0;
+  flex: 1;
+  padding: 26px 32px 190px;
+  overflow: hidden auto;
+  background: var(--paper);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+/* 纸的下沿：消息滚到输入框下面时淡出，不与它叠字。 */
+.sheet::after {
+  position: absolute;
+  right: 14px;
+  bottom: 0;
+  left: 0;
+  height: 130px;
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--paper) 46%);
 }
 
 .thread {
@@ -378,7 +460,7 @@
 /* ── 输入框：平时收成一行，点进去才展开。外面一圈缓慢旋转的彩色细边是 AI 入口的记号 ── */
 .composerDock {
   position: absolute;
-  z-index: 3;
+  z-index: 5;
   bottom: 24px;
   left: 50%;
   display: flex;
@@ -394,9 +476,82 @@
   pointer-events: auto;
 }
 
-.page[data-mode='chat'][data-side='true'] .composerDock {
-  left: calc(50% - 170px);
-  width: min(760px, calc(100% - 420px));
+/* 对话纸上的输入框：白纸上不需要那么重的投影。 */
+.page[data-mode='chat'] .composer {
+  box-shadow: 0 0 0 4px rgb(139 92 246 / 7%), 0 12px 30px -18px rgb(10 16 29 / 30%);
+}
+
+/* 收起对话后留在输入框上方的一枚：对话还在，点一下摊开。 */
+.resume {
+  display: inline-flex;
+  max-width: min(600px, 100%);
+  height: 2.3rem;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.9rem 0 0.8rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.933rem;
+  cursor: pointer;
+  background: var(--paper);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--line-2), 0 10px 22px -14px rgb(10 16 29 / 40%);
+  transition: transform 0.12s;
+}
+
+.resume:hover {
+  box-shadow: 0 0 0 1px rgb(36 80 200 / 45%), 0 10px 22px -14px rgb(10 16 29 / 40%);
+}
+
+.resume:active {
+  transform: scale(0.98);
+}
+
+.resume > b {
+  flex: none;
+  font-weight: 700;
+}
+
+.resume > small {
+  flex: none;
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+.resume > svg {
+  flex: none;
+  color: var(--primary);
+}
+
+.resumeTopic {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resumeDot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: var(--primary);
+  border-radius: 50%;
+}
+
+.resumeDot[data-busy='true'] {
+  animation: pulse 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  to {
+    opacity: 0.25;
+  }
+}
+
+:global(html[data-fx='lite']) .resumeDot[data-busy='true'] {
+  animation: none;
 }
 
 .composerNotices {
@@ -626,17 +781,14 @@
 }
 
 @media (max-width: 1100px) {
-  .chatWrap {
-    grid-template-columns: minmax(0, 1fr);
+  .layer {
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
-  .sideSlot {
-    display: none;
-  }
-
-  .page[data-mode='chat'][data-side='true'] .composerDock {
-    left: 50%;
-    width: min(760px, calc(100% - 80px));
+  .sheetBody {
+    padding-right: 18px;
+    padding-left: 18px;
   }
 
   .chips {

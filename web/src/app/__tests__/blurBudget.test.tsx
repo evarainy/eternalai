@@ -231,18 +231,22 @@ describe('blur-layer detector', () => {
     ]);
   });
 
-  it('resolves declared class names to the names that reach the DOM', () => {
-    const root = renderLoginScreen();
-    const cardLayer = findBlurLayers(root).find(
-      (layer) => layer.declaredSelector === '.card',
+  /*
+   * 2026-11-14 登录页改为左墨右纸、不再有玻璃卡，样本换成仍在用模块类名声明模糊的浮动面板
+   * `AIDock.module.css .dock`（钉住时可见）。
+   */
+  it('resolves declared class names to the names that reach the DOM', async () => {
+    useAIDockStore.setState({ lastOpenMode: 'pinned', mode: 'pinned' });
+    renderScreen('/work-objects');
+    const dock = await screen.findByTestId('ai-dock');
+    const dockLayer = findBlurLayers(shellElement()).find(
+      (layer) => layer.declaredSelector === '.dock',
     );
-    expect(cardLayer).toBeDefined();
-    expect(cardLayer?.file).toBe('pages/LoginPage.module.css');
-    expect(cardLayer?.element).toBe(
-      screen.getByRole('heading', { name: '欢迎回来' }).parentElement,
-    );
-    expect(cardLayer?.matchSelector).not.toBe('.card');
-    expect(cardLayer?.element.matches(cardLayer.matchSelector)).toBe(true);
+    expect(dockLayer).toBeDefined();
+    expect(dockLayer?.file).toBe('app/AIDock.module.css');
+    expect(dockLayer?.element).toBe(dock);
+    expect(dockLayer?.matchSelector).not.toBe('.dock');
+    expect(dockLayer?.element.matches(dockLayer.matchSelector)).toBe(true);
   });
 
   /*
@@ -351,7 +355,7 @@ describe('per-screen blur-layer budget', () => {
 
   it('keeps the software-centre screen on its floating glass entry', async () => {
     renderScreen('/apps');
-    await screen.findByTestId('oa-status');
+    await screen.findByRole('button', { name: /OA 办公系统/ });
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
@@ -366,10 +370,10 @@ describe('per-screen blur-layer budget', () => {
    */
   it('adds no blur layer when the create-software dialog covers the screen', async () => {
     renderScreen('/apps');
-    await screen.findByTestId('oa-status');
+    await screen.findByRole('button', { name: /OA 办公系统/ });
     const before = describeBlurLayers(shellElement());
 
-    fireEvent.click(screen.getByRole('button', { name: /新建应用/ }));
+    fireEvent.click(screen.getByRole('button', { name: '添加软件' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
 
     const after = describeBlurLayers(document.body);
@@ -377,10 +381,11 @@ describe('per-screen blur-layer budget', () => {
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the login screen on its single glass card', () => {
+  // 2026-11-14 起登录页是左墨右纸，不再有玻璃卡：这一屏一层模糊都不买。
+  it('keeps the login screen free of blur layers', () => {
     const layers = describeBlurLayers(renderLoginScreen());
 
-    expect(layers).toEqual(['pages/LoginPage.module.css .card']);
+    expect(layers).toEqual([]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
@@ -405,7 +410,6 @@ describe('per-screen blur-layer budget', () => {
         .sort(),
     ).toEqual([
       'app/AIDock.module.css .dock',
-      'pages/LoginPage.module.css .card',
       'shared/ui/workbench.css .wb-glass',
     ]);
   });

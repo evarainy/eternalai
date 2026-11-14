@@ -73,7 +73,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('NewSoftwareDialog form', () => {
   it('uses the shared field boundary and one focus host at the canvas input size', () => {
     renderDialog();
-    const css = readSource('../AppsPage.module.css');
+    const css = readSource('../NewSoftwareDialog.module.css');
     const field = /\.field :global\(\.ant-input\),[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     expect(field).toContain('var(--workbench-field-face)');
     expect(field).toContain('font-size: 17px');

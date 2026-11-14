@@ -562,11 +562,13 @@ describe('AppShell user bar', () => {
     expect(screen.queryByRole('button', { name: /退出登录/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '管理页面' }));
     const admin = screen.getByRole('region', { name: '管理页面' });
-    expect(within(admin).getByRole('link', { name: '账号绑定' })).toHaveAttribute('href', '/admin/bindings');
+    expect(within(admin).getByRole('link', { name: '绑定管理' })).toHaveAttribute('href', '/admin/bindings');
+    expect(within(admin).queryByRole('link', { name: '账号绑定' })).toBeNull();
     const menu = openUserMenu();
-    for (const label of ['皮肤', '字号', '时钟', '动效', '通知', '系统状态', '退出登录']) {
+    for (const label of ['账号绑定', '皮肤', '字号', '时钟', '动效', '通知', '系统状态', '退出登录']) {
       expect(within(menu).getByText(label)).toBeInTheDocument();
     }
+    expect(within(menu).getByTestId('user-menu-bindings')).toHaveAttribute('href', '/settings/bindings');
     const logout = within(menu).getByRole('button', { name: /退出登录/ });
     expect(logout).toHaveTextContent('只退工作台');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
@@ -614,7 +616,7 @@ describe('AppShell user bar', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '重新绑定 OA 账号' })).toHaveAttribute(
       'href',
-      '/admin/bindings',
+      '/settings/bindings',
     );
     expect(screen.getByTestId('system-status-summary')).toHaveTextContent(
       '1 个不正常',

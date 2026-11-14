@@ -171,7 +171,7 @@ describe('application authentication boundary', () => {
         </QueryClientProvider>,
       );
 
-      expect(screen.queryByRole('heading', { name: '欢迎回来' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { level: 1, name: '登录' })).not.toBeInTheDocument();
       expect(await screen.findByText('受保护目标')).toBeInTheDocument();
     });
 
@@ -291,7 +291,7 @@ describe('application authentication boundary', () => {
       await renderProductionApplication();
 
       expect(
-        await screen.findByRole('heading', { name: '欢迎回来' }),
+        await screen.findByRole('heading', { level: 1, name: '登录' }),
       ).toBeInTheDocument();
       expect(screen.queryByText('Registry 管理')).not.toBeInTheDocument();
     },
@@ -690,11 +690,16 @@ describe('application authentication boundary', () => {
       ['消息', '/messages'],
       ['功能管理', '/admin/registry'],
       ['任务证据', '/admin/tasks'],
-      ['账号绑定', '/admin/bindings'],
+      ['绑定管理', '/admin/bindings'],
     ]) {
       if (name === '功能管理') fireEvent.click(screen.getByRole('button', { name: '管理页面' }));
       expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
     }
+    // 个人的账号绑定从「设置」进入，与管理员的「绑定管理」分开。
+    fireEvent.click(screen.getByTestId('rail-settings'));
+    const settings = screen.getByRole('region', { name: '设置' });
+    expect(within(settings).getByTestId('user-menu-bindings')).toHaveTextContent('账号绑定');
+    expect(within(settings).getByTestId('user-menu-bindings')).toHaveAttribute('href', '/settings/bindings');
     expect(screen.queryByText('当前位置')).not.toBeInTheDocument();
     expect(screen.queryByText('开始新工作', { selector: 'strong' })).toBeNull();
   });

@@ -183,7 +183,7 @@ it('provides the bound Apps recovery link after an unknown business operation', 
     data: { action_outcome: 'accepted', result: { operation_id: 'a'.repeat(32), state: 'UNKNOWN' } },
   }))] });
   renderChat();
-  expect(screen.getByRole('link', { name: '查看原操作并恢复' })).toHaveAttribute('href', `/apps?operation=${'a'.repeat(32)}`);
+  expect(screen.getByRole('link', { name: '查看原操作并恢复' })).toHaveAttribute('href', `/settings/bindings?operation=${'a'.repeat(32)}`);
   expect(runtimeMock.action).not.toHaveBeenCalled();
 });
 

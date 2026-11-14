@@ -1,0 +1,31 @@
+/* 设置 › 账号绑定：纸面正中一栏，一段一个系统。 */
+.page {
+  display: grid;
+  width: min(880px, 100%);
+  gap: 2rem;
+  margin: 0 auto;
+  animation: rise 0.34s var(--ease) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+:global(html[data-fx='lite']) .page {
+  animation: none;
+}
+
+.block {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.blockTitle {
+  margin: 0;
+  font-size: 1.067rem;
+  font-weight: 800;
+  line-height: 1.3;
+}

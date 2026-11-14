@@ -171,7 +171,6 @@ describe('自绘控件的边界与动作层级', () => {
   // 沿用兼容令牌的控件保留原落点；新版控件核对 v7 的纸面与细线。
   it.each([
     ['工作事项搜索提交键（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchSubmit {', ['var(--workbench-control-ring)']],
-    ['软件中心「打开」', '../../features/apps/AppsPage.module.css', '.openLink,', ['background: var(--paper)', 'border: 1px solid var(--line-2)']],
     ['浮动面板「知道了」', '../AIDock.module.css', '.noticeButton {', ['var(--workbench-control-ring)']],
     ['占位页动作', '../../shared/ui/PlaceholderPage.module.css', '.action {', ['var(--workbench-control-ring)']],
     ['工作事项分段控件', '../../pages/WorkObjectsPage.module.css', '.segmented {', ['background: var(--paper-2)']],
@@ -185,19 +184,25 @@ describe('自绘控件的边界与动作层级', () => {
     }
   });
 
-  it.each([
-    ['软件中心「去绑账号」', '../../features/apps/AppsPage.module.css', '.bindLink {', ['background: var(--primary)', 'color: #fff', 'border-color: var(--primary)']],
-    [
-      '交办页「发布」',
-      '../../features/work-dispatch/WorkDispatchPage.module.css',
-      ':global(.ant-btn).publishButton.publishButton {',
-      ['var(--workbench-control-ring-primary)', 'var(--workbench-control-glow-strong)'],
-    ],
-  ] as const)('%s 用的是主动作那一组令牌，不是各页手写一套', (_name, path, selector, expected) => {
-    const declarations = rule(readSource(path), selector);
-    for (const declaration of expected) expect(declarations).toContain(declaration);
+  /*
+   * 2026-11-14 改版：交办页「发布」改用全站共用的 `wb-btn wb-btn-primary`（实心主题色底），页内样式
+   * 只调尺寸，不另画底色、边框或投影。
+   */
+  it('交办页「发布」 用的是主动作那一组令牌，不是各页手写一套', () => {
+    const tsx = readSource('../../features/work-dispatch/WorkDispatchPage.tsx');
+    expect(tsx).toContain('<button className="wb-btn wb-btn-primary" disabled={!canPublish} onClick={publish} type="button">{submitLabel}</button>');
+    const shared = rule(readSource('../../shared/ui/workbench.css'), '.wb-btn-primary {');
+    for (const declaration of ['background: var(--primary)', 'color: #fff', 'border-color: var(--primary)']) {
+      expect(shared).toContain(declaration);
+    }
+    const pageCss = readSource('../../features/work-dispatch/WorkDispatchPage.module.css');
+    const local = rule(pageCss, '.aside > :global(.wb-btn-primary) {');
+    for (const property of ['background', 'background-color', 'background-image', 'border', 'border-color', 'box-shadow', 'color']) {
+      expect(local).not.toMatch(new RegExp(`(^|[;\\s])${property}\\s*:`));
+    }
     // 手写的 48% 蓝内边（1.88:1）不许再出现。
-    expect(declarations).not.toContain('rgb(47 107 255 / 48%)');
+    expect(shared).not.toContain('rgb(47 107 255 / 48%)');
+    expect(withoutComments(pageCss)).not.toContain('rgb(47 107 255 / 48%)');
   });
 });
 
@@ -216,6 +221,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       '../AIDock.module.css',
       '../../components/RuntimeViews.module.css',
       '../../features/apps/AppsPage.module.css',
+      '../../features/apps/NewSoftwareDialog.module.css',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '../../features/work-dispatch/WorkObjectSearchPage.module.css',
       '../../pages/ChatPage.module.css',
@@ -264,25 +270,27 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
     expect(token('workbench-field-face-focus')).toContain(
       'inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring)',
     );
-    for (const [path, selector] of [
-      ['../WorkObjectSearchField.module.css', '.searchField:focus-within {'],
-      ['../../pages/LoginPage.module.css', '.form :global(.ant-input):focus,'],
-      [
-        '../../features/work-dispatch/WorkDispatchPage.module.css',
-        '.chipWell:focus-within {',
-      ],
+    expect(rule(readSource('../WorkObjectSearchField.module.css'), '.searchField:focus-within {')).toContain(
+      'var(--workbench-field-face-focus)',
+    );
+    /*
+     * 2026-11-14 改版：登录页与交办页改用原生输入框（v7 样板），不再经过兼容令牌，直接写同样的两层：
+     * 非聚焦 1px 线条色边框；聚焦时边框换主题色、外加 3px 主题色外晕。
+     */
+    for (const [path, base, focus] of [
+      ['../../pages/LoginPage.module.css', '.field > input {', '.field > input:focus {'],
+      ['../../features/work-dispatch/WorkDispatchPage.module.css', '.box {', '.box:focus {'],
     ] as const) {
-      expect(rule(readSource(path), selector), path).toContain(
-        'var(--workbench-field-face-focus)',
-      );
+      const css = readSource(path);
+      expect(rule(css, base), path).toContain('border: 1px solid var(--line-2)');
+      expect(rule(css, focus), path).toContain('border-color: var(--primary)');
+      expect(rule(css, focus), path).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
     }
   });
 
   it('登录页输入框不再用看不见的白色凹槽描边', () => {
     const css = readSource('../../pages/LoginPage.module.css');
-    expect(rule(css, '.form :global(.ant-input-affix-wrapper),')).toContain(
-      'var(--workbench-field-face)',
-    );
+    expect(rule(css, '.field > input {')).toContain('border: 1px solid var(--line-2)');
     expect(css).not.toContain('var(--workbench-well-edge)');
   });
 });
@@ -313,14 +321,6 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       'var(--workbench-field-face-focus)',
     ],
     [
-      '交办页「交办对象」凹槽',
-      '../../features/work-dispatch/WorkDispatchPage.tsx',
-      '../../features/work-dispatch/WorkDispatchPage.module.css',
-      '.chipWell:focus-within {',
-      'role="group" aria-label="交办对象（目录选择）"',
-      'var(--workbench-field-face-focus)',
-    ],
-    [
       'AI 助手页输入卡',
       '../../pages/ChatPage.tsx',
       '../../pages/ChatPage.module.css',
@@ -330,10 +330,18 @@ describe('一个控件同一时刻只画一个焦点环', () => {
     ],
   ])('%s：焦点标记符合当前控件结构，子树里也确实有人画环', (_name, tsx, css, selector, structure, focusDeclaration) => {
     expect(readSource(tsx)).toContain(structure);
-    if (structure === 'role="group" aria-label="交办对象（目录选择）"') {
-      expect(readSource(tsx)).not.toContain('data-focus-ring="host"');
-    }
     expect(rule(readSource(css), selector)).toContain(focusDeclaration);
+  });
+
+  /*
+   * 交办对象是一行已选标签加「选择对象/添加」按钮，里面没有输入框，也不再有画环的凹槽；每个按钮用全局
+   * 键盘焦点环，所以这一组不挂输入抑制标记。
+   */
+  it('交办页「交办对象」：目录选择组不挂输入抑制标记，按钮沿用全局焦点环', () => {
+    const tsx = readSource('../../features/work-dispatch/WorkDispatchPage.tsx');
+    expect(tsx).toContain('<div aria-label="交办对象（目录选择）" className={styles.chips} role="group">');
+    // 「交办对象」这一行（含目录选择组）本身不挂 host：里面只有按钮，按钮要保留全局兜底环。
+    expect(tsx).toMatch(/<div className=\{styles\.f\}>\s*<span className=\{styles\.fl\}>交办对象<\/span>\s*<div>\s*<div aria-label="交办对象（目录选择）"/);
   });
 
   it('AI 助手原生输入卡由外层彩色边画环，textarea 不叠内框', () => {
@@ -352,11 +360,6 @@ describe('一个控件同一时刻只画一个焦点环', () => {
 
   it.each([
     ['工作事项搜索凹槽（原顶栏搜索）', '../WorkObjectSearchField.module.css', '.searchField:focus-within:has(button:focus-visible) {'],
-    [
-      '交办页「交办对象」凹槽',
-      '../../features/work-dispatch/WorkDispatchPage.module.css',
-      '.chipWell:focus-within:has(button:focus-visible) {',
-    ],
   ])(
     '%s：里面的按钮拿到焦点时凹槽那圈收回去，一次只留一个环',
     (_name, path, selector) => {
@@ -370,13 +373,46 @@ describe('一个控件同一时刻只画一个焦点环', () => {
     },
   );
 
-  it('交办页两个输入框自己不再多画一圈', () => {
-    const css = readSource(
-      '../../features/work-dispatch/WorkDispatchPage.module.css',
+  /*
+   * 2026-11-14 v7：交办页与登录页改用原生输入框，聚焦环画在输入框自己身上（主题色边框 + 3px 外晕）。
+   * 这些输入框的外层必须挂 `data-focus-ring="host"`，让全局兜底 outline 让位，聚焦时只剩一圈；
+   * 大标题输入框自己不画环，故意不挂，由全局兜底 outline 承担唯一的一圈。
+   */
+  it('交办页与登录页自己画环的输入框不再多画一圈', () => {
+    const hostRule = rule(
+      GLOBAL_CSS,
+      "[data-focus-ring='host'] :is(input, textarea, [contenteditable='true']):focus-visible",
     );
-    // 凹槽已经画了环，里面的输入框聚焦时不再画第二圈。
-    expect(rule(css, '.chipInput:focus,')).toContain('box-shadow: none');
-    // 一句话输入框的环画在它自己身上，不再叠外面那圈 3px 兜底 outline。
-    expect(rule(css, '.briefInput:focus-visible,')).toContain('outline: none');
+    expect(hostRule).toContain('outline: none');
+
+    const dispatchTsx = readSource('../../features/work-dispatch/WorkDispatchPage.tsx');
+    const dispatchCss = readSource('../../features/work-dispatch/WorkDispatchPage.module.css');
+    /** 某个控件最近的外层 `.f` 行的开标签。 */
+    const rowOpening = (marker: string) => {
+      const at = dispatchTsx.indexOf(marker);
+      expect(at, marker).toBeGreaterThan(-1);
+      const start = dispatchTsx.lastIndexOf('<div className={styles.f}', at);
+      return dispatchTsx.slice(start, dispatchTsx.indexOf('>', start) + 1);
+    };
+    for (const marker of ['id="dispatch-due"', 'id="dispatch-requirement"', 'id="dispatch-receipt"']) {
+      expect(rowOpening(marker), marker).toContain('data-focus-ring="host"');
+    }
+    // 三行里的输入框确实自己画环（边框换主题色 + 外晕）。
+    expect(dispatchTsx.match(/className=\{(?:`\$\{)?styles\.box\b/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(rule(dispatchCss, '.box:focus {')).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
+    // 目录搜索框：外层 `.wb-field` 用 :focus-within 画环，里面的输入框不再叠兜底 outline。
+    expect(dispatchTsx).toContain('<label className={`wb-field ${styles.pickerSearch}`} data-focus-ring="host">');
+    expect(rule(readSource('../../shared/ui/workbench.css'), '.wb-field:focus-within {')).toContain('0 0 0 3px var(--primary-ring)');
+    // 大标题输入框自己不画环：不挂 host，也没有自己的聚焦规则。
+    expect(dispatchTsx).toMatch(/<input aria-label="标题" className=\{styles\.titleInput\}/);
+    const titleAt = dispatchTsx.indexOf('<input aria-label="标题"');
+    const titleParent = dispatchTsx.lastIndexOf('<div', titleAt);
+    expect(dispatchTsx.slice(titleParent, dispatchTsx.indexOf('>', titleParent) + 1)).toBe('<div className={styles.form}>');
+    expect(dispatchTsx).toContain('return <div className={styles.composer}>\n    <div className={styles.form}>');
+    expect(withoutComments(dispatchCss)).not.toMatch(/\.titleInput:focus/);
+
+    const loginTsx = readSource('../../pages/LoginPage.tsx');
+    expect(loginTsx.match(/<label className=\{styles\.field\} data-focus-ring="host"/g)).toHaveLength(2);
+    expect(rule(readSource('../../pages/LoginPage.module.css'), '.field > input:focus {')).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
   });
 });
