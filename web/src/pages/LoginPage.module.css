@@ -1,138 +1,249 @@
 /*
- * 登录页是外壳之外的**独立一屏**：它挂在 `ProtectedRoute` 之外，不经过 `AppShell`，所以玻璃材质必须
- * 在本文件里自己落地，不能指望外壳的换皮覆盖过来。底图由 `styles.css` 画在 `body` 上。
+ * 登录页：外壳之外的独立一屏，但和进去以后是同一副样子——左边是墨，右边是一张纸。
  *
- * 2026-09-02 玻璃四条硬约束在本文件里的落点：
- * 1. 模糊层预算：整屏只有 `.card` 一处 `backdrop-filter`（1 层，预算 6）。
- * 2. 小元件：品牌底座与提交按钮不带模糊，只用低不透明度白 + 边缘高光。
- * 3. 正文区：登录卡只承载两个字段与一句副标题，不是正文列表面板，按大面玻璃（58% 白）处理，与左导航
- *    / 顶栏同档；对比度按 `theme.ts` 的 `glassSurface`（最深底图上的最坏合成底色）核。
- * 4. 颜色：按钮不填固定色，颜色由底图透出；品牌标记的蓝是语义强调色。
- *
- * 可读性令牌一律不下调：正文 19px、辅助 16px、说明 14px、控件高 ≥44px。
+ * 墨就是 `body` 上那层外框底色（随皮肤变），这里不再另画；纸是不透明的白面，四角收在墨框里，
+ * 尺寸与外壳的内容面一致（四周 8px、圆角 `--r-sheet`）。整屏没有毛玻璃。
  */
 .screen {
+  position: fixed;
   display: grid;
-  min-height: 100vh;
-  align-content: center;
-  justify-items: center;
-  padding: 32px 16px;
+  padding: 8px;
+  grid-template-columns: minmax(280px, 5fr) minmax(0, 7fr);
+  inset: 0;
 }
 
-.card {
-  width: 100%;
-  max-width: 472px;
-  padding: 44px 44px 36px;
-  color: var(--workbench-text);
-  background: var(--workbench-glass-fill);
-  backdrop-filter: blur(32px) saturate(190%);
-  border: 1px solid var(--workbench-edge);
-  border-radius: 36px;
-  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+/* ── 墨：只放产品名和今天的日期 ── */
+.ink {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 36px 44px 44px;
+  color: var(--rail-fg-on);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .brandMark {
   display: grid;
-  width: 50px;
-  height: 50px;
+  width: 40px;
+  height: 40px;
   flex: none;
+  background: var(--rail-ind);
+  border-radius: 13px;
+  box-shadow: var(--rail-ind-edge);
   place-items: center;
-  color: var(--workbench-primary);
-  background-image: var(--workbench-chip-fill);
-  border-radius: 17px;
-  box-shadow: var(--workbench-chip-edge);
-  font-size: 24px;
-  line-height: 1;
 }
 
-.brandText {
+.brandName {
+  font-size: 1.067rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.inkFoot {
+  animation: rise 0.5s var(--ease) both;
+}
+
+.product {
+  margin: 0;
+  font-size: clamp(2.4rem, 4.2vw, 3.6rem);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+}
+
+.today {
+  margin: 1rem 0 0;
+  color: var(--rail-fg);
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+}
+
+/* ── 纸：两个输入框，一枚主按钮 ── */
+.paper {
   display: grid;
   min-width: 0;
-}
-
-/* 画板：品牌名 17px、「欢迎回来」34px。 */
-.brandName {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  line-height: 1.25;
-}
-
-.brandSub {
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-caption);
-  line-height: 1.35;
-}
-
-.welcome {
-  margin: 34px 0 0;
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  line-height: 1.25;
-}
-
-.subtitle {
-  margin: 10px 0 0;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
-}
-
-.alert {
-  margin-top: 22px;
+  padding: 32px 24px;
+  overflow: auto;
+  background: var(--paper);
+  border-radius: var(--r-sheet);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 6%), 0 20px 50px -20px rgb(0 0 0 / 50%);
+  place-items: center;
 }
 
 .form {
-  margin-top: 26px;
+  display: flex;
+  width: min(24rem, 100%);
+  flex-direction: column;
+  animation: rise 0.4s var(--ease) both;
 }
 
-/*
- * 输入框做成凹槽：玻璃面上「可以往里写」的地方要一眼看出来。
- *
- * 2026-09-04：描边从 `--workbench-well-edge`（那一圈 70% 白）换成全站共用的 `--workbench-field-face`。
- * 白边在玻璃面上与相邻色几乎没有对比，不满足 WCAG 2.2 SC 1.4.11 的 3:1；换过来后是 1px 深墨边，
- * 实算 ≈4.1:1。聚焦态本页原来一条都没有，靠的是全局 `:focus-visible` 打在内层 `<input>` 上的橙色环，
- * 正是雨爷 2026-09-04 说的「比视觉上输入框小一圈」——改为在承担可见边框的这一层画 2px 主题色，写法与
- * 顶栏搜索框、AI 助手输入卡、交办页各字段完全一致。
- */
-.form :global(.ant-input-affix-wrapper),
-.form :global(.ant-input) {
-  min-height: 52px;
-  background-color: transparent;
-  background-image: var(--workbench-well-fill);
-  border-color: transparent;
-  box-shadow: var(--workbench-field-face);
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }
 
-.form :global(.ant-input):focus,
-.form :global(.ant-input-affix-wrapper):focus-within {
-  box-shadow: var(--workbench-field-face-focus);
+:global(html[data-fx='lite']) .inkFoot,
+:global(html[data-fx='lite']) .form {
+  animation: none;
 }
 
-/* 带后缀图标的输入框（密码）外层已经是凹槽，内层 input 不再叠第二层内阴影——聚焦时也不叠。 */
-.form :global(.ant-input-affix-wrapper .ant-input),
-.form :global(.ant-input-affix-wrapper .ant-input):focus {
-  min-height: auto;
-  background-color: transparent;
-  background-image: none;
-  box-shadow: none;
+.title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+/* 标题下面一小段墨线：纸面的页眉。朱红只留给「要紧」和「亲手授权」，这里不用。 */
+.title::after {
+  display: block;
+  width: 2.2rem;
+  height: 2px;
+  margin-top: 0.9rem;
+  content: '';
+  background: var(--text);
+  border-radius: 1px;
+}
+
+.lead {
+  margin: 0.9rem 0 1.6rem;
+  color: var(--text-3);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 1.2rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.933rem;
+  line-height: 1.5;
+  border-radius: var(--r-ctl);
+}
+
+.notice > svg {
+  flex: none;
+  margin-top: 0.2em;
+}
+
+.notice[data-tone='warn'] {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.notice[data-tone='error'] {
+  color: var(--seal);
+  background: var(--seal-soft);
+}
+
+/* 必填提示放在输入框下面预留的空当里，出现时不把表单顶高。 */
+.field {
+  position: relative;
+  display: block;
+  margin-bottom: 1.6rem;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-2);
+  font-size: 0.933rem;
+  font-weight: 600;
+}
+
+.field > input {
+  display: block;
+  width: 100%;
+  height: 3rem;
+  padding: 0 0.9rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.067rem;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-ctl);
+  outline: 0;
+  transition: border-color 0.15s;
+}
+
+.field > input:hover {
+  border-color: var(--line-3);
+}
+
+.field > input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+.field > input:disabled {
+  color: var(--text-3);
+  background: var(--paper-2);
+}
+
+.field[data-invalid='true'] > input {
+  border-color: var(--seal);
+}
+
+.field > em {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.15rem;
+  color: var(--seal);
+  font-size: 0.867rem;
+  font-style: normal;
 }
 
 .submit {
-  height: 56px !important;
-  font-size: var(--workbench-font-body) !important;
+  width: 100%;
+  height: 3rem;
+  justify-content: center;
+  margin-top: 0.2rem;
+  font-size: 1.067rem;
+}
+
+.submit[data-loading='true'] > svg {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:global(html[data-fx='lite']) .submit[data-loading='true'] > svg {
+  animation: none;
 }
 
 .note {
-  margin: 18px 0 0;
-  color: var(--workbench-text-caption);
-  font-size: var(--workbench-font-caption);
+  margin: 1.4rem 0 0;
+  color: var(--text-3);
+  font-size: 0.867rem;
   line-height: 1.6;
+}
+
+/* 窄屏：墨收成顶上一行，纸占满。 */
+@media (max-width: 860px) {
+  .screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .ink {
+    padding: 14px 16px 16px;
+  }
+
+  .inkFoot {
+    display: none;
+  }
 }

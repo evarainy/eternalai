@@ -164,17 +164,17 @@ describe('LoginPage', () => {
 
   /*
    * 登录页挂在 `ProtectedRoute` 之外、不经过 `AppShell`，玻璃换皮曾整个漏掉它。下面钉死它自己那一屏
-   * 的形态：品牌标识 + 欢迎语 + 一句副标题，照定稿画板 `Login.dc.html`；标签去掉 OA 前缀（雨爷
+   * 的形态：品牌标识 + 标题 + 一句副标题，照 2026-11-14 v7 版式（左墨右纸）；标签去掉 OA 前缀（雨爷
    * 2026-09-03 明确要求，优先于画板上的「OA 账号」「OA 密码」）；不出现 2026-09-02 已全站移除的内线
    * 电话字样。
    */
   it('renders the decided login-card copy without the OA prefix or the removed hotline line', () => {
     renderLogin();
 
-    expect(screen.getByRole('heading', { level: 1, name: '欢迎回来' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '登录' })).toBeInTheDocument();
     expect(screen.getByText('EternalAI')).toBeInTheDocument();
     expect(screen.getByText('办事工作台')).toBeInTheDocument();
-    expect(screen.getByText('OA 里要你办的事，都在这儿。')).toBeInTheDocument();
+    expect(screen.getByText('用你的 OA 账号和密码')).toBeInTheDocument();
     expect(screen.queryByLabelText('OA 登录标识')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('OA 密码')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('内线');

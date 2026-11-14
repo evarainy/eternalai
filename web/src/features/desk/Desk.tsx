@@ -365,7 +365,7 @@ function OaCard({ onAsk, size }: CardProps) {
     >
       {needsBinding ? (
         <CardState
-          action={<Link className="wb-btn wb-btn-sm" to="/admin/bindings">绑定账号</Link>}
+          action={<Link className="wb-btn wb-btn-sm" to="/settings/bindings">绑定账号</Link>}
           icon="lock"
           note="绑定后这里显示你的 OA 待办"
           text={binding.data?.bound === true ? 'OA 登录已失效' : '还没有绑定 OA 账号'}
@@ -514,20 +514,5 @@ export const Desk = memo(function Desk({ onAsk }: { onAsk: Ask }) {
         ))}
       </div>
     </div>
-  );
-});
-
-/** 对话中，案头收到右侧一栏：同一批卡片，窄一些、矮一些。 */
-export const DeskSide = memo(function DeskSide({ onAsk }: { onAsk: Ask }) {
-  return (
-    <aside aria-label="案头" className={styles.side}>
-      <div className={styles.card} data-size="auto">
-        <Stats onAsk={onAsk} />
-      </div>
-      {DEFAULT_COLUMNS.flat().map((slot) => {
-        const Card = CARD_COMPONENTS[slot.id];
-        return <Card key={slot.id} onAsk={onAsk} size="auto" />;
-      })}
-    </aside>
   );
 });

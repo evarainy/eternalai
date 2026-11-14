@@ -40,7 +40,10 @@ import styles from './AppShell.module.css';
 
 const AI_ASSISTANT_PATH = '/chat';
 const MESSAGES_PATH = '/messages';
-const BINDINGS_PATH = '/admin/bindings';
+/** 管理员看全单位绑定情况的页面。 */
+const ADMIN_BINDINGS_PATH = '/admin/bindings';
+/** 设置 › 账号绑定：每个人管自己的账号。 */
+const BINDINGS_PATH = '/settings/bindings';
 const WORK_OBJECTS_PATH = '/work-objects';
 
 const LazyAIDock = lazy(() =>
@@ -79,7 +82,7 @@ interface AdminNavigationItem {
 const ADMIN_NAVIGATION: readonly AdminNavigationItem[] = [
   { icon: 'tool', label: '功能管理', to: '/admin/registry' },
   { icon: 'file', label: '任务证据', to: '/admin/tasks' },
-  { icon: 'card', label: '账号绑定', to: BINDINGS_PATH },
+  { icon: 'card', label: '绑定管理', to: ADMIN_BINDINGS_PATH },
 ];
 
 /** 领导名单只给本单位系统管理员：入口按后端对名单接口的实际判定显示，后端仍是最终判定。 */
@@ -502,9 +505,10 @@ export function AppShell() {
             aria-expanded={openPanel === 'user'}
             aria-label="设置"
             className={styles.railLink}
+            data-active={location.pathname.startsWith('/settings/') ? 'true' : 'false'}
             data-testid="rail-settings"
             onClick={() => togglePanel('user')}
-            title="设置：皮肤、字号、时钟、动效"
+            title="设置：账号绑定、皮肤、字号、时钟、动效"
             type="button"
           >
             <Icon name="gear" size={22} strokeWidth={1.75} />
@@ -630,6 +634,17 @@ export function AppShell() {
                   ))}
                 </div>
               </div>
+              <Link
+                aria-current={location.pathname === BINDINGS_PATH ? 'page' : undefined}
+                className={styles.menuRow}
+                data-testid="user-menu-bindings"
+                onClick={() => setOpenPanel(null)}
+                to={BINDINGS_PATH}
+              >
+                <Icon name="link" size={18} />
+                <span>账号绑定</span>
+                <em>OA、业务服务</em>
+              </Link>
               <button
                 className={styles.menuRow}
                 data-testid="user-menu-notifications"
