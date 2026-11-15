@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-from app.ports.auth import Principal
+from app.ports.auth import CredentialStorePort, OASessionCredential, Principal
 from app.ports.background_jobs import (
     BackgroundJobAcceptance,
     BackgroundJobAcceptRequest,
@@ -32,6 +33,7 @@ from app.ports.background_jobs import (
     BackgroundJobView,
     ExternalEffect,
 )
+from app.ports.credential_binding import OASessionHeartbeatResult
 from app.ports.file_artifacts import JobOutputPublisher
 from app.ports.identity_mapping import IdentityMappingPort
 
@@ -43,6 +45,7 @@ SELF_CHECK_NAMES = (
     "organization_directory_dispatch_policy",
 )
 _KIND_NAME = re.compile(r"^[a-z][a-z0-9_.]{2,63}$")
+_LOGGER = logging.getLogger("uvicorn.error.background_jobs")
 
 ReadonlyCheck = Callable[[], Awaitable[bool]]
 
@@ -70,6 +73,7 @@ JobHandler = Callable[[BaseModel, JobExecution], Awaitable[JobOutcome]]
 # (principal, trusted bound session id, params already parsed by the kind) -> None to
 # accept, or a closed refusal code.
 JobAdmission = Callable[[Principal, str | None, BaseModel], Awaitable[str | None]]
+OASessionProbe = Callable[[BackgroundJobRunOwner], Awaitable[OASessionHeartbeatResult | None]]
 
 
 @dataclass(frozen=True)
@@ -165,11 +169,39 @@ async def executed_by_worker(params: BaseModel, execution: JobExecution) -> JobO
     raise BackgroundJobError("background_job_kind_invalid")
 
 
+def build_oa_session_probe(
+    credential_store: CredentialStorePort,
+    heartbeat: Callable[[OASessionCredential], Awaitable[OASessionHeartbeatResult]],
+) -> OASessionProbe:
+    """Shared API/worker probe: one saved Session read and one heartbeat, no renewal."""
+
+    async def probe(owner: BackgroundJobRunOwner) -> OASessionHeartbeatResult | None:
+        session = None
+        try:
+            session = await credential_store.load(owner.ai_user_id, "oa", tenant_id=owner.tenant_id)
+            result = None if session is None else await heartbeat(session)
+        except Exception as error:
+            # An unreadable credential or unreachable OA proves nothing about expiry.
+            _LOGGER.info("oa_heartbeat_unavailable exception_type=%s", type(error).__name__)
+            return None
+        finally:
+            session = None
+        _LOGGER.info("oa_heartbeat result=%s", result)
+        return result
+
+    return probe
+
+
 async def oa_binding_refusal(
-    identity_mapping: IdentityMappingPort | None, principal: Principal
+    identity_mapping: IdentityMappingPort | None,
+    principal: Principal,
+    *,
+    session_probe: OASessionProbe | None = None,
 ) -> str | None:
-    """Binding metadata only (no decryption): missing or revoked is ``oa_unbound``; a
-    failed verification or an unconfigured lookup is ``oa_unavailable``."""
+    """Check binding metadata, then the saved Session when a read-only probe is supplied.
+
+    Only a proven dead Session means expiry; an inconclusive probe means unavailable.
+    """
 
     if identity_mapping is None:
         return "oa_unavailable"
@@ -180,6 +212,16 @@ async def oa_binding_refusal(
         return "oa_unbound"
     if mapping.bind_status == "verification_failed":
         return "oa_unavailable"
+    if session_probe is not None:
+        result = await session_probe(BackgroundJobRunOwner(
+            tenant_id=principal.org_ctx.tenant_id,
+            ai_user_id=principal.ai_user_id,
+            session_id=None,
+        ))
+        if result == "dead":
+            return "oa_session_expired"
+        if result is None:
+            return "oa_unavailable"
     return None
 
 
@@ -304,10 +346,12 @@ __all__ = (
     "OA_PENDING_REPORT_KIND",
     "OA_PENDING_REPORT_PARAMS",
     "OAPendingReportParams",
+    "OASessionProbe",
     "SELF_CHECK_KIND",
     "SELF_CHECK_NAMES",
     "SelfCheckParams",
     "build_job_kinds",
+    "build_oa_session_probe",
     "executed_by_worker",
     "oa_binding_refusal",
     "oa_pending_report_key",

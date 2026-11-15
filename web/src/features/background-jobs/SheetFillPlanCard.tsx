@@ -107,6 +107,9 @@ export function SheetFillPlanCard({
       <ul>
         {plan.mappings.map((mapping) => <MappingLine key={mapping.sheet} mapping={mapping} />)}
       </ul>
+      {plan.skipped_sheets.length > 0 ? (
+        <p><Text>这次不填的工作表：{plan.skipped_sheets.map((sheet) => `「${sheet}」`).join('、')}。</Text></p>
+      ) : null}
       <p>
         <Text type="secondary">
           只填写空白格，已有内容不会覆盖；查不到时写入标注并标浅黄色。
