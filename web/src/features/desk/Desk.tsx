@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, DragEvent, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -23,32 +23,31 @@ import {
   useSentWork,
 } from './deskData';
 import type { DueRow } from './deskData';
+import { CARD_IDS, CARD_SIZES, CARD_SIZE_LABELS, DEFAULT_COLUMNS, useHomeLayoutStore } from './homeLayout';
+import type { CardId, CardSize } from './homeLayout';
 import styles from './Desk.module.css';
 
 /**
- * 案头：助手页上的一张张卡片，像桌上摆着的纸（2026-11-13 雨爷确认 v7 样板）。
+ * 首页：助手页上的一张张卡片，像桌上摆着的纸。
  *
  * - 卡片三档固定高度（小 / 中 / 大，占 2 / 3 / 4 个高度单位），一列凑满 6 个单位正好一屏；
- *   内容多了在卡片里滚，页面本身不滚。滚动条平时不出现，鼠标移上去才出现。
- * - 默认就显示，不做收起按钮。
+ *   内容多了在卡片里滚。滚动条平时不出现，鼠标移上去才出现。
  * - 每张卡片都能直接拿去问 AI：点标题行右边的记号，把一句现成的话填进输入框。
- * - 只放有真实数据来源的卡片；还没有数据来源的卡片不出现在案头上。
+ * - 只放有真实数据来源的卡片。摆哪些、怎么排、多大，每个人可以自己定（见 `homeLayout.ts`）。
  */
-type CardSize = 'S' | 'M' | 'L';
+const CARD_TITLES: Record<CardId, string> = {
+  todo: '今日要办', types: '待办按类型', tasks: '交办情况', week: '未来 7 天到期', oa: 'OA 办公', done: '近 30 天办结',
+};
 
-type CardId = 'todo' | 'types' | 'tasks' | 'week' | 'oa' | 'done';
-
-interface CardSlot {
-  id: CardId;
-  size: CardSize;
-}
-
-/** 默认摆法：每列凑满 6 个高度单位（大 + 小、中 + 中、中 + 中）。 */
-const DEFAULT_COLUMNS: readonly (readonly CardSlot[])[] = [
-  [{ id: 'todo', size: 'L' }, { id: 'types', size: 'S' }],
-  [{ id: 'tasks', size: 'M' }, { id: 'week', size: 'M' }],
-  [{ id: 'oa', size: 'M' }, { id: 'done', size: 'M' }],
-];
+/** 卡片库里每张卡片下面的一句话。 */
+const CARD_NOTES: Record<CardId, string> = {
+  todo: '已超期、今天、明天到期的事',
+  types: '待办按办理动作分类的数量',
+  tasks: '我交办出去、还在办的事',
+  week: '未来一周每天到期几件',
+  oa: 'OA 里等我办的流程',
+  done: '最近一个月办结的事',
+};
 
 type Ask = (question: string) => void;
 
@@ -365,7 +364,7 @@ function OaCard({ onAsk, size }: CardProps) {
     >
       {needsBinding ? (
         <CardState
-          action={<Link className="wb-btn wb-btn-sm" to="/admin/bindings">绑定账号</Link>}
+          action={<Link className="wb-btn wb-btn-sm" to="/settings/bindings">绑定账号</Link>}
           icon="lock"
           note="绑定后这里显示你的 OA 待办"
           text={binding.data?.bound === true ? 'OA 登录已失效' : '还没有绑定 OA 账号'}
@@ -475,6 +474,33 @@ function useStats(): Stat[] {
   }, [open.data, completed.data, now]);
 }
 
+/** 数字从旧值滚到新值。精简动效或系统要求减少动效时直接显示。 */
+function AnimatedNumber({ value }: { value: number }) {
+  const [shown, setShown] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    const still = document.documentElement.dataset.fx === 'lite'
+      || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+      || typeof requestAnimationFrame !== 'function';
+    if (still || from.current === value) {
+      from.current = value;
+      setShown(value);
+      return undefined;
+    }
+    const start = from.current;
+    const startedAt = performance.now();
+    let frame = requestAnimationFrame(function tick(now: number) {
+      const progress = Math.min(1, (now - startedAt) / 700);
+      const eased = 1 - (1 - progress) ** 3;
+      setShown(Math.round(start + (value - start) * eased));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+      else from.current = value;
+    });
+    return () => { cancelAnimationFrame(frame); from.current = value; };
+  }, [value]);
+  return <>{shown}</>;
+}
+
 /** 重点数字：点任何一个数字，就把对应的问题填进输入框。 */
 function Stats({ onAsk }: { onAsk: Ask }) {
   const stats = useStats();
@@ -488,7 +514,7 @@ function Stats({ onAsk }: { onAsk: Ask }) {
           onClick={() => onAsk(stat.ask)}
           type="button"
         >
-          <b className="wb-num">{stat.value ?? '–'}</b>
+          <b className="wb-num">{stat.value === null ? '–' : <AnimatedNumber value={stat.value} />}</b>
           <span>{stat.label}</span>
         </button>
       ))}
@@ -496,20 +522,142 @@ function Stats({ onAsk }: { onAsk: Ask }) {
   );
 }
 
-/** 没有对话时，案头铺满助手页。 */
+const DEFAULT_SIZES = Object.fromEntries(
+  DEFAULT_COLUMNS.flat().map((slot) => [slot.id, slot.size]),
+) as Record<CardId, CardSize>;
+
+/**
+ * 首页。平时是一张张摆好的卡片；自定义时卡片可以拖到别的位置（包括别的列）、改大小、移出，
+ * 每列末尾可以把没摆出来的卡片加回来。
+ */
 export const Desk = memo(function Desk({ onAsk }: { onAsk: Ask }) {
+  const columns = useHomeLayoutStore((state) => state.columns);
+  const customizing = useHomeLayoutStore((state) => state.customizing);
+  const place = useHomeLayoutStore((state) => state.place);
+  const resize = useHomeLayoutStore((state) => state.resize);
+  const remove = useHomeLayoutStore((state) => state.remove);
+  const [dragging, setDragging] = useState<CardId | null>(null);
+  const [drop, setDrop] = useState<{ column: number; index: number } | null>(null);
+  const [libraryColumn, setLibraryColumn] = useState<number | null>(null);
+  const placed = new Set(columns.flat().map((slot) => slot.id));
+  const spare = CARD_IDS.filter((id) => !placed.has(id));
+
+  // 退出自定义时把拖放和卡片库的临时状态清掉。
+  useEffect(() => {
+    if (!customizing) { setDragging(null); setDrop(null); setLibraryColumn(null); }
+  }, [customizing]);
+
+  /** 鼠标在这一列的哪两张卡片之间：按各卡片的中线判断。 */
+  const dropIndex = (event: DragEvent<HTMLDivElement>): number => {
+    const slots = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-slot]')];
+    const index = slots.findIndex((slot) => {
+      const box = slot.getBoundingClientRect();
+      return event.clientY < box.top + box.height / 2;
+    });
+    return index < 0 ? slots.length : index;
+  };
+
+  let order = 0;
   return (
-    <div className={styles.desk}>
+    <div className={styles.desk} data-customizing={customizing ? 'true' : 'false'}>
       <header className={styles.deskHead}>
         <Stats onAsk={onAsk} />
       </header>
-      <div className={styles.cards} style={{ gridTemplateColumns: `repeat(${DEFAULT_COLUMNS.length}, minmax(0, 1fr))` }}>
-        {DEFAULT_COLUMNS.map((column, index) => (
-          <div className={styles.column} key={index}>
-            {column.map((slot) => {
+      <div className={styles.cards} style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+        {columns.map((column, columnIndex) => (
+          <div
+            className={styles.column}
+            key={columnIndex}
+            onDragOver={customizing && dragging !== null ? (event) => {
+              event.preventDefault();
+              const index = dropIndex(event);
+              setDrop((current) => (current?.column === columnIndex && current.index === index
+                ? current : { column: columnIndex, index }));
+            } : undefined}
+            onDrop={customizing && dragging !== null ? (event) => {
+              event.preventDefault();
+              place(dragging, columnIndex, dropIndex(event));
+              setDragging(null);
+              setDrop(null);
+            } : undefined}
+          >
+            {column.map((slot, index) => {
               const Card = CARD_COMPONENTS[slot.id];
-              return <Card key={slot.id} onAsk={onAsk} size={slot.size} />;
+              const style = { '--i': order } as CSSProperties;
+              order += 1;
+              return (
+                <Fragment key={slot.id}>
+                  {drop?.column === columnIndex && drop.index === index ? <i aria-hidden="true" className={styles.dropLine} /> : null}
+                  <div
+                    className={styles.slot}
+                    data-dragging={dragging === slot.id ? 'true' : 'false'}
+                    data-slot=""
+                    draggable={customizing}
+                    onDragEnd={() => { setDragging(null); setDrop(null); }}
+                    onDragStart={customizing ? (event) => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', slot.id);
+                      setDragging(slot.id);
+                      setLibraryColumn(null);
+                    } : undefined}
+                    style={style}
+                  >
+                    <Card onAsk={onAsk} size={slot.size} />
+                    {customizing ? (
+                      <div className={styles.slotTools}>
+                        <div aria-label={`${CARD_TITLES[slot.id]}的大小`} className={styles.sizes} role="group">
+                          {CARD_SIZES.map((size) => (
+                            <button aria-pressed={slot.size === size} key={size} onClick={() => resize(slot.id, size)} type="button">
+                              {CARD_SIZE_LABELS[size]}
+                            </button>
+                          ))}
+                        </div>
+                        <button
+                          aria-label={`把「${CARD_TITLES[slot.id]}」移出首页`}
+                          className={styles.slotRemove}
+                          onClick={() => remove(slot.id)}
+                          title="移出首页"
+                          type="button"
+                        >
+                          <Icon name="close" size={15} strokeWidth={2.2} />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </Fragment>
+              );
             })}
+            {drop?.column === columnIndex && drop.index === column.length ? <i aria-hidden="true" className={styles.dropLine} /> : null}
+            {customizing ? (
+              <div className={styles.addWrap}>
+                <button
+                  aria-expanded={libraryColumn === columnIndex}
+                  className={styles.add}
+                  onClick={() => setLibraryColumn((open) => (open === columnIndex ? null : columnIndex))}
+                  type="button"
+                >
+                  <Icon name="plus" size={17} />
+                  添加卡片
+                </button>
+                {libraryColumn === columnIndex ? (
+                  <div aria-label="卡片库" className={styles.library} role="group">
+                    {spare.length === 0 ? <p>卡片都已经在首页上了。</p> : spare.map((id) => (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          place(id, columnIndex, column.length, DEFAULT_SIZES[id]);
+                          setLibraryColumn(null);
+                        }}
+                        type="button"
+                      >
+                        <b>{CARD_TITLES[id]}</b>
+                        <small>{CARD_NOTES[id]}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
@@ -517,17 +665,19 @@ export const Desk = memo(function Desk({ onAsk }: { onAsk: Ask }) {
   );
 });
 
-/** 对话中，案头收到右侧一栏：同一批卡片，窄一些、矮一些。 */
-export const DeskSide = memo(function DeskSide({ onAsk }: { onAsk: Ask }) {
+/** 自定义首页时放在输入框位置上的操作条。 */
+export function HomeCustomizeBar() {
+  const reset = useHomeLayoutStore((state) => state.reset);
+  const finish = useHomeLayoutStore((state) => state.finishCustomizing);
   return (
-    <aside aria-label="案头" className={styles.side}>
-      <div className={styles.card} data-size="auto">
-        <Stats onAsk={onAsk} />
-      </div>
-      {DEFAULT_COLUMNS.flat().map((slot) => {
-        const Card = CARD_COMPONENTS[slot.id];
-        return <Card key={slot.id} onAsk={onAsk} size="auto" />;
-      })}
-    </aside>
+    <div aria-label="自定义首页" className={styles.customizeBar} role="toolbar">
+      <Icon name="grid" size={18} />
+      <span>拖动卡片换位置，卡片右上角改大小或移出</span>
+      <button className="wb-btn wb-btn-sm" onClick={reset} type="button">恢复默认</button>
+      <button className="wb-btn wb-btn-primary wb-btn-sm" onClick={finish} type="button">
+        <Icon name="check" size={16} strokeWidth={2.2} />
+        完成
+      </button>
+    </div>
   );
-});
+}

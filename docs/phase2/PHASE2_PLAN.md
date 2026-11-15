@@ -962,6 +962,16 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 真实验收环境缺项 | 验收环境未启用组织目录同步（新建交办的目录选择返回 503，未验）、未启动后台 worker；验收账号当前分类无事项，详情抽屉与时间线点选未实测；流畅度没有帧率实测；目标浏览器下限 Chrome 130 未在该版本实测（本机 Chrome 157） | 具备目录同步与 worker 的验收环境；Electron 封装 | 目标机 Docker 阶段验收 | 在目录同步可用的环境完成新建交办全流程；有事项的账号验详情抽屉与时间线；目标机实测滚动与切页帧率及最低浏览器版本 | 仓库外 `workbench-ui-20261112/env/ACCEPTANCE_REPORT.md`「已知环境缺项与未验证项」 |
 | 视觉裁决未登记 | 「墨、纸、印」方向、其推翻的 2026-09-02 / 09-04 / 11-11 旧视觉裁决，以及「按钮与输入框边线照 v7、不再要求 3:1」均为雨爷 2026-11-13 已决，尚未写入 DECISIONS | 无 | 后续 GOV-SYNC 棒 | `docs/phase2/DECISIONS.md` 登记该裁决及被推翻条目 | 仓库外登记稿 `DECISIONS_登记稿_20261113.md` |
 
+### 工作台前端改版第二棒 `P2-FE-WORKBENCH-V4-002` 新增欠债（2026-11-14）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 业务服务的授权与断开未做真实验证 | 账号设置的绑定、更新密码、解除绑定、启用自动登录已于 2026-11-15 经雨爷授权用真实账号补验通过；业务服务「重新授权」在验收环境被后端拒绝（409，`mcp_action_unavailable`），只验到前端如实提示失败。只读排查指向固定只读授权批准配置 `MCP_FIXED_READ_APPROVAL_JSON` 从未生成安装（本人主体与批准依据未取得），原始错误码因 `_SafeMcpRoute` 不记日志尚未实测确认；断开后无法重新连接，故未测断开 | 固定只读授权批准配置与批准依据 | 待分配（业务服务接入） | 授权链接可取得、断开后可重新连接，并在页面实测 | `web/src/features/apps/McpConnectionsPanel.tsx`、`app/api/v1/mcp.py::_SafeMcpRoute`、`app/mcp/oauth.py::OAuthConnections.service`；仓库外 `workbench-ui-20261112/round3/` |
+| 部分业务系统尚未接入 | 对应关系已由雨爷 2026-11-15 确认：财务软件对应 `u8` 凭证目标、综合业务平台对应业务服务连接；但 `u8` 账号后端只保存不验证，数据中台、执法办案平台只有占位，OA 卡片不免登 | 各系统的接入代码与地址；OA 单点登录接入 | 待分配 | 各系统卡片可进入对应系统且账号可验证；或确认不接并移除 | `web/src/features/apps/systems.ts::SYSTEMS`、`::openSystem` |
+| 自定义首页的布局只存在浏览器本地 | 换浏览器或清缓存后恢复默认；按人保存要后端接口，本棒不改后端 | 个人偏好保存接口 | 待分配 | 布局按登录人保存并跨设备一致 | `web/src/features/desk/homeLayout.ts` |
+| 助手回复的排版只认粗体和清单 | 标题、表格、链接等其他写法原样显示 | 无 | 待分配（工作台第二期） | 按实际出现的写法补齐，或确认够用 | `web/src/shared/ui/AnswerText.tsx` |
+| 添加软件对话框、周期任务页其余部分仍用旧样式变量 | 本棒只重写走查点名的页面；对话框样式只是原样拆到独立文件 | 无 | 待分配（工作台第二期） | 两处改为新版式，不再引用 `--workbench-*` 别名 | `web/src/features/apps/NewSoftwareDialog.module.css`、`web/src/features/work-dispatch/WorkObjectSeriesPage.module.css` |
+
 ## 6. P2 不做什么
 
 

@@ -1,5 +1,5 @@
 /*
- * 案头：浅灰桌面上摆着一张张白色卡片。
+ * 首页：浅灰桌面上摆着一张张白色卡片。
  *
  * 高度单位 `--u` 由助手页按视口高度算出（84–126px）；小 / 中 / 大三档各占 2 / 3 / 4 个单位，
  * 一列凑满 6 个单位正好一屏。卡片内部滚动、底色不透明（滚动交给显卡合成）、底部用吸底的渐隐
@@ -643,68 +643,283 @@
   animation: none;
 }
 
-/* ── 对话时靠边的案头：同一批卡片，窄一些 ── */
-.side {
+/* ── 动起来：卡片依次落到桌面上，横条和柱子从零长出来，鼠标移上去卡片微微抬起 ── */
+.slot {
+  position: relative;
+  min-width: 0;
+  animation: slot-in 0.55s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+@keyframes slot-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+}
+
+.slot > .card {
+  transition: transform 0.25s var(--ease);
+}
+
+.desk[data-customizing='false'] .slot:hover > .card {
+  box-shadow: 0 2px 4px rgb(16 26 46 / 5%), 0 18px 34px -20px rgb(16 26 46 / 30%);
+  transform: translateY(-3px);
+}
+
+.barTrack i,
+.meter div i {
+  transform-origin: 0 50%;
+  animation: grow-x 0.8s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 0.25s);
+}
+
+.columnBar i {
+  transform-origin: 50% 100%;
+  animation: grow-y 0.8s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 0.25s);
+}
+
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+/* 「已超期」的数字旁边一枚缓缓呼吸的朱红点：这件事要紧。 */
+.stat[data-hot='true'] b::after {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 0.35rem;
+  vertical-align: 0.9em;
+  content: '';
+  background: var(--seal);
+  border-radius: 50%;
+  animation: breathe 1.6s ease-in-out infinite alternate;
+}
+
+@keyframes breathe {
+  to {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+}
+
+.stat b {
+  transition: transform 0.2s var(--spring);
+  transform-origin: 0 100%;
+}
+
+.stat:hover b {
+  transform: scale(1.06);
+}
+
+:global(html[data-fx='lite']) :is(.slot, .barTrack i, .meter div i, .columnBar i, .stat[data-hot='true'] b::after) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot,
+  .barTrack i,
+  .meter div i,
+  .columnBar i,
+  .stat[data-hot='true'] b::after {
+    animation: none;
+  }
+}
+
+/* ── 自定义首页 ── */
+.desk[data-customizing='true'] .slot {
+  cursor: grab;
+  border-radius: var(--r-card);
+  outline: 2px dashed rgb(36 80 200 / 38%);
+  outline-offset: 3px;
+}
+
+.desk[data-customizing='true'] .slot > .card {
+  pointer-events: none;
+  user-select: none;
+}
+
+.slot[data-dragging='true'] {
+  opacity: 0.35;
+}
+
+.slotTools {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
   display: flex;
-  max-height: 100%;
-  flex-direction: column;
-  gap: 12px;
-  padding-bottom: 16px;
-  overflow-y: auto;
-  scrollbar-width: none;
+  gap: 6px;
+  animation: tools-in 0.2s var(--ease) both;
 }
 
-.side .card {
-  height: auto;
-  max-height: 15.5rem;
-  flex: none;
-  padding: 0.7rem 1rem 0.8rem;
+@keyframes tools-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
 }
 
-.side .ask {
-  display: none;
+.sizes {
+  display: flex;
+  padding: 2px;
+  background: var(--text);
+  border-radius: 9px;
+  box-shadow: 0 6px 14px -6px rgb(10 16 29 / 50%);
 }
 
-.side .stats {
-  display: grid;
-  gap: 0.8rem 0.6rem;
-  grid-template-columns: 1fr 1fr;
-}
-
-.side .stat {
+.sizes > button {
+  width: 1.9rem;
+  height: 1.7rem;
   padding: 0;
-  border: 0;
-}
-
-.side .stat b {
-  font-size: 1.6rem;
-}
-
-.side .stat span {
+  color: rgb(255 255 255 / 70%);
+  font: inherit;
   font-size: 0.8rem;
-}
-
-.side .row {
-  gap: 0.6rem;
-  padding: 0.45rem 0;
+  font-weight: 600;
+  cursor: pointer;
+  background: none;
   border: 0;
-  grid-template-columns: 2.8rem minmax(0, 1fr);
+  border-radius: 7px;
 }
 
-.side .row .chevron,
-.side .rowText small {
-  display: none;
+.sizes > button[aria-pressed='true'] {
+  color: var(--text);
+  background: #fff;
 }
 
-.side .rowText b {
+.slotRemove {
+  display: grid;
+  width: calc(1.7rem + 4px);
+  height: calc(1.7rem + 4px);
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+  background: var(--text);
+  border: 0;
+  border-radius: 9px;
+  box-shadow: 0 6px 14px -6px rgb(10 16 29 / 50%);
+  place-items: center;
+}
+
+.slotRemove:hover {
+  background: var(--seal);
+}
+
+.dropLine {
+  display: block;
+  height: 4px;
+  margin: -5px 0;
+  background: var(--primary);
+  border-radius: 2px;
+  box-shadow: 0 0 0 4px var(--primary-ring);
+}
+
+.addWrap {
+  position: relative;
+}
+
+.add {
+  display: flex;
+  width: 100%;
+  height: 3.2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: none;
+  border: 2px dashed var(--line-3);
+  border-radius: var(--r-card);
+}
+
+.add:hover,
+.add[aria-expanded='true'] {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: rgb(36 80 200 / 45%);
+}
+
+.library {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: var(--paper);
+  border-radius: var(--r-card);
+  box-shadow: var(--float), 0 0 0 1px rgb(16 26 46 / 12%);
+  animation: tools-in 0.2s var(--ease) both;
+}
+
+.library > p {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  color: var(--text-3);
   font-size: 0.933rem;
-  font-weight: 500;
 }
 
-.side .due {
+.library > button {
+  display: grid;
+  gap: 1px;
+  padding: 0.55rem 0.7rem;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+}
+
+.library > button:hover {
+  background: var(--paper-2);
+}
+
+.library > button > b {
+  font-weight: 600;
+}
+
+.library > button > small {
+  color: var(--text-3);
   font-size: 0.867rem;
 }
 
-.side .columns {
-  height: 6.5rem;
+.customizeBar {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.6rem 0.55rem 1rem;
+  color: #fff;
+  font-size: 0.933rem;
+  background: var(--text);
+  border-radius: 16px;
+  box-shadow: 0 20px 44px -20px rgb(10 16 29 / 60%);
+  animation: tools-in 0.25s var(--ease) both;
+}
+
+.customizeBar > span {
+  margin-right: 0.6rem;
+  color: rgb(255 255 255 / 78%);
+  white-space: nowrap;
+}
+
+.customizeBar > :global(.wb-btn):not(:global(.wb-btn-primary)) {
+  color: #fff;
+  background: rgb(255 255 255 / 12%);
+  border-color: transparent;
 }

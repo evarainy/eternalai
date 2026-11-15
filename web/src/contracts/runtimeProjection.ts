@@ -622,7 +622,7 @@ const REPORT_JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // Internal UI reason code of the backend MCP authorization card (bind_required).
 const MCP_AUTHORIZATION_REASON = 'mcp_authorization_required';
 export const MCP_CONNECTIONS_ANCHOR = 'mcp-connections';
-const MCP_AUTHORIZATION_PATH = `/apps#${MCP_CONNECTIONS_ANCHOR}`;
+const MCP_AUTHORIZATION_PATH = `/settings/bindings#${MCP_CONNECTIONS_ANCHOR}`;
 
 export function projectResponse(
   value: unknown,
@@ -797,5 +797,5 @@ function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {
       ].includes(reference.state)) return {};
   if (reference.result !== undefined && reference.result !== null &&
       (reference.state !== 'VERIFIED_SUCCESS' || !isRecord(reference.result))) return {};
-  return { mcpRecoveryPath: `/apps?operation=${reference.operation_id}` };
+  return { mcpRecoveryPath: `/settings/bindings?operation=${reference.operation_id}` };
 }

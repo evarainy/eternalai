@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../../app/theme';
 import { DRAFT_STORAGE_KEY, loadDraft, saveDraft, parseDraft } from '../dispatchDraft';
 import WorkDispatchPage from '../WorkDispatchPage';
+import styles from '../WorkDispatchPage.module.css';
 
 /** vitest 下 `import.meta.url` 是 jsdom 的 URL 实例，`fileURLToPath` 不认，先取 `.href`。 */
 function readSource(relativePath: string): string {
@@ -63,27 +64,32 @@ describe('WorkDispatchPage form', () => {
     expect(within(navigation).getByRole('link', { name: '交办情况' })).toHaveAttribute('href', '/work-dispatch');
     expect(within(navigation).getByRole('link', { name: '新建交办' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByRole('tab')).toBeNull();
-    expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent)).toEqual(['基本信息', '交办对象', '办理要求与回执材料']);
+    // 2026-11-14 v7 版式：表单不再分节，唯一的二级标题是右栏「发布后」。
+    expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent)).toEqual(['发布后']);
     const ordered = container.querySelectorAll('h2');
-    expect(Array.from(ordered, (node) => node.textContent?.trim())).toEqual(['基本信息', '交办对象', '办理要求与回执材料']);
+    expect(Array.from(ordered, (node) => node.textContent?.trim())).toEqual(['发布后']);
     for (const node of ordered) expect(node).toBeVisible();
     expect(screen.getByLabelText('标题').compareDocumentPosition(screen.getByRole('group', { name: '交办对象（目录选择）' }))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // 办理方式与完成模式收在「更多」里：收起时这一行写着当前取值，展开后是单选组。
+    expect(screen.getByText(/各自独立办理 · 提交即完成/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
     expect(screen.getByRole('radio', { name: '各自独立办理' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: '正式提交即完成' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '提交即完成' })).toBeChecked();
   });
 
   /*
-   * 2026-08-27 §七 要求交办的九类字段在**发布前**固定展示。这里逐项钉死，缺一项就红；同时钉死三个
-   * 分组标题，防止九项被摊成一列长表单。
+   * 2026-08-27 §七 要求交办的九类字段在**发布前**固定展示。这里逐项钉死，缺一项就红。2026-11-14 v7
+   * 版式不再分节（一行一项）；办理方式与完成模式收在「更多」里，收起时那一行写出两者的当前取值。
    */
-  it('shows all nine dispatch fields grouped into the three decided sections', async () => {
+  it('shows all nine dispatch fields before publishing', async () => {
     renderPage();
     expect(screen.getByRole('heading', { level: 1, name: '任务交办' })).toBeInTheDocument();
-    for (const section of ['基本信息', '交办对象', '办理要求与回执材料']) expect(screen.getByRole('heading', { level: 2, name: section })).toBeInTheDocument();
-    expect(screen.getByLabelText('类型')).toBeInTheDocument(); expect(screen.getByLabelText('标题')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: '类型' })).toBeInTheDocument(); expect(screen.getByLabelText('标题')).toBeInTheDocument();
+    expect(screen.getByText(/各自独立办理 · 提交即完成/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
     expect(screen.getByRole('radio', { name: '各自独立办理' })).toBeInTheDocument(); expect(screen.getByRole('radio', { name: '派发人确认后完成' })).toBeInTheDocument();
     expect(screen.getByLabelText('截止时间')).toBeInTheDocument(); expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toBeInTheDocument();
-    expect(screen.getByLabelText('办理要求与交付物')).toBeInTheDocument(); expect(screen.getByRole('group', { name: '附件' })).toBeInTheDocument();
+    expect(screen.getByLabelText('办理要求')).toBeInTheDocument(); expect(screen.getByRole('group', { name: '附件' })).toBeInTheDocument();
     expect(screen.getByLabelText('回执要求')).toBeInTheDocument(); expect(screen.getByRole('group', { name: '站内到期提示' })).toBeInTheDocument();
   });
 
@@ -95,15 +101,17 @@ describe('WorkDispatchPage form', () => {
   });
 
   /*
-   * 控件闭集：「类型」是单选下拉、「截止时间」是日期时间选择器、「提醒策略」是多选。三者都**不许**
+   * 控件闭集：「类型」是单选组、「截止时间」是日期时间选择器、「提醒策略」是多选。三者都**不许**
    * 退化成随手输入的文本框——退化了这条就红。
    */
   it('keeps the closed-set fields as pickers instead of free text boxes', () => {
     renderPage();
 
-    const kind = screen.getByLabelText('类型');
-    expect(kind).toHaveAttribute('role', 'combobox');
-    expect(kind).toHaveAttribute('readonly');
+    const kind = screen.getByRole('radiogroup', { name: '类型' });
+    expect(within(kind).queryByRole('textbox')).toBeNull();
+    expect(kind.querySelector('input')).toBeNull();
+    expect(within(kind).getAllByRole('radio')).toHaveLength(4);
+    expect(within(kind).getAllByRole('radio').filter((radio) => radio.getAttribute('aria-checked') === 'true')).toHaveLength(1);
 
     expect(screen.getByLabelText('截止时间')).toHaveAttribute(
       'type',
@@ -111,15 +119,13 @@ describe('WorkDispatchPage form', () => {
     );
   });
 
-  it('offers exactly the four decided dispatch kinds in the type dropdown', () => {
+  it('offers exactly the four decided dispatch kinds in the type group', () => {
     renderPage();
 
-    fireEvent.mouseDown(screen.getByLabelText('类型'));
-
-    const listbox = screen.getByRole('listbox');
+    const kind = screen.getByRole('radiogroup', { name: '类型' });
     expect(
-      within(listbox)
-        .getAllByRole('option')
+      within(kind)
+        .getAllByRole('radio')
         .map((option) => option.textContent),
     ).toEqual(['通知', '督办令', '工作任务', '提醒']);
   });
@@ -127,17 +133,19 @@ describe('WorkDispatchPage form', () => {
   it('preselects the last three reminder steps and lets each one be toggled', async () => {
     renderPage(); fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-09-11T01:30' } });
     const reminders = screen.getByRole('group', { name: '站内到期提示' });
-    const checkbox = (name: string) => within(reminders).getByRole('checkbox', { name });
-    expect(checkbox('提前 7 天')).not.toBeChecked(); expect(checkbox('提前 3 天')).toBeChecked(); expect(checkbox('提前 1 天')).toBeChecked(); expect(checkbox('逾期当天')).toBeChecked();
-    fireEvent.click(checkbox('提前 7 天')); expect(checkbox('提前 7 天')).toBeChecked(); fireEvent.click(checkbox('逾期当天')); expect(checkbox('逾期当天')).not.toBeChecked();
+    const toggle = (name: string) => within(reminders).getByRole('button', { name });
+    expect(toggle('提前 7 天')).toHaveAttribute('aria-pressed', 'false'); expect(toggle('提前 3 天')).toHaveAttribute('aria-pressed', 'true'); expect(toggle('提前 1 天')).toHaveAttribute('aria-pressed', 'true'); expect(toggle('逾期当天')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(toggle('提前 7 天')); expect(toggle('提前 7 天')).toHaveAttribute('aria-pressed', 'true'); fireEvent.click(toggle('逾期当天')); expect(toggle('逾期当天')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('deduplicates directory tuples and counts only selected targets', async () => {
-    renderPage(); expect(screen.getByText('尚未选择对象')).toBeInTheDocument(); await selectDepartment();
+    renderPage(); expectNoTargets(); await selectDepartment();
     fireEvent.click(screen.getByRole('button', { name: '选择 办公室' }));
-    expect(screen.getByText(/已选择 1 个目标/)).toBeInTheDocument();
-    expect(screen.getByText('每个目标分别生成一个工作事项，分别办结。')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '移除 办公室' })); expect(screen.getByText('尚未选择对象')).toBeInTheDocument();
+    expect(screen.getByText('1 个对象各收到 1 条工作事项')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: '交办对象（目录选择）' })).getAllByRole('button', { name: /^移除 / })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
+    expect(screen.getByText('每个对象各生成一条工作事项，分别办结。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '移除 办公室' })); expectNoTargets();
   });
 
   // 当前合同接通目录、附件和交办；站内提醒不得冒充外部通知。
@@ -145,28 +153,35 @@ describe('WorkDispatchPage form', () => {
     renderPage();
     expect(screen.queryByRole('button', { name: /生成草稿/ })).toBeNull(); expect(screen.queryByText(/生成草稿还没有接进来/)).toBeNull();
     expect(screen.getByLabelText('添加附件')).toBeEnabled(); expect(screen.getByText(/单文件 20 MiB/)).toBeInTheDocument();
-    expect(screen.getByText(/不代表已发送邮件、短信或 IM/)).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' })); expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled(); expect(posts()).toHaveLength(0);
+    expect(screen.getByText('设了截止时间才能提醒。')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-09-11T01:30' } });
+    expect(screen.getByText('提醒只显示在工作台里，不发短信、邮件或 IM 消息。')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '发布' })); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled(); expect(posts()).toHaveLength(0);
   });
 
   // 保留既有设计系统的表单边界和多行办理要求。
   it('keeps the structured form fields discernible within the design system', async () => {
     renderPage();
     const title = screen.getByLabelText('标题'); expect(title.tagName).toBe('INPUT');
-    const source = readSource('../WorkDispatchPage.tsx'); expect(source).toContain('rows={4}');
+    const requirement = screen.getByLabelText('办理要求'); expect(requirement.tagName).toBe('TEXTAREA'); expect(requirement).toHaveAttribute('rows', '3');
+    expect(requirement).toHaveClass(styles.box!);
+    // 2026-11-14 v7：原生输入框 1px 线条色边框，聚焦换主题色边框加 3px 外晕。
     const css = readSource('../WorkDispatchPage.module.css');
-    const fieldRule = /\.field :global\(\.ant-input\),[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(fieldRule).toContain('var(--workbench-field-face)'); expect(css).toContain('var(--workbench-field-face-focus)');
+    const fieldRule = /\n\.box\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(fieldRule).toContain('border: 1px solid var(--line-2)');
+    const focusRule = /\n\.box:focus\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(focusRule).toContain('border-color: var(--primary)'); expect(focusRule).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
     expect(css).not.toContain('inset 0 0 0 1px rgb(22 29 46 / 11%)');
   });
 
   it('answers publish with a verified receipt and blocks empty titles', async () => {
     renderPage(); await selectDepartment();
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
     expect(screen.getByRole('alert')).toHaveTextContent('请核对标题、已确认目录对象');
     expect(posts()).toHaveLength(0);
     fireEvent.change(screen.getByLabelText('标题'), { target: { value: '报送第三季度政务信息' } });
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
     expect(await screen.findByRole('status', { name: '交办状态' })).toHaveTextContent('已发布，共 1 条工作事项。');
     expect(posts()).toHaveLength(1);
   });
@@ -191,11 +206,11 @@ describe('WorkDispatchPage form', () => {
 
   it('restores a saved normalized snapshot and starts empty in a new session', async () => {
     saveDraft(parseDraft({ title: '值班表报送', kind: '督办令', targets: ['办公室', '办公室', '  '], reminders: ['提前 7 天', '这一档不存在'] }), token());
-    const restored = renderPage(); expect(screen.getByLabelText('标题')).toHaveValue('值班表报送'); expect(screen.getByLabelText('类型')).toHaveAccessibleName('类型');
-    expect(screen.getByText('督办令')).toBeInTheDocument(); expect(screen.getByText(/已核对旧草稿意图/)).toHaveTextContent('办公室');
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' })); expect(posts()).toHaveLength(0);
-    const reminders = screen.getByRole('group', { name: '站内到期提示' }); expect(within(reminders).getByRole('checkbox', { name: '提前 7 天' })).toBeChecked();
-    expect(within(reminders).getByRole('checkbox', { name: '逾期当天' })).not.toBeChecked(); restored.unmount();
+    const restored = renderPage(); expect(screen.getByLabelText('标题')).toHaveValue('值班表报送'); expect(screen.getByRole('radiogroup', { name: '类型' })).toHaveAccessibleName('类型');
+    expect(screen.getByRole('radio', { name: '督办令' })).toBeChecked(); expect(screen.getByText(/已核对旧草稿意图/)).toHaveTextContent('办公室');
+    fireEvent.click(screen.getByRole('button', { name: '发布' })); expect(posts()).toHaveLength(0);
+    const reminders = screen.getByRole('group', { name: '站内到期提示' }); expect(within(reminders).getByRole('button', { name: '提前 7 天' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(reminders).getByRole('button', { name: '逾期当天' })).toHaveAttribute('aria-pressed', 'false'); restored.unmount();
     useAuthStore.getState().markAuthenticated(); window.localStorage.setItem(DRAFT_STORAGE_KEY, '{ 不是 JSON'); renderPage(); expect(screen.getByLabelText('标题')).toHaveValue('');
   });
 
@@ -216,9 +231,9 @@ describe('WorkDispatchPage form', () => {
 
   it('round-trips only decided choices and literal deduplicated targets through the page', async () => {
     saveDraft(parseDraft({ kind: '未知类型', dueAt: '2026-09-07T16:30', targets: [' 办公室 ', '办公室', '', 42, '财务科'], reminders: ['提前 7 天', '提前 7 天', '未知提醒'] }), token()); renderPage();
-    expect(screen.getByText('通知')).toBeVisible(); expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-07T16:30');
-    const group = screen.getByRole('group', { name: '站内到期提示' }); expect(within(group).getAllByRole('checkbox').map((node) => node.closest('label')?.textContent)).toEqual(['提前 7 天', '提前 3 天', '提前 1 天', '逾期当天']);
-    for (const checkbox of within(group).getAllByRole('checkbox')) fireEvent.click(checkbox);
+    expect(screen.getByRole('radio', { name: '通知' })).toBeVisible(); expect(screen.getByRole('radio', { name: '通知' })).toBeChecked(); expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-07T16:30');
+    const group = screen.getByRole('group', { name: '站内到期提示' }); expect(within(group).getAllByRole('button').map((node) => node.textContent)).toEqual(['提前 7 天', '提前 3 天', '提前 1 天', '逾期当天']);
+    for (const toggle of within(group).getAllByRole('button')) fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: '暂存草稿' })); expect(loadDraft(token())).toMatchObject({ kind: '通知', dueAt: '2026-09-07T16:30', targets: ['办公室', '财务科'], reminders: ['提前 3 天', '提前 1 天', '逾期当天'] });
   });
 
@@ -240,10 +255,10 @@ describe('WorkDispatchPage form', () => {
       for (const term of FORBIDDEN_INTERNAL_TERMS) expect(text).not.toContain(term);
     };
     checkCopy();
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
     checkCopy();
     fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成草稿' } });
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
     checkCopy();
     fireEvent.click(screen.getByRole('button', { name: '暂存草稿' }));
     checkCopy();
@@ -290,7 +305,7 @@ it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on
   }
   render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/work-dispatch?tab=new']}><Host /></MemoryRouter></QueryClientProvider>);
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'private-A' } });
-  fireEvent.change(screen.getByLabelText('办理要求与交付物'), { target: { value: 'chip-A' } });
+  fireEvent.change(screen.getByLabelText('办理要求'), { target: { value: 'chip-A' } });
   fireEvent.click(screen.getByRole('button', { name: '暂存草稿' }));
   expect(screen.getByRole('status', { name: '交办状态' })).toHaveTextContent('草稿已暂存');
   fireEvent.change(screen.getByLabelText('回执要求'), { target: { value: 'pending-A' } });
@@ -304,7 +319,7 @@ it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on
     expect(value).not.toMatch(/private-A|chip-A|pending-A|草稿已暂存/);
   }
   expect(screen.getByLabelText('标题')).toHaveValue('');
-  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent('尚未选择对象');
+  expectNoTargets();
   expect(screen.queryByRole('button', { name: '删除交办对象 chip-A' })).toBeNull();
   expect(screen.queryByRole('status', { name: '交办状态' })).toBeNull();
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'B' } });
@@ -346,23 +361,33 @@ function directoryFetch(url: string, init?: RequestInit): Promise<Response> {
   return Promise.resolve(response(url.includes('kind=user') ? options([person], 'user') : options([department])));
 }
 function posts() { return vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST'); }
-async function selectDepartment() { fireEvent.click(screen.getByRole('button', { name: '可选部门' })); fireEvent.click(await screen.findByRole('button', { name: '选择 办公室' })); }
+/** 目录选择面板里「人员 / 部门」两个范围按钮（新建时面板默认已展开）。 */
+function scopeButton(name: '人员' | '部门') { return within(screen.getByRole('group', { name: '目录范围' })).getByRole('button', { name }); }
+/** 尚未选择任何交办对象：目录选择组里没有已选标签，右栏写明还没有对象。 */
+function expectNoTargets() {
+  expect(within(screen.getByRole('group', { name: '交办对象（目录选择）' })).queryAllByRole('button', { name: /^移除 / })).toHaveLength(0);
+  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent(/^选择对象$/);
+  expect(screen.getByText('还没有选交办对象')).toBeInTheDocument();
+}
+async function selectDepartment() { fireEvent.click(scopeButton('部门'));fireEvent.click(await screen.findByRole('button', { name: '选择 办公室' })); }
 async function ready() {
   renderPage(); await selectDepartment();
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成交办' } });
 }
-function publish() { const button = screen.queryByRole('button', { name: '发布任务' }); if (button) fireEvent.click(button); }
+function publish() { const button = screen.queryByRole('button', { name: '发布' }); if (button) fireEvent.click(button); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { resolve, promise }; }
 
 it('C1 selects_names_after_department and omits undefined parameters', async () => {
   renderPage();
-  fireEvent.click(screen.getByRole('button', { name: '可选部门' })); await screen.findByRole('button', { name: '选择 办公室' });
+  fireEvent.click(scopeButton('部门')); await screen.findByRole('button', { name: '选择 办公室' });
   expect(vi.mocked(fetch).mock.calls[0]![0]).toBe('/api/v1/work-objects/dispatch-options?kind=user&query=&limit=50');
   expect(screen.queryByText(/同名/)).toBeNull(); expect(posts()).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: '查看 办公室 人员' }));
   fireEvent.click(await screen.findByRole('button', { name: '选择 同名（办公室，目录编号 u1）' }));
   expect(vi.mocked(fetch).mock.calls[2]![0]).toBe('/api/v1/work-objects/dispatch-options?kind=user&department_id=d1&query=&limit=50');
-  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent('同名（办公室，目录编号 u1）');
+  const chosen = screen.getByRole('group', { name: '交办对象（目录选择）' });
+  expect(within(chosen).getByRole('button', { name: '移除 同名（办公室，目录编号 u1）' })).toBeInTheDocument();
+  expect(within(chosen).getByTitle('同名（办公室，目录编号 u1）')).toHaveTextContent('同名');
   expect(posts()).toHaveLength(0);
 });
 it('C2 keeps_same_name_targets_distinct and deduplicates exact tuples', async () => {
@@ -383,7 +408,7 @@ it('C3 shows_unselectable_count_without_fabricating_people across pages', async 
   vi.mocked(fetch).mockImplementation((url, init) => String(url).includes('kind=user')
     ? Promise.resolve(response(options(String(url).includes('cursor=') ? [] : [person], 'user', { unselectable_count: 2, ...(String(url).includes('cursor=') ? {} : { has_more: true, next_cursor: 'opaque+/=' }) })))
     : directoryFetch(String(url), init));
-  renderPage(); fireEvent.click(screen.getByRole('button', { name: '可选部门' })); fireEvent.click(await screen.findByRole('button', { name: '查看 办公室 人员' }));
+  renderPage(); fireEvent.click(scopeButton('部门')); fireEvent.click(await screen.findByRole('button', { name: '查看 办公室 人员' }));
   fireEvent.click(await screen.findByRole('button', { name: '加载下一页' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: '加载下一页' })).toBeNull());
   expect(screen.getByText(/当前不能唯一解析/)).toHaveTextContent('有 2 个对象');
@@ -400,30 +425,29 @@ it('C4 reloads_snapshot_and_rejects_late_pages', async () => {
   });
   await ready();
   fireEvent.click(screen.getByRole('button', { name: '查看 办公室 人员' }));
-  fireEvent.click(screen.getByRole('button', { name: '可选部门' }));
+  fireEvent.click(scopeButton('部门'));
   await screen.findByText(/目录已更新/);
   expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent('办公室（待重新确认）');
-  expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
   await act(async () => late.resolve(response(options([person], 'user'))));
   expect(screen.queryByRole('button', { name: /^选择 同名/ })).toBeNull();
   expect(posts()).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: '选择 办公室' }));
-  expect(screen.getByRole('button', { name: '发布任务' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: '发布' })).toBeEnabled();
 });
 it('C5 blocks_new_publish_on_directory_failure without automatic retry', async () => {
   await ready();
   vi.mocked(fetch).mockResolvedValue(response({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }, 503));
-  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('目录已过期');
   expect(screen.getByLabelText('标题')).toHaveValue('合成交办');
-  expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3); expect(posts()).toHaveLength(0);
 });
 it('C6 requires_legacy_intent_confirmation and sends seven canonical fields', async () => {
   saveDraft(parseDraft({ title: '\u0085合成标题\u001c', requirement: '\u001c要求\u0085', receipt: ' 回执 ', assignee: '旧责任', visibility: '旧可见', targets: ['旧对象'] }), token());
   renderPage(); await selectDepartment();
   expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent('办公室');
-  expect(screen.getByText(/候选由服务端按当前身份提供/)).toBeVisible();
   expect(screen.getByText(/已核对旧草稿意图并重新选择目标/)).toHaveTextContent('旧责任 旧可见 旧对象');
   publish(); expect(posts()).toHaveLength(0);
   fireEvent.click(screen.getByRole('checkbox', { name: /已核对旧草稿意图/ }));
@@ -432,7 +456,7 @@ it('C6 requires_legacy_intent_confirmation and sends seven canonical fields', as
 });
 it.each(['title', 'requirement', 'receipt'] as const)('C6 blocks overlong %s while preserving content', async (field) => {
   await ready();
-  const names = { title: '标题', requirement: '办理要求与交付物', receipt: '回执要求' };
+  const names = { title: '标题', requirement: '办理要求', receipt: '回执要求' };
   const limits = { title: 200, requirement: 10000, receipt: 2000 };
   fireEvent.change(screen.getByLabelText(names[field]), { target: { value: '字'.repeat(limits[field] + 1) } });
   publish(); expect(screen.getByRole('alert')).toHaveTextContent('请核对标题、已确认目录对象'); expect(posts()).toHaveLength(0);
@@ -448,7 +472,7 @@ it.each([
   vi.mocked(fetch).mockResolvedValue(response(options([department], 'department', bad)));
   renderPage(); expect(await screen.findByRole('alert')).toHaveTextContent('目录读取失败');
   expect(screen.queryByRole('button', { name: /^选择 / })).toBeNull();
-  expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled(); expect(posts()).toHaveLength(0);
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled(); expect(posts()).toHaveLength(0);
 });
 it('P2 freezes_and_retries_same_submission and prevents duplicate pending sends', async () => {
   const pending = deferred<Response>(); await ready();
@@ -477,7 +501,7 @@ it('P3 confirms replay and requires explicit new intent after success', async ()
   publish(); expect(await screen.findByRole('status', { name: '交办状态' })).toHaveTextContent('已确认原提交，共 1 条工作事项');
   publish(); expect(posts()).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: '继续创建' }));
-  expect(screen.getByLabelText('标题')).toBeEnabled(); expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled();
+  expect(screen.getByLabelText('标题')).toBeEnabled(); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
 });
 it.each(['success', 'error'])('P4 discards_old_identity_results %s', async (kind) => {
   const client = new QueryClient(); const oldGeneration = useAuthStore.getState().generation;
@@ -488,7 +512,7 @@ it.each(['success', 'error'])('P4 discards_old_identity_results %s', async (kind
   await act(async () => pending.resolve(kind === 'success' ? response(receipt()) : response({ detail: { code: 'dispatch_target_not_found', message: 'private' } }, 404)));
   expect(screen.getByLabelText('标题')).toHaveValue('');
   expect(screen.queryByRole('status', { name: '交办状态' })).toBeNull(); expect(screen.queryByText(/先前提交/)).toBeNull();
-  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toHaveTextContent('尚未选择对象');
+  expectNoTargets();
   expect(client.getQueryState(['work-objects', oldGeneration])?.isInvalidated).toBe(false);
 });
 it('P5 saves content without selected targets or submission state', async () => {
@@ -529,7 +553,7 @@ it('P8 refreshes_work_objects_after_confirmed_publish for only current generatio
 it('P9 edits_after_definite_rejection', async () => {
   await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'dispatch_target_not_found', message: 'synthetic' } }, 404));
   publish(); await screen.findAllByRole('alert'); expect(screen.getByLabelText('标题')).toBeEnabled();
-  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取' }));
   await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: '改正后标题' } }); publish(); await screen.findByRole('status', { name: '交办状态' });
   expect(posts()[0]![1]!.headers).not.toEqual(posts()[1]![1]!.headers);
   expect(JSON.parse(String(posts()[1]![1]!.body)).title).toBe('改正后标题');
@@ -538,7 +562,7 @@ it('P9 retries_after_directory_recovery with original frozen body', async () => 
   await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }, 503));
   publish(); await screen.findAllByRole('alert');
   expect(screen.getByRole('button', { name: '重试原请求' })).toBeEnabled();
-  expect(screen.getByRole('button', { name: '重新读取目录' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '重新读取' })).toBeDisabled();
   expect(posts()).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: '重试原请求' })); await screen.findByRole('status', { name: '交办状态' });
   expect(posts()[0]![1]).toEqual(posts()[1]![1]);
@@ -552,9 +576,11 @@ it('T2 posts_time_and_empty_reminders and does not restore cancelled reminders',
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: '新任务' } });
   fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-09-12T12:00' } });
   fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '' } });
-  for (const checkbox of within(screen.getByRole('group', { name: '站内到期提示' })).getAllByRole('checkbox')) expect(checkbox).toBeDisabled();
+  const toggles = () => within(screen.getByRole('group', { name: '站内到期提示' })).getAllByRole('button');
+  expect(toggles()).toHaveLength(4);
+  for (const toggle of toggles()) expect(toggle).toBeDisabled();
   fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-10-01T10:00' } });
-  for (const checkbox of within(screen.getByRole('group', { name: '站内到期提示' })).getAllByRole('checkbox')) expect(checkbox).not.toBeChecked();
+  for (const toggle of toggles()) expect(toggle).toHaveAttribute('aria-pressed', 'false');
   fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '' } });
   publish(); await screen.findByRole('status', { name: '交办状态' }); expect(JSON.parse(String(posts()[1]![1]!.body))).toMatchObject({ due_at: null, reminder_choices: [] });
 });
@@ -569,7 +595,7 @@ it('T3 converts saved content to another browser zone without changing instant',
   vi.spyOn(timeModule, 'browserZone').mockReturnValue('Asia/Shanghai');
   saveDraft(parseDraft({ title: 'saved', dueAt: '2026-09-11T01:30', dueInstant: '2026-09-10T16:30:00Z', dueZone: 'Asia/Tokyo', dueOffset: 'UTC+09:00' }), token());
   renderPage(); await selectDepartment(); expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-11T00:30');
-  fireEvent.change(screen.getByLabelText('办理要求与交付物'), { target: { value: '正文修改' } }); publish();
+  fireEvent.change(screen.getByLabelText('办理要求'), { target: { value: '正文修改' } }); publish();
   await screen.findByRole('status', { name: '交办状态' }); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe('2026-09-10T16:30:00Z');
 });
 it.each(['2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z'])('T5 blocks_dst_until_explicit_choice %s', async (instant) => {
@@ -579,7 +605,8 @@ it.each(['2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z'])('T5 blocks_dst_until_e
   fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-11-01T01:30' } });
   expect(screen.getByLabelText('选择截止时间偏移')).toHaveValue(''); publish(); expect(posts()).toHaveLength(0);
   expect(screen.getByText('时区：America/New_York UTC-04:00 / UTC-05:00')).toBeVisible();
-  fireEvent.mouseDown(screen.getByLabelText('选择截止时间偏移')); fireEvent.click(screen.getByRole('option', { name: instant.includes('05:30') ? 'UTC-04:00' : 'UTC-05:00' })); publish();
+  const offset = screen.getByRole<HTMLOptionElement>('option', { name: instant.includes('05:30') ? 'UTC-04:00' : 'UTC-05:00' });
+  fireEvent.change(screen.getByLabelText('选择截止时间偏移'), { target: { value: offset.value } }); publish();
   await screen.findByRole('status', { name: '交办状态' }); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe(instant);
 });
 
@@ -595,9 +622,9 @@ it.each([
   renderPage(); await selectDepartment();
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: '保留正文' } });
   vi.mocked(fetch).mockImplementation(() => Promise.resolve(response({ detail: { code, message: 'private-response-must-not-be-rendered' } }, status)));
-  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取' }));
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(text));
-  expect(screen.getByLabelText('标题')).toHaveValue('保留正文'); expect(screen.getByRole('button', { name: '发布任务' })).toBeDisabled();
+  expect(screen.getByLabelText('标题')).toHaveValue('保留正文'); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
   expect(document.body.textContent).not.toContain('private-response'); expect(posts()).toHaveLength(0);
 });
 it.each([
@@ -619,7 +646,7 @@ it.each([
 });
 it.each(['GET', 'POST'])('E2 consumes 401 through existing authentication transport %s', async (method) => {
   await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'authentication_required', message: 'private' } }, 401));
-  if (method === 'GET') fireEvent.click(screen.getByRole('button', { name: '重新读取目录' })); else publish();
+  if (method === 'GET') fireEvent.click(screen.getByRole('button', { name: '重新读取' })); else publish();
   await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
   expect(screen.queryByLabelText('标题')).toBeNull(); expect(document.body.textContent).not.toContain('private');
   expect(posts()).toHaveLength(method === 'POST' ? 1 : 0);
@@ -628,7 +655,7 @@ it('C4 restarts opaque cursor chain after snapshot conflict', async () => {
   vi.mocked(fetch).mockResolvedValueOnce(response(options([person], 'user'))).mockResolvedValueOnce(response(options([department], 'department', { has_more: true, next_cursor: 'old-cursor' })));
   await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'organization_directory_snapshot_changed', message: 'synthetic' } }, 409));
   fireEvent.click(screen.getByRole('button', { name: '加载下一页' })); await screen.findByRole('alert');
-  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' })); await screen.findByRole('button', { name: '选择 办公室' });
+  fireEvent.click(screen.getByRole('button', { name: '重新读取' })); await screen.findByRole('button', { name: '选择 办公室' });
   expect(vi.mocked(fetch)).toHaveBeenCalledTimes(4);
   expect(String(vi.mocked(fetch).mock.calls[2]![0])).toContain('cursor=old-cursor');
   expect(String(vi.mocked(fetch).mock.calls[3]![0])).toBe('/api/v1/work-objects/dispatch-options?kind=department&query=&limit=50');
@@ -648,17 +675,17 @@ it('C2 refuses the 101st selected target while allowing exactly 100', async () =
     const cursor = String(url).includes('cursor=');
     return Promise.resolve(response(options(Array.from({ length: 50 }, (_, i) => ({ ...department, department_id: `d${i + (cursor ? 50 : 0)}`, department_display_name: `部门${i + (cursor ? 50 : 0)}` })), 'department', cursor ? {} : { has_more: true, next_cursor: 'second' })));
   });
-  renderPage(); fireEvent.click(screen.getByRole('button', { name: '可选部门' })); fireEvent.click(await screen.findByText('加载下一页'));
+  renderPage(); fireEvent.click(scopeButton('部门')); fireEvent.click(await screen.findByText('加载下一页'));
   await waitFor(() => expect(document.querySelector('button[aria-label="选择 部门99"]')).toBeInTheDocument());
   const candidates = document.querySelectorAll('button[aria-label^="选择 部门"]');
   expect(candidates).toHaveLength(100);
   act(() => { for (const button of candidates) button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-  expect(screen.getByText(/已选择 100 个目标/)).toBeVisible();
+  expect(screen.getByText('100 个对象各收到 1 条工作事项')).toBeVisible();
   vi.mocked(fetch).mockResolvedValueOnce(response(options([{ ...department, department_id: 'd100', department_display_name: '第101个部门' }])));
-  fireEvent.click(screen.getByText('重新读取目录'));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取' }));
   await screen.findByText('第101个部门');
   expect(document.querySelector('button[aria-label="选择 第101个部门"]')).toBeDisabled();
-  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '100个对象' } }); fireEvent.click(screen.getByText('发布任务'));
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '100个对象' } }); fireEvent.click(screen.getByRole('button', { name: '发布' }));
   expect(await screen.findByRole('status', { name: '交办状态' })).toHaveTextContent('已发布，共 100 条工作事项');
   expect(JSON.parse(String(posts()[0]![1]!.body)).targets).toHaveLength(100);
 });
@@ -677,6 +704,6 @@ it('P8 preserves confirmed publication when active list refresh fails', async ()
       : Promise.resolve(response({ detail: { code: 'organization_directory_unavailable', message: 'synthetic' } }, 503)));
     publish(); await waitFor(() => expect(screen.getByRole('status', { name: '交办状态' })).toHaveTextContent('已发布，共 1 条工作事项。列表刷新失败'));
     expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/v1/work-objects')).toBe(true);
-    expect(posts()).toHaveLength(1); expect(screen.queryByRole('button', { name: '发布任务' })).toBeNull();
+    expect(posts()).toHaveLength(1); expect(screen.queryByRole('button', { name: '发布' })).toBeNull();
   } finally { unsubscribe(); }
 });

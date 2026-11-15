@@ -10,6 +10,7 @@ const LazyAuthenticatedAppShell = lazy(() =>
     default: AuthenticatedAppShell,
   })),
 );
+const LazyAccountBindingsPage = lazy(() => import('../features/apps/AccountBindingsPage'));
 const LazyAppsPage = lazy(() => import('../features/apps/AppsPage'));
 const LazyLeaderRosterPage = lazy(() => import('../features/leader-roster/LeaderRosterPage'));
 const LazyMessagesPage = lazy(() => import('../features/messages/MessagesPage'));
@@ -30,6 +31,7 @@ const LazyWorkObjectsPage = lazy(() => import('../pages/WorkObjectsPage'));
 
 export interface LazyRouteComponents {
   LazyAuthenticatedAppShell: ComponentType;
+  LazyAccountBindingsPage: ComponentType;
   LazyAppsPage: ComponentType;
   LazyBindingsPage: ComponentType;
   LazyChatPage: ComponentType;
@@ -48,6 +50,7 @@ export interface LazyRouteComponents {
 /** The production route modules; tests may supply controlled loaders without changing route semantics. */
 export const lazyRouteComponents: LazyRouteComponents = {
   LazyAuthenticatedAppShell,
+  LazyAccountBindingsPage,
   LazyAppsPage,
   LazyBindingsPage,
   LazyChatPage,

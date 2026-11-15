@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpConnectionsPanel } from '../McpConnectionsPanel';
@@ -8,6 +9,10 @@ vi.mock('../../../api/mcp', async (original) => ({
   ...await original<typeof import('../../../api/mcp')>(), listMcpServices: api.services,
   listMcpConnections: api.connections, authorizeMcp: api.authorize, disconnectMcp: api.disconnect,
 }));
+function renderPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}><McpConnectionsPanel /></QueryClientProvider>);
+}
 beforeEach(() => {
   vi.clearAllMocks(); useAuthStore.setState({ generation: 1, status: 'authenticated' });
   api.services.mockResolvedValue([{ service_config_id: 'a', display_name: '业务甲', enabled: true },
@@ -17,7 +22,7 @@ beforeEach(() => {
 describe('MCP connections', () => {
   it.each([undefined, {}, [null], [{ service_config_id: 'a', display_name: '业务甲', enabled: 'true' }]])('fails closed for malformed service response %j', async (response) => {
     api.services.mockResolvedValue(response);
-    render(<McpConnectionsPanel />);
+    renderPanel();
     expect(await screen.findByRole('alert')).toHaveTextContent('暂时读不到连接状态');
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
     expect(screen.queryByText('暂未配置业务服务，请等待管理员提供接入配置。')).not.toBeInTheDocument();
@@ -25,13 +30,13 @@ describe('MCP connections', () => {
   });
   it('fails closed for malformed connection responses', async () => {
     api.connections.mockResolvedValue([{ connection_id: 'synthetic', service_config_id: 'a', state: 'ACTIVE' }]);
-    render(<McpConnectionsPanel />);
+    renderPanel();
     expect(await screen.findByRole('alert')).toHaveTextContent('暂时读不到连接状态');
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
   it('keeps service scope and requires an explicit external authorization click', async () => {
     api.authorize.mockResolvedValue({ authorization_url: 'https://provider.invalid/authorize?state=synthetic' });
-    render(<McpConnectionsPanel />);
+    renderPanel();
     const buttons = await screen.findAllByRole('button', { name: '连接账号' });
     expect(buttons).toHaveLength(2);
     fireEvent.click(buttons[1]!);
@@ -43,7 +48,7 @@ describe('MCP connections', () => {
   it('suppresses late authorization after logout and blocks double clicks', async () => {
     let resolve!: (value: { authorization_url: string }) => void;
     api.authorize.mockReturnValue(new Promise((done) => { resolve = done; }));
-    render(<McpConnectionsPanel />);
+    renderPanel();
     const button = (await screen.findAllByRole('button', { name: '连接账号' }))[0]!;
     fireEvent.click(button); fireEvent.click(button);
     expect(api.authorize).toHaveBeenCalledTimes(1);
@@ -52,7 +57,7 @@ describe('MCP connections', () => {
   });
   it('does not render unsafe links or mistake unavailable data for disconnected', async () => {
     api.authorize.mockResolvedValue({ authorization_url: 'javascript:alert(1)' });
-    render(<McpConnectionsPanel />);
+    renderPanel();
     fireEvent.click((await screen.findAllByRole('button', { name: '连接账号' }))[0]!);
     expect(await screen.findByRole('alert')).toHaveTextContent('操作未确认完成');
     expect(screen.queryByRole('link')).not.toBeInTheDocument();

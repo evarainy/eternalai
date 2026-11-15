@@ -133,6 +133,7 @@ interface AppProps {
 export default function App({ routes = lazyRouteComponents }: AppProps) {
   const {
     LazyAuthenticatedAppShell,
+    LazyAccountBindingsPage,
     LazyAppsPage,
     LazyBindingsPage,
     LazyChatPage,
@@ -236,6 +237,14 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
                   element={(
                     <RouteLoadBoundary label="正在打开页面">
                       <LazyAppsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/settings/bindings"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyAccountBindingsPage />
                     </RouteLoadBoundary>
                   )}
                 />

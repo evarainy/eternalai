@@ -5,6 +5,7 @@ const NAMED_PROTECTED_PATHS = new Set([
   '/chat',
   '/messages',
   '/search',
+  '/settings/bindings',
   '/work-dispatch',
   '/work-objects',
   '/work-object-series',

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Input } from 'antd';
 import { getMcpOperation, listMcpOperations, resumeMcpOperation, safeMcpLink } from '../../api/mcp';
 import type { OperationView, ResumeRequestAction } from '../../generated/mcp/mcp.schemas';
 import { fieldLabel } from '../../contracts/businessLabels';
@@ -65,37 +64,75 @@ function Operation({ generation }: { generation: number }) {
     }
   }
   const reviewUrl = safeMcpLink(operation?.review_url);
-  return <section className={styles.panel} aria-label="查看原操作">
-    <h2>查看原操作</h2>
-    <p className={styles.muted}>选择你在业务平台的原操作，核对动作和参数摘要后继续。不会自动重新提交。</p>
-    <ul aria-label="我的原操作">
-      {operations.map((item) => <li key={item.operation_id}>
-        <Button disabled={busy} onClick={() => { sequence.current++; setReference(item.operation_id); setOperation(item); setError(''); }}>
-          {item.service_name} · {item.action} · {states[item.state]}
-        </Button>
-      </li>)}
-    </ul>
-    <form className={styles.form} onSubmit={(event) => { event.preventDefault(); void run(); }}>
-      <Input aria-label="原操作编号" value={reference} disabled={busy} onChange={(event) => { setReference(event.target.value.trim()); setOperation(undefined); sequence.current++; }} />
-      <Button htmlType="submit" disabled={busy || !/^[a-f0-9]{32}$/.test(reference)}>查询状态</Button>
-    </form>
-    {error && <p role="alert" className={styles.error}>{error}</p>}
-    {operation && <div className={styles.row}>
-      <p role="status">{states[operation.state]}</p>
-      <p>业务平台：{operation.service_name}；操作：{operation.action}</p>
-      <dl aria-label="原参数安全摘要">{Object.entries(operation.argument_preview).map(([field, value]) => <div key={field}><dt>{fieldLabel(field)}</dt><dd>{String(value)}</dd></div>)}</dl>
-      {operation.state === 'VERIFIED_SUCCESS' && operation.result &&
-        <pre aria-label="已核实业务结果">{JSON.stringify(operation.result, null, 2)}</pre>}
-      <p className={styles.muted}>这里只列出部分内容，确认后按原操作的全部内容办理。</p>
-      {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('confirm')}>确认原操作</Button>}
-      {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('cancel')}>取消</Button>}
-      {operation.recovery_action === 'takeover' && <Button disabled={busy} onClick={() => void run('takeover')}>核验重新授权并接管</Button>}
-      {operation.recovery_action === 'recover' && <Button disabled={busy} onClick={() => void run('recover')}>检查中断状态</Button>}
-      {operation.recovery_action === 'read_original' && <Button disabled={busy} onClick={() => void run('reconcile')}>核对原业务结果</Button>}
-      {operation.recovery_action === 'manual_reconcile' && <p className={styles.muted}>请由业务平台核实原操作结果，勿重复创建。</p>}
-      {reviewUrl && <a className={styles.link} href={reviewUrl} target="_blank" rel="noopener noreferrer">前往业务平台本人确认</a>}
-    </div>}
-  </section>;
+  const act = (label: string, action: ResumeRequestAction, primary = false) => (
+    <button
+      className={primary ? 'wb-btn wb-btn-primary wb-btn-sm' : 'wb-btn wb-btn-sm'}
+      disabled={busy}
+      onClick={() => { void run(action); }}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+  return (
+    <section aria-label="查看原操作" className={styles.panel}>
+      <h2>查看原操作</h2>
+      <p className={styles.muted}>选择你在业务平台的原操作，核对动作和参数摘要后继续。不会自动重新提交。</p>
+      <ul aria-label="我的原操作">
+        {operations.map((item) => (
+          <li key={item.operation_id}>
+            <button
+              aria-pressed={operation?.operation_id === item.operation_id}
+              className={styles.pick}
+              disabled={busy}
+              onClick={() => { sequence.current++; setReference(item.operation_id); setOperation(item); setError(''); }}
+              type="button"
+            >
+              {item.service_name} · {item.action} · {states[item.state]}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <form className={styles.form} onSubmit={(event) => { event.preventDefault(); void run(); }}>
+        <label className="wb-field" data-focus-ring="host">
+          <input
+            aria-label="原操作编号"
+            disabled={busy}
+            onChange={(event) => { setReference(event.target.value.trim()); setOperation(undefined); sequence.current++; }}
+            placeholder="原操作编号"
+            type="text"
+            value={reference}
+          />
+        </label>
+        <button className="wb-btn wb-btn-sm" disabled={busy || !/^[a-f0-9]{32}$/.test(reference)} type="submit">查询状态</button>
+      </form>
+      {error ? <p className={styles.error} role="alert">{error}</p> : null}
+      {operation ? (
+        <div className={styles.row}>
+          <p className={styles.state} role="status">{states[operation.state]}</p>
+          <p>业务平台：{operation.service_name}；操作：{operation.action}</p>
+          <dl aria-label="原参数安全摘要">
+            {Object.entries(operation.argument_preview).map(([field, value]) => (
+              <div key={field}><dt>{fieldLabel(field)}</dt><dd>{String(value)}</dd></div>
+            ))}
+          </dl>
+          {operation.state === 'VERIFIED_SUCCESS' && operation.result
+            ? <pre aria-label="已核实业务结果">{JSON.stringify(operation.result, null, 2)}</pre> : null}
+          <p className={styles.muted}>这里只列出部分内容，确认后按原操作的全部内容办理。</p>
+          {operation.recovery_action === 'confirm' ? act('确认原操作', 'confirm', true) : null}
+          {operation.recovery_action === 'confirm' ? act('取消', 'cancel') : null}
+          {operation.recovery_action === 'takeover' ? act('核验重新授权并接管', 'takeover', true) : null}
+          {operation.recovery_action === 'recover' ? act('检查中断状态', 'recover', true) : null}
+          {operation.recovery_action === 'read_original' ? act('核对原业务结果', 'reconcile', true) : null}
+          {operation.recovery_action === 'manual_reconcile'
+            ? <p className={styles.muted}>请由业务平台核实原操作结果，勿重复创建。</p> : null}
+          {reviewUrl ? (
+            <a className={styles.link} href={reviewUrl} rel="noopener noreferrer" target="_blank">前往业务平台本人确认</a>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function validOperation(value: unknown): value is OperationView {

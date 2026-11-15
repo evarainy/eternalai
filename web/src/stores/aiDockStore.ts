@@ -85,6 +85,12 @@ interface AIDockState {
   sessionContextMode: AIDockSessionContextMode;
   sessionId: string | null;
   transcript: TranscriptEntry[];
+  /**
+   * 助手页的对话层是否摊开。用户收起后回到案头，对话还在；再发一句话或新开对话时重新摊开。
+   * 放在这里是为了换页再回来仍记得用户的选择。
+   */
+  chatSheetOpen: boolean;
+  setChatSheetOpen: (open: boolean) => void;
   confirmationResults: Record<string, UserActionOutcome>;
   collection: PendingCollection | null;
   applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
@@ -153,6 +159,8 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   sessionContextMode: 'page',
   sessionId: null,
   transcript: [],
+  chatSheetOpen: true,
+  setChatSheetOpen: (chatSheetOpen) => set({ chatSheetOpen }),
   confirmationResults: {},
   collection: null,
   applyConfirmationResult: (sessionId, responseId, result) =>
@@ -171,7 +179,10 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       };
     }),
   appendTranscript: (entry) =>
-    set((state) => ({ transcript: [...state.transcript, entry] })),
+    set((state) => ({
+      transcript: [...state.transcript, entry],
+      chatSheetOpen: entry.role === 'user' ? true : state.chatSheetOpen,
+    })),
   settleSheetFill: (responseId, outcome) =>
     set((state) => ({
       transcript: state.transcript.map((entry) =>
@@ -196,6 +207,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
+      chatSheetOpen: true,
       confirmationResults: {},
       collection: null,
     }),
@@ -355,6 +367,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionContextMode: 'general',
       sessionId: newSessionId(),
       transcript: [],
+      chatSheetOpen: true,
       confirmationResults: {},
       collection: null,
     })),
