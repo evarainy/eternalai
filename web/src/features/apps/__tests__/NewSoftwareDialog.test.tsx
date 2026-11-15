@@ -75,14 +75,14 @@ describe('NewSoftwareDialog form', () => {
     renderDialog();
     const css = readSource('../NewSoftwareDialog.module.css');
     const field = /\.field :global\(\.ant-input\),[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(field).toContain('var(--workbench-field-face)');
+    expect(field).toContain('inset 0 0 0 1px var(--line-3)');
     expect(field).toContain('font-size: 17px');
     const focus = /\.field :global\(\.ant-input\):focus,[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(focus).toContain('var(--workbench-field-face-focus)');
+    expect(focus).toContain('inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring)');
     const well = /\.chipWell\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(well).toContain('var(--workbench-field-face)');
+    expect(well).toContain('inset 0 0 0 1px var(--line-3)');
     const wellFocus = /\.chipWell:focus-within\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(wellFocus).toContain('var(--workbench-field-face-focus)');
+    expect(wellFocus).toContain('inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring)');
     expect(screen.getByLabelText('谁能在软件中心看见它').parentElement)
       .toHaveAttribute('data-focus-ring', 'host');
     expect(css).toMatch(/\.field \.chipInput:global\(\.ant-input\):focus\s*\{[^}]*box-shadow: none !important/);
