@@ -30,7 +30,12 @@ from app.api.v1.work_objects import (
     OA_PENDING_WORKFLOWS_CAPABILITY_ID,
     WorkObjectService,
 )
-from app.background_jobs import BackgroundJobService, build_job_kinds, oa_pending_report_kind
+from app.background_jobs import (
+    BackgroundJobService,
+    build_job_kinds,
+    build_oa_session_probe,
+    oa_pending_report_kind,
+)
 from app.config import (
     MCP_TLS_CA_OAUTH_ENDPOINTS,
     ProductionSettings,
@@ -1146,6 +1151,17 @@ def build_production_components(
             files=file_artifacts,
             identity_mapping=resolved_identity_mapping,
             document_qa=document_qa,
+            oa_session_probe=(
+                build_oa_session_probe(
+                    credential_store,
+                    OASessionHeartbeat(
+                        base_url=settings.oa_base_url,
+                        heartbeat_path=settings.oa_heartbeat_path,
+                        timeout_seconds=settings.oa_timeout_seconds,
+                    ),
+                )
+                if settings.oa_read_adapter_mode == "live" else None
+            ),
         )
         if file_artifacts is not None else None
     )

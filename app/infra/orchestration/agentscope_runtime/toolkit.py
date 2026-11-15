@@ -708,7 +708,7 @@ class ProposeSheetFill(_ControlTool):
             " sheets=%s skipped=%s",
             sum(mapping.last_row - mapping.first_row + 1 for mapping in plan.mappings),
             len(plan.mappings),
-            len(proposal.skipped_sheets),
+            len(plan.skipped_sheets),
         )
         ledger.terminal = SheetFillProposed(plan.model_dump(mode="json"))
         halt_tool_use(_agent_state, "turn_terminal")

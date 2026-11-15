@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime
 from time import monotonic
 from typing import Any
@@ -27,6 +27,8 @@ from app.background_jobs import (
     JobExecution,
     JobKindSpec,
     JobOutcome,
+    OASessionProbe,
+    build_oa_session_probe,
     oa_pending_report_kind,
 )
 from app.config import OAReportWorkerSettings
@@ -50,7 +52,6 @@ from app.infra.spreadsheets.oa_pending_report import (
 from app.ports.background_jobs import BackgroundJobError, BackgroundJobRunOwner
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.credential_binding import OASessionHeartbeatResult
 from app.ports.file_artifacts import XLSX_MEDIA_TYPE, ChunkWriter, FileArtifactError
 from app.ports.request_context import RequestOrgContext
 
@@ -65,7 +66,7 @@ _FAILURES = {
     "upstream_permission_denied": "oa_forbidden",
 }
 # One heartbeat with the requester's own saved Session; None when it proves nothing.
-WorkerSessionProbe = Callable[[BackgroundJobRunOwner], Awaitable[OASessionHeartbeatResult | None]]
+WorkerSessionProbe = OASessionProbe
 
 
 class _PendingOnlyRegistry:
@@ -249,30 +250,16 @@ def build_worker_session_probe(
 ) -> WorkerSessionProbe:
     """Read-only liveness check of the requester's own OA Session: never logs in or renews."""
 
-    credential_store = PostgreSQLCredentialStore(
-        session_factory=sessions, encryption_key=settings.credential_encryption_key
+    return build_oa_session_probe(
+        PostgreSQLCredentialStore(
+            session_factory=sessions, encryption_key=settings.credential_encryption_key
+        ),
+        OASessionHeartbeat(
+            base_url=settings.oa_read.oa_base_url,
+            heartbeat_path=settings.oa_heartbeat_path,
+            timeout_seconds=settings.oa_read.oa_timeout_seconds,
+        ),
     )
-    heartbeat = OASessionHeartbeat(
-        base_url=settings.oa_read.oa_base_url,
-        heartbeat_path=settings.oa_heartbeat_path,
-        timeout_seconds=settings.oa_read.oa_timeout_seconds,
-    )
-
-    async def probe(owner: BackgroundJobRunOwner) -> OASessionHeartbeatResult | None:
-        session = None
-        try:
-            session = await credential_store.load(owner.ai_user_id, "oa", tenant_id=owner.tenant_id)
-            result = None if session is None else await heartbeat(session)
-        except Exception as error:
-            # An unreadable credential or unreachable OA proves nothing about expiry.
-            _LOGGER.info("oa_heartbeat_unavailable exception_type=%s", type(error).__name__)
-            return None
-        finally:
-            session = None
-        _LOGGER.info("oa_heartbeat result=%s", result)
-        return result
-
-    return probe
 
 
 def build_worker_pending_gateway(

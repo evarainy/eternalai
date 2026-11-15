@@ -892,7 +892,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 欠债 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 普通说法下模型提案的完整性不稳定：有时只映射一个工作表（已关闭）；OA 会话失效时会先去查询（保留） | glm-4.7 的工具选择不稳定；PR #278 要求逐表交代后，普通说法新会话连续 3 次映射全部工作表；“会话失效时先去查询”未改 | 无 | 工具命中率改进时 | 映射完整性已满足；先查询行为另行实测改善 | 本 PR 验收 S1 记录；PR #278 F2-2 |
+| 普通说法下模型提案的完整性不稳定：有时只映射一个工作表（已关闭）；OA 会话失效时会先去查询（已关闭） | glm-4.7 的工具选择不稳定；PR #278 要求逐表交代后，普通说法新会话连续 3 次映射全部工作表；`P2-CHAT-SHEETFILL-POLISH-001` 改为提案阶段由系统只读心跳一次判定 OA 会话，失效即不出确认卡并提示重新授权，不再依赖模型先去查询 | 无 | `P2-CHAT-SHEETFILL-POLISH-001`（已完成） | 已满足；失效分支的真实验证见该棒新增欠债 | 本 PR 验收 S1 记录；PR #278 F2-2；`app/sheet_fill.py::SheetFillAdmission.propose` |
 | 干净结果表未做：表格含图表、图片等对象时直接拒绝 | 首版范围收窄（PLAN §7 P1-6） | 无 | 业务出现带对象的表格时 | 实现“干净结果表 + 原表” | PLAN §7 |
 | 表头固定为第 1 行 | 防止数据行进入模型（PLAN §7 P1-4） | 无 | 业务需要其他表头位置时 | 支持由用户指定表头行 | PLAN §7 |
 | 文档问答逐题串行，较慢（9 题约 25–80 秒） | 首版简单实现 | 无 | 题量变大时 | 并发或批量问答 | worker 日志 |
@@ -908,7 +908,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 欠债 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 确认卡不显示被跳过的工作表 | skipped_sheets 不进入 plan 合同，首版不改前端 | 无 | 用户反馈看不到哪些表没填时 | 卡片列出跳过的工作表 | PR #278 F2 |
+| 确认卡不显示被跳过的工作表（已关闭） | `P2-CHAT-SHEETFILL-POLISH-001` 把 `skipped_sheets` 纳入 plan 合同（无跳过项时不出现，保持旧幂等指纹），确认卡列出「这次不填的工作表」 | 无 | `P2-CHAT-SHEETFILL-POLISH-001`（已完成） | 已满足：2026-11-16 真实验收确认卡列出不填的工作表，确认后作业成功 | PR #278 F2；`app/sheet_fill.py::SheetFillPlan`、`web/src/features/background-jobs/SheetFillPlanCard.tsx` |
 | coverage 拒绝在日志中与其他 `sheet_fill_proposal_invalid` 共用同一个 code | 只记计数与 code，首版不细分 | 无 | 需要统计拒绝原因时 | 日志区分原因 | `toolkit.py::ProposeSheetFill._rejected` |
 
 ### IM 自建前端、代理 B 与 V1 多来源新增欠债（2026-11-11）
@@ -961,6 +961,12 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | IM 回归的遗留与误发的合成消息 | 验收脚本一度把群会话误当成甲乙单聊，10 条带「WBACC」标记的合成消息发进了测试 Zulip 的一个群（雨爷 2026-11-13 定：测试环境，保留）；修正并核对收件范围后重验，第 5 节五项通过。遗留：联系人、搜索等面板的加载中、空、出错三种状态未逐一触发；同一条消息连续第二次点「返回原消息」时按钮点击超时，只作观察，是否与外壳改版有关未验证（本分支未改 IM 内部代码） | 无 | 下一次 IM 联合验收 | 三种状态各触发一次并核对；复现并判定「连续第二次返回原消息」的现象 | 仓库外 `workbench-ui-20261112/env/ACCEPTANCE_REPORT.md`「验收脚本问题及边界事故」「第三轮（IM 单聊重验）」 |
 | 真实验收环境缺项 | 验收环境未启用组织目录同步（新建交办的目录选择返回 503，未验）、未启动后台 worker；验收账号当前分类无事项，详情抽屉与时间线点选未实测；流畅度没有帧率实测；目标浏览器下限 Chrome 130 未在该版本实测（本机 Chrome 157） | 具备目录同步与 worker 的验收环境；Electron 封装 | 目标机 Docker 阶段验收 | 在目录同步可用的环境完成新建交办全流程；有事项的账号验详情抽屉与时间线；目标机实测滚动与切页帧率及最低浏览器版本 | 仓库外 `workbench-ui-20261112/env/ACCEPTANCE_REPORT.md`「已知环境缺项与未验证项」 |
 | 视觉裁决未登记 | 「墨、纸、印」方向、其推翻的 2026-09-02 / 09-04 / 11-11 旧视觉裁决，以及「按钮与输入框边线照 v7、不再要求 3:1」均为雨爷 2026-11-13 已决，尚未写入 DECISIONS | 无 | 后续 GOV-SYNC 棒 | `docs/phase2/DECISIONS.md` 登记该裁决及被推翻条目 | 仓库外登记稿 `DECISIONS_登记稿_20261113.md` |
+
+### 填表体验小修 `P2-CHAT-SHEETFILL-POLISH-001` 新增欠债（2026-11-16）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 提案阶段 OA 会话失效分支未真实验证 | 2026-11-16 甲乙丙三个账号保存的 OA 会话均有效（正常登录会保存新会话），只验证了有效分支；不为制造失效去解绑、改库或登出 OA | 无 | 本人 OA 会话自然失效时 | 已绑定但会话失效的账号上传表格请求填表，不出确认卡、提示重新授权 OA、日志 code=`oa_session_expired` | `app/background_jobs.py::oa_binding_refusal`、`::build_oa_session_probe`；仓库外 `chat-polish-20261115/ACC_r2.md` |
 
 ### 工作台前端改版第二棒 `P2-FE-WORKBENCH-V4-002` 新增欠债（2026-11-14）
 

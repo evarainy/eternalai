@@ -16,11 +16,20 @@ from collections.abc import Mapping
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictInt,
+    StrictStr,
+    model_serializer,
+)
 
 from app.background_jobs import (
     JobHandler,
     JobKindSpec,
+    OASessionProbe,
     executed_by_worker,
     oa_binding_refusal,
 )
@@ -70,6 +79,7 @@ _INVALID_MESSAGES = {
     "fill_column": "fills 的列必须是第 1 行表头非空的列字母，互不重复且不能等于 key_column。",
     "field": "field 不在所选来源的可填字段内。",
     "attachment": "attachment_id 不是本轮附件。",
+    "skipped": "skipped_sheets 只能列该附件里没有放进 mappings 的工作表名称，且不能重复。",
     "coverage": (
         "untrusted_attachments 中还有行数大于 1 的工作表既不在 mappings 也不在 skipped_sheets："
         "有待办标题列的用 oa_pending、有问题列的用 document 放进 mappings，"
@@ -128,6 +138,17 @@ class SheetFillPlan(_Strict):
     sha256: StrictStr = Field(pattern=_SHA256_HEX)
     filename: StrictStr = Field(min_length=1, max_length=255)
     mappings: tuple[SheetFillMapping, ...] = Field(min_length=1, max_length=MAX_MAPPINGS)
+    skipped_sheets: tuple[StrictStr, ...] = Field(default=(), max_length=100)
+
+    @model_serializer(mode="wrap")
+    def _omit_no_skipped(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # The dump feeds the job's idempotency fingerprint: a plan without skipped sheets
+        # must serialize exactly as before the field existed, so earlier confirmations
+        # still replay instead of conflicting.
+        data: dict[str, Any] = handler(self)
+        if not self.skipped_sheets:
+            data.pop("skipped_sheets", None)
+        return data
 
 
 def parse_sheet_fill_plan(raw: Mapping[str, Any]) -> BaseModel:
@@ -160,7 +181,7 @@ class SheetFillProposal(BaseModel):
 
     attachment_id: UUID
     mappings: list[SheetFillProposalMapping] = Field(min_length=1, max_length=MAX_MAPPINGS)
-    # Chat proposals only: sheets the model deliberately leaves blank (not part of the plan).
+    # Sheets the model deliberately leaves blank, preserved in the confirmation plan.
     skipped_sheets: list[StrictStr] = Field(default_factory=list, max_length=100)
 
 
@@ -296,12 +317,19 @@ def validate_plan(proposal: SheetFillProposal, inspection: ChatInputInspection) 
         ))
     if questions > DOCUMENT_MAX_QUESTIONS:
         raise SheetFillRejected("sheet_fill_too_many_rows", _TOO_MANY_ROWS_MESSAGE)
+    mapped = {mapping.sheet for mapping in mappings}
+    skipped = proposal.skipped_sheets
+    if len(set(skipped)) != len(skipped) or any(
+        name not in sheets or name in mapped for name in skipped
+    ):
+        raise _invalid("skipped")
     return SheetFillPlan(
         plan_version=1,
         artifact_id=descriptor.artifact_id,
         sha256=inspection.sha256,
         filename=descriptor.filename,
         mappings=tuple(mappings),
+        skipped_sheets=tuple(proposal.skipped_sheets),
     )
 
 
@@ -321,6 +349,7 @@ def _require_coverage(proposal: SheetFillProposal, inspection: ChatInputInspecti
 def proposal_from_plan(plan: SheetFillPlan) -> SheetFillProposal:
     return SheetFillProposal(
         attachment_id=plan.artifact_id,
+        skipped_sheets=list(plan.skipped_sheets),
         mappings=[
             SheetFillProposalMapping(
                 sheet=mapping.sheet,
@@ -340,6 +369,7 @@ def proposal_from_plan(plan: SheetFillPlan) -> SheetFillProposal:
 
 _SOURCE_REFUSAL_MESSAGES = {
     "oa_unbound": "用户尚未在软件中心授权 OA，不能用 OA 待办填表；请提示用户先授权 OA。",
+    "oa_session_expired": "OA 登录已失效，不能用 OA 待办填表；请提示用户到软件中心重新授权 OA。",
     "oa_unavailable": "OA 暂不可用，不能用 OA 待办填表；请提示用户稍后重试。",
     "sheet_fill_document_forbidden": "当前用户不能使用固定文档问答填表。",
 }
@@ -354,10 +384,12 @@ class SheetFillAdmission:
         files: FileArtifactService,
         identity_mapping: IdentityMappingPort | None,
         document_qa: DocumentQAService | None,
+        oa_session_probe: OASessionProbe | None = None,
     ) -> None:
         self._files = files
         self._identity_mapping = identity_mapping
         self._document_qa = document_qa
+        self._oa_session_probe = oa_session_probe
 
     async def _inspect(
         self, principal: Principal, session_id: str, artifact_id: UUID
@@ -372,7 +404,13 @@ class SheetFillAdmission:
                 "sheet_fill_source_changed", _SOURCE_CHANGED_MESSAGE
             ) from None
 
-    async def _source_refusal(self, principal: Principal, plan: SheetFillPlan) -> str | None:
+    async def _source_refusal(
+        self,
+        principal: Principal,
+        plan: SheetFillPlan,
+        *,
+        session_probe: OASessionProbe | None = None,
+    ) -> str | None:
         sources = {mapping.source for mapping in plan.mappings}
         if "document" in sources and (
             self._document_qa is None
@@ -382,7 +420,9 @@ class SheetFillAdmission:
         ):
             return "sheet_fill_document_forbidden"
         if "oa_pending" in sources:
-            return await oa_binding_refusal(self._identity_mapping, principal)
+            return await oa_binding_refusal(
+                self._identity_mapping, principal, session_probe=session_probe
+            )
         return None
 
     async def propose(
@@ -391,7 +431,9 @@ class SheetFillAdmission:
         inspection = await self._inspect(principal, session_id, proposal.attachment_id)
         plan = validate_plan(proposal, inspection)
         _require_coverage(proposal, inspection)
-        refused = await self._source_refusal(principal, plan)
+        refused = await self._source_refusal(
+            principal, plan, session_probe=self._oa_session_probe
+        )
         if refused is not None:
             raise SheetFillRejected(refused, _SOURCE_REFUSAL_MESSAGES[refused])
         return plan

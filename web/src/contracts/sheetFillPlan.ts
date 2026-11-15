@@ -29,6 +29,8 @@ export interface SheetFillPlan {
   readonly sha256: string;
   readonly filename: string;
   readonly mappings: readonly SheetFillMapping[];
+  /** Sheets this plan deliberately leaves blank; shown on the card, resubmitted unchanged. */
+  readonly skipped_sheets: readonly string[];
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -87,10 +89,16 @@ function mapping(value: unknown): SheetFillMapping | null {
 
 /** Strict plan v1 check; null for anything else. */
 export function parseSheetFillPlan(value: unknown): SheetFillPlan | null {
-  if (!isObject(value) || !hasExactKeys(
-    value, ['plan_version', 'artifact_id', 'sha256', 'filename', 'mappings'],
-  )) return null;
+  // The server omits `skipped_sheets` when nothing is skipped (and older plans never had it);
+  // a missing key means none skipped, a present key must be a list of sheet names.
+  if (!isObject(value)) return null;
+  const hasSkipped = Object.prototype.hasOwnProperty.call(value, 'skipped_sheets');
+  const keys = ['plan_version', 'artifact_id', 'sha256', 'filename', 'mappings'];
+  if (!hasExactKeys(value, hasSkipped ? [...keys, 'skipped_sheets'] : keys)) return null;
   const { plan_version: version, artifact_id: artifactId, sha256, filename, mappings } = value;
+  const skipped = hasSkipped ? value.skipped_sheets : [];
+  if (!Array.isArray(skipped) || skipped.length > 100
+      || !skipped.every((sheet: unknown) => typeof sheet === 'string')) return null;
   if (version !== 1 || typeof artifactId !== 'string' || !UUID.test(artifactId)
       || typeof sha256 !== 'string' || !SHA256.test(sha256) || !text(filename, 255)
       || !Array.isArray(mappings) || mappings.length < 1 || mappings.length > 5) return null;
@@ -100,6 +108,6 @@ export function parseSheetFillPlan(value: unknown): SheetFillPlan | null {
   if (sheets.size !== parsed.length) return null;
   return {
     plan_version: 1, artifact_id: artifactId, sha256, filename,
-    mappings: parsed as SheetFillMapping[],
+    mappings: parsed as SheetFillMapping[], skipped_sheets: skipped as string[],
   };
 }
