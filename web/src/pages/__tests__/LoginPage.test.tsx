@@ -164,7 +164,7 @@ describe('LoginPage', () => {
 
   /*
    * 登录页挂在 `ProtectedRoute` 之外、不经过 `AppShell`，玻璃换皮曾整个漏掉它。下面钉死它自己那一屏
-   * 的形态：品牌标识 + 标题 + 一句副标题，照 2026-11-14 v7 版式（左墨右纸）；标签去掉 OA 前缀（雨爷
+   * 的形态：品牌标识、产品名与登录标题；本轮按雨爷要求去掉副标题与凭证说明。标签去掉 OA 前缀（雨爷
    * 2026-09-03 明确要求，优先于画板上的「OA 账号」「OA 密码」）；不出现 2026-09-02 已全站移除的内线
    * 电话字样。
    */
@@ -174,7 +174,8 @@ describe('LoginPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: '登录' })).toBeInTheDocument();
     expect(screen.getByText('EternalAI')).toBeInTheDocument();
     expect(screen.getByText('办事工作台')).toBeInTheDocument();
-    expect(screen.getByText('用你的 OA 账号和密码')).toBeInTheDocument();
+    expect(screen.queryByText('用你的 OA 账号和密码')).not.toBeInTheDocument();
+    expect(screen.queryByText('登录信息只用于这一次 OA 验证，提交后立即清除。')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('OA 登录标识')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('OA 密码')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('内线');

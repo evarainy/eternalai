@@ -1,46 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from 'antd';
-import { authorizeMcp, disconnectMcp, listMcpConnections, listMcpServices, safeMcpAuthorizationLink } from '../../api/mcp';
+import { useQueryClient } from '@tanstack/react-query';
+import { authorizeMcp, disconnectMcp, safeMcpAuthorizationLink } from '../../api/mcp';
 import type { ConnectionView, ServiceView } from '../../generated/mcp/mcp.schemas';
 import { MCP_CONNECTIONS_ANCHOR } from '../../contracts/runtimeProjection';
+import { Icon } from '../../shared/ui/Icon';
 import { useAuthStore } from '../../stores/authStore';
-import styles from './McpPanels.module.css';
+import {
+  CONNECTION_LABELS, connectionHeld, connectionLight, serviceAccountsQueryKey, useServiceAccounts,
+} from './serviceAccounts';
+import type { ServiceAccounts } from './serviceAccounts';
+import styles from './Systems.module.css';
 
-const labels: Record<string, string> = {
-  ACTIVE: '已连接', AUTHORIZING: '等待授权', PENDING_IDENTITY: '等待确认账号对应关系',
-  DISCONNECTED: '已断开', REVOKED: '授权已撤销', EXPIRED: '授权已过期',
-};
-
-function validServices(value: unknown): value is ServiceView[] {
-  return Array.isArray(value) && value.every((item: unknown) => {
-    if (item === null || typeof item !== 'object') return false;
-    const entry = item as Record<string, unknown>;
-    return typeof entry.service_config_id === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(entry.service_config_id)
-      && typeof entry.display_name === 'string' && entry.display_name.length > 0
-      && typeof entry.enabled === 'boolean';
-  }) && new Set(value.map((item) => item.service_config_id)).size === value.length;
-}
-
-function validConnections(value: unknown): value is ConnectionView[] {
-  return Array.isArray(value) && value.every((item: unknown) => {
-    if (item === null || typeof item !== 'object') return false;
-    const entry = item as Record<string, unknown>;
-    return typeof entry.connection_id === 'string' && entry.connection_id.length > 0
-      && typeof entry.service_config_id === 'string' && typeof entry.state === 'string'
-      && Object.prototype.hasOwnProperty.call(labels, entry.state)
-      && (entry.expires_at === null || typeof entry.expires_at === 'string' && Number.isFinite(Date.parse(entry.expires_at)));
-  }) && new Set(value.map((item) => item.service_config_id)).size === value.length;
-}
-
+/**
+ * 业务服务连接：单位提供的每个业务服务一行，一盏灯、一句状态、连接和断开两个按钮。
+ *
+ * 授权在业务平台本人确认：点「连接账号」只拿到一条授权链接，要你再点一次才会离开本页。
+ * 管理员还没配置业务服务时，按钮照样摆在这里，只是点不动，旁边写明原因。
+ */
 export function McpConnectionsPanel() {
   const generation = useAuthStore((state) => state.generation);
   return <Connections key={generation} generation={generation} />;
 }
 
 function Connections({ generation }: { generation: number }) {
-  const [services, setServices] = useState<ServiceView[]>([]);
-  const [connections, setConnections] = useState<ConnectionView[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const query = useServiceAccounts();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [link, setLink] = useState<{ service: string; href: string }>();
@@ -49,25 +33,14 @@ function Connections({ generation }: { generation: number }) {
   const inFlight = useRef(false);
   const section = useRef<HTMLElement>(null);
   const current = (id: number) => live.current && sequence.current === id && useAuthStore.getState().generation === generation;
+  const loading = query.isPending;
 
   useEffect(() => {
     live.current = true;
-    const id = ++sequence.current;
-    Promise.all([listMcpServices(), listMcpConnections()]).then(([items, links]) => {
-      if (!validServices(items) || !validConnections(links)) throw new Error('invalid_connection_view');
-      if (live.current && sequence.current === id && useAuthStore.getState().generation === generation) {
-        setServices(items); setConnections(links); setLoading(false);
-      }
-    }).catch(() => {
-      if (live.current && sequence.current === id && useAuthStore.getState().generation === generation) {
-        setError('暂时读不到连接状态，请稍后重新打开本页。'); setLoading(false);
-      }
-    });
     return () => { live.current = false; };
-  }, [generation]);
+  }, []);
 
-  // The hash target renders only after the async load, so the browser's own
-  // anchor jump finds nothing: scroll once loading has settled.
+  // 从对话里的「去授权」跳过来时带着锚点；这一段读完数据才有内容，读完再滚过去。
   useEffect(() => {
     if (!loading && window.location.hash === `#${MCP_CONNECTIONS_ANCHOR}`) {
       section.current?.scrollIntoView?.({ block: 'start' });
@@ -83,7 +56,12 @@ function Connections({ generation }: { generation: number }) {
       if (connection) {
         await disconnectMcp(connection.connection_id);
         if (!current(id)) return;
-        setConnections((items) => items.map((item) => item.connection_id === connection.connection_id ? { ...item, state: 'DISCONNECTED' } : item));
+        queryClient.setQueryData<ServiceAccounts>(serviceAccountsQueryKey(generation), (accounts) => accounts && {
+          ...accounts,
+          connections: accounts.connections.map((item) => (
+            item.connection_id === connection.connection_id ? { ...item, state: 'DISCONNECTED' } : item
+          )),
+        });
       } else {
         const result = await authorizeMcp(service.service_config_id);
         if (!current(id)) return;
@@ -99,23 +77,72 @@ function Connections({ generation }: { generation: number }) {
     }
   }
 
-  return <section ref={section} id={MCP_CONNECTIONS_ANCHOR} className={styles.panel} aria-label="业务服务连接">
-    <h2>业务服务连接</h2>
-    <p className={styles.muted}>分别连接单位提供的业务服务，授权由业务平台本人确认。</p>
-    {loading && <p role="status">正在读取连接状态…</p>}
-    {error && <p role="alert" className={styles.error}>{error}</p>}
-    {!loading && !error && services.length === 0 && <p className={styles.muted}>暂未配置业务服务，请等待管理员提供接入配置。</p>}
-    {services.map((service) => {
-      const connection = connections.find((item) => item.service_config_id === service.service_config_id);
-      const connected = connection && !['DISCONNECTED', 'REVOKED', 'EXPIRED'].includes(connection.state);
-      return <article className={styles.row} key={service.service_config_id}>
-        <strong className={styles.name}>{service.display_name}</strong>
-        <span>{connection ? labels[connection.state] ?? '状态待核实' : '尚未连接'}</span>
-        <Button disabled={busy || !service.enabled} onClick={() => void act(service)}>{connected ? '重新授权' : '连接账号'}</Button>
-        {connected && <Button disabled={busy} onClick={() => void act(service, connection)}>断开连接</Button>}
-        {!service.enabled && <span className={styles.muted}>等待管理员完成接入准备</span>}
-        {link?.service === service.service_config_id && <a className={styles.link} href={link.href} target="_blank" rel="noopener noreferrer">继续前往授权</a>}
-      </article>;
-    })}
-  </section>;
+  // 重读失败时旧数据还留在缓存里：读不准就不摆按钮，不拿旧状态让人连接或断开。
+  const accounts = query.isError ? undefined : query.data;
+  const services = accounts?.services ?? [];
+  const connections = accounts?.connections ?? [];
+
+  return (
+    <section aria-label="业务服务连接" className={styles.services} id={MCP_CONNECTIONS_ANCHOR} ref={section}>
+      {loading ? <p className={styles.bindingFact} role="status">正在读取连接状态…</p> : null}
+      {query.isError ? (
+        <p className={styles.bindingNote} data-tone="error" role="alert">暂时读不到连接状态，请稍后重新打开本页。</p>
+      ) : null}
+      {error ? <p className={styles.bindingNote} data-tone="error" role="alert">{error}</p> : null}
+      {accounts !== undefined && services.length === 0 ? (
+        <article className={styles.service}>
+          <span aria-hidden="true" className={styles.light} data-state="none" />
+          <div className={styles.serviceText}>
+            <b>业务服务</b>
+            <small>暂未配置业务服务，请等待管理员提供接入配置。</small>
+          </div>
+          <div className={styles.serviceActions}>
+            <button className="wb-btn wb-btn-primary wb-btn-sm" disabled type="button">连接账号</button>
+          </div>
+        </article>
+      ) : null}
+      {services.map((service) => {
+        const connection = connections.find((item) => item.service_config_id === service.service_config_id);
+        const held = connectionHeld(connection);
+        return (
+          <article className={styles.service} key={service.service_config_id}>
+            <span aria-hidden="true" className={styles.light} data-state={connectionLight(connection)} />
+            <div className={styles.serviceText}>
+              <b>{service.display_name}</b>
+              <small>
+                {connection ? CONNECTION_LABELS[connection.state] ?? '状态待核实' : '尚未连接'}
+                {service.enabled ? null : ' · 等待管理员完成接入准备'}
+              </small>
+            </div>
+            <div className={styles.serviceActions}>
+              <button
+                className="wb-btn wb-btn-primary wb-btn-sm"
+                disabled={busy || !service.enabled}
+                onClick={() => { void act(service); }}
+                type="button"
+              >
+                {held ? '重新授权' : '连接账号'}
+              </button>
+              {held ? (
+                <button
+                  className="wb-btn wb-btn-sm"
+                  disabled={busy}
+                  onClick={() => { void act(service, connection); }}
+                  type="button"
+                >
+                  断开连接
+                </button>
+              ) : null}
+            </div>
+            {link?.service === service.service_config_id ? (
+              <a className={styles.serviceLink} href={link.href} rel="noopener noreferrer" target="_blank">
+                继续前往授权
+                <Icon name="external" size={15} />
+              </a>
+            ) : null}
+          </article>
+        );
+      })}
+    </section>
+  );
 }

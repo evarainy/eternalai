@@ -3,6 +3,7 @@ import { lazy, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import AntApp from 'antd/es/app';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { startCustomizingHome } from '../features/desk/homeLayout';
 import { leaderRosterQueryKey, readLeaderRoster } from '../features/leader-roster/leaderRosterApi';
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
 import type { CredentialBindingView } from '../generated/credential-bindings/credential-bindings.schemas';
@@ -91,12 +92,11 @@ const LEADER_ROSTER_NAVIGATION: AdminNavigationItem = {
 };
 
 /** 这些弹出层都由窄栏底部的「管理」「设置」和头像打开，共用同一个浮层，一次只开一个。 */
-type ShellPanel = 'admin' | 'system-status' | 'notifications' | 'user';
+type ShellPanel = 'admin' | 'system-status' | 'user';
 
 /** 弹出层的可访问名称；同时用于 `aria-label`。 */
 const PANEL_LABELS: Record<ShellPanel, string> = {
   'admin': '管理页面',
-  'notifications': '通知',
   'system-status': '系统状态',
   'user': '设置',
 };
@@ -508,7 +508,7 @@ export function AppShell() {
             data-active={location.pathname.startsWith('/settings/') ? 'true' : 'false'}
             data-testid="rail-settings"
             onClick={() => togglePanel('user')}
-            title="设置：账号绑定、皮肤、字号、时钟、动效"
+            title="设置：自定义首页、账号绑定、皮肤、字号、时钟、动效"
             type="button"
           >
             <Icon name="gear" size={22} strokeWidth={1.75} />
@@ -565,6 +565,20 @@ export function AppShell() {
                   {`${identity.departmentName ?? DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`}
                 </small>
               </div>
+              <button
+                className={styles.menuRow}
+                data-testid="user-menu-customize-home"
+                onClick={() => {
+                  setOpenPanel(null);
+                  startCustomizingHome();
+                  navigate(AI_ASSISTANT_PATH);
+                }}
+                type="button"
+              >
+                <Icon name="grid" size={18} />
+                <span>自定义首页</span>
+                <em>增删、排列卡片</em>
+              </button>
               <div className={styles.option}>
                 <Icon name="droplet" size={18} />
                 <span>皮肤</span>
@@ -647,16 +661,6 @@ export function AppShell() {
               </Link>
               <button
                 className={styles.menuRow}
-                data-testid="user-menu-notifications"
-                onClick={() => setOpenPanel('notifications')}
-                type="button"
-              >
-                <Icon name="bell" size={18} />
-                <span>通知</span>
-                <em>暂无</em>
-              </button>
-              <button
-                className={styles.menuRow}
                 data-testid="user-menu-system-status"
                 onClick={() => setOpenPanel('system-status')}
                 type="button"
@@ -732,7 +736,7 @@ export function AppShell() {
                 </span>
               </div>
               <p className={styles.popNote}>
-                这里只说各个系统还能不能用。要你办的事在设置里的「通知」。
+                这里只说各个系统还能不能用。要你办的事在首页和工作事项里。
               </p>
               {statusRows.map((row) => (
                 <div
@@ -772,30 +776,6 @@ export function AppShell() {
             </>
           ) : null}
 
-          {openPanel === 'notifications' ? (
-            <>
-              <div className={styles.popHead}>
-                {backToMenu}
-                <h2 className={styles.popTitle}>通知</h2>
-              </div>
-              <div className={styles.popBody}>
-                <p className={styles.popEmpty}>暂无通知。</p>
-                <p className={styles.popHint}>系统还不会给你发提醒。</p>
-                <p className={styles.popHint}>单位消息的新消息与未读，看左侧「消息」上的数字。</p>
-                <p className={styles.popHint}>
-                  要办的事请看
-                  <Link
-                    className={styles.inlineLink}
-                    onClick={() => setOpenPanel(null)}
-                    to={WORK_OBJECTS_PATH}
-                  >
-                    工作事项
-                  </Link>
-                  ；OA 里的通知请直接去 OA 查看。
-                </p>
-              </div>
-            </>
-          ) : null}
         </section>
       )}
 

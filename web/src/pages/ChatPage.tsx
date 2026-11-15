@@ -6,7 +6,8 @@ import { useMutation } from '@tanstack/react-query';
 import { Alert, Button, Checkbox, Space, Typography } from 'antd';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
-import { Desk } from '../features/desk/Desk';
+import { Desk, HomeCustomizeBar } from '../features/desk/Desk';
+import { useHomeLayoutStore } from '../features/desk/homeLayout';
 import { DeliveryComposerButton } from '../features/messages/DeliveryComposer';
 import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
@@ -86,6 +87,7 @@ import {
 } from '../features/chat-upload/chatUploadApi';
 import { useChatAttachments } from '../features/chat-upload/useChatAttachments';
 import type { ChatAttachment } from '../stores/aiDockStore';
+import { AnswerText } from '../shared/ui/AnswerText';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
@@ -535,15 +537,20 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const [browserOptIn, setBrowserOptIn] = useState(false);
   const chatAttachments = useChatAttachments();
   const [attachmentsToggled, setAttachmentsToggled] = useState(false);
-  // 对话是摊在案头上的一张纸：可以收起回到案头，对话还在，随时再摊开。
+  // 对话是摊在首页上的一张纸：可以缩小回到首页，对话还在，随时再摊开。
   const chatSheetOpen = useAIDockStore((state) => state.chatSheetOpen);
   const setChatSheetOpen = useAIDockStore((state) => state.setChatSheetOpen);
   // 「历史对话」是输入框底栏打开的小面板。
   const [historyOpen, setHistoryOpen] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
+  // 自定义首页时输入框让位给操作条，对话纸先缩小。
+  const customizing = useHomeLayoutStore((state) => state.customizing);
+  useEffect(() => {
+    if (customizing) setChatSheetOpen(false);
+  }, [customizing, setChatSheetOpen]);
   const deskRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // 案头上的数字、卡片和快捷指令都只做一件事：把一句现成的话填进输入框，由用户自己发出去。
+  // 首页上的数字、卡片和快捷指令都只做一件事：把一句现成的话填进输入框，由用户自己发出去。
   const askFromDesk = useCallback((question: string) => {
     setDraft(question);
     inputRef.current?.focus();
@@ -1122,7 +1129,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [sheetShown, setChatSheetOpen]);
 
-  // 对话纸摊开时，后面的案头既不进读屏的树，也不能被 Tab 到；组件照常挂着。
+  // 对话纸摊开时，后面的首页既不进读屏的树，也不能被 Tab 到；组件照常挂着。
   useEffect(() => {
     if (deskRef.current !== null) deskRef.current.inert = sheetShown;
   }, [sheetShown]);
@@ -1136,7 +1143,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       {/* 所在页由左侧窄栏高亮表明，标题只留给读屏软件定位，不占版面。 */}
       <h1 className={styles.pageTitle}>AI 助手</h1>
 
-      {/* 案头一直在；对话纸摊开时它退到后面。 */}
+      {/* 首页一直在；对话纸摊开时它退到后面。 */}
       <div className={styles.scroll} ref={deskRef}>
         <div className={styles.deskWrap}>
           <Desk onAsk={askFromDesk} />
@@ -1144,13 +1151,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       </div>
 
       {/*
-        对话纸：摊在案头上的一层。消息只在纸里滚，不带动页面；点纸外、按 Esc 或右上角收起，
-        回到案头。收起只是藏起来，进行中的任务照常跑，所以这一层不卸载。
+        对话纸：摊在首页上的一层。消息只在纸里滚，不带动页面；点纸外、按 Esc 或右上角缩小，
+        回到首页。缩小只是藏起来，进行中的任务照常跑，所以这一层不卸载。
       */}
       {inConversation ? (
         <div className={styles.layer} hidden={!chatSheetOpen}>
           <button
-            aria-label="收起对话，回到案头"
+            aria-label="缩小对话，回到首页"
             className={styles.veil}
             onClick={() => setChatSheetOpen(false)}
             tabIndex={-1}
@@ -1173,13 +1180,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 新对话
               </button>
               <button
-                className="wb-btn wb-btn-sm"
+                aria-label="缩小对话"
+                className="wb-btn wb-btn-quiet wb-btn-icon"
                 onClick={() => setChatSheetOpen(false)}
-                title="收起对话，回到案头（Esc）"
+                title="缩小，回到首页（Esc）"
                 type="button"
               >
-                <Icon name="panel" size={17} />
-                回到案头
+                <Icon name="minus" size={18} strokeWidth={2} />
               </button>
             </header>
             <div
@@ -1236,7 +1243,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                             ))}
                           </ul>
                         ) : null}
-                        <p className={styles.messageText}>{entry.text}</p>
+                        {entry.role === 'assistant'
+                          ? <AnswerText className={styles.messageText} text={entry.text} />
+                          : <p className={styles.messageText}>{entry.text}</p>}
                         {entry.role === 'assistant' && entry.reportJobId !== undefined ? (
                           <ReportJobCard jobId={entry.reportJobId} />
                         ) : null}
@@ -1359,7 +1368,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
         </div>
-        {inConversation && !chatSheetOpen ? (
+        {customizing ? <HomeCustomizeBar /> : null}
+        {inConversation && !chatSheetOpen && !customizing ? (
           <button className={styles.resume} onClick={() => setChatSheetOpen(true)} type="button">
             <span aria-hidden="true" className={styles.resumeDot} data-busy={mutation.isPending ? 'true' : 'false'} />
             <b>回到对话</b>
@@ -1370,7 +1380,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             <Icon name="up" size={15} strokeWidth={2} />
           </button>
         ) : null}
-        {sheetShown ? null : (
+        {/* 快捷指令是开头用的；有了对话以后，这一行的位置让给「回到对话」。 */}
+        {inConversation || customizing ? null : (
           <div aria-label="可以这样问我" className={styles.chips} role="group">
             {STARTER_PROMPTS.map((prompt) => (
               <button key={prompt.key} onClick={() => askFromDesk(prompt.label)} title={prompt.description} type="button">
@@ -1392,6 +1403,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         ) : null}
         <form
           className={`${styles.composer} wb-ring`}
+          hidden={customizing}
           data-focus-ring="host"
           data-open={composerOpen ? 'true' : 'false'}
           onClick={(event) => {

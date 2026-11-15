@@ -1,0 +1,65 @@
+/* 助手回复里的清单：一张描边小卡片，一条一行，超过 5 条在卡片里翻页。 */
+.listCard {
+  margin: 0.45rem 0 0.75rem;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list > li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.6rem 0.95rem;
+  animation: item-in 0.3s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+.list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+@keyframes item-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* 序号用数字字体靠右对齐；没有序号的清单是一个小圆点。 */
+.mark {
+  min-width: 1.3rem;
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--font-num);
+  font-size: 0.933rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mark:empty::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  vertical-align: 0.2em;
+  content: '';
+  background: var(--line-3);
+  border-radius: 50%;
+}
+
+.itemText {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+:global(html[data-fx='lite']) .list > li {
+  animation: none;
+}

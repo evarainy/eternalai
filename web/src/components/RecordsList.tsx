@@ -2,6 +2,8 @@ import type {
   RecordsIncompleteReason,
   RecordsView,
 } from '../contracts/runtimeProjection';
+import { Pager } from '../shared/ui/Pager';
+import { usePaging } from '../shared/ui/paging';
 import styles from './RuntimeViews.module.css';
 
 const LONG_CONTENT_THRESHOLD = 120;
@@ -23,6 +25,10 @@ const navigationMessages = {
 export function RecordsList({ records }: { records: RecordsView }) {
   const heading =
     records.kind === 'pending_workflows' ? '待办记录' : '系统消息';
+  const total = records.items.length;
+  // 一页 5 条，多了在卡片里翻页。
+  const paging = usePaging(total);
+  const { from, to } = paging;
 
   return (
     <section className={styles.panel} aria-label={heading}>
@@ -51,7 +57,7 @@ export function RecordsList({ records }: { records: RecordsView }) {
 
       <ul className={styles.recordList}>
         {records.kind === 'pending_workflows'
-          ? records.items.map((record) => (
+          ? records.items.slice(from, to).map((record) => (
               <li className={styles.record} key={record.todoId}>
                 <h4 className={styles.recordTitle}>{record.title}</h4>
                 <dl className={styles.recordFacts}>
@@ -68,7 +74,7 @@ export function RecordsList({ records }: { records: RecordsView }) {
                 </dl>
               </li>
             ))
-          : records.items.map((record) => (
+          : records.items.slice(from, to).map((record) => (
               <li className={styles.record} key={record.messageId}>
                 <h4 className={styles.recordTitle}>{record.title}</h4>
                 <dl className={styles.recordFacts}>
@@ -107,6 +113,8 @@ export function RecordsList({ records }: { records: RecordsView }) {
               </li>
             ))}
       </ul>
+
+      <Pager label={`${heading}分页`} paging={paging} total={total} />
     </section>
   );
 }

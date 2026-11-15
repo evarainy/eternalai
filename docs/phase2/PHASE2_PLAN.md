@@ -966,9 +966,11 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 登录后的页面未做真实验收 | 验收期间（2026-11-14 04:36–09:23）OA 服务端对登录握手不响应，工作台无法登录；对话纸、软件中心、账号绑定、任务交办只有静态评审与既有测试，未在真实环境实测 | OA 恢复可登录 | 本棒合并前补验；合并前仍未恢复则由雨爷决定 | 用 `round2/r2acc.py` 在 5183 以本人会话完成各项只读验收并更新验收报告 | 仓库外 `workbench-ui-20261112/round2/ACCEPTANCE_r1.md` |
-| 软件中心四个业务系统只有占位，OA 方印不免登 | 财务软件、综合业务平台、数据中台、执法办案平台尚无接入代码，雨爷 2026-11-14 定先做占位、后续单独接入；OA 单点登录另行接入 | 各系统的接入代码与地址；OA 单点登录接入 | 待分配 | 四枚方印可点并进入对应系统，OA 方印点开后落在已登录的页面；或确认不接并移除占位 | `web/src/features/apps/AppsPage.tsx::SYSTEMS`、`::openSystem` |
-| 账号绑定页的 OA 账号卡仍是旧组件 | 该卡是提交 OA 密码的表单，重写后须用真实账号验证绑定、解绑、启用自动登录，本棒没有这项授权，故原样嵌入，样式与新页面不一致 | 雨爷对真实绑定与解绑验证的授权 | 待分配（工作台第二期） | OA 账号卡按新版式重写并以真实账号验证三种操作 | `web/src/features/apps/AccountBindingsPage.tsx`、`web/src/components/OACredentialBindingCard.tsx` |
+| 账号设置的写操作未做真实验证 | 软件中心与账号绑定页的账号设置表单（绑定、更新密码、解除绑定、启用自动登录）和业务服务的授权、断开，只有静态评审与既有测试；真实验收按雨爷边界只读 | 雨爷对真实绑定与解绑验证的授权 | 本棒合并前由雨爷决定是否补验 | 以真实账号验证上述操作并更新验收记录 | `web/src/features/apps/PasswordBinding.tsx`、`web/src/features/apps/McpConnectionsPanel.tsx`；仓库外 `workbench-ui-20261112/round2/` |
+| 业务系统与账号绑定方式的对应关系是暂定的 | 财务软件按 `u8` 凭证目标保存账号（后端不验证）、综合业务平台按业务服务连接处理，是实现时的假设；数据中台、执法办案平台只有占位；OA 卡片不免登 | 雨爷确认对应关系；各系统的接入代码与地址；OA 单点登录接入 | 待分配 | 对应关系经确认，各系统卡片可进入对应系统且账号可验证；或确认不接并移除 | `web/src/features/apps/systems.ts::SYSTEMS`、`::openSystem` |
+| 自定义首页的布局只存在浏览器本地 | 换浏览器或清缓存后恢复默认；按人保存要后端接口，本棒不改后端 | 个人偏好保存接口 | 待分配 | 布局按登录人保存并跨设备一致 | `web/src/features/desk/homeLayout.ts` |
+| 两个已无引用的样式文件待删除 | `AppsPage.module.css`、`AccountBindingsPage.module.css` 在页面重写后不再被引用；删除文件需雨爷专项授权 | 雨爷的删除授权 | 本棒合并前或下一棒 | 两个文件删除 | `web/src/features/apps/AppsPage.module.css`、`web/src/features/apps/AccountBindingsPage.module.css` |
+| 助手回复的排版只认粗体和清单 | 标题、表格、链接等其他写法原样显示 | 无 | 待分配（工作台第二期） | 按实际出现的写法补齐，或确认够用 | `web/src/shared/ui/AnswerText.tsx` |
 | 添加软件对话框、周期任务页其余部分仍用旧样式变量 | 本棒只重写走查点名的页面；对话框样式只是原样拆到独立文件 | 无 | 待分配（工作台第二期） | 两处改为新版式，不再引用 `--workbench-*` 别名 | `web/src/features/apps/NewSoftwareDialog.module.css`、`web/src/features/work-dispatch/WorkObjectSeriesPage.module.css` |
 
 ## 6. P2 不做什么

@@ -355,7 +355,7 @@ describe('per-screen blur-layer budget', () => {
 
   it('keeps the software-centre screen on its floating glass entry', async () => {
     renderScreen('/apps');
-    await screen.findByRole('button', { name: /OA 办公系统/ });
+    await screen.findByText('OA 办公系统', { selector: 'b' });
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
@@ -370,7 +370,7 @@ describe('per-screen blur-layer budget', () => {
    */
   it('adds no blur layer when the create-software dialog covers the screen', async () => {
     renderScreen('/apps');
-    await screen.findByRole('button', { name: /OA 办公系统/ });
+    await screen.findByText('OA 办公系统', { selector: 'b' });
     const before = describeBlurLayers(shellElement());
 
     fireEvent.click(screen.getByRole('button', { name: '添加软件' }));
@@ -418,7 +418,7 @@ describe('per-screen blur-layer budget', () => {
    * 上面那条按文件钉，这一条按**渲染出来的那一屏**钉：主内容区 `<main id="main-content">` 里不许有
    * 模糊层。两条角度不同——文件那条防「新写一条模糊规则」，这条防「把某个大面挪进内容区」。
    *
-   * AI 助手页的案头、线程、输入框与按需展开的历史面板同样不买模糊。
+   * AI 助手页的首页、线程、输入框与按需展开的历史面板同样不买模糊。
    */
   it.each([
     ['/work-dispatch?tab=new', [] as string[]],

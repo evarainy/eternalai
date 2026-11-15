@@ -442,7 +442,7 @@ describe('AppShell primary navigation', () => {
 });
 
 /*
- * 2026-11-11 雨爷决定全站取消顶栏：全局项移到左导航底部的个人栏（头像、姓名、单位、通知铃），点个人栏
+ * 2026-11-11 雨爷决定全站取消顶栏：全局项移到左导航底部的个人栏；本轮设置里的通知入口和面板已删除，点个人栏
  * 弹出菜单（搜索工作事项 Ctrl K、切换身份、风格、系统状态、退出登录），设计稿 `dt/claude-v3/v3-7`。
  * 下面这组断言是原「AppShell topbar」各条在新结构上的等价断言：身份如实、取不到不编、状态靠颜色加文字、
  * 读取三态分开、退出由服务端确认。
@@ -455,7 +455,7 @@ describe('AppShell user bar', () => {
     return screen.getByRole('region', { name: '设置' });
   }
 
-  it('puts admin, settings and avatar in the rail footer and notifications in settings', () => {
+  it('puts admin, settings and avatar in the rail footer and customization in settings', () => {
     renderShell();
     expect(screen.queryByTestId('app-topbar')).not.toBeInTheDocument();
     expect(screen.queryByRole('banner')).not.toBeInTheDocument();
@@ -468,7 +468,8 @@ describe('AppShell user bar', () => {
     expect(within(footer).getByTestId('user-bar-identity')).toBeInTheDocument();
     fireEvent.click(within(footer).getByTestId('rail-settings'));
     expect(screen.getByRole('region', { name: '设置' })).toHaveAttribute('data-panel', 'user');
-    expect(screen.getByTestId('user-menu-notifications')).toHaveTextContent('通知');
+    expect(screen.getByTestId('user-menu-customize-home')).toHaveTextContent('自定义首页');
+    expect(screen.queryByTestId('user-menu-notifications')).not.toBeInTheDocument();
   });
 
   it('shows the real name and department in settings and the name on the avatar', async () => {
@@ -565,7 +566,7 @@ describe('AppShell user bar', () => {
     expect(within(admin).getByRole('link', { name: '绑定管理' })).toHaveAttribute('href', '/admin/bindings');
     expect(within(admin).queryByRole('link', { name: '账号绑定' })).toBeNull();
     const menu = openUserMenu();
-    for (const label of ['账号绑定', '皮肤', '字号', '时钟', '动效', '通知', '系统状态', '退出登录']) {
+    for (const label of ['自定义首页', '账号绑定', '皮肤', '字号', '时钟', '动效', '系统状态', '退出登录']) {
       expect(within(menu).getByText(label)).toBeInTheDocument();
     }
     expect(within(menu).getByTestId('user-menu-bindings')).toHaveAttribute('href', '/settings/bindings');
@@ -604,7 +605,6 @@ describe('AppShell user bar', () => {
 
     fireEvent.click(trigger);
     const menu = screen.getByRole('region', { name: '设置' });
-    expect(within(menu).getByTestId('user-menu-notifications')).toHaveTextContent('通知暂无');
     expect(within(menu).getByTestId('system-status-count')).toHaveTextContent('1 个不正常');
     fireEvent.click(within(menu).getByTestId('user-menu-system-status'));
 
@@ -685,20 +685,6 @@ describe('AppShell user bar', () => {
     expect(screen.queryByTestId('user-bar-status-dot')).not.toBeInTheDocument();
   });
 
-  it('explains why the notification panel is empty and what to do instead', () => {
-    renderShell();
-
-    fireEvent.click(screen.getByTestId('user-bar-identity'));
-    fireEvent.click(screen.getByTestId('user-menu-notifications'));
-
-    expect(screen.getByText('暂无通知。')).toBeInTheDocument();
-    expect(screen.getByText('系统还不会给你发提醒。')).toBeInTheDocument();
-    const panel = screen.getByRole('region', { name: '通知' });
-    expect(within(panel).getByRole('link', { name: '工作事项' })).toHaveAttribute(
-      'href',
-      '/work-objects',
-    );
-  });
 });
 
 /*

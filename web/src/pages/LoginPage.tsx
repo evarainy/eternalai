@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api/mutator';
@@ -20,16 +20,46 @@ const LOGIN_UNAVAILABLE_MESSAGE = '认证服务暂时不可用，请稍后重试
 
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'] as const;
 
-/** 写法与外壳顶部的时钟一致。 */
-function todayLine(now: Date): string {
-  return `${now.getMonth() + 1} 月 ${now.getDate()} 日 · ${WEEKDAYS[now.getDay()]}`;
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/** 现在几点几分；每到整分跳一次。 */
+function useMinute(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer: number;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        setNow(new Date());
+        schedule();
+      }, 60_000 - (Date.now() % 60_000));
+    };
+    schedule();
+    return () => window.clearTimeout(timer);
+  }, []);
+  return now;
+}
+
+/** 墨上的大钟：时间、日期、产品名。日期写法与外壳顶部的时钟一致。 */
+function Hero() {
+  const now = useMinute();
+  return (
+    <div className={styles.hero}>
+      <p aria-hidden="true" className={styles.clock}>
+        {pad(now.getHours())}
+        <i>:</i>
+        {pad(now.getMinutes())}
+      </p>
+      <p className={styles.today}>{`${now.getMonth() + 1} 月 ${now.getDate()} 日 · ${WEEKDAYS[now.getDay()]}`}</p>
+      <p className={styles.product}>办事工作台</p>
+    </div>
+  );
 }
 
 /**
- * 登录页：和进去以后是同一副样子——左边是墨，右边是一张纸。
+ * 登录页：一整屏墨，墨上一只大钟，右边浮着一张纸。
  *
- * 墨上只有产品名和今天的日期；纸上只有两个输入框和一枚主按钮。账号密码不进任何状态：提交时
- * 从表单里读出来，随即清空输入框。
+ * 墨上只有产品名、时间和日期，背后两团光缓缓游动；纸上只有两个输入框和一枚主按钮。账号密码不进
+ * 任何状态：提交时从表单里读出来，随即清空输入框。
  */
 export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
@@ -37,11 +67,16 @@ export default function LoginPage() {
     loginid: false, userpassword: false,
   });
   const [errorMessage, setErrorMessage] = useState<string>();
+  const [capsLock, setCapsLock] = useState(false);
   const [sessionNotice] = useState(reauthLoginNotice);
   const markAuthenticated = useAuthStore((state) => state.markAuthenticated);
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
+
+  const watchCapsLock = (event: KeyboardEvent<HTMLInputElement>) => {
+    setCapsLock(event.getModifierState('CapsLock'));
+  };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -93,6 +128,12 @@ export default function LoginPage() {
 
   return (
     <div className={styles.screen}>
+      <div aria-hidden="true" className={styles.backdrop}>
+        <i />
+        <i />
+        <span />
+      </div>
+
       <aside className={styles.ink}>
         <div className={styles.brand}>
           <span className={styles.brandMark}>
@@ -100,16 +141,12 @@ export default function LoginPage() {
           </span>
           <span className={styles.brandName}>EternalAI</span>
         </div>
-        <div className={styles.inkFoot}>
-          <p className={styles.product}>办事工作台</p>
-          <p className={styles.today}>{todayLine(new Date())}</p>
-        </div>
+        <Hero />
       </aside>
 
-      <main className={styles.paper}>
-        <form autoComplete="off" className={styles.form} noValidate onSubmit={handleSubmit}>
+      <main className={styles.stage}>
+        <form autoComplete="off" className={styles.card} noValidate onSubmit={handleSubmit}>
           <h1 className={styles.title}>登录</h1>
-          <p className={styles.lead}>用你的 OA 账号和密码</p>
 
           {sessionNotice !== null && !errorMessage ? (
             <p className={styles.notice} data-tone="warn" role="status">
@@ -126,28 +163,38 @@ export default function LoginPage() {
 
           <label className={styles.field} data-focus-ring="host" data-invalid={missing.loginid ? 'true' : 'false'}>
             <span>账号</span>
-            <input
-              aria-invalid={missing.loginid}
-              autoComplete="off"
-              autoFocus
-              disabled={submitting}
-              name="loginid"
-              onChange={() => setMissing((state) => (state.loginid ? { ...state, loginid: false } : state))}
-              type="text"
-            />
+            <span className={styles.box}>
+              <Icon name="user" size={18} />
+              <input
+                aria-invalid={missing.loginid}
+                autoComplete="off"
+                autoFocus
+                disabled={submitting}
+                name="loginid"
+                onChange={() => setMissing((state) => (state.loginid ? { ...state, loginid: false } : state))}
+                type="text"
+              />
+            </span>
             {missing.loginid ? <em role="alert">请输入账号。</em> : null}
           </label>
           <label className={styles.field} data-focus-ring="host" data-invalid={missing.userpassword ? 'true' : 'false'}>
             <span>密码</span>
-            <input
-              aria-invalid={missing.userpassword}
-              autoComplete="off"
-              disabled={submitting}
-              name="userpassword"
-              onChange={() => setMissing((state) => (state.userpassword ? { ...state, userpassword: false } : state))}
-              type="password"
-            />
+            <span className={styles.box}>
+              <Icon name="lock" size={18} />
+              <input
+                aria-invalid={missing.userpassword}
+                autoComplete="off"
+                disabled={submitting}
+                name="userpassword"
+                onBlur={() => setCapsLock(false)}
+                onChange={() => setMissing((state) => (state.userpassword ? { ...state, userpassword: false } : state))}
+                onKeyDown={watchCapsLock}
+                onKeyUp={watchCapsLock}
+                type="password"
+              />
+            </span>
             {missing.userpassword ? <em role="alert">请输入密码。</em> : null}
+            {capsLock && !missing.userpassword ? <em data-tone="warn" role="status">大写锁定已打开。</em> : null}
           </label>
 
           <button
@@ -158,9 +205,8 @@ export default function LoginPage() {
           >
             {submitting ? <Icon name="retry" size={17} /> : null}
             {submitting ? '正在登录…' : '登录'}
+            {submitting ? null : <Icon className={styles.go} name="right" size={17} />}
           </button>
-
-          <p className={styles.note}>登录信息只用于这一次 OA 验证，提交后立即清除。</p>
         </form>
       </main>
     </div>

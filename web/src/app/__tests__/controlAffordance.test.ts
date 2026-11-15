@@ -220,7 +220,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       '../AppShell.module.css',
       '../AIDock.module.css',
       '../../components/RuntimeViews.module.css',
-      '../../features/apps/AppsPage.module.css',
+      '../../features/apps/Systems.module.css',
       '../../features/apps/NewSoftwareDialog.module.css',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '../../features/work-dispatch/WorkObjectSearchPage.module.css',
@@ -263,7 +263,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
 
   });
 
-  it('自绘输入框保留主题色聚焦边界与外晕，非聚焦为 1px 边界', () => {
+  it('自绘输入框保留主题色聚焦边界与外晕，并核对现役的静息边界', () => {
     expect(token('workbench-field-face')).toContain(
       'inset 0 0 0 1px var(--line-3)',
     );
@@ -274,23 +274,25 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       'var(--workbench-field-face-focus)',
     );
     /*
-     * 2026-11-14 改版：登录页与交办页改用原生输入框（v7 样板），不再经过兼容令牌，直接写同样的两层：
-     * 非聚焦 1px 线条色边框；聚焦时边框换主题色、外加 3px 主题色外晕。
+     * 登录页本轮把图标与 input 包进 .box：浅底加透明细边，悬停显示线条色，焦点边框与外晕由外层承担。
+     * 交办页仍是输入框自己画 1px 线条边与聚焦外晕。
      */
-    for (const [path, base, focus] of [
-      ['../../pages/LoginPage.module.css', '.field > input {', '.field > input:focus {'],
-      ['../../features/work-dispatch/WorkDispatchPage.module.css', '.box {', '.box:focus {'],
+    for (const [path, base, focus, restingBorder] of [
+      ['../../pages/LoginPage.module.css', '.box {', '.box:focus-within {', 'border: 1px solid transparent'],
+      ['../../features/work-dispatch/WorkDispatchPage.module.css', '.box {', '.box:focus {', 'border: 1px solid var(--line-2)'],
     ] as const) {
       const css = readSource(path);
-      expect(rule(css, base), path).toContain('border: 1px solid var(--line-2)');
+      expect(rule(css, base), path).toContain(restingBorder);
       expect(rule(css, focus), path).toContain('border-color: var(--primary)');
       expect(rule(css, focus), path).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
     }
   });
 
-  it('登录页输入框不再用看不见的白色凹槽描边', () => {
+  it('登录页输入框由浅底外框承担悬停与聚焦边界，不使用旧白色凹槽描边', () => {
     const css = readSource('../../pages/LoginPage.module.css');
-    expect(rule(css, '.field > input {')).toContain('border: 1px solid var(--line-2)');
+    expect(rule(css, '.box {')).toContain('background: var(--paper-2)');
+    expect(rule(css, '.box:hover {')).toContain('border-color: var(--line-2)');
+    expect(rule(css, '.box:focus-within {')).toContain('border-color: var(--primary)');
     expect(css).not.toContain('var(--workbench-well-edge)');
   });
 });
@@ -374,7 +376,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
   );
 
   /*
-   * 2026-11-14 v7：交办页与登录页改用原生输入框，聚焦环画在输入框自己身上（主题色边框 + 3px 外晕）。
+   * 交办页的原生输入框自己画环；登录页本轮由包住图标和 input 的 .box 画环（主题色边框 + 3px 外晕）。
    * 这些输入框的外层必须挂 `data-focus-ring="host"`，让全局兜底 outline 让位，聚焦时只剩一圈；
    * 大标题输入框自己不画环，故意不挂，由全局兜底 outline 承担唯一的一圈。
    */
@@ -413,6 +415,10 @@ describe('一个控件同一时刻只画一个焦点环', () => {
 
     const loginTsx = readSource('../../pages/LoginPage.tsx');
     expect(loginTsx.match(/<label className=\{styles\.field\} data-focus-ring="host"/g)).toHaveLength(2);
-    expect(rule(readSource('../../pages/LoginPage.module.css'), '.field > input:focus {')).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
+    expect(loginTsx.match(/<span className=\{styles\.box\}>\s*<Icon[^>]*\/>\s*<input/g)).toHaveLength(2);
+    const loginCss = readSource('../../pages/LoginPage.module.css');
+    expect(rule(loginCss, '.box:focus-within {')).toContain('box-shadow: 0 0 0 3px var(--primary-ring)');
+    expect(rule(loginCss, '.box > input {')).toContain('border: 0');
+    expect(rule(loginCss, '.box > input {')).toContain('outline: 0');
   });
 });

@@ -1,0 +1,613 @@
+/*
+ * 软件中心与账号绑定页共用：系统卡片、指示灯、账号设置。
+ * 卡片是纸面上的实色小卡，依次落下；鼠标移上去微微抬起，方印跟着弹一下。
+ */
+.page {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
+
+.secRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1.2rem;
+  margin: 0.4rem 0.2rem 0.8rem;
+}
+
+/* 图例：四盏灯各是什么意思。 */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.1rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  list-style: none;
+}
+
+.legend > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sec {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.grid {
+  display: grid;
+  align-items: start;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+}
+
+/* ── 系统卡片 ── */
+.card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+  transition: transform 0.25s var(--ease), border-color 0.2s;
+  animation: card-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.card:hover,
+.card[data-open='true'] {
+  border-color: color-mix(in srgb, var(--c) 45%, transparent);
+  box-shadow: 0 2px 4px rgb(16 26 46 / 5%), 0 18px 34px -20px color-mix(in srgb, var(--c) 70%, transparent);
+}
+
+.card:hover {
+  transform: translateY(-3px);
+}
+
+/* 设置卡片摊开时，这张卡片要压在后面几张的上面，也不再跟着鼠标抬起（不然设置卡片会跟着跳）。 */
+.card[data-open='true'] {
+  z-index: 5;
+  transform: none;
+}
+
+/* 卡片主体：点一下进入系统 */
+.enter {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem 0.4rem 1rem 1rem;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--r-card) 0 0 var(--r-card);
+}
+
+.enter:disabled {
+  cursor: default;
+}
+
+/* 单字方印 */
+.mono {
+  display: grid;
+  width: 3.3rem;
+  height: 3.3rem;
+  flex: none;
+  color: #fff;
+  font-size: 1.4rem;
+  font-weight: 800;
+  background: var(--c);
+  border-radius: 1rem;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), inset 0 0 0 1px rgb(255 255 255 / 12%),
+    0 12px 18px -12px var(--c);
+  transition: transform 0.3s var(--spring);
+  place-items: center;
+}
+
+.card:hover .mono {
+  transform: rotate(-4deg) scale(1.06);
+}
+
+/* 还没接入的系统，方印褪一点色。 */
+.card[data-pending='true'] .mono {
+  filter: saturate(0.5);
+  opacity: 0.75;
+}
+
+.cardText {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.2rem;
+}
+
+.cardText > b {
+  overflow: hidden;
+  font-size: 1.067rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem 0.7rem;
+}
+
+.cardMeta > small {
+  color: var(--warn);
+  font-size: 0.8rem;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-2);
+  font-size: 0.867rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.enterMark {
+  flex: none;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s var(--ease);
+  transform: translateX(-4px);
+}
+
+.card:hover .enterMark {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── 指示灯 ── */
+.light {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  flex: none;
+  background: var(--text-3);
+  border-radius: 50%;
+}
+
+.light[data-state='on'] {
+  background: #1fa558;
+  box-shadow: 0 0 0 3px rgb(31 165 88 / 18%), 0 0 10px rgb(31 165 88 / 70%);
+}
+
+/* 亮着的灯外面一圈缓缓散开的光晕：它是活的，系统连着。 */
+.light[data-state='on']::after {
+  position: absolute;
+  content: '';
+  border: 1.5px solid #1fa558;
+  border-radius: 50%;
+  animation: halo 2.4s ease-out infinite;
+  inset: -1px;
+}
+
+@keyframes halo {
+  from {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+.light[data-state='alert'] {
+  background: var(--seal);
+  box-shadow: 0 0 0 3px rgb(201 58 38 / 18%);
+  animation: blink 1.1s ease-in-out infinite alternate;
+}
+
+.light[data-state='warn'] {
+  background: var(--warn-mark);
+  box-shadow: 0 0 0 3px rgb(201 138 10 / 18%);
+}
+
+.light[data-state='off'] {
+  background: none;
+  box-shadow: inset 0 0 0 2px var(--line-3);
+}
+
+.light[data-state='busy'] {
+  background: var(--line-3);
+  animation: blink 0.8s ease-in-out infinite alternate;
+}
+
+.light[data-state='none'] {
+  background: none;
+  border: 1.5px dashed var(--line-3);
+}
+
+@keyframes blink {
+  to {
+    opacity: 0.3;
+  }
+}
+
+/* ── 齿轮与设置卡片 ── */
+.gear {
+  display: grid;
+  width: 2.9rem;
+  flex: none;
+  padding: 0;
+  color: var(--text-3);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 var(--r-card) var(--r-card) 0;
+  transition: color 0.15s, background-color 0.15s;
+  place-items: center;
+}
+
+.gear > svg {
+  transition: transform 0.4s var(--ease);
+}
+
+.gear:hover,
+.gear[aria-expanded='true'] {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.gear:hover > svg,
+.gear[aria-expanded='true'] > svg {
+  transform: rotate(60deg);
+}
+
+.settings {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 8px);
+  right: -1px;
+  left: -1px;
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  background: var(--paper);
+  border-radius: var(--r-card);
+  box-shadow: var(--float), 0 0 0 1px rgb(16 26 46 / 12%);
+  transform-origin: 100% 0;
+  animation: settings-in 0.22s var(--ease) both;
+}
+
+/* 小三角：设置卡片是从齿轮上长出来的。 */
+.settings::before {
+  position: absolute;
+  top: -6px;
+  right: 1.05rem;
+  width: 12px;
+  height: 12px;
+  content: '';
+  background: var(--paper);
+  box-shadow: -1px -1px 0 rgb(16 26 46 / 12%);
+  transform: rotate(45deg);
+}
+
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+
+.settings > h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0;
+  font-size: 0.933rem;
+  font-weight: 800;
+}
+
+/* ── 账号设置表单 ── */
+.binding {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.binding > p {
+  margin: 0;
+}
+
+.bindingField {
+  display: grid;
+  align-items: center;
+  gap: 0.7rem;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
+}
+
+.bindingField > span {
+  color: var(--text-3);
+  font-size: 0.933rem;
+}
+
+.bindingField > input {
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  color: var(--text);
+  font: inherit;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-ctl);
+  outline: 0;
+  transition: border-color 0.15s;
+}
+
+.bindingField > input:hover:enabled {
+  border-color: var(--line-3);
+}
+
+.bindingField > input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+
+.bindingField > input:disabled {
+  background: var(--paper-2);
+}
+
+.bindingField[data-invalid='true'] > input {
+  border-color: var(--seal);
+}
+
+.bindingActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.1rem;
+}
+
+.bindingPending {
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.bindingFact {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-2);
+  font-size: 0.867rem;
+}
+
+.bindingNote {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.867rem;
+  line-height: 1.5;
+  border-radius: var(--r-ctl);
+}
+
+.bindingNote[data-tone='ok'] {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.bindingNote[data-tone='error'] {
+  color: var(--seal);
+  background: var(--seal-soft);
+}
+
+.bindingNote > button {
+  margin-left: 0.5rem;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 业务服务连接：一个服务一行 ── */
+.services {
+  display: grid;
+  gap: 0.6rem;
+  scroll-margin-top: 1rem;
+}
+
+.services > p {
+  margin: 0;
+}
+
+.service {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.7rem;
+}
+
+.service + .service {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.serviceText {
+  display: grid;
+  min-width: 8rem;
+  flex: 1;
+  gap: 0.1rem;
+}
+
+.serviceText > b {
+  font-weight: 700;
+}
+
+.serviceText > small {
+  color: var(--text-3);
+  font-size: 0.867rem;
+  line-height: 1.5;
+}
+
+.serviceActions {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+}
+
+.serviceLink {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 2.3rem;
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  background: var(--primary-soft);
+  border-radius: var(--r-ctl);
+}
+
+.serviceLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── 添加软件 ── */
+.addCard {
+  display: flex;
+  min-height: 5.4rem;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+  background: none;
+  border: 1.5px dashed var(--line-3);
+  border-radius: var(--r-card);
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+  animation: card-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.addCard:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: rgb(36 80 200 / 45%);
+}
+
+.addMark {
+  display: grid;
+  width: 3.3rem;
+  height: 3.3rem;
+  flex: none;
+  border-radius: 1rem;
+  box-shadow: inset 0 0 0 1.5px currentcolor;
+  opacity: 0.6;
+  place-items: center;
+}
+
+.addCard > b {
+  font-size: 1.067rem;
+  font-weight: 600;
+}
+
+/* ── 账号绑定页：一个系统一段，设置直接摊开 ── */
+.rows {
+  display: grid;
+  width: min(880px, 100%);
+  gap: 14px;
+  margin: 0 auto;
+}
+
+.row {
+  display: grid;
+  align-items: start;
+  gap: 1.2rem;
+  padding: 1.1rem 1.2rem;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  grid-template-columns: 15rem minmax(0, 1fr);
+  animation: card-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.rowHead {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.rowHead .mono {
+  width: 2.9rem;
+  height: 2.9rem;
+  font-size: 1.25rem;
+  border-radius: 0.9rem;
+}
+
+.wide {
+  padding: 1.1rem 1.2rem;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-card);
+  animation: card-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+:global(html[data-fx='lite']) :is(.card, .addCard, .row, .wide, .settings, .light, .light::after, .spin) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .addCard,
+  .row,
+  .wide,
+  .settings,
+  .light,
+  .light::after {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

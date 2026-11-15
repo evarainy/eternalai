@@ -1,6 +1,6 @@
 /*
- * 账号绑定页里的两段：业务服务连接、查看原操作。
- * 一段一个标题加一句说明，下面是一行一项的清单；每行是纸面上的一张描边小卡。
+ * 账号绑定页最下面一段：查看原操作。
+ * 一个标题加一句说明，下面是可选的原操作和查询框；选中的一条摊成一张描边小卡。
  */
 .panel {
   display: grid;
@@ -77,9 +77,34 @@
   width: 100%;
 }
 
-.name {
-  min-width: 10rem;
-  flex: 1;
+/* 我的原操作：一条一枚可选的小签。 */
+.pick {
+  min-height: 2.2rem;
+  padding: 0.35rem 0.8rem;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.933rem;
+  text-align: left;
+  cursor: pointer;
+  background: var(--paper-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-ctl);
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+
+.pick:hover:enabled,
+.pick[aria-pressed='true'] {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: rgb(36 80 200 / 35%);
+}
+
+.pick:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.state {
   font-weight: 700;
 }
 
@@ -98,7 +123,7 @@
   gap: 0.6rem;
 }
 
-.form input {
+.form > label {
   min-width: 12rem;
   flex: 1;
 }

@@ -42,7 +42,7 @@ vi.mock('../../generated/me/me', () => ({
   readMeApiV1MeGet: identityMock.readMe,
 }));
 
-// 案头独立取数，不能消耗下面各业务用例专用的 fetch 响应。
+// 首页独立取数，不能消耗下面各业务用例专用的 fetch 响应。
 const deskMock = vi.hoisted(() => ({ listWorkObjects: vi.fn(), readWorkQueue: vi.fn(), getBinding: vi.fn() }));
 vi.mock('../../generated/work-objects/work-objects', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../generated/work-objects/work-objects')>(),
@@ -290,6 +290,13 @@ function storageText(storage: Storage): string {
 beforeEach(() => {
   // Restore before re-establishing the identity response for this test.
   vi.restoreAllMocks();
+  // 本文件验证业务请求和结果，使用本轮提供的轻动效模式，数字直接落到真实值。
+  const previousFx = document.documentElement.dataset.fx;
+  document.documentElement.dataset.fx = 'lite';
+  onTestFinished(() => {
+    if (previousFx === undefined) delete document.documentElement.dataset.fx;
+    else document.documentElement.dataset.fx = previousFx;
+  });
   const emptyWork = { items: [], limit: 200, limit_exceeded: false, oa_sync: { last_success_at: null } };
   deskMock.listWorkObjects.mockResolvedValue(emptyWork);
   deskMock.readWorkQueue.mockResolvedValue(emptyWork);
@@ -1668,7 +1675,7 @@ describe('ChatPage assistant surfaces', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    // 空：案头与快捷指令可用，消息线程尚未出现。
+    // 空：首页与快捷指令可用，消息线程尚未出现。
     expect(screen.getByRole('group', { name: '可以这样问我' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: '办理会话' })).not.toBeInTheDocument();
 

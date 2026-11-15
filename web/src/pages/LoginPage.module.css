@@ -1,24 +1,77 @@
 /*
- * 登录页：外壳之外的独立一屏，但和进去以后是同一副样子——左边是墨，右边是一张纸。
+ * 登录页：外壳之外的独立一屏。一整屏墨（就是 `body` 上那层外框底色，随皮肤变），墨上一只大钟，
+ * 右边浮着一张纸。
  *
- * 墨就是 `body` 上那层外框底色（随皮肤变），这里不再另画；纸是不透明的白面，四角收在墨框里，
- * 尺寸与外壳的内容面一致（四周 8px、圆角 `--r-sheet`）。整屏没有毛玻璃。
+ * 背后两团光缓缓游动，只动 transform，不用模糊滤镜；精简动效时它们停住。整屏没有毛玻璃。
  */
 .screen {
   position: fixed;
   display: grid;
-  padding: 8px;
-  grid-template-columns: minmax(280px, 5fr) minmax(0, 7fr);
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr) min(36rem, 46vw);
+  inset: 0;
+  isolation: isolate;
+}
+
+/* ── 背后的光和点阵 ── */
+.backdrop {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
   inset: 0;
 }
 
-/* ── 墨：只放产品名和今天的日期 ── */
+.backdrop > i {
+  position: absolute;
+  border-radius: 50%;
+}
+
+.backdrop > i:nth-child(1) {
+  top: -26vmax;
+  left: -18vmax;
+  width: 70vmax;
+  height: 70vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--primary) 52%, transparent), transparent);
+  animation: drift-a 24s ease-in-out infinite alternate;
+}
+
+.backdrop > i:nth-child(2) {
+  right: -6vmax;
+  bottom: -30vmax;
+  width: 60vmax;
+  height: 60vmax;
+  background: radial-gradient(closest-side, rgb(86 170 255 / 24%), transparent);
+  animation: drift-b 30s ease-in-out infinite alternate;
+}
+
+@keyframes drift-a {
+  to {
+    transform: translate(9vmax, 7vmax) scale(1.12);
+  }
+}
+
+@keyframes drift-b {
+  to {
+    transform: translate(-11vmax, -8vmax) scale(0.9);
+  }
+}
+
+/* 一层细点阵，往四周淡出：墨面有了纵深。 */
+.backdrop > span {
+  position: absolute;
+  background-image: radial-gradient(color-mix(in srgb, var(--rail-fg-on) 20%, transparent) 1px, transparent 1.5px);
+  background-size: 28px 28px;
+  inset: 0;
+  mask-image: radial-gradient(60% 70% at 28% 62%, #000, transparent);
+}
+
+/* ── 墨：产品名、大钟、日期 ── */
 .ink {
   display: flex;
   min-width: 0;
   flex-direction: column;
   justify-content: space-between;
-  padding: 36px 44px 44px;
+  padding: 44px 24px 60px 64px;
   color: var(--rail-fg-on);
 }
 
@@ -45,85 +98,120 @@
   letter-spacing: 0.08em;
 }
 
-.inkFoot {
-  animation: rise 0.5s var(--ease) both;
-}
-
-.product {
+.hero > p {
   margin: 0;
-  font-size: clamp(2.4rem, 4.2vw, 3.6rem);
-  font-weight: 800;
-  line-height: 1.15;
-  letter-spacing: 0.04em;
+  animation: rise 0.7s var(--ease) both;
 }
 
-.today {
-  margin: 1rem 0 0;
+.clock {
+  font-family: var(--font-num);
+  font-size: clamp(5.5rem, 12vw, 10.5rem);
+  font-weight: 300;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 冒号一秒一亮一暗：这只钟是走着的。 */
+.clock > i {
+  display: inline-block;
+  margin: 0 0.04em;
+  font-style: normal;
+  transform: translateY(-0.06em);
+  animation: tick 2s steps(2, jump-none) infinite;
+}
+
+@keyframes tick {
+  to {
+    opacity: 0.25;
+  }
+}
+
+.hero > .today {
+  margin-top: 1.4rem;
   color: var(--rail-fg);
-  font-size: 1rem;
-  letter-spacing: 0.12em;
+  font-size: 1.133rem;
+  letter-spacing: 0.14em;
+  animation-delay: 0.08s;
 }
 
-/* ── 纸：两个输入框，一枚主按钮 ── */
-.paper {
-  display: grid;
-  min-width: 0;
-  padding: 32px 24px;
-  overflow: auto;
-  background: var(--paper);
-  border-radius: var(--r-sheet);
-  box-shadow: 0 0 0 1px rgb(255 255 255 / 6%), 0 20px 50px -20px rgb(0 0 0 / 50%);
-  place-items: center;
-}
-
-.form {
+.hero > .product {
   display: flex;
-  width: min(24rem, 100%);
-  flex-direction: column;
-  animation: rise 0.4s var(--ease) both;
+  align-items: center;
+  gap: 1.1rem;
+  margin-top: 2.2rem;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  animation-delay: 0.16s;
+}
+
+/* 产品名前面一小段线，进场时从左边长出来。 */
+.product::before {
+  width: 2.6rem;
+  height: 2px;
+  flex: none;
+  content: '';
+  background: currentcolor;
+  border-radius: 1px;
+  transform-origin: 0 50%;
+  animation: draw 0.8s 0.4s var(--ease) both;
+}
+
+@keyframes draw {
+  from {
+    transform: scaleX(0);
+  }
 }
 
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(16px);
   }
 }
 
-:global(html[data-fx='lite']) .inkFoot,
-:global(html[data-fx='lite']) .form {
-  animation: none;
+/* ── 纸：浮在墨上的一张卡片，两个输入框，一枚主按钮 ── */
+.stage {
+  display: grid;
+  min-width: 0;
+  padding: 24px 64px 24px 24px;
+  overflow: auto;
+  place-items: center;
+}
+
+.card {
+  display: flex;
+  width: min(25rem, 100%);
+  flex-direction: column;
+  padding: 2.6rem 2.4rem 2.4rem;
+  background: var(--paper);
+  border-radius: 24px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 8%), 0 44px 90px -34px rgb(0 0 0 / 60%),
+    0 14px 30px -18px rgb(0 0 0 / 35%);
+  animation: card-in 0.7s var(--ease) both;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(26px) scale(0.975);
+  }
 }
 
 .title {
-  margin: 0;
+  margin: 0 0 1.9rem;
   font-size: 2rem;
   font-weight: 800;
   line-height: 1.2;
-  letter-spacing: -0.01em;
-}
-
-/* 标题下面一小段墨线：纸面的页眉。朱红只留给「要紧」和「亲手授权」，这里不用。 */
-.title::after {
-  display: block;
-  width: 2.2rem;
-  height: 2px;
-  margin-top: 0.9rem;
-  content: '';
-  background: var(--text);
-  border-radius: 1px;
-}
-
-.lead {
-  margin: 0.9rem 0 1.6rem;
-  color: var(--text-3);
+  letter-spacing: 0.02em;
 }
 
 .notice {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  margin: 0 0 1.2rem;
+  margin: -0.5rem 0 1.3rem;
   padding: 0.6rem 0.8rem;
   font-size: 0.933rem;
   line-height: 1.5;
@@ -143,53 +231,82 @@
 .notice[data-tone='error'] {
   color: var(--seal);
   background: var(--seal-soft);
+  animation: shake 0.4s var(--ease);
+}
+
+/* 登录没成功：提示左右晃一下。 */
+@keyframes shake {
+  25% {
+    transform: translateX(-5px);
+  }
+
+  75% {
+    transform: translateX(4px);
+  }
 }
 
 /* 必填提示放在输入框下面预留的空当里，出现时不把表单顶高。 */
 .field {
   position: relative;
   display: block;
-  margin-bottom: 1.6rem;
+  margin-bottom: 1.8rem;
 }
 
-.field > span {
+.field > span:first-child {
   display: block;
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.45rem;
   color: var(--text-2);
   font-size: 0.933rem;
   font-weight: 600;
 }
 
-.field > input {
-  display: block;
-  width: 100%;
-  height: 3rem;
-  padding: 0 0.9rem;
-  color: var(--text);
-  font: inherit;
-  font-size: 1.067rem;
+/* 输入框：平时是一块浅底，聚焦时变白、描蓝边，前面的小图标跟着变蓝。 */
+.box {
+  display: flex;
+  height: 3.2rem;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0 1rem;
+  color: var(--text-3);
+  background: var(--paper-2);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+
+.box:hover {
+  border-color: var(--line-2);
+}
+
+.box:focus-within {
+  color: var(--primary);
   background: var(--paper);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-ctl);
-  outline: 0;
-  transition: border-color 0.15s;
-}
-
-.field > input:hover {
-  border-color: var(--line-3);
-}
-
-.field > input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-ring);
 }
 
-.field > input:disabled {
-  color: var(--text-3);
-  background: var(--paper-2);
+.box > svg {
+  flex: none;
 }
 
-.field[data-invalid='true'] > input {
+.box > input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.067rem;
+  background: none;
+  border: 0;
+  outline: 0;
+}
+
+.box > input:disabled {
+  color: var(--text-3);
+}
+
+.field[data-invalid='true'] > .box {
   border-color: var(--seal);
 }
 
@@ -197,18 +314,32 @@
   position: absolute;
   top: 100%;
   left: 0;
-  margin-top: 0.15rem;
+  margin-top: 0.3rem;
   color: var(--seal);
   font-size: 0.867rem;
   font-style: normal;
 }
 
+.field > em[data-tone='warn'] {
+  color: var(--warn);
+}
+
 .submit {
   width: 100%;
-  height: 3rem;
+  height: 3.2rem;
   justify-content: center;
-  margin-top: 0.2rem;
+  margin-top: 0.4rem;
   font-size: 1.067rem;
+  border-radius: 12px;
+}
+
+/* 箭头：鼠标移上按钮时往前走一步。 */
+.go {
+  transition: transform 0.25s var(--ease);
+}
+
+.submit:hover:enabled > .go {
+  transform: translateX(4px);
 }
 
 .submit[data-loading='true'] > svg {
@@ -221,18 +352,18 @@
   }
 }
 
-:global(html[data-fx='lite']) .submit[data-loading='true'] > svg {
+:global(html[data-fx='lite']) :is(.backdrop > i, .hero > p, .product::before, .clock > i, .card, .notice, .submit > svg) {
   animation: none;
 }
 
-.note {
-  margin: 1.4rem 0 0;
-  color: var(--text-3);
-  font-size: 0.867rem;
-  line-height: 1.6;
+@media (prefers-reduced-motion: reduce) {
+  .backdrop > i,
+  .clock > i {
+    animation: none;
+  }
 }
 
-/* 窄屏：墨收成顶上一行，纸占满。 */
+/* 窄屏：墨收成顶上一行，卡片居中。 */
 @media (max-width: 860px) {
   .screen {
     grid-template-columns: minmax(0, 1fr);
@@ -240,10 +371,14 @@
   }
 
   .ink {
-    padding: 14px 16px 16px;
+    padding: 18px 20px 0;
   }
 
-  .inkFoot {
+  .hero {
     display: none;
+  }
+
+  .stage {
+    padding: 16px;
   }
 }

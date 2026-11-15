@@ -20,6 +20,7 @@ import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { returnUnsentMessage } from './reauthRestore';
 import type { UnsentIdentity } from './reauthRestore';
+import { AnswerText } from '../shared/ui/AnswerText';
 import styles from './AIDock.module.css';
 
 /** 键盘移动浮动面板的步长；提供给不能使用鼠标拖动的用户。 */
@@ -405,7 +406,9 @@ export function AIDock({ suppressed = false }: AIDockProps) {
                   <span className={styles.speaker}>
                     {entry.role === 'user' ? '你' : 'AI 回复'}
                   </span>
-                  <p className={styles.messageText}>{entry.text}</p>
+                  {entry.role === 'assistant'
+                    ? <AnswerText className={styles.messageText} text={entry.text} />
+                    : <p className={styles.messageText}>{entry.text}</p>}
                 </li>
               ))}
             </ol>
