@@ -12,7 +12,7 @@ import styles from './AnswerText.module.css';
  * - 连着两行以上的清单（`1. …`、`- …`）排成一张清单小卡片，超过 5 条在卡片里翻页；
  * - `| 列 | 列 |` 加一行 `|---|---|` 的表格排成表格卡片，超过 5 行在卡片里翻页；
  * - 行内的 `**粗体**`、`` `代码` ``、`[文字](链接)`；链接只认 http(s) 和本站路径，别的原样显示；
- * - 单独一行的 `---` 是分隔线，不显示。
+ * - 单独一行的 `---`、`* * *` 是分隔线，不显示。
  *
  * 只拼 React 元素，不往页面里塞 HTML。什么写法都没有的回复仍是一个段落，文字和原来一样。
  */
@@ -23,13 +23,15 @@ type Block =
   | { kind: 'table'; head: string[]; rows: string[][] };
 
 const ITEM = /^\s{0,3}(?:(\d{1,3})[.、)）]|[-*•·])\s+(\S.*)$/;
-const HEADING = /^\s{0,3}#{1,4}\s+(\S.*?)\s*#*\s*$/;
+const HEADING = /^\s{0,3}#{1,4}\s+(.*?\S)(?:\s+#+)?\s*$/;
 const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 
+/** 按没转义的竖线分格；`\|` 是格子里的竖线，显示时还原。 */
 function cells(line: string): string[] {
-  return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+  return line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
 }
 
 function parseBlocks(text: string): Block[] {
@@ -50,7 +52,10 @@ function parseBlocks(text: string): Block[] {
       index += 1;
       continue;
     }
-    if (TABLE_ROW.test(line) && index + 1 < lines.length && TABLE_RULE.test(lines[index + 1]!)) {
+    const rule = lines[index + 1];
+    // 表头下面那行分隔线要带竖线、列数和表头一样，才算表格。
+    if (TABLE_ROW.test(line) && rule !== undefined && rule.includes('|') && TABLE_RULE.test(rule)
+        && cells(rule).length === cells(line).length) {
       flushProse();
       const head = cells(line);
       let end = index + 2;
@@ -67,7 +72,7 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
     let end = index;
-    while (end < lines.length && ITEM.test(lines[end]!)) end += 1;
+    while (end < lines.length && ITEM.test(lines[end]!) && !RULE.test(lines[end]!)) end += 1;
     // 孤零零一行「1. …」多半是句子，不当清单。
     if (end - index < 2) {
       prose.push(line);
@@ -87,14 +92,16 @@ function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
-const INLINE = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+// 链接地址里允许一层成对括号，如 `https://…/a(b)`。
+const INLINE = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g;
 
 function linkTo(label: string, href: string, key: number): ReactNode {
   if (/^https?:\/\//i.test(href)) {
     return <a className={styles.link} href={href} key={key} rel="noopener noreferrer" target="_blank">{label}</a>;
   }
   // 本站路径在当前页里跳，对话和进行中的任务不丢。
-  if (href.startsWith('/') && !href.startsWith('//')) {
+  // `//…`、`/\…` 和带反斜杠的地址浏览器会当成别的站，不算本站路径。
+  if (/^\/(?![/\\])/.test(href) && !href.includes('\\')) {
     return <Link className={styles.link} key={key} to={href}>{label}</Link>;
   }
   return <Fragment key={key}>{`[${label}](${href})`}</Fragment>;
@@ -162,7 +169,8 @@ function TableCard({ head, rows }: { head: string[]; rows: string[][] }) {
 
 export function AnswerText({ className, text }: { className?: string; text: string }) {
   const blocks = parseBlocks(text);
-  if (blocks.length === 0) return <p className={className}>{text}</p>;
+  // 什么都没解析出来：要么本来就是空白，要么只有分隔线（不显示）。
+  if (blocks.length === 0) return text.trim() === '' ? <p className={className}>{text}</p> : null;
   return (
     <>
       {blocks.map((block, index) => {
