@@ -19,9 +19,14 @@ type Busy = null | 'bind' | 'activate' | 'unbind';
  * 一个系统的账号设置：看状态、输账号密码绑定、解除绑定。OA 另有「启用自动登录」。
  *
  * 账号密码不进任何状态：提交时从表单里读出来，随即清空输入框。换了登录身份后发回来的结果一律丢弃。
+ * 换了登录身份，整张表单重建：上一个人没提交的输入、进行到一半的操作和提示都不留给下一个人。
  */
 export function PasswordBinding({ name, target }: { name: string; target: PasswordTarget }) {
   const generation = useAuthStore((state) => state.generation);
+  return <PasswordForm generation={generation} key={`${generation}/${target}`} name={name} target={target} />;
+}
+
+function PasswordForm({ generation, name, target }: { generation: number; name: string; target: PasswordTarget }) {
   const queryClient = useQueryClient();
   const queryKey = passwordBindingQueryKey(generation, target);
   const browserQueryKey = ['browser-binding', generation, 'oa'] as const;
@@ -39,9 +44,11 @@ export function PasswordBinding({ name, target }: { name: string; target: Passwo
 
   const binding = bindingQuery.data;
   const bound = binding?.bound === true;
-  // 正在提交或状态没读准时，不拿旧的自动登录状态做判断。
-  const browser = target !== 'oa' || busy !== null || browserQuery.isFetching || browserQuery.isError
-    ? undefined : browserQuery.data;
+  // 正在提交或状态没读准时，不拿旧的自动登录状态做判断，也不把「不知道」说成「未启用」。
+  const browserUnknown = busy !== null || browserQuery.isFetching || browserQuery.isError
+    || browserQuery.data === undefined;
+  const browser = target !== 'oa' || browserUnknown ? undefined : browserQuery.data;
+  const browserFailed = browserQuery.isError && busy === null && !browserQuery.isFetching;
   const autoLoginOn = browser?.binding_state === 'active';
   const canActivate = browser?.binding_id != null && browser.binding_revision != null
     && browser.binding_state === 'unverified';
@@ -82,6 +89,7 @@ export function PasswordBinding({ name, target }: { name: string; target: Passwo
         const updated = await activateBrowserBinding(selection, credential);
         if (!current()) return;
         await queryClient.cancelQueries({ queryKey: browserQueryKey });
+        if (!current()) return;
         queryClient.setQueryData(browserQueryKey, updated);
         setMessage({ tone: 'ok', text: '自动登录已启用。' });
         return;
@@ -90,6 +98,7 @@ export function PasswordBinding({ name, target }: { name: string; target: Passwo
       if (!current()) return;
       queryClient.setQueryData(queryKey, updated);
       if (target === 'oa') await queryClient.resetQueries({ queryKey: browserQueryKey });
+      if (!current()) return;
       setMessage({
         tone: 'ok',
         text: target === 'oa' ? (bound ? '密码已更新。' : '已绑定。') : `已保存。${name}接入后会用这组账号验证。`,
@@ -114,6 +123,7 @@ export function PasswordBinding({ name, target }: { name: string; target: Passwo
       if (!current()) return;
       queryClient.setQueryData(queryKey, updated);
       if (target === 'oa') await queryClient.resetQueries({ queryKey: browserQueryKey });
+      if (!current()) return;
       setMessage({ tone: 'ok', text: '已解除绑定。' });
     } catch {
       if (!current()) return;
@@ -132,10 +142,20 @@ export function PasswordBinding({ name, target }: { name: string; target: Passwo
           <button onClick={() => { void bindingQuery.refetch(); }} type="button">重试</button>
         </p>
       ) : null}
-      {target === 'oa' && bound ? (
+      {target === 'oa' && bound && browserFailed ? (
+        <p className={styles.bindingNote} data-tone="error" role="alert">
+          读不到自动登录状态，这不等于没启用。
+          <button onClick={() => { void browserQuery.refetch(); }} type="button">重试</button>
+        </p>
+      ) : null}
+      {target === 'oa' && bound && !browserFailed ? (
         <p className={styles.bindingFact}>
-          <span className={styles.light} data-state={autoLoginOn ? 'on' : 'off'} />
-          {autoLoginOn ? '自动登录已启用' : '自动登录未启用'}
+          <span
+            aria-hidden="true"
+            className={styles.light}
+            data-state={browserUnknown ? 'busy' : autoLoginOn ? 'on' : 'off'}
+          />
+          {browserUnknown ? '正在读取自动登录状态' : autoLoginOn ? '自动登录已启用' : '自动登录未启用'}
         </p>
       ) : null}
       {target === 'oa' && binding?.poll_status === 'retrying' ? (
