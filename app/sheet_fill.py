@@ -16,7 +16,15 @@ from collections.abc import Mapping
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictInt,
+    StrictStr,
+    model_serializer,
+)
 
 from app.background_jobs import (
     JobHandler,
@@ -71,6 +79,7 @@ _INVALID_MESSAGES = {
     "fill_column": "fills 的列必须是第 1 行表头非空的列字母，互不重复且不能等于 key_column。",
     "field": "field 不在所选来源的可填字段内。",
     "attachment": "attachment_id 不是本轮附件。",
+    "skipped": "skipped_sheets 只能列该附件里没有放进 mappings 的工作表名称，且不能重复。",
     "coverage": (
         "untrusted_attachments 中还有行数大于 1 的工作表既不在 mappings 也不在 skipped_sheets："
         "有待办标题列的用 oa_pending、有问题列的用 document 放进 mappings，"
@@ -130,6 +139,16 @@ class SheetFillPlan(_Strict):
     filename: StrictStr = Field(min_length=1, max_length=255)
     mappings: tuple[SheetFillMapping, ...] = Field(min_length=1, max_length=MAX_MAPPINGS)
     skipped_sheets: tuple[StrictStr, ...] = Field(default=(), max_length=100)
+
+    @model_serializer(mode="wrap")
+    def _omit_no_skipped(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # The dump feeds the job's idempotency fingerprint: a plan without skipped sheets
+        # must serialize exactly as before the field existed, so earlier confirmations
+        # still replay instead of conflicting.
+        data: dict[str, Any] = handler(self)
+        if not self.skipped_sheets:
+            data.pop("skipped_sheets", None)
+        return data
 
 
 def parse_sheet_fill_plan(raw: Mapping[str, Any]) -> BaseModel:
@@ -298,6 +317,12 @@ def validate_plan(proposal: SheetFillProposal, inspection: ChatInputInspection) 
         ))
     if questions > DOCUMENT_MAX_QUESTIONS:
         raise SheetFillRejected("sheet_fill_too_many_rows", _TOO_MANY_ROWS_MESSAGE)
+    mapped = {mapping.sheet for mapping in mappings}
+    skipped = proposal.skipped_sheets
+    if len(set(skipped)) != len(skipped) or any(
+        name not in sheets or name in mapped for name in skipped
+    ):
+        raise _invalid("skipped")
     return SheetFillPlan(
         plan_version=1,
         artifact_id=descriptor.artifact_id,

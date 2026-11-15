@@ -176,7 +176,6 @@ def build_oa_session_probe(
     """Shared API/worker probe: one saved Session read and one heartbeat, no renewal."""
 
     async def probe(owner: BackgroundJobRunOwner) -> OASessionHeartbeatResult | None:
-        session = None
         try:
             session = await credential_store.load(owner.ai_user_id, "oa", tenant_id=owner.tenant_id)
             result = None if session is None else await heartbeat(session)
@@ -184,8 +183,6 @@ def build_oa_session_probe(
             # An unreadable credential or unreachable OA proves nothing about expiry.
             _LOGGER.info("oa_heartbeat_unavailable exception_type=%s", type(error).__name__)
             return None
-        finally:
-            session = None
         _LOGGER.info("oa_heartbeat result=%s", result)
         return result
 

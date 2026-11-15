@@ -89,13 +89,14 @@ function mapping(value: unknown): SheetFillMapping | null {
 
 /** Strict plan v1 check; null for anything else. */
 export function parseSheetFillPlan(value: unknown): SheetFillPlan | null {
-  // Plans kept from before `skipped_sheets` existed have no such key; read them as none skipped.
+  // The server omits `skipped_sheets` when nothing is skipped (and older plans never had it);
+  // a missing key means none skipped, a present key must be a list of sheet names.
+  if (!isObject(value)) return null;
+  const hasSkipped = Object.prototype.hasOwnProperty.call(value, 'skipped_sheets');
   const keys = ['plan_version', 'artifact_id', 'sha256', 'filename', 'mappings'];
-  if (!isObject(value) || !hasExactKeys(
-    value, Object.prototype.hasOwnProperty.call(value, 'skipped_sheets') ? [...keys, 'skipped_sheets'] : keys,
-  )) return null;
+  if (!hasExactKeys(value, hasSkipped ? [...keys, 'skipped_sheets'] : keys)) return null;
   const { plan_version: version, artifact_id: artifactId, sha256, filename, mappings } = value;
-  const skipped = value.skipped_sheets ?? [];
+  const skipped = hasSkipped ? value.skipped_sheets : [];
   if (!Array.isArray(skipped) || skipped.length > 100
       || !skipped.every((sheet: unknown) => typeof sheet === 'string')) return null;
   if (version !== 1 || typeof artifactId !== 'string' || !UUID.test(artifactId)
