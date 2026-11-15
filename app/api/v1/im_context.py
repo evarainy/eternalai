@@ -56,7 +56,7 @@ def make_router(
 
     def available() -> IMContextService:
         if service is None:
-            raise HTTPException(503, {"code": "im_not_enabled"})
+            raise HTTPException(503, {"code": "im_not_enabled", "message": "消息服务未启用。"})
         return service
 
     @router.get("/configuration", response_model=IMConfiguration | None)
@@ -76,7 +76,9 @@ def make_router(
         try:
             binding, form = await current.issue_login(principal)
         except IMContextError as error:
-            raise HTTPException(error.http_status, {"code": error.code}) from None
+            raise HTTPException(
+                error.http_status, {"code": error.code, "message": "消息登录未完成。"}
+            ) from None
         return IMLoginResponse(
             provider=binding.provider,
             im_instance_id=binding.im_instance_id,
@@ -106,7 +108,9 @@ def make_router(
                 IMSelection.model_construct(**body.model_dump(exclude={"session_id"})),
             )
         except IMContextError as error:
-            raise HTTPException(error.http_status, {"code": error.code}) from None
+            raise HTTPException(
+                error.http_status, {"code": error.code, "message": "消息来源核验未完成。"}
+            ) from None
         return SourceResponse(
             ref_id=result.ref_id,
             expires_at=result.expires_at,
