@@ -917,16 +917,16 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 代理出错时的页面呈现未实测 | 验收环境无权停止代理进程 | 无 | 目标机 Docker 阶段验收 | 可控环境停掉代理，页面显示错误且不泄露上游信息 | PR #280；`feplan/acc3/ACC3_REPORT.md` 第 7 项 |
+| 代理出错时的页面呈现未实测（已关闭） | 2026-11-16 IM 补验停掉本任务后端：用户组区域与消息页如实提示失败、不泄露上游信息，恢复后自动接通 | 无 | `P2-IM-DEBT-ACC-20261116`（已完成） | 已满足 | PR #280；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 1 项 |
 | 两个依赖 dispatch_db 的 logout 用例本地未运行 | fixture 会建/清 schema，超出代理棒授权的库边界；由 required CI 覆盖 | 无 | required CI | CI 全绿即覆盖（PR #280 已满足，本项关闭条件已达成，仅留记录） | PR #280；`proxyplan/PROXY_IMPL_REPORT.md` |
 | 既有 Windows mypy 7 项（非新增） | `d_form_flow.py`、`d_form_cli.py`、`synthetic_vault.py` 的平台类型问题，裁定保留 | 无 | 另行分配 | 原平台入口通过或另作明确处置 | PR #280/#281；`proxyplan/PROXY_BASELINE_EVIDENCE.json` |
-| 所选消息撤回后服务端整组拒绝分支未实测 | 验收时消息已超上游 600 秒撤回时限；前端撤回即去选，界面无法触发 | 无 | 下一次 IM 联合验收 | 撤回时限内用已撤回 id 直接请求 sources，整组拒绝且不写部分来源 | PR #281；`feplan/acc3/ACC4_REPORT.md`、`ACC6_REPORT.md` |
-| 资料卡非空部门/职务/电话/邮箱呈现未真实验证 | 测试账号自定义资料字段为空 | 无 | 目标机 Docker 阶段验收 | 有真实资料字段的账号核对各行显示与空值隐藏 | PR #282；`feplan/acc3/ACC7_REPORT.md`、`ACC8_REPORT.md` |
-| V3 授权与撤权未实测 | 会写入业务授权状态，本轮未授权 | 无 | 下一次 IM 联合验收 | 在面板完成一次授权与撤权并核对生效 | PR #282；`ACC7_REPORT.md` 第 7 项 |
-| V2/V4 卡片站内链接未实测 | 测试账号无现成送核或委托卡片 | 无 | 下一次 IM 联合验收 | 点卡片链接在本页打开对应抽屉、不整页刷新 | PR #282；`ACC7_REPORT.md` 第 8 项 |
-| 用户组展开成员未实测 | 测试实例没有非系统用户组 | 无 | 目标机 Docker 阶段验收 | 有用户组时展开成员并能查看资料 | PR #282；`ACC7_REPORT.md` 第 3 项 |
-| 普通群静音「新消息自然未读后立即切换」未单独覆盖 | 验收页面聚焦时新消息即自动已读，改用「标为未读」准备状态验证 | 无 | 下一次 IM 联合验收 | 后台页签收到新消息后切换静音并核对角标 | PR #282；`ACC8_REPORT.md` 第 4 项 |
-| ACC7、ACC9 各有一个中断驱动的甲会话未经界面退出 | 驱动异常中断，上下文随之关闭，无法补验会话撤销 | 无 | 无（会话按空闲过期） | 会话过期或该账号下次登录时被替换 | PR #282；`ACC7_REPORT.md` 第 13 项、`ACC9_REPORT.md` |
+| 所选消息撤回后服务端整组拒绝分支未实测（已关闭） | 2026-11-16 实测撤回时限内撤回一条后「交给我的 AI」，服务端 404 `im_source_not_found` 整组拒绝、无部分来源；当时页面只显示泛化重试提示，由 `P2-IM-SOURCE-ERROR-001` 补齐错误信封后实测显示「请重新选择」 | 无 | `P2-IM-SOURCE-ERROR-001`（已完成） | 已满足 | PR #281；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 2 项；仓库外 `im-source-error-20261116/IMPL_r2.md` |
+| 资料卡非空部门/职务/电话呈现未真实验证（已关闭） | 2026-11-16 经雨爷授权用测试 Zulip 组织所有者能力建「部门」「职务」「办公电话」自定义资料字段并给甲乙填合成值（乙电话留空）：资料卡逐行显示合成值、空电话行隐藏，本人邮箱显示与 r2 一致 | 无 | `P2-IM-DEBT-ACC-20261116`（已完成） | 已满足 | PR #282；`feplan/acc3/ACC7_REPORT.md`、`ACC8_REPORT.md`；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r3.md` |
+| V3 授权与撤权未实测（已关闭） | 2026-11-16 经雨爷授权，在测试环境以合成资料完成一次授权与撤权，状态与界面一致 | 无 | `P2-IM-DEBT-ACC-20261116`（已完成） | 已满足 | PR #282；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 4 项 |
+| V4 委托卡片站内链接未实测（V2 已关闭） | 2026-11-16 合成送核卡片（V2）链接在本页打开对应抽屉、不整页刷新，已实测；V4 测试 Bot 回调仍指向另一后端 18015，未改回调 | 无 | 下一次 IM 联合验收 | 点 V4 委托卡片链接在本页打开对应抽屉 | PR #282；`ACC7_REPORT.md` 第 8 项；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 5 项 |
+| 用户组展开成员未实测（已关闭） | 2026-11-16 在测试 Zulip 建合成用户组，展开成员准确并能打开资料 | 无 | `P2-IM-DEBT-ACC-20261116`（已完成） | 已满足 | PR #282；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 6 项 |
+| 普通群静音「新消息自然未读后立即切换」未单独覆盖 | 验收页面聚焦时新消息即自动已读；2026-11-16 无头 Chrome 切页、最小化后仍判为前台，有头上下文登录失败，前置未成立 | 无 | 下一次 IM 联合验收 | 后台页签收到新消息后切换静音并核对角标 | PR #282；`ACC8_REPORT.md` 第 4 项；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 7 项 |
+| ACC7、ACC9 及 2026-11-16 补验首轮各有一个中断驱动的甲会话未经退出 | 驱动异常中断，签名会话票据未保存，库内无已签发会话行，无法补做撤销或核实到期 | 无 | 无（会话按到期失效） | 会话到期失效 | PR #282；`ACC7_REPORT.md` 第 13 项、`ACC9_REPORT.md`；仓库外 `E:/code/eternalai-reviews/im-debt-20261116/ACC_r2.md` 第 8 项 |
 
 ### IM 环境新增欠债（2026-11-09）
 
