@@ -63,3 +63,67 @@
 :global(html[data-fx='lite']) .list > li {
   animation: none;
 }
+
+/* 小标题：比正文略大、加粗，上面多留一点空。 */
+.heading {
+  margin: 0.9rem 0 0.35rem;
+  color: var(--text);
+  font-size: 1.067rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  overflow-wrap: anywhere;
+}
+
+.code {
+  padding: 0.05em 0.35em;
+  font-family: Consolas, 'Cascadia Mono', 'Noto Sans Mono', monospace;
+  font-size: 0.933em;
+  background: var(--paper-2);
+  border-radius: 4px;
+}
+
+/* 表格：和清单同一张描边卡片；列多时卡片里横向滚动，页面不跟着变宽。 */
+.tableScroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.933rem;
+}
+
+.table th,
+.table td {
+  padding: 0.55rem 0.95rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  color: var(--text-2);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--paper-2);
+}
+
+.table tbody tr {
+  animation: item-in 0.3s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+.table tbody tr + tr td,
+.table thead + tbody tr:first-child td {
+  border-top: 1px solid var(--line);
+}
+
+:global(html[data-fx='lite']) .table tbody tr {
+  animation: none;
+}

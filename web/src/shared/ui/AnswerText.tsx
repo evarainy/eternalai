@@ -1,22 +1,38 @@
 import { Fragment } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Pager } from './Pager';
 import { usePaging } from './paging';
 import styles from './AnswerText.module.css';
 
 /**
- * 助手回复的正文。模型爱用两种写法，这里照着排出来，别的原样显示：
+ * 助手回复的正文。模型常用的几种写法照着排出来，别的原样显示：
  *
- * - `**要紧的话**` 排成粗体；
- * - 连着两行以上的清单（`1. …`、`- …`）排成一张清单小卡片，超过 5 条在卡片里翻页。
+ * - `## 小标题` 排成小标题；
+ * - 连着两行以上的清单（`1. …`、`- …`）排成一张清单小卡片，超过 5 条在卡片里翻页；
+ * - `| 列 | 列 |` 加一行 `|---|---|` 的表格排成表格卡片，超过 5 行在卡片里翻页；
+ * - 行内的 `**粗体**`、`` `代码` ``、`[文字](链接)`；链接只认 http(s) 和本站路径，别的原样显示；
+ * - 单独一行的 `---`、`* * *` 是分隔线，不显示。
  *
- * 只拼 React 元素，不往页面里塞 HTML。没有清单的回复仍是一个段落，文字和原来一样。
+ * 只拼 React 元素，不往页面里塞 HTML。什么写法都没有的回复仍是一个段落，文字和原来一样。
  */
 type Block =
   | { kind: 'text'; text: string }
-  | { kind: 'list'; ordered: boolean; items: string[] };
+  | { kind: 'heading'; text: string }
+  | { kind: 'list'; ordered: boolean; items: string[] }
+  | { kind: 'table'; head: string[]; rows: string[][] };
 
 const ITEM = /^\s{0,3}(?:(\d{1,3})[.、)）]|[-*•·])\s+(\S.*)$/;
+const HEADING = /^\s{0,3}#{1,4}\s+(.*?\S)(?:\s+#+)?\s*$/;
+const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+/** 按没转义的竖线分格；`\|` 是格子里的竖线，显示时还原。 */
+function cells(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
+}
 
 function parseBlocks(text: string): Block[] {
   const blocks: Block[] = [];
@@ -28,16 +44,43 @@ function parseBlocks(text: string): Block[] {
     prose = [];
   };
   for (let index = 0; index < lines.length;) {
+    const line = lines[index]!;
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flushProse();
+      blocks.push({ kind: 'heading', text: heading[1]! });
+      index += 1;
+      continue;
+    }
+    const rule = lines[index + 1];
+    // 表头下面那行分隔线要带竖线、列数和表头一样，才算表格。
+    if (TABLE_ROW.test(line) && rule !== undefined && rule.includes('|') && TABLE_RULE.test(rule)
+        && cells(rule).length === cells(line).length) {
+      flushProse();
+      const head = cells(line);
+      let end = index + 2;
+      while (end < lines.length && TABLE_ROW.test(lines[end]!)) end += 1;
+      // 每行补齐或截到表头的列数，表格不会参差。
+      const rows = lines.slice(index + 2, end)
+        .map((row) => head.map((_, column) => cells(row)[column] ?? ''));
+      blocks.push({ kind: 'table', head, rows });
+      index = end;
+      continue;
+    }
+    if (RULE.test(line)) {
+      index += 1;
+      continue;
+    }
     let end = index;
-    while (end < lines.length && ITEM.test(lines[end]!)) end += 1;
+    while (end < lines.length && ITEM.test(lines[end]!) && !RULE.test(lines[end]!)) end += 1;
     // 孤零零一行「1. …」多半是句子，不当清单。
     if (end - index < 2) {
-      prose.push(lines[index]!);
+      prose.push(line);
       index += 1;
       continue;
     }
     flushProse();
-    const matches = lines.slice(index, end).map((line) => ITEM.exec(line)!);
+    const matches = lines.slice(index, end).map((item) => ITEM.exec(item)!);
     blocks.push({
       kind: 'list',
       ordered: matches.every((match) => match[1] !== undefined),
@@ -49,14 +92,37 @@ function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
-/** `**粗体**`；成不了对的星号原样留着。 */
+// 链接地址里允许一层成对括号，如 `https://…/a(b)`。
+const INLINE = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g;
+
+function linkTo(label: string, href: string, key: number): ReactNode {
+  if (/^https?:\/\//i.test(href)) {
+    return <a className={styles.link} href={href} key={key} rel="noopener noreferrer" target="_blank">{label}</a>;
+  }
+  // 本站路径在当前页里跳，对话和进行中的任务不丢。
+  // `//…`、`/\…` 和带反斜杠的地址浏览器会当成别的站，不算本站路径。
+  if (/^\/(?![/\\])/.test(href) && !href.includes('\\')) {
+    return <Link className={styles.link} key={key} to={href}>{label}</Link>;
+  }
+  return <Fragment key={key}>{`[${label}](${href})`}</Fragment>;
+}
+
+/** 行内写法；成不了对的符号原样留着。 */
 function inline(text: string): ReactNode {
-  const parts = text.split(/\*\*([^*\n]+)\*\*/);
-  if (parts.length === 1) return text;
-  return parts.map((part, index) => (
-    // 奇数下标是两对星号中间的字。
-    index % 2 === 1 ? <strong key={index}>{part}</strong> : <Fragment key={index}>{part}</Fragment>
-  ));
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(INLINE)) {
+    const at = match.index;
+    if (at > last) parts.push(text.slice(last, at));
+    const key = at;
+    if (match[1] !== undefined) parts.push(<strong key={key}>{match[1]}</strong>);
+    else if (match[2] !== undefined) parts.push(<code className={styles.code} key={key}>{match[2]}</code>);
+    else parts.push(linkTo(match[3]!, match[4]!, key));
+    last = at + match[0].length;
+  }
+  if (parts.length === 0) return text;
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.map((part, index) => (typeof part === 'string' ? <Fragment key={`t${index}`}>{part}</Fragment> : part));
 }
 
 function ListCard({ items, ordered }: { items: string[]; ordered: boolean }) {
@@ -78,16 +144,41 @@ function ListCard({ items, ordered }: { items: string[]; ordered: boolean }) {
   );
 }
 
+function TableCard({ head, rows }: { head: string[]; rows: string[][] }) {
+  const paging = usePaging(rows.length);
+  return (
+    <div className={styles.listCard}>
+      <div className={styles.tableScroll}>
+        <table className={styles.table}>
+          <thead>
+            <tr>{head.map((cell, column) => <th key={column} scope="col">{inline(cell)}</th>)}</tr>
+          </thead>
+          <tbody key={paging.page}>
+            {rows.slice(paging.from, paging.to).map((row, index) => (
+              <tr key={paging.from + index} style={{ '--i': index } as CSSProperties}>
+                {row.map((cell, column) => <td key={column}>{inline(cell)}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pager label="表格分页" paging={paging} total={rows.length} />
+    </div>
+  );
+}
+
 export function AnswerText({ className, text }: { className?: string; text: string }) {
   const blocks = parseBlocks(text);
-  if (blocks.length === 0) return <p className={className}>{text}</p>;
+  // 什么都没解析出来：要么本来就是空白，要么只有分隔线（不显示）。
+  if (blocks.length === 0) return text.trim() === '' ? <p className={className}>{text}</p> : null;
   return (
     <>
-      {blocks.map((block, index) => (
-        block.kind === 'text'
-          ? <p className={className} key={index}>{inline(block.text)}</p>
-          : <ListCard items={block.items} key={index} ordered={block.ordered} />
-      ))}
+      {blocks.map((block, index) => {
+        if (block.kind === 'text') return <p className={className} key={index}>{inline(block.text)}</p>;
+        if (block.kind === 'heading') return <p className={styles.heading} key={index}>{inline(block.text)}</p>;
+        if (block.kind === 'list') return <ListCard items={block.items} key={index} ordered={block.ordered} />;
+        return <TableCard head={block.head} key={index} rows={block.rows} />;
+      })}
     </>
   );
 }
