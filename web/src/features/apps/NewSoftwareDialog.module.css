@@ -7,8 +7,8 @@
  */
 .caption {
   margin: 0;
-  color: var(--workbench-text-caption);
-  font-size: var(--workbench-font-caption);
+  color: var(--text-3);
+  font-size: 0.867rem;
   line-height: 1.5;
 }
 
@@ -26,7 +26,7 @@
 
 .dialog :global(.ant-modal-content) {
   border-radius: 30px;
-  background: var(--workbench-panel-fill);
+  background: var(--paper);
 }
 
 .optionSet {
@@ -45,7 +45,7 @@
 .optionOn,
 .optionOff {
   display: grid;
-  min-height: var(--workbench-target-size);
+  min-height: 2.4rem;
   gap: 4px;
   padding: 13px 15px;
   border: 0;
@@ -58,13 +58,13 @@
 }
 
 .optionOn {
-  background-image: var(--workbench-chip-fill-strong);
+  background-color: var(--paper);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
     inset 0 0 0 2px rgb(47 107 255 / 45%), 0 6px 16px -10px rgb(16 26 58 / 40%);
 }
 
 .optionTitle {
-  color: var(--workbench-text);
+  color: var(--text);
   font-size: 17px;
   font-weight: 600;
   line-height: 1.4;
@@ -76,8 +76,8 @@
 
 /* 画板 `.opt .od`：14px。 */
 .optionHint {
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-caption);
+  color: var(--text-2);
+  font-size: 0.867rem;
   line-height: 1.5;
 }
 
@@ -103,23 +103,23 @@
 .field > label,
 .fieldLabel {
   padding: 0;
-  color: var(--workbench-text-secondary);
+  color: var(--text-2);
   font-size: 15px;
   line-height: 1.3;
 }
 
 .field :global(.ant-input),
 .field :global(.ant-input-affix-wrapper) {
-  background: var(--workbench-field-fill) !important;
+  background: var(--paper) !important;
   border: 0 !important;
-  border-radius: var(--workbench-radius-control) !important;
-  box-shadow: var(--workbench-field-face) !important;
+  border-radius: var(--r-ctl) !important;
+  box-shadow: inset 0 0 0 1px var(--line-3) !important;
   font-size: 17px !important;
 }
 
 .field :global(.ant-input):focus,
 .field :global(.ant-input-affix-wrapper-focused) {
-  box-shadow: var(--workbench-field-face-focus) !important;
+  box-shadow: inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring) !important;
 }
 
 .choiceRow {
@@ -131,15 +131,15 @@
 
 .choiceOn,
 .choiceOff {
-  min-height: var(--workbench-target-size);
+  min-height: 2.4rem;
   padding: 0 14px;
   border: 0;
   border-radius: 999px;
-  background-image: var(--workbench-chip-fill-strong);
-  color: var(--workbench-text);
+  background-color: var(--paper);
+  color: var(--text);
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--workbench-font-auxiliary);
+  font-size: 0.933rem;
 }
 
 .choiceOn {
@@ -150,8 +150,8 @@
 
 /* 未选中不靠颜色单独表意：选中的另有蓝色内边与加粗字重。 */
 .choiceOff {
-  box-shadow: var(--workbench-chip-edge);
-  color: var(--workbench-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text-2);
   opacity: 0.72;
 }
 
@@ -163,17 +163,17 @@
 .chipWell {
   display: flex;
   flex-wrap: wrap;
-  min-height: var(--workbench-target-size);
+  min-height: 2.4rem;
   align-items: center;
   gap: 7px;
   padding: 6px 10px;
-  border-radius: var(--workbench-radius-control);
-  background: var(--workbench-field-fill);
-  box-shadow: var(--workbench-field-face);
+  border-radius: var(--r-ctl);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-3);
 }
 
 .chipWell:focus-within {
-  box-shadow: var(--workbench-field-face-focus);
+  box-shadow: inset 0 0 0 1px var(--primary), 0 0 0 3px var(--primary-ring);
 }
 
 .chip {
@@ -183,19 +183,19 @@
   gap: 6px;
   padding: 0 6px 0 12px;
   border-radius: 999px;
-  background-image: var(--workbench-chip-fill-strong);
-  box-shadow: var(--workbench-chip-edge);
-  color: var(--workbench-text);
-  font-size: var(--workbench-font-auxiliary);
+  background-color: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 0.933rem;
 }
 
 .chipRemove {
   display: grid;
-  width: var(--workbench-target-size);
-  height: var(--workbench-target-size);
+  width: 2.4rem;
+  height: 2.4rem;
   border: 0;
   background: none;
-  color: var(--workbench-text-secondary);
+  color: var(--text-2);
   cursor: pointer;
   place-items: center;
 }
@@ -211,11 +211,11 @@
 }
 
 .chipWell:focus-within:has(button:focus-visible) {
-  box-shadow: var(--workbench-field-face);
+  box-shadow: inset 0 0 0 1px var(--line-3);
 }
 
 .chipAdd {
-  min-height: var(--workbench-target-size);
+  min-height: 2.4rem;
   gap: 6px;
 }
 
@@ -235,16 +235,16 @@
   height: 34px;
   flex: none;
   border-radius: 12px;
-  background-image: var(--workbench-chip-fill);
-  box-shadow: var(--workbench-chip-edge);
-  color: var(--workbench-warning);
+  background-color: var(--paper-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--warn);
   place-items: center;
 }
 
 .warnCopy {
   margin: 4px 0 0;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  color: var(--text-2);
+  font-size: 0.933rem;
   line-height: 1.5;
 }
 
@@ -256,7 +256,7 @@
   margin: 14px -24px 0;
   padding: 12px 24px;
   background: rgb(22 29 46 / 3.5%);
-  box-shadow: inset 0 1px 0 var(--workbench-hair);
+  box-shadow: inset 0 1px 0 var(--line);
 }
 
 .dialogActions {
@@ -266,14 +266,14 @@
 }
 
 .dialogActions :global(.ant-btn) {
-  min-height: var(--workbench-target-size);
+  min-height: 2.4rem;
 }
 
 .dialogNotice {
   margin: 0 -24px;
   padding: 12px 24px;
   background: rgb(255 206 138 / 26%);
-  color: var(--workbench-text);
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.6;
 }
