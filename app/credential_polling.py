@@ -216,14 +216,7 @@ class CredentialPollingService:
         observed = await keeper.observe(
             tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id
         )
-        if (
-            observed is None
-            or observed.snapshot != candidate.snapshot
-            or observed.binding_state != "active"
-            or observed.revoked
-            or not observed.has_password
-            or observed.poll_status not in {"active", "retrying"}
-        ):
+        if observed is None or observed.snapshot != candidate.snapshot:
             return
         probe = await keeper.probe(
             tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id,

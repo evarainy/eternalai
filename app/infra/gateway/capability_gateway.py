@@ -511,9 +511,6 @@ class CapabilityGateway:
             if (
                 identity_result.bind_status == "expired"
                 and identity_result_matches_request
-                and capability_spec.target_system == "oa"
-                and capability_spec.execution_identity == "user_delegated"
-                and capability_spec.type == "query"
                 and capability_id in {"oa.list_pending_workflows", "oa.list_system_messages"}
                 and self._oa_read_preparation is not None
                 and await self._oa_read_preparation(request_context.tenant_id, ai_user_id)
