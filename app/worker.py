@@ -6,7 +6,8 @@ hold limit, file artifact root and MAC key), plus optional IM Bot and reader con
 When personal agents are enabled it also loads the tool-free published-material model seam, without
 the production composition, ordinary chat, OA or browser stacks. When an OA read mode is
 configured it registers the OA pending-workflow report kind over a minimal read-only OA
-Gateway (requester's own saved session; no login, renewal or heartbeat). With file
+Gateway and one shared keeper for verified-expiry recovery of eligible active bindings.
+With file
 artifacts it registers the sheet fill kind (OA pending and/or fixed-document Q&A sources,
 whichever are configured; the workbook is parsed only in an isolated child). The loop is
 psycopg + Selector.
@@ -107,10 +108,17 @@ async def run_worker(settings: WorkerSettings) -> None:
             ),
         )
         kinds = build_job_kinds(settings.self_check_max_hold_seconds)
+        oa_session_keeper = None
         if settings.oa_report is not None:
-            from app.infra.jobs.oa_pending_report import build_worker_oa_pending_report_kind
+            from app.infra.jobs.oa_pending_report import (
+                build_worker_oa_pending_report_kind,
+                build_worker_oa_session_keeper,
+            )
 
-            report = build_worker_oa_pending_report_kind(settings.oa_report, sessions)
+            oa_session_keeper = build_worker_oa_session_keeper(settings.oa_report, sessions)
+            report = build_worker_oa_pending_report_kind(
+                settings.oa_report, sessions, session_keeper=oa_session_keeper
+            )
             kinds[report.name] = report
         if file_artifacts is not None:
             from app.infra.jobs.sheet_fill import build_worker_sheet_fill_kind
@@ -118,6 +126,7 @@ async def run_worker(settings: WorkerSettings) -> None:
             sheet_fill = build_worker_sheet_fill_kind(
                 file_artifacts, sessions,
                 oa_report=settings.oa_report, document_qa=settings.document_qa,
+                oa_session_keeper=oa_session_keeper,
             )
             kinds[sheet_fill.name] = sheet_fill
         runner = BackgroundJobRunner(

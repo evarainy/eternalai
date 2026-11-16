@@ -7,7 +7,7 @@ import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 from typing import Any
 
@@ -49,6 +49,7 @@ from app.credential_polling import (
     CredentialRecoveryPolicy,
     CredentialSessionRecovery,
     OASessionKeeper,
+    prepare_active_oa_read,
 )
 from app.db.session import make_async_session_factory
 from app.dependency_checks import build_readonly_checks
@@ -169,6 +170,7 @@ from app.ports.auth import (
     OASessionCredential,
     SessionRevocationStorePort,
     SessionTokenPort,
+    authenticated_session,
 )
 from app.ports.browser_chat import BrowserOrdinarySubmissionPort
 from app.ports.browser_gateway import BrowserGatewayRegistration, BrowserIntentHandoffPort
@@ -838,6 +840,22 @@ def build_production_components(
         authentication=resolved_authentication,
         polling_policy=credential_polling_policy,
     )
+
+    async def prepare_oa_read(tenant_id: str, ai_user_id: str) -> bool:
+        session = authenticated_session.get()
+        if (
+            oa_session_keeper is None
+            or session is None
+            or session.expires_at <= datetime.now(UTC)
+            or (session.principal.org_ctx.tenant_id, session.principal.ai_user_id)
+            != (tenant_id, ai_user_id)
+        ):
+            return False
+        result = await prepare_active_oa_read(
+            oa_session_keeper, tenant_id=tenant_id, ai_user_id=ai_user_id, trigger="local_expiry"
+        )
+        return result in {"alive", "recovered", "refreshed_by_other"}
+
     resolved_adapters = (
         {
             "oa": build_oa_read_adapter(
@@ -972,6 +990,7 @@ def build_production_components(
         unbound_task_capability_ids=frozenset({OA_PENDING_WORKFLOWS_CAPABILITY_ID}),
         tenant_id=settings.source_tenant_id,
         mcp_contexts=mcp_contexts,
+        oa_read_preparation=prepare_oa_read,
         mcp_profiles=mcp_profiles,
         mcp_scope_allowed=(
             lambda tenant, user, capability, service, tool: (
@@ -1162,6 +1181,7 @@ def build_production_components(
                 )
                 if settings.oa_read_adapter_mode == "live" else None
             ),
+            oa_session_keeper=oa_session_keeper,
         )
         if file_artifacts is not None else None
     )
@@ -1339,6 +1359,7 @@ def build_production_components(
         work_objects=work_object_service,
         policy=credential_polling_policy,
         tenant_id=settings.source_tenant_id,
+        session_keeper=oa_session_keeper,
     )
 
     async def run_credential_polling_job(payload: dict[str, Any]) -> int:

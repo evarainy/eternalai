@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from time import monotonic
 from typing import Any, cast
 from uuid import UUID
@@ -168,6 +168,7 @@ class CapabilityGateway:
         mcp_contexts: McpExecutionContextFactory | None = None,
         mcp_profiles: Mapping[str, ServiceConfig] | None = None,
         mcp_scope_allowed: Callable[[str, str, str, str, str], bool] | None = None,
+        oa_read_preparation: Callable[[str, str], Awaitable[bool]] | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("source_profile_configuration_invalid")
@@ -175,6 +176,7 @@ class CapabilityGateway:
         self._mcp_contexts = mcp_contexts
         self._mcp_profiles = dict(mcp_profiles or {})
         self._mcp_scope_allowed = mcp_scope_allowed
+        self._oa_read_preparation = oa_read_preparation
         self._adapter = adapter
         self._adapters = adapters
         self._capability_registry = capability_registry
@@ -506,6 +508,31 @@ class CapabilityGateway:
                 identity_result.target_system == capability_spec.target_system
                 and identity_result.execution_identity == capability_spec.execution_identity
             )
+            if (
+                identity_result.bind_status == "expired"
+                and identity_result_matches_request
+                and capability_spec.target_system == "oa"
+                and capability_spec.execution_identity == "user_delegated"
+                and capability_spec.type == "query"
+                and capability_id in {"oa.list_pending_workflows", "oa.list_system_messages"}
+                and self._oa_read_preparation is not None
+                and await self._oa_read_preparation(request_context.tenant_id, ai_user_id)
+            ):
+                identity_result = await self._identity_mapping.resolve_execution_identity(
+                    ai_user_id=ai_user_id,
+                    target_system=capability_spec.target_system,
+                    execution_identity=capability_spec.execution_identity,
+                    request_context=request_context,
+                    **(
+                        {"service_config_id": service_config_id}
+                        if service_config_id is not None
+                        else {}
+                    ),
+                )
+                identity_result_matches_request = (
+                    identity_result.target_system == capability_spec.target_system
+                    and identity_result.execution_identity == capability_spec.execution_identity
+                )
             if identity_result.bind_status != "active" or not identity_result_matches_request:
                 bind_status = (
                     identity_result.bind_status

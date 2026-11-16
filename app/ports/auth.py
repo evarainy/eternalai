@@ -127,6 +127,15 @@ class CredentialStoreError(RuntimeError):
     """Uniform fail-closed error for unreadable encrypted credential storage."""
 
 
+class CredentialSubjectMismatch(CredentialStoreError):
+    """Automatic recovery returned a different OA resource subject."""
+
+    code = "credential_subject_mismatch"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
 @dataclass(frozen=True, slots=True)
 class CredentialSnapshot:
     """Read-only optimistic snapshot; absence never authorizes an overwrite."""
@@ -257,7 +266,9 @@ class CredentialStorePort(Protocol):
         tenant_id: str,
         reactivate_revoked_session: bool = True,
         expected_write: CredentialWriteStamp,
-    ) -> CredentialWriteStamp: ...
+    ) -> CredentialWriteStamp:
+        """Automatic writes preserve an active binding only for its verified subject."""
+        ...
 
     async def load(
         self, ai_user_id: str, target_system: str, *, tenant_id: str
@@ -268,6 +279,7 @@ __all__ = (
     "AuthenticationError",
     "AuthenticationPort",
     "CredentialStoreError",
+    "CredentialSubjectMismatch",
     "CredentialStorePort",
     "LoginCredential",
     "OASessionCredential",

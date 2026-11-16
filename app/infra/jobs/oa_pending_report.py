@@ -2,9 +2,9 @@
 
 The worker reads only ``oa.list_pending_workflows`` with the requester's own saved OA
 session, through a minimal Gateway (registry limited to that descriptor, OA identity
-mapping, MinimalPolicyGuard, PostgreSQL trace and HumanGate). No login, renewal,
-directory, MCP or browser component is built; an unclassified read failure is probed once
-with the official OA heartbeat so a dead Session reports ``oa_session_expired``.
+mapping, MinimalPolicyGuard, PostgreSQL trace and HumanGate). One keeper shared by the
+worker's OA readers recovers eligible active bindings only after a dead heartbeat.
+No directory, MCP or browser component is built.
 Generation, read-back check and publication run in that order; a mismatch never
 publishes. Logs carry stage, job, counts, elapsed time and closed codes only: never
 titles, states, user names, cookies or content.
@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -32,10 +32,19 @@ from app.background_jobs import (
     oa_pending_report_kind,
 )
 from app.config import OAReportWorkerSettings
+from app.credential_polling import (
+    CredentialPollingPolicy,
+    CredentialRecoveryPolicy,
+    CredentialSessionRecovery,
+    OASessionKeeper,
+    prepare_active_oa_read,
+)
 from app.infra.adapters.oa.adapter import OA_LIST_PENDING_WORKFLOWS
 from app.infra.adapters.oa.contracts import OAPendingWorkflowCollection
 from app.infra.adapters.oa.factory import build_oa_read_provider_adapter
 from app.infra.adapters.oa.provider import OASessionHeartbeat
+from app.infra.auth.background import OAPasswordCredentialAcquirer
+from app.infra.auth.oa import OACredentialVerifier, make_urllib_session_factory
 from app.infra.auth.postgresql import PostgreSQLCredentialStore, PostgreSQLPrincipalRoleReader
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.human_gate import PostgreSQLHumanGate
@@ -49,9 +58,11 @@ from app.infra.spreadsheets.oa_pending_report import (
     report_filename,
     verify_report,
 )
+from app.ports.auth import OASessionCredential
 from app.ports.background_jobs import BackgroundJobError, BackgroundJobRunOwner
-from app.ports.capability_gateway import CapabilityGatewayPort
+from app.ports.capability_gateway import CapabilityGatewayPort, ExecutionResult
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.credential_binding import OAKeepaliveStatus
 from app.ports.file_artifacts import XLSX_MEDIA_TYPE, ChunkWriter, FileArtifactError
 from app.ports.request_context import RequestOrgContext
 
@@ -103,31 +114,70 @@ async def read_pending_workflows(
     *,
     task_id: str,
     session_probe: WorkerSessionProbe | None = None,
+    session_keeper: OASessionKeeper | None = None,
 ) -> OAPendingWorkflowCollection:
     """One full read of the requester's own OA to-dos; failures are closed job codes."""
 
-    assert owner.session_id is not None
+    session_id = owner.session_id
+    assert session_id is not None
     roles = await role_reader.list_roles(owner.ai_user_id, tenant_id=owner.tenant_id)
-    result = await gateway.execute_capability(
-        task_id=task_id,
-        session_id=owner.session_id,
-        ai_user_id=owner.ai_user_id,
-        capability_id=OA_LIST_PENDING_WORKFLOWS,
-        arguments={},
-        request_context=RequestOrgContext(
-            request_id=str(uuid4()),
-            tenant_id=owner.tenant_id,
-            roles=list(roles),
-            channel="web",
-        ),
+    request_context = RequestOrgContext(
+        request_id=str(uuid4()), tenant_id=owner.tenant_id, roles=list(roles), channel="web"
     )
+    prepared: OAKeepaliveStatus | None = None
+    if session_keeper is not None:
+        observed = await session_keeper.observe(
+            tenant_id=owner.tenant_id, ai_user_id=owner.ai_user_id
+        )
+        if (
+            observed is not None
+            and observed.binding_state == "active"
+            and observed.session_expires_at is not None
+            and observed.session_expires_at <= datetime.now(UTC)
+        ):
+            prepared = await prepare_active_oa_read(
+                session_keeper, tenant_id=owner.tenant_id, ai_user_id=owner.ai_user_id,
+                trigger="local_expiry",
+            )
+
+    async def read() -> ExecutionResult:
+        return await gateway.execute_capability(
+            task_id=task_id, session_id=session_id, ai_user_id=owner.ai_user_id,
+            capability_id=OA_LIST_PENDING_WORKFLOWS, arguments={}, request_context=request_context,
+        )
+
+    result = await read()
     if result.status != "completed" or result.data is None:
         code = _FAILURES.get(result.error_code or "")
-        if code is None:
-            # OA's ambiguous rejections (e.g. 002) mean expiry only when its heartbeat agrees.
-            dead = session_probe is not None and await session_probe(owner) == "dead"
-            code = "oa_session_expired" if dead else "oa_unavailable"
-        raise BackgroundJobError(code)
+        if (
+            session_keeper is not None
+            and prepared in {None, "alive", "binding_unavailable"}
+            and (result.error_code == "identity_expired" or code is None)
+        ):
+            prepared = await prepare_active_oa_read(
+                session_keeper, tenant_id=owner.tenant_id, ai_user_id=owner.ai_user_id,
+                trigger="read_identity_expired" if result.error_code == "identity_expired"
+                else "oa_002",
+            )
+            if prepared in {"recovered", "refreshed_by_other"} or (
+                prepared == "alive" and result.error_code == "identity_expired"
+            ):
+                result = await read()
+                if result.status != "completed" or result.data is None:
+                    raise BackgroundJobError(
+                        _FAILURES.get(result.error_code or "", "oa_unavailable")
+                    )
+            elif prepared not in {"alive", "unavailable", "binding_unavailable"}:
+                code = "oa_session_expired"
+        if result.status != "completed" or result.data is None:
+            if code is None:
+                # Ineligible bindings retain their pure probe; unavailable never means dead.
+                dead = (
+                    prepared in {None, "binding_unavailable"}
+                    and session_probe is not None and await session_probe(owner) == "dead"
+                )
+                code = "oa_session_expired" if dead else "oa_unavailable"
+            raise BackgroundJobError(code)
     try:
         return OAPendingWorkflowCollection.model_validate(result.data, strict=True)
     except ValidationError:
@@ -151,11 +201,13 @@ class OAPendingReportHandler:
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         *,
         session_probe: WorkerSessionProbe | None = None,
+        session_keeper: OASessionKeeper | None = None,
     ) -> None:
         self._gateway = gateway
         self._roles = role_reader
         self._clock = clock
         self._session_probe = session_probe
+        self._session_keeper = session_keeper
 
     async def __call__(self, params: BaseModel, execution: JobExecution) -> JobOutcome:
         started = monotonic()
@@ -184,6 +236,7 @@ class OAPendingReportHandler:
             owner,
             task_id=f"report-job:{job_id}",
             session_probe=self._session_probe,
+            session_keeper=self._session_keeper,
         )
         read_finished_at = self._clock()
         rows = [
@@ -231,7 +284,8 @@ class OAPendingReportHandler:
 
 
 def build_worker_oa_pending_report_kind(
-    settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession]
+    settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession],
+    *, session_keeper: OASessionKeeper | None,
 ) -> JobKindSpec:
     """The report kind with its worker handler over the minimal OA read Gateway."""
 
@@ -241,6 +295,7 @@ def build_worker_oa_pending_report_kind(
             build_worker_pending_gateway(settings, sessions),
             PostgreSQLPrincipalRoleReader(session_factory=sessions),
             session_probe=build_worker_session_probe(settings, sessions),
+            session_keeper=session_keeper,
         ),
     )
 
@@ -262,10 +317,70 @@ def build_worker_session_probe(
     )
 
 
+def build_worker_oa_session_keeper(
+    settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession]
+) -> OASessionKeeper | None:
+    """One worker-local heartbeat/recovery instance shared by both OA job handlers."""
+
+    oa_read = settings.oa_read
+    if oa_read.oa_read_adapter_mode != "live":
+        return None
+    tenant_id = oa_read.source_tenant_id
+    store = PostgreSQLCredentialStore(
+        session_factory=sessions, encryption_key=settings.credential_encryption_key
+    )
+    session_factory = make_urllib_session_factory(
+        base_url=oa_read.oa_base_url, timeout_seconds=oa_read.oa_timeout_seconds
+    )
+    authentication = OACredentialVerifier(
+        session_factory=session_factory,
+        credential_store=store,
+        role_reader=PostgreSQLPrincipalRoleReader(session_factory=sessions),
+        identity_hmac_key=settings.identity_hmac_key,
+        credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        tenant_id=tenant_id,
+    )
+    policy = CredentialPollingPolicy(
+        interval_seconds=settings.credential_poll_interval_seconds,
+        maximum_backoff_seconds=settings.credential_poll_maximum_backoff_seconds,
+        work_start_hour=settings.credential_poll_work_start_hour,
+        work_end_hour=settings.credential_poll_work_end_hour,
+        timezone_name=settings.credential_poll_timezone,
+        global_concurrency=settings.credential_poll_global_concurrency,
+        scheduler_tick_seconds=settings.credential_poll_scheduler_tick_seconds,
+    )
+    recovery = CredentialSessionRecovery(
+        binding_store=store, tenant_id=tenant_id,
+        acquirer=OAPasswordCredentialAcquirer(
+            session_factory=session_factory, authentication=authentication,
+            binding_store=store, tenant_id=tenant_id,
+        ),
+        policy=policy,
+        recovery_policy=CredentialRecoveryPolicy(
+            cooldown_seconds=settings.oa_recovery_cooldown_seconds,
+            wait_seconds=settings.oa_recovery_wait_seconds,
+            kick_window_seconds=settings.oa_recovery_kick_window_seconds,
+        ),
+    )
+
+    async def load_session(ai_user_id: str) -> OASessionCredential | None:
+        return await store.load(ai_user_id, "oa", tenant_id=tenant_id)
+
+    return OASessionKeeper(
+        binding_store=store, tenant_id=tenant_id, load_session=load_session,
+        heartbeat=OASessionHeartbeat(
+            base_url=oa_read.oa_base_url, heartbeat_path=settings.oa_heartbeat_path,
+            timeout_seconds=oa_read.oa_timeout_seconds,
+        ),
+        recovery=recovery, credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        heartbeat_interval_seconds=settings.oa_heartbeat_interval_seconds,
+    )
+
+
 def build_worker_pending_gateway(
     settings: OAReportWorkerSettings, sessions: async_sessionmaker[AsyncSession]
 ) -> CapabilityGateway:
-    """Minimal read-only Gateway over ``oa.list_pending_workflows`` only (no renewal)."""
+    """Minimal Gateway; the shared worker read preparation owns session recovery."""
 
     oa_read = settings.oa_read
     credential_store = PostgreSQLCredentialStore(
@@ -276,7 +391,7 @@ def build_worker_pending_gateway(
         identity_mapping=PostgreSQLOAIdentityMapping(session_factory=sessions),
         policy_guard=MinimalPolicyGuard(),
         trace_port=PostgreSQLTraceWriter(sessions),
-        # No session_renewal: an expired OA session fails the job, it is never renewed here.
+        # The ledger owner prepares recovery outside the adapter's HTTP-only owner gate.
         adapters={"oa": build_oa_read_provider_adapter(oa_read, credential_store=credential_store)},
         human_gate_port=PostgreSQLHumanGate(sessions),
         unbound_task_capability_ids=frozenset({OA_LIST_PENDING_WORKFLOWS}),
@@ -289,6 +404,7 @@ def build_worker_pending_gateway(
 __all__ = (
     "OAPendingReportHandler",
     "build_worker_oa_pending_report_kind",
+    "build_worker_oa_session_keeper",
     "build_worker_pending_gateway",
     "build_worker_session_probe",
     "read_pending_workflows",

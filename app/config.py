@@ -1411,12 +1411,24 @@ class OAReadSettings:
 
 @dataclass(frozen=True)
 class OAReportWorkerSettings:
-    """What the worker needs to read the requester's own OA to-dos: no login or renewal."""
+    """The requester's OA reads and one-shot active-binding session recovery."""
 
     oa_read: OAReadSettings
     credential_encryption_key: bytes = field(repr=False)
-    # Read-only liveness probe after an ambiguous OA rejection.
+    identity_hmac_key: bytes = field(repr=False)
+    oa_credential_ttl_seconds: int
     oa_heartbeat_path: str = _DEFAULT_OA_HEARTBEAT_PATH
+    oa_heartbeat_interval_seconds: int = _DEFAULT_OA_HEARTBEAT_INTERVAL_SECONDS
+    credential_poll_interval_seconds: int = _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS
+    credential_poll_maximum_backoff_seconds: int = _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS
+    credential_poll_work_start_hour: int = _DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR
+    credential_poll_work_end_hour: int = _DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR
+    credential_poll_timezone: str = _DEFAULT_CREDENTIAL_POLL_TIMEZONE
+    credential_poll_global_concurrency: int = _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY
+    credential_poll_scheduler_tick_seconds: int = _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS
+    oa_recovery_cooldown_seconds: int = _DEFAULT_OA_RECOVERY_COOLDOWN_SECONDS
+    oa_recovery_wait_seconds: int = _DEFAULT_OA_RECOVERY_WAIT_SECONDS
+    oa_recovery_kick_window_seconds: int = _DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS
 
 
 _OA_PENDING_PATH_KEYS: tuple[tuple[str, str], ...] = (
@@ -1474,8 +1486,54 @@ def _oa_report_worker_settings(source: Mapping[str, str]) -> OAReportWorkerSetti
         credential_encryption_key=_base64_key(
             source, "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64", exact_bytes=32
         ),
+        identity_hmac_key=_base64_key(
+            source, "ETERNALAI_IDENTITY_HMAC_KEY_B64", minimum_bytes=32
+        ),
+        oa_credential_ttl_seconds=_required_positive_int(source, "OA_CREDENTIAL_TTL_S"),
         oa_heartbeat_path=_oa_path_with_default(
             source, "OA_HEARTBEAT_PATH", _DEFAULT_OA_HEARTBEAT_PATH
+        ),
+        oa_heartbeat_interval_seconds=_bounded_positive_int(
+            source, "OA_HEARTBEAT_INTERVAL_S", _DEFAULT_OA_HEARTBEAT_INTERVAL_SECONDS,
+            minimum=30, maximum=600,
+        ),
+        credential_poll_interval_seconds=_bounded_positive_int(
+            source, "CREDENTIAL_POLL_INTERVAL_S", _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS,
+            minimum=600, maximum=86_400,
+        ),
+        credential_poll_maximum_backoff_seconds=_bounded_positive_int(
+            source, "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S",
+            _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS, minimum=600, maximum=604_800,
+        ),
+        credential_poll_work_start_hour=_integer_in_range(
+            source, "CREDENTIAL_POLL_WORK_START_HOUR", _DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR,
+            minimum=0, maximum=23,
+        ),
+        credential_poll_work_end_hour=_integer_in_range(
+            source, "CREDENTIAL_POLL_WORK_END_HOUR", _DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR,
+            minimum=1, maximum=24,
+        ),
+        credential_poll_timezone=_required(
+            source, "CREDENTIAL_POLL_TIMEZONE", default=_DEFAULT_CREDENTIAL_POLL_TIMEZONE,
+        ),
+        credential_poll_global_concurrency=_bounded_positive_int(
+            source, "CREDENTIAL_POLL_GLOBAL_CONCURRENCY",
+            _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY, maximum=32,
+        ),
+        credential_poll_scheduler_tick_seconds=_bounded_positive_int(
+            source, "CREDENTIAL_POLL_SCHEDULER_TICK_S",
+            _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS, maximum=600,
+        ),
+        oa_recovery_cooldown_seconds=_bounded_positive_int(
+            source, "OA_RECOVERY_COOLDOWN_S", _DEFAULT_OA_RECOVERY_COOLDOWN_SECONDS,
+            minimum=30, maximum=3_600,
+        ),
+        oa_recovery_wait_seconds=_bounded_positive_int(
+            source, "OA_RECOVERY_WAIT_S", _DEFAULT_OA_RECOVERY_WAIT_SECONDS, maximum=60,
+        ),
+        oa_recovery_kick_window_seconds=_bounded_positive_int(
+            source, "OA_RECOVERY_KICK_WINDOW_S", _DEFAULT_OA_RECOVERY_KICK_WINDOW_SECONDS,
+            minimum=60, maximum=3_600,
         ),
     )
 

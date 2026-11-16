@@ -613,6 +613,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             key=bytes(range(32)),
         ),
         target_system="oa",
+        binding_state="unverified",
         poll_failure_count=0,
         updated_at=datetime(2026, 8, 21, 1, 0, tzinfo=UTC),
         tenant_id="default",

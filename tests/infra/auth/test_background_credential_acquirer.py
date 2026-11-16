@@ -36,6 +36,7 @@ from app.ports.credential_binding import (
 CANDIDATE = CredentialPollCandidate(
     ai_user_id="usr_v1_synthetic",
     target_system="oa",
+    binding_state="unverified",
     poll_failure_count=0,
     updated_at=datetime(2026, 8, 21, tzinfo=UTC),
     tenant_id="default",

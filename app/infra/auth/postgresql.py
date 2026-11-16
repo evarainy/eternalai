@@ -24,6 +24,7 @@ from app.ports.auth import (
     CredentialSnapshot,
     CredentialStoreError,
     CredentialStorePort,
+    CredentialSubjectMismatch,
     CredentialWriteStamp,
     OASessionCredential,
     Principal,
@@ -264,17 +265,17 @@ class PostgreSQLCredentialStore:
             nonce, payload, _v2_aad(expected_write.snapshot, "session")
         )
         verified_subject_digest: bytes | None = None
-        if reactivate_revoked_session:
-            subject = credential.oa_user_id.get_secret_value()
-            if subject and len(subject) <= 256 and subject == subject.strip():
-                from app.infra.browser.local_resource_lifecycle import registered_subject_digest
+        subject = credential.oa_user_id.get_secret_value()
+        if subject and len(subject) <= 256 and subject == subject.strip():
+            from app.infra.browser.local_resource_lifecycle import registered_subject_digest
 
-                verified_subject_digest = registered_subject_digest("oa", subject)
+            verified_subject_digest = registered_subject_digest("oa", subject)
         async with self._write_session(tenant_id, ai_user_id, target_system) as session:
             current = (
                 await session.execute(
                     text(
-                        "SELECT binding_state,binding_revision,revoked_at,"
+                        "SELECT binding_state,binding_revision,revoked_at,poll_status,"
+                        "encrypted_password_payload IS NOT NULL AS has_password,"
                         "binding_subject_digest,binding_subject_verified_at,"
                         "clock_timestamp() AS db_now FROM oa_session_credentials WHERE"
                         f" {_WRITE_WHERE} FOR UPDATE"
@@ -284,13 +285,10 @@ class PostgreSQLCredentialStore:
             ).mappings().one_or_none()
             if current is None:
                 raise StaleCredentialWrite("credential write fenced")
-            if current["binding_state"] == "active" and not reactivate_revoked_session:
-                raise CredentialStoreError("browser_subject_verifier_unavailable")
             verified_at = current["binding_subject_verified_at"]
             db_now = current["db_now"]
-            preserve_verified_binding = (
-                reactivate_revoked_session
-                and current["binding_state"] == "active"
+            verifiable_binding = (
+                current["binding_state"] == "active"
                 and current["revoked_at"] is None
                 and type(db_now) is datetime
                 and db_now.tzinfo is not None
@@ -302,12 +300,33 @@ class PostgreSQLCredentialStore:
                 and verified_subject_digest is not None
                 and type(current["binding_subject_digest"]) is bytes
                 and len(current["binding_subject_digest"]) == 32
-                and current["binding_subject_digest"] == verified_subject_digest
                 and bool(credential.cookies)
                 and credential.expires_at.tzinfo is not None
                 and credential.expires_at.utcoffset() is not None
                 and credential.expires_at > db_now
             )
+            preserve_verified_binding = (
+                verifiable_binding
+                and current["binding_subject_digest"] == verified_subject_digest
+            )
+            if not reactivate_revoked_session:
+                if (
+                    current["binding_state"] not in {"unverified", "active"}
+                    or not current["has_password"]
+                    or current["revoked_at"] is not None
+                    or current["poll_status"] not in {"active", "retrying"}
+                ):
+                    raise StaleCredentialWrite("credential write fenced")
+                if current["binding_state"] == "active":
+                    if not verifiable_binding:
+                        raise CredentialStoreError("browser_subject_verifier_unavailable")
+                    if not preserve_verified_binding:
+                        logging.getLogger("app.infra.auth.oa").info(
+                            "oa_binding_transition operation=automatic_recovery "
+                            "outcome=subject_mismatch binding_revision=%s",
+                            current["binding_revision"],
+                        )
+                        raise CredentialSubjectMismatch()
             mutation = ""
             if reactivate_revoked_session and not preserve_verified_binding:
                 mutation = (
@@ -357,6 +376,12 @@ class PostgreSQLCredentialStore:
                 state_before,
                 state_after,
                 current["binding_revision"],
+                row["binding_revision"],
+            )
+        elif preserve_verified_binding:
+            logging.getLogger("app.infra.auth.oa").info(
+                "oa_binding_transition operation=automatic_recovery "
+                "outcome=preserved_verified_binding binding_revision=%s",
                 row["binding_revision"],
             )
         return CredentialWriteStamp(
@@ -696,12 +721,12 @@ class PostgreSQLCredentialStore:
                     await session.execute(
                         text(
                             "SELECT tenant_id, ai_user_id, target_system, poll_failure_count,"
-                            " updated_at, binding_id, binding_revision,"
+                            " updated_at, binding_id, binding_revision, binding_state,"
                             " credential_write_revision, refresh_epoch FROM oa_session_credentials"
                             " WHERE tenant_id = :tenant_id"
                             " AND encrypted_password_payload IS NOT NULL"
                             " AND target_system = 'oa'"
-                            " AND binding_state = 'unverified'"
+                            " AND binding_state IN ('unverified', 'active')"
                             " AND revoked_at IS NULL"
                             " AND poll_status IN ('active', 'retrying')"
                             " ORDER BY updated_at ASC, ai_user_id ASC, target_system ASC"
@@ -724,12 +749,12 @@ class PostgreSQLCredentialStore:
                     await session.execute(
                         text(
                             "SELECT tenant_id, ai_user_id, target_system, poll_failure_count,"
-                            " updated_at, binding_id, binding_revision,"
+                            " updated_at, binding_id, binding_revision, binding_state,"
                             " credential_write_revision, refresh_epoch FROM oa_session_credentials"
                             " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                             " AND target_system = :target_system"
                             " AND encrypted_password_payload IS NOT NULL"
-                            " AND binding_state = 'unverified'"
+                            " AND binding_state IN ('unverified', 'active')"
                             " AND revoked_at IS NULL"
                             " AND poll_status IN ('active', 'retrying')"
                         ),
@@ -930,7 +955,8 @@ class PostgreSQLCredentialStore:
                                 " encrypted_password_payload, tenant_id, target_system, binding_id"
                                 " FROM oa_session_credentials"
                                 f" WHERE {_WRITE_WHERE}"
-                                " AND binding_state = 'unverified'"
+                                " AND encrypted_password_payload IS NOT NULL"
+                                " AND binding_state IN ('unverified', 'active')"
                                 " AND revoked_at IS NULL"
                                 " AND poll_status IN ('active', 'retrying')"
                             ),
@@ -1056,7 +1082,10 @@ class PostgreSQLCredentialStore:
         revoked_expression = ":updated_at" if revoke_session else "revoked_at"
         binding_mutation = (
             ", binding_state='revoked',binding_revision=binding_revision+1,"
-            "binding_subject_digest=NULL,binding_subject_verified_at=NULL"
+            "binding_subject_digest=CASE WHEN binding_state='active'"
+            " THEN binding_subject_digest ELSE NULL END,"
+            "binding_subject_verified_at=CASE WHEN binding_state='active'"
+            " THEN binding_subject_verified_at ELSE NULL END"
             if revoke_session
             else ""
         )
@@ -1203,6 +1232,7 @@ def _candidate(row: RowMapping) -> CredentialPollCandidate:
         tenant_id=row["tenant_id"],
         ai_user_id=row["ai_user_id"],
         target_system=row["target_system"],
+        binding_state=row["binding_state"],
         poll_failure_count=row["poll_failure_count"],
         updated_at=row["updated_at"],
         snapshot=_snapshot(row),

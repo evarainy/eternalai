@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.background_jobs import JobExecution, JobKindSpec, JobOutcome
 from app.config import OAReportWorkerSettings, WorkerDocumentQASettings
+from app.credential_polling import OASessionKeeper
 from app.file_artifacts import FileArtifactService
 from app.infra.adapters.oa.contracts import OAPendingWorkflow
 from app.infra.auth.postgresql import PostgreSQLPrincipalRoleReader
@@ -210,12 +211,14 @@ class SheetFillHandler:
         role_reader: PostgreSQLPrincipalRoleReader | None,
         document_qa: DocumentQAService | None,
         oa_session_probe: WorkerSessionProbe | None = None,
+        oa_session_keeper: OASessionKeeper | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ) -> None:
         self._files = files
         self._oa_gateway = oa_gateway
         self._roles = role_reader
         self._oa_session_probe = oa_session_probe
+        self._oa_session_keeper = oa_session_keeper
         self._document_qa = document_qa
         self._clock = clock
 
@@ -291,6 +294,7 @@ class SheetFillHandler:
             collection = await read_pending_workflows(
                 self._oa_gateway, self._roles, owner, task_id=f"sheet-fill-job:{job_id}",
                 session_probe=self._oa_session_probe,
+                session_keeper=self._oa_session_keeper,
             )
             oa_index = {}
             for item in collection.workflows:
@@ -413,6 +417,7 @@ def build_worker_sheet_fill_kind(
     *,
     oa_report: OAReportWorkerSettings | None,
     document_qa: WorkerDocumentQASettings | None,
+    oa_session_keeper: OASessionKeeper | None = None,
 ) -> JobKindSpec:
     """Sources the worker is not configured for refuse only the jobs that use them."""
 
@@ -427,6 +432,7 @@ def build_worker_sheet_fill_kind(
             else PostgreSQLPrincipalRoleReader(session_factory=sessions),
             oa_session_probe=None if oa_report is None
             else build_worker_session_probe(oa_report, sessions),
+            oa_session_keeper=oa_session_keeper,
             document_qa=None if document_qa is None else build_document_qa(document_qa),
         ),
     )
