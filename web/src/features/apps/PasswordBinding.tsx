@@ -18,8 +18,8 @@ type Busy = null | 'bind' | 'activate' | 'unbind';
 /**
  * 一个系统的账号设置：看状态、输账号密码绑定、解除绑定。OA 另有「启用自动登录」。
  *
- * 账号密码不进任何状态：提交时从表单里读出来，随即清空输入框。换了登录身份后发回来的结果一律丢弃。
- * 换了登录身份，整张表单重建：上一个人没提交的输入、进行到一半的操作和提示都不留给下一个人。
+ * 账号密码只留在当前打开的表单 DOM，不写入状态或缓存；提交后保留输入，关闭表单时卸载。
+ * 换了登录身份后丢弃旧请求结果并重建表单，不保留上一人的输入、操作或提示。
  */
 export function PasswordBinding({ name, target }: { name: string; target: PasswordTarget }) {
   const generation = useAuthStore((state) => state.generation);
@@ -80,7 +80,6 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
     const selection = action === 'activate' && browser?.binding_id != null && browser.binding_revision != null
       ? { binding_id: browser.binding_id, binding_revision: browser.binding_revision } : null;
     if (action === 'activate' && selection === null) return;
-    form.reset();
     setBusy(action);
     setMessage(null);
     setUnbindArmed(false);
