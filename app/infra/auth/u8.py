@@ -29,7 +29,11 @@ class U8Login:
     async def login(self, credential: PasswordBindingCredential) -> SecretStr:
         stage = "key"
         try:
-            private_key = serialization.load_pem_private_key(self._key_path.read_bytes(), None)
+            # The supplied U8 PEM armor says PKCS#1, but its body is PKCS#8 DER.
+            key_body = b"".join(self._key_path.read_bytes().strip().splitlines()[1:-1])
+            private_key = serialization.load_der_private_key(
+                base64.b64decode(key_body, validate=True), None,
+            )
             if not isinstance(private_key, rsa.RSAPrivateKey):
                 raise ValueError("U8 key must be RSA")
             async with httpx2.AsyncClient(
