@@ -168,7 +168,8 @@ def create_oa_bridge(
                         secure=secure or bool(cookie["secure"]), httponly=bool(cookie["httponly"]),
                         samesite=cookie["samesite"] or "lax",
                     )
-            _log.info("oa_bridge stage=proxy status=%s", result.status_code)
+            if result.status_code >= 400:
+                _log.warning("oa_bridge stage=proxy status=%s", result.status_code)
             return response
         except Exception:
             await close()

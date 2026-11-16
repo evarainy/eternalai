@@ -49,7 +49,6 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
       ? '免登入口未配置，打开原系统' : '免登入口未配置';
 
   const enter = async () => {
-    if (busy) return;
     if (!sso) {
       if (href !== null) openSystem(href);
       return;
