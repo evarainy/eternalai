@@ -107,6 +107,10 @@
   cursor: default;
 }
 
+.cardMeta small[role='alert'] {
+  color: var(--danger, #b42318);
+}
+
 /* 单字方印 */
 .mono {
   display: grid;

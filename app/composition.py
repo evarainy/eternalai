@@ -95,6 +95,7 @@ from app.infra.auth.postgresql import (
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
+from app.infra.auth.u8 import U8Login
 from app.infra.communication.composition import build_im_delivery, build_personal_agents
 from app.infra.communication.zulip import ZulipCommunicationAdapter
 from app.infra.fixed_txt import build_document_qa_service
@@ -136,6 +137,7 @@ from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectSto
 from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSeriesStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.system_entry.oa_login import OAEntryVerifier
 from app.infra.workflow.catalog import production_workflow_capabilities
 from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
 from app.infra.workflow.production import (
@@ -198,6 +200,7 @@ from app.ports.workflow_store import McpRecoveryPolicyPort
 from app.runtime.document_qa import DocumentQAService
 from app.runtime.runtime import RuntimeImpl
 from app.sheet_fill import SheetFillAdmission, sheet_fill_kind
+from app.system_entry.service import SystemEntryService
 from app.work_dispatch.attachments import WorkObjectAttachmentService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 from app.work_dispatch.service import WorkDispatchService
@@ -255,6 +258,8 @@ class ProductionComponents:
     im_context: IMContextService | None = None
     im_client: IMClientService | None = None
     personal_agents: PersonalAgentService | None = None
+    system_entry_service: SystemEntryService | None = None
+    close_system_entry: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
 
 
 def build_credential_store(
@@ -1315,10 +1320,29 @@ def build_production_components(
         trace_port=resolved_trace_port, dispatch_service=work_dispatch_service,
         attachment_service=work_attachment_service, series_service=work_series_service,
     )
+    u8_login = (
+        U8Login(
+            base_url=settings.u8_base_url, private_key_path=settings.u8_rsa_private_key_path,
+            timeout=settings.oa_timeout_seconds,
+        ) if settings.u8_rsa_private_key_path is not None else None
+    )
+    oa_tickets = None
+    if settings.oa_bridge_public_base is not None:
+        from app.infra.system_entry.tickets import RedisOAEntryTickets
+
+        oa_tickets = RedisOAEntryTickets(
+            redis_url=settings.redis_url, encryption_key=settings.credential_encryption_key,
+        )
+    system_entry_service = SystemEntryService(
+        reader=credential_store, oa_verifier=OAEntryVerifier(resolved_binding_verifier),
+        oa_tickets=oa_tickets, oa_bridge_base=settings.oa_bridge_public_base,
+        u8_login=u8_login, u8_base=settings.u8_base_url,
+    )
     credential_binding_service = CredentialBindingService(
         store=credential_store,
         verifier=resolved_binding_verifier,
         oa_session_keeper=oa_session_keeper,
+        u8_login=u8_login,
     )
     user_profile = build_user_profile_port(
         settings=settings,
@@ -1466,6 +1490,8 @@ def build_production_components(
         work_object_series_scheduler=work_series_scheduler,
         leader_roster_admin_service=leader_roster_admin_service,
         credential_binding_service=credential_binding_service,
+        system_entry_service=system_entry_service,
+        close_system_entry=oa_tickets.aclose if oa_tickets is not None else None,
         credential_polling_job_queue=credential_polling_job_queue,
         credential_polling_scheduler=credential_polling_scheduler,
         authentication=resolved_authentication,

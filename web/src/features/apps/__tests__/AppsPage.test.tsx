@@ -27,7 +27,11 @@ const OTHER_SYSTEMS = ['财务软件', '综合业务平台', '数据中台', '�
 /** 状态文案闭集（2026-09-02 第二轮意见）。「未开通」当前没有任何真实来源，任何一屏都不该出现。 */
 const FABRICATED_STATUS_LABELS = ['未开通'];
 
-const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn(), mcpServices: vi.fn(), mcpConnections: vi.fn(), mcpOperations: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn(), mcpServices: vi.fn(), mcpConnections: vi.fn(), mcpOperations: vi.fn(), entryAvailability: vi.fn() }));
+vi.mock('../../../api/systemEntry', () => ({
+  getSystemEntryAvailability: apiMocks.entryAvailability,
+}));
+
 vi.mock('../../../api/mcp', () => ({
   listMcpServices: apiMocks.mcpServices, listMcpConnections: apiMocks.mcpConnections,
   listMcpOperations: apiMocks.mcpOperations,
@@ -102,6 +106,7 @@ let openWindow: MockInstance<typeof window.open>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  apiMocks.entryAvailability.mockResolvedValue({ oa: false, u8: false });
   apiMocks.mcpServices.mockResolvedValue([]);
   apiMocks.mcpOperations.mockResolvedValue([]);
   apiMocks.mcpConnections.mockResolvedValue([]);
@@ -125,7 +130,7 @@ describe('AppsPage business systems', () => {
 
     const tile = oaTile();
     expect(tile).toBeEnabled();
-    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定');
+    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定 免登入口未配置，打开原系统');
     expect(tile).toHaveAttribute('title', '打开OA 办公系统');
     fireEvent.click(tile);
     expect(openWindow).toHaveBeenCalledExactlyOnceWith(
@@ -142,7 +147,7 @@ describe('AppsPage business systems', () => {
     const tile = oaTile();
     expect(tile).toBeDisabled();
     expect(tile).not.toHaveAttribute('title');
-    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定 入口地址未配置');
+    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定 免登入口未配置');
     fireEvent.click(tile);
     expect(openWindow).not.toHaveBeenCalled();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
@@ -162,7 +167,7 @@ describe('AppsPage business systems', () => {
     const tile = oaTile();
     expect(tile).toBeDisabled();
     expect(tile).not.toHaveAttribute('title');
-    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定 入口地址未配置');
+    expect(tile).toHaveAccessibleName('OA 办公系统 未绑定 免登入口未配置');
     fireEvent.click(tile);
     expect(openWindow).not.toHaveBeenCalled();
     expect(document.body.textContent ?? '').not.toContain('elsewhere.invalid');
@@ -241,10 +246,10 @@ describe('AppsPage backend gaps', () => {
     for (const label of ['要先绑账号', '正在读取', '读不到']) {
       expect(document.body.textContent).not.toContain(label);
     }
-    expect(oaTile()).toHaveAccessibleName('OA 办公系统 密码已失效');
+    expect(oaTile()).toHaveAccessibleName('OA 办公系统 密码已失效 免登入口未配置，打开原系统');
     expect(oaTile().querySelector('[data-state]')).toHaveAttribute('data-state', 'alert');
     const finance = systemTiles()[1]!;
-    expect(finance).toHaveAccessibleName('财务软件 已保存，接入后验证');
+    expect(finance).toHaveAccessibleName('财务软件 已保存 免登入口未配置');
     expect(finance.querySelector('[data-state]')).toHaveAttribute('data-state', 'on');
   });
 
@@ -279,7 +284,7 @@ describe('AppsPage vocabulary', () => {
       if (state === 'unconfigured') navigationConfigMock.current = null;
       await renderPage();
       expect(oaTile()).toHaveAccessibleName(state === 'configured'
-        ? 'OA 办公系统 未绑定' : 'OA 办公系统 未绑定 入口地址未配置');
+        ? 'OA 办公系统 未绑定 免登入口未配置，打开原系统' : 'OA 办公系统 未绑定 免登入口未配置');
       expect(oaTile()).toHaveProperty('disabled', state === 'unconfigured');
       const checkCopy = () => {
         const text = [document.body.textContent, ...Array.from(

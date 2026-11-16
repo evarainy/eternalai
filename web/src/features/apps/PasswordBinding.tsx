@@ -101,7 +101,7 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
       if (!current()) return;
       setMessage({
         tone: 'ok',
-        text: target === 'oa' ? (bound ? '密码已更新。' : '已绑定。') : `已保存。${name}接入后会用这组账号验证。`,
+        text: bound ? '密码已更新。' : '已绑定。',
       });
     } catch (error) {
       if (!current()) return;

@@ -23,6 +23,7 @@ from app.ports.credential_binding import (
     OASessionRenewalPort,
     PasswordBindingCredential,
 )
+from app.ports.system_entry import SystemEntryError, U8LoginPort
 
 _MAX_BINDING_BODY_BYTES = 16_384
 _BINDING_REQUEST_BODY = {
@@ -53,10 +54,12 @@ class CredentialBindingService:
         store: CredentialBindingStorePort,
         verifier: CredentialBindingVerifierPort,
         oa_session_keeper: OASessionRenewalPort | None = None,
+        u8_login: U8LoginPort | None = None,
     ) -> None:
         self._store = store
         self._verifier = verifier
         self._oa_session_keeper = oa_session_keeper
+        self._u8_login = u8_login
 
     async def get(
         self,
@@ -76,6 +79,15 @@ class CredentialBindingService:
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
     ) -> CredentialBindingView:
+        if target_system == "u8":
+            if self._u8_login is None:
+                _raise_binding_unavailable()
+            try:
+                await self._u8_login.login(credential)
+            except SystemEntryError as exc:
+                if exc.code == "entry_credentials_rejected":
+                    _raise_binding_failed()
+                _raise_binding_unavailable()
         try:
             async with self._store.poll_lock(
                 principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id

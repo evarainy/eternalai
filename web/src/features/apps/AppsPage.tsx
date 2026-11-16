@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ApiError } from '../../api/mutator';
+import { createSystemEntry, getSystemEntryAvailability } from '../../api/systemEntry';
+import type { SystemEntryAvailability } from '../../api/systemEntry';
+import { useAuthStore } from '../../stores/authStore';
 import { Icon } from '../../shared/ui/Icon';
 import { PageFrame } from '../../shared/ui/PageFrame';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
@@ -15,6 +20,8 @@ const LEGEND = [
 
 interface SystemCardProps {
   index: number;
+  availability: SystemEntryAvailability | undefined;
+  availabilityFailed: boolean;
   onClose: () => void;
   onToggle: () => void;
   open: boolean;
@@ -25,10 +32,50 @@ interface SystemCardProps {
  * 一张系统卡片：左边点一下进入系统，名称下面一盏灯说明账号绑没绑；右边的齿轮摊开一张小设置卡片，
  * 在里面输账号密码绑定。点卡片外面或按 Esc 收起。
  */
-function SystemCard({ index, onClose, onToggle, open, system }: SystemCardProps) {
+function SystemCard({ index, availability, availabilityFailed, onClose, onToggle, open, system }: SystemCardProps) {
   const card = useRef<HTMLElement>(null);
   const gear = useRef<HTMLButtonElement>(null);
   const href = systemHref(system.key);
+  const generation = useAuthStore((state) => state.generation);
+  const [busy, setBusy] = useState(false);
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const target = system.account.kind === 'password' ? system.account.target : null;
+  const sso = target !== null && availability?.[target] === true;
+  const canEnter = sso || (target === 'oa' && availability !== undefined && href !== null);
+  const hint = target === null ? null
+    : availabilityFailed ? '读不到免登入口状态，请刷新重试'
+    : availability === undefined ? '正在读取入口'
+    : sso ? null : target === 'oa' && href !== null
+      ? '免登入口未配置，打开原系统' : '免登入口未配置';
+
+  const enter = async () => {
+    if (busy) return;
+    if (!sso) {
+      if (href !== null) openSystem(href);
+      return;
+    }
+    const popup = window.open('about:blank', '_blank');
+    if (popup === null) {
+      setEntryError('浏览器拦截了新窗口，请允许本站弹窗后重试。');
+      return;
+    }
+    popup.opener = null;
+    setBusy(true);
+    setEntryError(null);
+    const current = () => useAuthStore.getState().generation === generation;
+    try {
+      const entry = await createSystemEntry(target!);
+      if (!current()) { popup.close(); return; }
+      if (!popup.closed) popup.location.replace(entry.url);
+    } catch (error) {
+      popup.close();
+      if (!current()) return;
+      setEntryError(error instanceof ApiError
+        ? error.message : '暂时无法进入系统，请稍后再试。');
+    } finally {
+      if (current()) setBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -58,9 +105,10 @@ function SystemCard({ index, onClose, onToggle, open, system }: SystemCardProps)
     >
       <button
         className={styles.enter}
-        disabled={href === null}
-        onClick={href === null ? undefined : () => openSystem(href)}
-        title={href === null ? undefined : `打开${system.name}`}
+        aria-busy={busy}
+        disabled={!canEnter || busy}
+        onClick={() => { void enter(); }}
+        title={canEnter ? `打开${system.name}` : undefined}
         type="button"
       >
         <span aria-hidden="true" className={styles.mono}>{system.mark}</span>
@@ -68,10 +116,12 @@ function SystemCard({ index, onClose, onToggle, open, system }: SystemCardProps)
           <b>{system.name}</b>
           <span className={styles.cardMeta}>
             <SystemLight system={system} />
-            {system.key === 'oa' && href === null ? <small>入口地址未配置</small> : null}
+            {busy ? <small role="status">正在登录…</small> : null}
+            {entryError !== null ? <small role="alert">{entryError}</small>
+              : hint !== null ? <small>{hint}</small> : null}
           </span>
         </span>
-        {href === null ? null : <Icon className={styles.enterMark} name="open" size={18} />}
+        {!canEnter ? null : <Icon className={styles.enterMark} name="open" size={18} />}
       </button>
       <button
         aria-expanded={open}
@@ -105,6 +155,12 @@ export default function AppsPage() {
   const [openKey, setOpenKey] = useState<BusinessSystem['key'] | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const close = useCallback(() => setOpenKey(null), []);
+  const generation = useAuthStore((state) => state.generation);
+  const entries = useQuery({
+    queryKey: ['system-entry-availability', generation],
+    queryFn: ({ signal }) => getSystemEntryAvailability(signal),
+    retry: false,
+  });
 
   return (
     <PageFrame title="软件中心">
@@ -123,8 +179,10 @@ export default function AppsPage() {
         <div className={styles.grid}>
           {SYSTEMS.map((system, index) => (
             <SystemCard
+              availability={entries.data}
+              availabilityFailed={entries.isError}
               index={index}
-              key={system.key}
+              key={`${generation}/${system.key}`}
               onClose={close}
               onToggle={() => setOpenKey((key) => (key === system.key ? null : system.key))}
               open={openKey === system.key}

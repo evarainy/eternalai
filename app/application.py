@@ -40,6 +40,7 @@ from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
 from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
+from app.api.v1.system_entry import make_router as make_system_entry_router
 from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
@@ -85,6 +86,7 @@ from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.browser_screen import BrowserScreenPort
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
+from app.system_entry.service import SystemEntryService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
@@ -96,6 +98,8 @@ def create_app(
     work_object_service: WorkObjectService | None = None,
     credential_binding_service: CredentialBindingService | None = None,
     *,
+    system_entry_service: SystemEntryService | None = None,
+    close_system_entry: Callable[[], Awaitable[None]] | None = None,
     user_profile: UserProfilePort | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
@@ -203,8 +207,12 @@ def create_app(
                             if close_im_deliveries is not None:
                                 await close_im_deliveries()
                         finally:
-                            if im_client is not None:
-                                await im_client.aclose()
+                            try:
+                                if im_client is not None:
+                                    await im_client.aclose()
+                            finally:
+                                if close_system_entry is not None:
+                                    await close_system_entry()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -355,6 +363,10 @@ def create_app(
             csrf_protected_principal,
         ),
         prefix="/api/v1/credential-bindings",
+    )
+    application.include_router(
+        make_system_entry_router(system_entry_service, csrf_protected_principal),
+        prefix="/api/v1/system-entry",
     )
     return application
 
@@ -550,6 +562,8 @@ def create_production_app(
             components.work_object_series_scheduler if background_sync_enabled else None
         ),
         credential_binding_service=components.credential_binding_service,
+        system_entry_service=components.system_entry_service,
+        close_system_entry=components.close_system_entry,
         user_profile=components.user_profile,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
