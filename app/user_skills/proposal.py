@@ -9,7 +9,6 @@ seen in the record.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
@@ -36,8 +35,7 @@ Path = tuple[str | int, ...]
 _SCHEMA_KEYS = ("type", "format", "minLength", "maxLength", "pattern", "minimum", "maximum",
                 "enum")
 MAX_LIST_ITEMS = 50
-_PARTIAL_WINDOW = 5
-_PARTIAL_SAMPLE_MIN = 8
+COMPLETENESS_FIELD = "is_complete"
 
 
 class ProposalRejected(ValueError):
@@ -299,20 +297,72 @@ def sample_values(records: Sequence[RecordEntry], exempt: set[str]) -> set[str]:
 
 
 def check_texts(texts: Sequence[str], samples: set[str]) -> None:
-    long_samples = [sample for sample in samples if len(sample) >= _PARTIAL_SAMPLE_MIN]
     for text in texts:
         normalized = _norm(text)
-        windows = {
-            normalized[i : i + _PARTIAL_WINDOW]
-            for i in range(len(normalized) - _PARTIAL_WINDOW + 1)
-        }
-        # Whole values, and a 5-character piece of a long value, both count.
-        if any(sample in normalized for sample in samples) or any(
-            window in sample for window in windows for sample in long_samples
-        ):
+        if any(sample in normalized for sample in samples):
             raise ProposalRejected(
                 "sample_value_in_text", "名称、说明或标题里出现了本次查询的具体内容，请改成一般说法"
             )
+
+
+# ------------------------------------------------------------ output schema
+def _deref(root: Mapping[str, Any], node: Any) -> Any:
+    seen = 0
+    while isinstance(node, Mapping) and isinstance(node.get("$ref"), str) and seen < 10:
+        ref = node["$ref"]
+        if not ref.startswith("#/"):
+            return None
+        target: Any = root
+        for part in ref[2:].split("/"):
+            target = target.get(part) if isinstance(target, Mapping) else None
+        node, seen = target, seen + 1
+    return node
+
+
+def _branches(root: Mapping[str, Any], node: Any) -> list[Mapping[str, Any]]:
+    node = _deref(root, node)
+    if not isinstance(node, Mapping):
+        return []
+    variants = node.get("anyOf") or node.get("oneOf")
+    if isinstance(variants, list):
+        return [b for v in variants for b in _branches(root, v)]
+    return [node]
+
+
+def schema_at(root: Mapping[str, Any], path: Sequence[str | int]) -> list[Mapping[str, Any]]:
+    """Schema nodes ``path`` can reach in a leaf's exposed output (empty: not exposed)."""
+
+    nodes = _branches(root, root)
+    for segment in path:
+        following: list[Mapping[str, Any]] = []
+        for node in nodes:
+            if isinstance(segment, int):
+                if node.get("type") == "array":
+                    following += _branches(root, node.get("items"))
+            else:
+                properties = node.get("properties")
+                if isinstance(properties, Mapping) and segment in properties:
+                    following += _branches(root, properties[segment])
+        nodes = following
+    return nodes
+
+
+def _has_type(nodes: Sequence[Mapping[str, Any]], kind: str) -> bool:
+    return any(node.get("type") == kind for node in nodes)
+
+
+def _list_items(root: Mapping[str, Any], path: Sequence[str | int]) -> Mapping[str, Any] | None:
+    """A root for one element of the list at ``path`` (keeps ``$defs`` for references)."""
+
+    for node in schema_at(root, path):
+        if node.get("type") == "array":
+            for item in _branches(root, node.get("items")):
+                return {**item, "$defs": root.get("$defs", {})}
+    return None
+
+
+def _exposed(root: Mapping[str, Any], path: Sequence[str | int]) -> bool:
+    return bool(schema_at(root, path))
 
 
 # ------------------------------------------------------------------- proposal
@@ -343,7 +393,11 @@ def build_proposal(
     steps: list[_Step] = []
     for item in model.steps:
         found = [by_seq.get(seq) for seq in item.record_seqs]
-        if any(entry is None for entry in found) or used & set(item.record_seqs):
+        if (
+            any(entry is None for entry in found)
+            or used & set(item.record_seqs)
+            or len(set(item.record_seqs)) != len(item.record_seqs)
+        ):
             raise ProposalRejected("proposal_invalid", "提案引用了不存在的查询记录")
         entries = [entry for entry in found if entry is not None]
         capability_ids = {entry.capability_id for entry in entries}
@@ -418,9 +472,10 @@ def build_proposal(
                 if len(steps[earlier].seqs) != 1:
                     continue
                 source = by_seq[steps[earlier].seqs[0]].data
+                source_schema = specs[steps[earlier].capability_id].output_schema
                 if len(group) == 1:
                     for path, scalar in scalar_paths(source):
-                        if scalar == values[0]:
+                        if scalar == values[0] and _exposed(source_schema, path):
                             source_label = (
                                 f"来自「{steps[earlier].label}」结果的"
                                 f"「{field_label(earlier, path)}」"
@@ -430,10 +485,13 @@ def build_proposal(
                                 source_label, step=earlier, path=path,
                             ))
                 for list_path, elements in list_paths(source):
+                    item_schema = _list_items(source_schema, list_path)
+                    if item_schema is None:
+                        continue
                     fields = {p for element in elements for p, _ in scalar_paths(element)}
                     for field_path in sorted(fields, key=str):
                         pool = [get_path(element, field_path) for element in elements]
-                        if all(value in pool for value in values):
+                        if _exposed(item_schema, field_path) and _distinct_items(values, pool):
                             candidates.append(Candidate(
                                 f"{binding_id}.l{earlier}.{len(candidates)}", "loop_item",
                                 f"对「{steps[earlier].label}」的每一条，取其「"
@@ -471,14 +529,13 @@ def build_proposal(
     for t_index, table in enumerate(model.tables):
         if table.step >= len(steps):
             raise ProposalRejected("proposal_invalid", "表格引用了不存在的步骤")
+        _check_table(table, specs[steps[table.step].capability_id],
+                     by_seq[steps[table.step].seqs[0]].data)
         table_id = f"t{t_index + 1}"
         tables_internal.append({"table_id": table_id, **table.model_dump(mode="json")})
         for c_index, column in enumerate(table.columns):
             columns_view.append({"column_id": f"{table_id}.c{c_index + 1}",
                                  "table_id": table_id, "label": column.label})
-    record_digest = hashlib.sha256(
-        json.dumps([(r.seq, r.capability_fingerprint) for r in records]).encode()
-    ).hexdigest()
     proposal_id = str(uuid4())
     view = {
         "kind": "proposal",
@@ -495,8 +552,8 @@ def build_proposal(
     }
     internal = {
         "proposal_id": proposal_id,
-        "record_digest": record_digest,
-        "steps": [s.__dict__ for s in steps],
+        "steps": [{**s.__dict__, "output_schema": specs[s.capability_id].output_schema}
+                  for s in steps],
         "bindings": internal_bindings,
         "tables": tables_internal,
         "samples": sorted(samples),
@@ -522,19 +579,53 @@ def _system_label(spec: CapabilitySpec) -> str:
 def _prefill(
     candidates: Sequence[Candidate], pref: ModelPreference | None, group_size: int
 ) -> Candidate | None:
-    if pref is not None:
-        kinds = {"fixed": {"fixed", "omit"}}.get(pref.choice, {pref.choice})
-        matching = [c for c in candidates if c.kind in kinds]
-        if len(matching) == 1:
-            return matching[0]
-    if group_size > 1:
-        loops = [c for c in candidates if c.kind == "loop_item"]
-        if len(loops) == 1:
-            return loops[0]
-    sources = [c for c in candidates if c.kind == "step_output"]
-    if len(sources) == 1 and group_size == 1:
-        return sources[0]
-    return None
+    """Preselect only an unambiguous choice; several possible sources are left to the user."""
+
+    if pref is not None and pref.choice == "param":
+        return next((c for c in candidates if c.kind == "param"), None)
+    sources = [c for c in candidates if c.kind != "param"]
+    if len(sources) != 1:
+        return None
+    only = sources[0]
+    if only.kind == "loop_item" and group_size < 2:
+        return None
+    return only
+
+
+def _distinct_items(values: Sequence[Any], pool: Sequence[Any]) -> bool:
+    """Each recorded value matches a different list element (a loop, not one item reused)."""
+
+    taken: set[int] = set()
+    options = [[i for i, v in enumerate(pool) if v == value] for value in values]
+    for choices in sorted(options, key=len):
+        free = [i for i in choices if i not in taken]
+        if not free:
+            return False
+        taken.add(free[0])
+    return True
+
+
+def _check_table(table: ModelTable, spec: CapabilitySpec, sample: Any) -> None:
+    """Every column path must be exposed by the leaf; list tables need a real list."""
+
+    root = spec.output_schema
+    sources = {column.source for column in table.columns}
+    invalid = ProposalRejected(
+        "table_path_invalid", f"表格「{table.title}」引用了查询结果里没有的内容"
+    )
+    if "row" in sources:
+        if sources != {"row"} or not table.list_path:
+            raise invalid
+        items = _list_items(root, table.list_path)
+        if items is None or not isinstance(get_path(sample, table.list_path), list):
+            raise invalid
+        if not all(_exposed(items, column.path) for column in table.columns):
+            raise invalid
+    elif any(
+        column.source == "item_result" and not _exposed(root, column.path)
+        for column in table.columns
+    ):
+        raise invalid
 
 
 # ----------------------------------------------------------- trial compile
@@ -611,6 +702,7 @@ def compile_trial(
             }
         step_specs.append(spec)
     selected = set(choices.column_ids)
+    completeness: dict[int, dict[str, Any]] = {}
     tables = []
     for table in internal["tables"]:
         columns = [
@@ -622,15 +714,40 @@ def compile_trial(
         if not columns:
             continue
         step_index = table["step"]
+        per_item = any(c["source"] != "row" for c in table["columns"])
+        if per_item != (step_index in loops):
+            raise ProposalRejected(
+                "table_loop_mismatch", f"表格「{table['title']}」需要与「逐条查询」的选择一致"
+            )
         if step_index in loops:
+            loop_step, list_path = loops[step_index]
+            items = _list_items(steps[loop_step]["output_schema"], list_path)
+            if items is None or not all(
+                _exposed(items, c["ref"]["path"]) for c in columns
+                if c["ref"]["source"] == "loop_item"
+            ):
+                raise ProposalRejected(
+                    "table_path_invalid", f"表格「{table['title']}」引用了查询结果里没有的内容"
+                )
             rows: dict[str, Any] = {"for_each_step": f"s{step_index + 1}"}
         else:
             rows = {"list": {"source": "step_output", "step_id": f"s{step_index + 1}",
-                             "path": table.get("list_path") or []}}
+                             "path": table["list_path"]}}
+            if _has_type(
+                schema_at(steps[step_index]["output_schema"], [COMPLETENESS_FIELD]), "boolean"
+            ):
+                completeness[step_index] = {
+                    "op": "complete",
+                    "ref": {"source": "step_output", "step_id": f"s{step_index + 1}",
+                            "path": [COMPLETENESS_FIELD]},
+                }
         tables.append({"table_id": table["table_id"], "title": table["title"],
                        "rows": rows, "columns": columns})
     if not tables:
         raise ProposalRejected("no_columns", "请至少选择一列要显示的内容")
+    # Leaves that report their own completeness get the ``complete`` check automatically.
+    for index, assertion in completeness.items():
+        step_specs[index]["assert"] = [assertion]
     try:
         definition = UserSkillDefinition.model_validate({
             "format": FORMAT, "params": params, "steps": step_specs,

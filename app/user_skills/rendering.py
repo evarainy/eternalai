@@ -136,6 +136,7 @@ def render_result(
         if outcome.status == "ok" and outcome.data is not None
     }
     steps = {step.step_id: step for step in definition.steps}
+    mismatch = False
     for table in definition.output.tables:
         columns = [{"label": column.label} for column in table.columns]
         rows: list[dict[str, Any]] = []
@@ -146,6 +147,9 @@ def render_result(
             ref = rows_spec.list
             source = projected.get(ref.step_id)
             records = None if source is None else _value(tuple(ref.path), source)
+            if source is not None and not isinstance(records, list):
+                # The saved list is missing from this result: not "no data".
+                mismatch = True
             if not isinstance(records, list):
                 records = []
             for record in records:
@@ -207,6 +211,9 @@ def render_result(
         if completeness is not None:
             entry["completeness_label"] = completeness
         result["tables"].append(entry)
+    if mismatch:
+        result.update(status="failed", error_code="adapter_payload_invalid",
+                      reason_label=reason_label("adapter_payload_invalid"))
     return result
 
 

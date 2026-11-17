@@ -187,8 +187,11 @@ async def run_definition(
                     step, index, "running" if attempt == 1 else "retrying", attempt=attempt
                 ),
             )
+            # Binding checks and Trace writes above spent part of the budget.
+            if deadline - loop.time() < MIN_CALL_SECONDS:
+                return "deadline", None, None, attempt
             try:
-                async with asyncio.timeout(remaining):
+                async with asyncio.timeout_at(deadline):
                     execution = await deps.gateway.execute_capability(
                         task_id,
                         session_id,

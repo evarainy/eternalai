@@ -227,19 +227,29 @@ def _error(text: str, code: str) -> ToolChunk:
 
 
 def takeover_data(context: dict[str, Any]) -> dict[str, Any]:
-    """Bounded, value-labelled summary of the failed run for the untrusted block."""
+    """Bounded facts of the failed run for the untrusted data block (never instructions)."""
+
+    def step(item: dict[str, Any]) -> dict[str, Any]:
+        bounded: dict[str, Any] = {
+            "step_label": str(item.get("step_label", ""))[:30],
+            "capability_id": str(item.get("capability_id", ""))[:100],
+            "error_code": item.get("error_code"),
+            "failed_items": int(item.get("failed_items", 0)),
+        }
+        if "arguments" in item:
+            bounded["arguments"] = item["arguments"]
+        if "failed_item_arguments" in item:
+            bounded["failed_item_arguments"] = item["failed_item_arguments"][:5]
+        return bounded
 
     return {
         "skill_name": str(context.get("skill_name", ""))[:40],
+        "version": context.get("version"),
         "inputs": [
             {"label": str(item.get("label", ""))[:30], "value": str(item.get("value", ""))[:100]}
             for item in context.get("inputs", [])[:10]
         ],
-        "failed_steps": [
-            {"step_label": str(item.get("step_label", ""))[:30],
-             "failed_items": int(item.get("failed_items", 0))}
-            for item in context.get("failed_steps", [])[:6]
-        ],
+        "failed_steps": [step(item) for item in context.get("failed_steps", [])[:6]],
     }
 
 

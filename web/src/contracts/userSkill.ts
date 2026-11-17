@@ -91,32 +91,71 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 const isString = (value: unknown): value is string => typeof value === 'string';
-const isArray = Array.isArray;
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isBool = (value: unknown): value is boolean => typeof value === 'boolean';
+const optional = (value: unknown, check: (v: unknown) => boolean) => value === undefined || check(value);
+const listOf = (value: unknown, check: (item: Record<string, unknown>) => boolean) =>
+  Array.isArray(value) && value.every((item) => isRecord(item) && check(item));
+const ROW_STATUSES = new Set(['ok', 'not_found', 'failed', 'not_executed']);
+const CANDIDATE_KINDS = new Set(['param', 'fixed', 'omit', 'step_output', 'loop_item']);
 
+const isForm = (form: unknown) => isRecord(form) && isRecord(form.schema) && isRecord(form.labels)
+  && optional(form.schema.properties, isRecord)
+  && optional(form.schema.required, (v) => Array.isArray(v) && v.every(isString));
+
+const isTable = (table: Record<string, unknown>) => isString(table.table_id) && isString(table.title)
+  && listOf(table.columns, (c) => isString(c.label))
+  && listOf(table.rows, (row) => Array.isArray(row.cells) && row.cells.every(isString)
+    && ROW_STATUSES.has(row.status as string) && optional(row.reason_label, isString))
+  && isRecord(table.counts) && [...ROW_STATUSES].every((key) => isNumber((table.counts as Record<string, unknown>)[key]))
+  && optional(table.completeness_label, isString);
+
+function isProposal(value: Record<string, unknown>): boolean {
+  return isString(value.proposal_id)
+    && listOf(value.steps, (step) => isString(step.step_label) && isString(step.system_label))
+    && listOf(value.params, (param) => isString(param.binding_id) && isString(param.label)
+      && isRecord(param.schema))
+    && listOf(value.bindings, (binding) => isString(binding.binding_id)
+      && isNumber(binding.step_index) && isString(binding.step_label) && isString(binding.arg_label)
+      && (binding.prefill === null || isString(binding.prefill))
+      && listOf(binding.candidates, (c) => isString(c.candidate_id) && isString(c.label)
+        && CANDIDATE_KINDS.has(c.kind as string)))
+    && listOf(value.for_each_offers, (offer) => isString(offer.offer_id) && isNumber(offer.step_index))
+    && listOf(value.column_options, (c) => isString(c.column_id) && isString(c.label))
+    && isRecord(value.draft) && isString(value.draft.name) && isString(value.draft.purpose)
+    && isString(value.draft.rules)
+    && listOf(value.update_targets, (t) => isString(t.skill_id) && isString(t.name)
+      && isNumber(t.current_version))
+    && listOf(value.rejections, (r) => isString(r.code) && isString(r.label));
+}
+
+function isResult(value: Record<string, unknown>): boolean {
+  return isString(value.run_id) && isString(value.name)
+    && (value.skill_id === null || isString(value.skill_id))
+    && (value.version === null || isNumber(value.version))
+    && (value.status === 'completed' || value.status === 'partial' || value.status === 'failed')
+    && listOf(value.inputs, (item) => isString(item.label) && isString(item.value))
+    && optional(value.input, isRecord) && optional(value.reason_label, isString)
+    && optional(value.notice_label, isString) && optional(value.exportable, isBool)
+    && optional(value.takeover_allowed, isBool) && listOf(value.tables, isTable);
+}
+
+/** Exact on the discriminator and on every field the cards read; anything else is rejected. */
 export function parseUserSkillPayload(value: unknown): UserSkillPayload | null {
   if (!isRecord(value)) return null;
   switch (value.kind) {
     case 'proposal':
-      return isString(value.proposal_id) && isArray(value.steps) && isArray(value.params)
-        && isArray(value.bindings) && isArray(value.column_options) && isRecord(value.draft)
-        && isArray(value.update_targets) && isArray(value.for_each_offers)
-        && isArray(value.rejections)
-        ? (value as unknown as UserSkillProposal) : null;
+      return isProposal(value) ? (value as unknown as UserSkillProposal) : null;
     case 'needs_input':
-      return isString(value.skill_id) && typeof value.version === 'number'
-        && isString(value.name) && isRecord(value.form) && isArray(value.missing)
+      return isString(value.skill_id) && isNumber(value.version) && isString(value.name)
+        && isForm(value.form) && Array.isArray(value.missing)
         ? (value as unknown as UserSkillNeedsInput) : null;
     case 'choice':
-      return isArray(value.options) && value.options.every(
-        (item) => isRecord(item) && isString(item.skill_id) && typeof item.version === 'number'
-          && isString(item.name),
-      ) ? (value as unknown as UserSkillChoice) : null;
+      return listOf(value.options, (item) => isString(item.skill_id) && isNumber(item.version)
+        && isString(item.name) && isString(item.purpose))
+        ? (value as unknown as UserSkillChoice) : null;
     case 'result':
-      return isString(value.name) && isArray(value.tables)
-        && (value.status === 'completed' || value.status === 'partial' || value.status === 'failed')
-        && value.tables.every((table) => isRecord(table) && isArray(table.columns)
-          && isArray(table.rows))
-        ? (value as unknown as UserSkillResult) : null;
+      return isResult(value) ? (value as unknown as UserSkillResult) : null;
     default:
       return null;
   }

@@ -1,7 +1,7 @@
 /** 「我的功能」卡片：保存确认、补填表单、选择功能、查询结果四种，全部用业务话显示。
  * 表格内容只来自服务端按功能定义取出的数据；卡片不改写结果。 */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Flex, Input, InputNumber, Radio, Select, Space, Switch, Table,
   Tag, Typography,
@@ -182,7 +182,8 @@ function ResultView({ result, sessionId, onExportAccepted, onAsk }: {
         </div>
       ))}
       <Space style={{ marginTop: 8 }} wrap>
-        {result.exportable && result.skill_id !== null && result.status !== 'failed' ? (
+        {onExportAccepted && result.exportable && result.skill_id !== null
+          && result.status !== 'failed' ? (
           <Button loading={phase === 'busy'} disabled={phase !== 'idle' || sessionId === null}
             onClick={() => void exportFile()}>
             {phase === 'done' ? '已开始导出' : '导出 Excel'}
@@ -191,7 +192,7 @@ function ResultView({ result, sessionId, onExportAccepted, onAsk }: {
         {result.skill_id !== null && !result.exportable && result.status !== 'failed' ? (
           <Text type="secondary">这个功能暂不支持导出 Excel。</Text>
         ) : null}
-        {result.takeover_allowed ? (
+        {onAsk && result.takeover_allowed ? (
           <Button onClick={() => void takeover()} disabled={sessionId === null}>让 AI 接手</Button>
         ) : null}
       </Space>
@@ -281,6 +282,10 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   const [target, setTarget] = useState<string>('new');
   const [inputs, setInputs] = useState<Record<string, unknown>>({});
   const [trial, setTrial] = useState<TrialResponse | null>(null);
+  // Every edit bumps the version; a trial answer for an older version is dropped, so the
+  // save button always belongs to what the card shows now.
+  const editVersion = useRef(0);
+  const [savedName, setSavedName] = useState('');
   const [phase, setPhase] = useState<'edit' | 'trying' | 'saving' | 'saved'>('edit');
   const [notice, setNotice] = useState('');
 
@@ -303,10 +308,12 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   });
   const ready = proposal.bindings.every((b) => choices[b.binding_id] !== undefined)
     && needsConfirm.every((b) => confirmed[b.binding_id] === true) && columns.length > 0;
-  const changed = () => { setTrial(null); setNotice(''); };
+  const changed = () => { editVersion.current += 1; setTrial(null); setNotice(''); };
 
   const tryRun = async () => {
     if (sessionId === null) return;
+    const version = editVersion.current;
+    const trialName = name;
     setPhase('trying');
     const update = proposal.update_targets.find((item) => item.skill_id === target);
     const loopSteps = new Set(proposal.bindings.filter((b) => chosenKind(b) === 'loop_item')
@@ -323,10 +330,13 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
         target: update === undefined ? { mode: 'new' }
           : { mode: 'update', skill_id: update.skill_id, expected_current_version: update.current_version },
       });
-      setTrial(response);
+      if (version === editVersion.current) {
+        setTrial(response);
+        setSavedName(trialName);
+      }
       setPhase('edit');
     } catch (error) {
-      setNotice(errorText(error));
+      if (version === editVersion.current) setNotice(errorText(error));
       setPhase('edit');
     }
   };
@@ -345,7 +355,7 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   if (phase === 'saved') {
     return (
       <Card aria-label="保存为功能" size="small">
-        <Alert type="success" showIcon title={`已保存为「${name}」，以后可以直接说这个名字使用。`} />
+        <Alert type="success" showIcon title={`已保存为「${savedName}」，以后可以直接说这个名字使用。`} />
       </Card>
     );
   }

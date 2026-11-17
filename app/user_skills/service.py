@@ -7,6 +7,7 @@ persisted.
 
 from __future__ import annotations
 
+import json
 import logging
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -28,6 +29,7 @@ from app.ports.user_skills import (
 from app.user_skills.definition import (
     UserSkillDefinition,
     canonical_definition_json,
+    compile_definition,
     definition_digest,
     params_schema,
 )
@@ -49,6 +51,7 @@ from app.user_skills.runner import (
     check_inputs,
 )
 from app.user_skills.session_store import SessionKey, TrialSnapshot, UserSkillSessionStore
+from app.workflow.definition_run import DefinitionReferenceError, resolve_ref
 
 _LOGGER = logging.getLogger("uvicorn.error.user_skills")
 MAX_CHOICE_OPTIONS = 5
@@ -147,10 +150,10 @@ class UserSkillService:
         source: frozenset[UserSkillState] = frozenset(
             {"disabled"} if state == "usable" else {"usable"}
         )
+        version = await self._store.get_current(owner, skill_id)
+        if version is None:
+            raise UserSkillFailure("not_found", 404, "功能不存在")
         if state == "usable":
-            version = await self._store.get_current(owner, skill_id)
-            if version is None:
-                raise UserSkillFailure("not_found", 404, "功能不存在")
             definition = UserSkillDefinition.model_validate(version.payload.definition)
             admission = await self._runner.admit(definition, _admin_context(owner))
             if admission.error_code is not None:
@@ -348,7 +351,9 @@ class UserSkillService:
                     raise UserSkillFailure(
                         "name_taken", 409, "已经有同名功能，请换个名称"
                     ) from None
-                if exc.code in {"conflict", "not_found"}:
+                if exc.code == "not_found":
+                    raise UserSkillFailure("not_found", 404, "功能不存在") from None
+                if exc.code == "conflict":
                     raise UserSkillFailure(
                         "conflict", 409, "功能已被更新，请重新试运行"
                     ) from None
@@ -514,11 +519,21 @@ def _row_failures(outcome: RunOutcome) -> bool:
 
 
 def _savable(outcome: RunOutcome) -> tuple[bool, str | None]:
-    if outcome.status == "completed":
+    # Saveable only when every step ran; per-item gaps or an incomplete list are
+    # data-dependent, a stopped run (deadline, stop code, failed step) is not.
+    run = outcome.run_result
+    if run is not None and run.status == "completed" and outcome.status != "failed":
         return True, None
-    if outcome.status == "partial" and outcome.error_code is None:
-        return True, None
-    return False, outcome.result.get("reason_label") or "试运行没有成功"
+    return False, outcome.result.get("reason_label") or "试运行没有全部完成，请重试后再保存"
+
+
+_SNAPSHOT_ITEMS = 5
+_SNAPSHOT_TEXT = 200
+
+
+def _bounded(value: Any) -> Any:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return value if len(text) <= _SNAPSHOT_TEXT else text[:_SNAPSHOT_TEXT] + "…"
 
 
 def _run_snapshot(
@@ -527,16 +542,64 @@ def _run_snapshot(
     inputs: Mapping[str, Any],
     outcome: RunOutcome,
 ) -> dict[str, Any]:
+    """Trusted facts of this run for a takeover: version, failed calls and their inputs."""
+
     labels = {param.name: param.label for param in definition.params}
-    failed_steps = []
-    if outcome.run_result is not None:
-        steps = {step.step_id: step for step in definition.steps}
-        for step_id, step_outcome in outcome.run_result.steps.items():
-            failed_items = sum(1 for i in (step_outcome.items or ()) if i.status != "ok")
-            if step_outcome.status != "ok" or failed_items:
-                failed_steps.append({"step_label": steps[step_id].label,
-                                     "failed_items": failed_items})
+    failed_steps: list[dict[str, Any]] = []
+    run = outcome.run_result
+    if run is not None:
+        compiled = {
+            step.step_id: step
+            for step in compile_definition(
+                definition, workflow_id="snapshot", version=str(current.current_version)
+            ).steps
+        }
+        labelled = {step.step_id: step for step in definition.steps}
+        projected = {
+            step_id: step_outcome.data
+            for step_id, step_outcome in run.steps.items()
+            if step_outcome.status == "ok" and step_outcome.data is not None
+        }
+
+        def arguments(step_id: str, item: Any) -> dict[str, Any]:
+            step = compiled[step_id]
+            values: dict[str, Any] = dict(step.static_arguments)
+            for name, ref in getattr(step, "arguments", {}).items():
+                try:
+                    values[name] = _bounded(resolve_ref(ref, inputs, projected, item))
+                except DefinitionReferenceError:
+                    values[name] = None
+            return values
+
+        for step_id, step_outcome in run.steps.items():
+            failed_items = [i for i in (step_outcome.items or ()) if i.status != "ok"]
+            if step_outcome.status == "ok" and not failed_items:
+                continue
+            entry: dict[str, Any] = {
+                "step_label": labelled[step_id].label,
+                "capability_id": labelled[step_id].capability_id,
+                "error_code": step_outcome.error_code,
+                "failed_items": len(failed_items),
+            }
+            step = compiled[step_id]
+            loop = getattr(step, "for_each", None)
+            if loop is None:
+                entry["arguments"] = arguments(step_id, None)
+            else:
+                try:
+                    listed = resolve_ref(loop.items, inputs, projected, None)
+                except DefinitionReferenceError:
+                    listed = []
+                entry["failed_item_arguments"] = [
+                    {"error_code": item.error_code,
+                     "arguments": arguments(step_id, listed[item.index])}
+                    for item in failed_items[:_SNAPSHOT_ITEMS]
+                    if isinstance(listed, list) and item.index < len(listed)
+                ]
+            failed_steps.append(entry)
     return {
+        "skill_id": current.skill_id,
+        "version": current.current_version,
         "skill_name": current.display_name,
         "inputs": [{"label": labels[name], "value": str(value)}
                    for name, value in inputs.items() if name in labels],
