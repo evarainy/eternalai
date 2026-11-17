@@ -615,3 +615,22 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.captchaRow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.5rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.captchaRow > img {
+  width: min(100%, 19rem);
+  min-width: 0;
+  height: auto;
+}
+
+.captchaRow > button {
+  flex: none;
+}

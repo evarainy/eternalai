@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
+import { readU8Captcha } from '../../api/systemEntry';
 import { activateBrowserBinding, getBrowserBindingStatus } from '../../api/browserBinding';
 import {
   bindPasswordApiV1CredentialBindingsTargetSystemPut as bindPassword,
@@ -11,6 +12,7 @@ import { Icon } from '../../shared/ui/Icon';
 import { useAuthStore } from '../../stores/authStore';
 import { passwordBindingQueryKey, usePasswordBinding } from './passwordAccounts';
 import type { PasswordTarget } from './systems';
+import { U8CaptchaFields } from './U8Captcha';
 import styles from './Systems.module.css';
 
 type Busy = null | 'bind' | 'activate' | 'unbind';
@@ -38,6 +40,7 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
     refetchOnWindowFocus: 'always',
   });
   const [busy, setBusy] = useState<Busy>(null);
+  const [captchaRevision, setCaptchaRevision] = useState(0);
   const [missing, setMissing] = useState({ login_id: false, password: false });
   const [unbindArmed, setUnbindArmed] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
@@ -57,7 +60,8 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
   const fail = (error: unknown, verb: string) => {
     setMessage({
       tone: 'error',
-      text: error instanceof ApiError && error.status >= 400 && error.status < 500
+      text: error instanceof ApiError && (error.code === 'entry_captcha_required' || error.code === 'entry_captcha_invalid')
+        ? error.message : error instanceof ApiError && error.status >= 400 && error.status < 500
         ? `${verb}没有成功：${name}没有通过这次验证，请核对账号和密码。`
         : `${verb}没有成功：凭证服务暂时不可用，请稍后再试。`,
     });
@@ -77,6 +81,11 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
     const nextMissing = { login_id: credential.login_id === '', password: credential.password === '' };
     setMissing(nextMissing);
     if (nextMissing.login_id || nextMissing.password) return;
+    const captcha = target === 'u8' ? readU8Captcha(data) : null;
+    if (target === 'u8' && captcha === null) {
+      setMessage({ tone: 'error', text: '请先加载并填写财务验证码。' });
+      return;
+    }
     const selection = action === 'activate' && browser?.binding_id != null && browser.binding_revision != null
       ? { binding_id: browser.binding_id, binding_revision: browser.binding_revision } : null;
     if (action === 'activate' && selection === null) return;
@@ -93,7 +102,8 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
         setMessage({ tone: 'ok', text: '自动登录已启用。' });
         return;
       }
-      const updated = await bindPassword(target, credential);
+      const updated = await bindPassword(target, captcha === null ? credential
+        : { ...credential, u8_guid: captcha.guid, u8_code: captcha.code });
       if (!current()) return;
       queryClient.setQueryData(queryKey, updated);
       if (target === 'oa') await queryClient.resetQueries({ queryKey: browserQueryKey });
@@ -107,7 +117,10 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
       fail(error, action === 'activate' ? '启用' : '绑定');
       if (target === 'oa') void queryClient.resetQueries({ queryKey: browserQueryKey });
     } finally {
-      if (current()) setBusy(null);
+      if (current()) {
+        setBusy(null);
+        if (target === 'u8') setCaptchaRevision((value) => value + 1);
+      }
     }
   };
 
@@ -182,6 +195,7 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
           type="password"
         />
       </label>
+      {target === 'u8' ? <U8CaptchaFields disabled={busy !== null} key={captchaRevision} /> : null}
       {missing.login_id || missing.password ? <p className={styles.bindingNote} data-tone="error" role="alert">请输入账号和密码。</p> : null}
       {message === null ? null : (
         <p className={styles.bindingNote} data-tone={message.tone} role={message.tone === 'error' ? 'alert' : 'status'}>

@@ -13,6 +13,8 @@ SystemEntryFailureCode: TypeAlias = Literal[
     "entry_not_configured",
     "entry_not_bound",
     "entry_credentials_rejected",
+    "entry_captcha_required",
+    "entry_captcha_invalid",
     "entry_unavailable",
 ]
 
@@ -23,6 +25,22 @@ class SystemEntryView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     url: str = Field(repr=False)
+
+
+class U8CaptchaAnswer(BaseModel):
+    """Transient user-entered challenge; never saved with the password binding."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    guid: str = Field(min_length=1, repr=False)
+    code: SecretStr = Field(min_length=1)
+
+
+class U8CaptchaView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    guid: str = Field(repr=False)
+    image: str = Field(repr=False)
 
 
 class SystemEntryError(RuntimeError):
@@ -46,11 +64,18 @@ class EntryPasswordReaderPort(Protocol):
 
 
 class U8LoginPort(Protocol):
-    async def login(self, credential: PasswordBindingCredential) -> SecretStr:
+    async def get_captcha(self) -> U8CaptchaView:
+        """Load U8's native image and challenge GUID without solving it."""
+        ...
+
+    async def login(
+        self, credential: PasswordBindingCredential, *, captcha: U8CaptchaAnswer | None = None,
+    ) -> SecretStr:
         """Sign in to U8 and return its bearer token.
 
         Raises ``SystemEntryError("entry_credentials_rejected")`` when U8 refuses the
-        account, ``SystemEntryError("entry_unavailable")`` for every other failure.
+        account, ``entry_captcha_required`` / ``entry_captcha_invalid`` for a missing or
+        rejected challenge, and ``entry_unavailable`` for other upstream failures.
         """
         ...
 
@@ -68,5 +93,7 @@ __all__ = (
     "SystemEntryFailureCode",
     "SystemEntryTarget",
     "SystemEntryView",
+    "U8CaptchaAnswer",
+    "U8CaptchaView",
     "U8LoginPort",
 )

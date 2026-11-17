@@ -3,11 +3,12 @@ import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
 import { createSystemEntry, getSystemEntryAvailability } from '../../api/systemEntry';
-import type { SystemEntryAvailability } from '../../api/systemEntry';
+import type { SystemEntryAvailability, U8CaptchaAnswer } from '../../api/systemEntry';
 import { useAuthStore } from '../../stores/authStore';
 import { Icon } from '../../shared/ui/Icon';
 import { PageFrame } from '../../shared/ui/PageFrame';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
+import { U8EntryCaptcha } from './U8Captcha';
 import { SystemAccountSettings } from './SystemAccountSettings';
 import { SystemLight } from './SystemStatus';
 import { SYSTEMS, openSystem, systemHref } from './systems';
@@ -38,6 +39,8 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
   const href = systemHref(system.key);
   const generation = useAuthStore((state) => state.generation);
   const [busy, setBusy] = useState(false);
+  const [captchaOpen, setCaptchaOpen] = useState(false);
+  const [captchaRevision, setCaptchaRevision] = useState(0);
   const [entryError, setEntryError] = useState<string | null>(null);
   const target = system.account.kind === 'password' ? system.account.target : null;
   const sso = target !== null && availability?.[target] === true;
@@ -48,9 +51,14 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
     : sso ? null : target === 'oa' && href !== null
       ? '免登入口未配置，打开原系统' : '免登入口未配置';
 
-  const enter = async () => {
+  const enter = async (captcha?: U8CaptchaAnswer) => {
     if (!sso) {
       if (href !== null) openSystem(href);
+      return;
+    }
+    if (target === 'u8' && captcha === undefined) {
+      setEntryError(null);
+      setCaptchaOpen(true);
       return;
     }
     const popup = window.open('about:blank', '_blank');
@@ -63,16 +71,20 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
     setEntryError(null);
     const current = () => useAuthStore.getState().generation === generation;
     try {
-      const entry = await createSystemEntry(target!);
+      const entry = await createSystemEntry(target!, captcha);
       if (!current()) { popup.close(); return; }
       if (!popup.closed) popup.location.replace(entry.url);
+      setCaptchaOpen(false);
     } catch (error) {
       popup.close();
       if (!current()) return;
       setEntryError(error instanceof ApiError
         ? error.message : '暂时无法进入系统，请稍后再试。');
     } finally {
-      if (current()) setBusy(false);
+      if (current()) {
+        setBusy(false);
+        if (target === 'u8') setCaptchaRevision((value) => value + 1);
+      }
     }
   };
 
@@ -133,6 +145,10 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
       >
         <Icon name="gear" size={18} />
       </button>
+      {captchaOpen ? (
+        <U8EntryCaptcha busy={busy} error={entryError} onCancel={() => setCaptchaOpen(false)}
+          onSubmit={(answer) => { void enter(answer); }} revision={captchaRevision} />
+      ) : null}
       {open ? (
         <div aria-label={`${system.name}的账号设置`} className={styles.settings} role="group">
           <h3>

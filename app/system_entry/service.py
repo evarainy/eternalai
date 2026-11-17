@@ -13,6 +13,8 @@ from app.ports.system_entry import (
     SystemEntryError,
     SystemEntryTarget,
     SystemEntryView,
+    U8CaptchaAnswer,
+    U8CaptchaView,
     U8LoginPort,
 )
 
@@ -35,7 +37,15 @@ class SystemEntryService:
     def availability(self) -> dict[str, bool]:
         return {"oa": self._tickets is not None, "u8": self._u8_login is not None}
 
-    async def enter(self, principal: Principal, target: SystemEntryTarget) -> SystemEntryView:
+    async def u8_captcha(self) -> U8CaptchaView:
+        if self._u8_login is None:
+            raise SystemEntryError("entry_not_configured")
+        return await self._u8_login.get_captcha()
+
+    async def enter(
+        self, principal: Principal, target: SystemEntryTarget, *,
+        captcha: U8CaptchaAnswer | None = None,
+    ) -> SystemEntryView:
         if not self.availability()[target]:
             raise SystemEntryError("entry_not_configured")
         credential = await self._reader.load_password_for_entry(
@@ -43,7 +53,7 @@ class SystemEntryService:
         )
         if target == "u8":
             assert self._u8_login is not None
-            token = await self._u8_login.login(credential)
+            token = await self._u8_login.login(credential, captcha=captcha)
             url = self._u8_base + "/?" + urlencode({"Authorization": token.get_secret_value()})
         else:
             assert self._tickets is not None and self._oa_bridge_base is not None

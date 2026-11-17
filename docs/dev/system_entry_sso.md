@@ -60,3 +60,19 @@ Path=/，只有 ecology_JSessionid 标记 HttpOnly，其余保持 OA 前端可�
 U8 原生 URL token 方案沿用已批准计划；token 不写入日志、报告或应用持久化存储。
 当前 U8 第一步通过 RSA 公钥恢复会话密钥，后续沿用 AES-ECB / PKCS7 请求和响应；
 旧示例的私钥解密方式与当前客户端不符。产品授权及本人登录结果以实际验收为准。
+
+
+## U8 图形验证码
+
+当前 U8 原生登录要求验证码。绑定财务账号时，账号设置内显示原生验证码，手工填写后验证并保存；
+验证码错误或过期会明确提示并换取新图，不清空账号密码。每次提交后验证码输入重建，旧码不复用。
+点击财务卡片时弹出验证码窗口，填写后使用本人已绑定账号登录；取消不会提交登录。
+此交互遵从 U8 验证码要求，不识别图片或绕过验证码，不能宣传为完全无交互免登。
+
+POST /api/v1/system-entry/u8/captcha 沿用本人会话与 CSRF 保护，返回原生 PNG 和 GUID，no-store；
+固定上游 GET /pub/user/getGifCode，不转发到任意地址。图片、GUID 只在当前界面内存，验证码只留表单 DOM。
+PUT /api/v1/credential-bindings/u8 增加请求专用 u8_guid / u8_code 字段，进入存储前还原为原账号密码 DTO，
+验证码不入密码容器或数据库。POST /api/v1/system-entry/u8 可提交 {guid, code}，OA 仍为空请求体。
+U8 登录体补 GUID/AUTHCODE 和当天 ywrq、原系统 loginType，原有密码编码与 AES 路径不变。
+验证码缺失/被拒绝返回固定 entry_captcha_required / entry_captcha_invalid；不透传上游消息或验证码内容。
+本次开发只做静态检查与 Astra 审查，真实绑定、验证码和落地身份测试由用户执行。
