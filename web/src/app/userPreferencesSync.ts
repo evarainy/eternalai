@@ -1,6 +1,7 @@
 import message from 'antd/es/message';
 import { getUserPreferences, putUserPreferences } from '../api/userPreferences';
 import type { UserPreferencesDocument } from '../api/userPreferences';
+import { readMeApiV1MeGet } from '../generated/me/me';
 import { adoptHomeLayout, useHomeLayoutStore } from '../features/desk/homeLayout';
 import { adoptAppearance, appearanceChoices, useAppearanceStore } from '../stores/appearanceStore';
 import { useAuthStore } from '../stores/authStore';
@@ -22,12 +23,15 @@ function snapshot(): UserPreferencesDocument {
  * - 同时最多一个保存请求；在途期间的新修改等它回来后再比较、再发，保证最后落库的是最后的选择。
  * - 身份一变（退出、换人），这次同步整体作废：定时器清掉，在途请求回来后什么都不做，
  *   上一个人没存完的修改不会写进下一个人的记录。
+ * - cookie 是整个浏览器共用的：另一个标签页换了人，这一页的 generation 要等身份重检回来才变。所以每次保存前
+ *   先问一次服务器「现在是谁」（`restore_scope`，服务端签发的账号别名），和读设置时的身份不一致就不发。
  */
 function startSession(generation: number): () => void {
   let live = true;
   let unsubscribe: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saved = '';
+  let owner: string | null = null;
   let saving = false;
   let again = false;
 
@@ -47,6 +51,8 @@ function startSession(generation: number): () => void {
     if (body === saved) return;
     saving = true;
     try {
+      const identity = await readMeApiV1MeGet();
+      if (!current() || (identity.restore_scope ?? null) !== owner) return;
       await putUserPreferences(document);
       if (!current()) return;
       saved = body;
@@ -68,9 +74,10 @@ function startSession(generation: number): () => void {
     timer = setTimeout(() => void flush(), SAVE_DELAY_MS);
   };
 
-  void getUserPreferences().then(
-    (document) => {
+  void Promise.all([readMeApiV1MeGet(), getUserPreferences()]).then(
+    ([identity, document]) => {
       if (!current()) return;
+      owner = identity.restore_scope ?? null;
       adoptAppearance(document.appearance);
       adoptHomeLayout(document.home_layout);
       saved = JSON.stringify(snapshot());
