@@ -461,3 +461,19 @@ services/decision/*
 !app/api/v1/im_client.py
 !app/im_client.py
 !app/ports/im_client.py
+
+# System entry APIs and the optional OA bridge runtime: exact source files only.
+!app/api/v1/system_entry.py
+!app/ports/system_entry.py
+!app/infra/auth/u8.py
+!app/system_entry/
+app/system_entry/*
+!app/system_entry/__init__.py
+!app/system_entry/service.py
+!app/system_entry/oa_bridge.py
+!app/infra/system_entry/
+app/infra/system_entry/*
+!app/infra/system_entry/__init__.py
+!app/infra/system_entry/oa_login.py
+!app/infra/system_entry/oa_bridge.py
+!app/infra/system_entry/tickets.py
