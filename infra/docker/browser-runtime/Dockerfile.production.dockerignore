@@ -482,3 +482,25 @@ app/infra/system_entry/*
 !app/infra/system_entry/oa_login.py
 !app/infra/system_entry/oa_bridge.py
 !app/infra/system_entry/tickets.py
+
+# Personal saved read flows (我的功能): exact source files only.
+!app/api/v1/my_skills.py
+!app/ports/user_skills.py
+!app/infra/persistence/user_skills.py
+!app/infra/jobs/user_skill_report.py
+!app/infra/spreadsheets/user_skill_report.py
+!app/infra/orchestration/agentscope_runtime/user_skill_turn.py
+!app/workflow/definition_run.py
+!app/user_skills/
+app/user_skills/*
+!app/user_skills/__init__.py
+!app/user_skills/definition.py
+!app/user_skills/proposal.py
+!app/user_skills/rendering.py
+!app/user_skills/runner.py
+!app/user_skills/service.py
+!app/user_skills/session_store.py
+!app/infra/user_skills/
+app/infra/user_skills/*
+!app/infra/user_skills/__init__.py
+!app/infra/user_skills/closing.py
