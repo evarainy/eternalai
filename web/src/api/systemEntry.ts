@@ -1,4 +1,4 @@
-import { customInstance } from './mutator';
+import { ApiError, customInstance } from './mutator';
 
 export interface SystemEntryAvailability {
   oa: boolean;
@@ -33,4 +33,21 @@ export function readU8Captcha(data: FormData): U8CaptchaAnswer | null {
   const guid = String(data.get('u8_guid') ?? '');
   const code = String(data.get('u8_code') ?? '').trim();
   return guid && code ? { guid, code } : null;
+}
+
+/** Keep business refusals distinct from browser-to-workbench transport errors. */
+export function systemEntryErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code.startsWith('entry_')) return error.message;
+    if (error.status === 401) return '工作台登录已失效，请重新登录。';
+    if (error.code === 'identity_changed') return '登录身份已变化，请重新操作。';
+    if (error.code === 'credential_binding_unavailable') return '账号绑定服务尚未就绪，请联系管理员。';
+    if (error.code === 'credential_binding_failed') return '账号绑定未能完成，具体原因尚未确认。';
+    return `工作台请求失败（HTTP ${error.status}），请稍后重试。`;
+  }
+  if (error instanceof TypeError && error.message === 'Failed to fetch') {
+    return '无法连接工作台服务，请检查网络后重试。';
+  }
+  if (error instanceof SyntaxError) return '工作台响应无法解析，请稍后重试。';
+  return '工作台请求未能完成，具体原因尚未确认。';
 }

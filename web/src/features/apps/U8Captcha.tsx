@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal } from 'antd';
-import { getU8Captcha, readU8Captcha } from '../../api/systemEntry';
+import { getU8Captcha, readU8Captcha, systemEntryErrorMessage } from '../../api/systemEntry';
 import type { U8CaptchaAnswer, U8CaptchaView } from '../../api/systemEntry';
 import styles from './Systems.module.css';
 
@@ -16,8 +16,8 @@ export function U8CaptchaFields({ disabled }: { disabled: boolean }) {
     setError(null);
     void getU8Captcha(controller.signal).then((value) => {
       if (!controller.signal.aborted) setChallenge(value);
-    }).catch(() => {
-      if (!controller.signal.aborted) setError('验证码加载失败，请重试。');
+    }).catch((failure: unknown) => {
+      if (!controller.signal.aborted) setError(systemEntryErrorMessage(failure));
     });
     return () => controller.abort();
   }, [revision]);

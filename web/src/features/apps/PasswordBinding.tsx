@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
-import { readU8Captcha } from '../../api/systemEntry';
+import { readU8Captcha, systemEntryErrorMessage } from '../../api/systemEntry';
 import { activateBrowserBinding, getBrowserBindingStatus } from '../../api/browserBinding';
 import {
   bindPasswordApiV1CredentialBindingsTargetSystemPut as bindPassword,
@@ -60,8 +60,8 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
   const fail = (error: unknown, verb: string) => {
     setMessage({
       tone: 'error',
-      text: error instanceof ApiError && (error.code === 'entry_captcha_required' || error.code === 'entry_captcha_invalid')
-        ? error.message : error instanceof ApiError && error.status >= 400 && error.status < 500
+      text: target === 'u8' ? `${verb}没有成功：${systemEntryErrorMessage(error)}`
+        : error instanceof ApiError && error.status >= 400 && error.status < 500
         ? `${verb}没有成功：${name}没有通过这次验证，请核对账号和密码。`
         : `${verb}没有成功：凭证服务暂时不可用，请稍后再试。`,
     });

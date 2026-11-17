@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
-import { createSystemEntry, getSystemEntryAvailability } from '../../api/systemEntry';
+import { createSystemEntry, getSystemEntryAvailability, systemEntryErrorMessage } from '../../api/systemEntry';
 import type { SystemEntryAvailability, U8CaptchaAnswer } from '../../api/systemEntry';
 import { useAuthStore } from '../../stores/authStore';
 import { Icon } from '../../shared/ui/Icon';
@@ -78,7 +78,7 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
     } catch (error) {
       popup.close();
       if (!current()) return;
-      setEntryError(error instanceof ApiError
+      setEntryError(target === 'u8' ? systemEntryErrorMessage(error) : error instanceof ApiError
         ? error.message : '暂时无法进入系统，请稍后再试。');
     } finally {
       if (current()) {

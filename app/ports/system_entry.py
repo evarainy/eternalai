@@ -15,6 +15,13 @@ SystemEntryFailureCode: TypeAlias = Literal[
     "entry_credentials_rejected",
     "entry_captcha_required",
     "entry_captcha_invalid",
+    "entry_captcha_expired",
+    "entry_timeout",
+    "entry_connection_failed",
+    "entry_upstream_http_error",
+    "entry_upstream_rejected",
+    "entry_invalid_response",
+    "entry_configuration_error",
     "entry_unavailable",
 ]
 
@@ -46,9 +53,12 @@ class U8CaptchaView(BaseModel):
 class SystemEntryError(RuntimeError):
     """Fixed-code failure without upstream text or credential values."""
 
-    def __init__(self, code: SystemEntryFailureCode) -> None:
+    def __init__(
+        self, code: SystemEntryFailureCode, *, upstream_status: int | None = None,
+    ) -> None:
         super().__init__("system entry failed")
         self.code = code
+        self.upstream_status = upstream_status
 
 
 class EntryPasswordReaderPort(Protocol):
@@ -75,7 +85,8 @@ class U8LoginPort(Protocol):
 
         Raises ``SystemEntryError("entry_credentials_rejected")`` when U8 refuses the
         account, ``entry_captcha_required`` / ``entry_captcha_invalid`` for a missing or
-        rejected challenge, and ``entry_unavailable`` for other upstream failures.
+        rejected challenge. Transport, HTTP, protocol and configuration failures use
+        distinct codes; an unrecognized business rejection retains its numeric upstream_status.
         """
         ...
 

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, SecretStr
 
 from app.api.v1.auth import PrincipalDependency
+from app.api.v1.system_entry import system_entry_failure
 from app.ports.auth import LoginCredential, Principal, authenticated_session
 from app.ports.credential_binding import (
     BrowserBindingActivationRequest,
@@ -90,19 +91,11 @@ class CredentialBindingService:
     ) -> CredentialBindingView:
         if target_system == "u8":
             if self._u8_login is None:
-                _raise_binding_unavailable()
+                raise system_entry_failure(SystemEntryError("entry_not_configured"))
             try:
                 await self._u8_login.login(credential, captcha=u8_captcha)
             except SystemEntryError as exc:
-                if exc.code in ("entry_captcha_required", "entry_captcha_invalid"):
-                    raise HTTPException(
-                        status.HTTP_400_BAD_REQUEST,
-                        detail={"code": exc.code,
-                                "message": "请输入财务验证码；不正确或已过期时请换一张重试。"},
-                    ) from None
-                if exc.code == "entry_credentials_rejected":
-                    _raise_binding_failed()
-                _raise_binding_unavailable()
+                raise system_entry_failure(exc) from None
         try:
             async with self._store.poll_lock(
                 principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
