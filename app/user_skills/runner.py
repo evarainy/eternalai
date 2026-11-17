@@ -28,7 +28,7 @@ from app.ports.response_projection_contract import canonical_schema_digest
 from app.ports.task_store import TaskRecord, TaskStorePort
 from app.ports.trace import TracePort
 from app.user_skills.definition import UserSkillDefinition, compile_definition, params_schema
-from app.user_skills.rendering import derive_status, render_result
+from app.user_skills.rendering import MAX_DISPLAY_ROWS, derive_status, render_result
 from app.version_binding import (
     capability_version_bindings,
     merge_version_bindings,
@@ -210,7 +210,12 @@ class UserSkillRunner:
         return Admission(leaves=tuple(leaves))
 
     async def run(
-        self, target: RunTarget, inputs: Mapping[str, Any], ctx: RunContext
+        self,
+        target: RunTarget,
+        inputs: Mapping[str, Any],
+        ctx: RunContext,
+        *,
+        max_rows: int | None = MAX_DISPLAY_ROWS,
     ) -> RunOutcome:
         run_id = str(uuid4())
         started = monotonic()

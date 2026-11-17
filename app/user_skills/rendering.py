@@ -96,6 +96,7 @@ def render_result(
     run_id: str,
     error_code: ErrorCode | None,
     queried_at: datetime,
+    max_rows: int | None = MAX_DISPLAY_ROWS,
 ) -> dict[str, Any]:
     definition = target.definition
     labels = {param.name: param.label for param in definition.params}
@@ -191,9 +192,9 @@ def render_result(
                 rows.append(row)
                 counts[row_status] += 1
         total = len(rows)
-        if total > MAX_DISPLAY_ROWS:
-            rows = rows[:MAX_DISPLAY_ROWS]
-            completeness = f"共 {total} 行，此处显示前 {MAX_DISPLAY_ROWS} 行，完整内容请导出"
+        if max_rows is not None and total > max_rows:
+            rows = rows[:max_rows]
+            completeness = f"共 {total} 行，此处显示前 {max_rows} 行，完整内容请导出"
         entry: dict[str, Any] = {
             "table_id": table.table_id,
             "title": table.title,

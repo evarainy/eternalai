@@ -106,6 +106,7 @@ from app.infra.identity.mcp_identity import McpIdentityMapping
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.job_queue.in_memory import InMemoryJobQueue
 from app.infra.jobs.ledger import PostgreSQLBackgroundJobLedger
+from app.infra.jobs.user_skill_report import user_skill_report_kind
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.mcp.driver import McpDriver
@@ -1245,22 +1246,6 @@ def build_production_components(
         )
         if file_artifacts is not None else None
     )
-    job_kinds = {
-        **build_job_kinds(settings.background_self_check_max_hold_seconds),
-        report_kind.name: report_kind,
-    }
-    if sheet_fill is not None:
-        sheet_kind = sheet_fill_kind(settings.source_tenant_id, admission=sheet_fill)
-        job_kinds[sheet_kind.name] = sheet_kind
-    background_jobs = BackgroundJobService(
-        PostgreSQLBackgroundJobLedger(session_factory), job_kinds
-    )
-    # The M1 AgentScope runtime reuses the same production instances and
-    # result mappings; with the legacy engine AgentScope is never imported.
-    agentscope_runtime: RuntimePort | None = None
-    install_browser_handoff: Callable[..., None] = partial(
-        _install_legacy_browser_handoff, runtime
-    )
     user_skills: UserSkillService | None = None
     if settings.runtime_engine == "agentscope":
         user_skills = build_user_skill_service(
@@ -1283,6 +1268,28 @@ def build_production_components(
             ),
             evaluator=terminal_evaluator,
         )
+    job_kinds = {
+        **build_job_kinds(settings.background_self_check_max_hold_seconds),
+        report_kind.name: report_kind,
+    }
+    if sheet_fill is not None:
+        sheet_kind = sheet_fill_kind(settings.source_tenant_id, admission=sheet_fill)
+        job_kinds[sheet_kind.name] = sheet_kind
+    if user_skills is not None:
+        export_kind = user_skill_report_kind(
+            settings.source_tenant_id, service=user_skills,
+            identity_mapping=resolved_identity_mapping,
+        )
+        job_kinds[export_kind.name] = export_kind
+    background_jobs = BackgroundJobService(
+        PostgreSQLBackgroundJobLedger(session_factory), job_kinds
+    )
+    # The M1 AgentScope runtime reuses the same production instances and
+    # result mappings; with the legacy engine AgentScope is never imported.
+    agentscope_runtime: RuntimePort | None = None
+    install_browser_handoff: Callable[..., None] = partial(
+        _install_legacy_browser_handoff, runtime
+    )
     if settings.runtime_engine == "agentscope":
         from app.infra.llm.agentscope_chat import build_chat_model
 

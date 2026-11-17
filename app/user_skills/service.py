@@ -39,6 +39,7 @@ from app.user_skills.proposal import (
     compile_trial,
     summarize,
 )
+from app.user_skills.rendering import MAX_DISPLAY_ROWS
 from app.user_skills.runner import (
     InputInvalid,
     RunContext,
@@ -373,6 +374,7 @@ class UserSkillService:
         inputs: Mapping[str, Any],
         *,
         expected_digest: bytes | None = None,
+        max_rows: int | None = MAX_DISPLAY_ROWS,
     ) -> tuple[dict[str, Any], bool, str | None]:
         """(``data.user_skill`` payload, failed, error code) for a saved flow."""
 
@@ -400,7 +402,7 @@ class UserSkillService:
             name=current.display_name, purpose=current.payload.purpose,
             definition=definition, skill_id=skill_id, version=version,
         )
-        outcome = await self._runner.run(target, clean, ctx)
+        outcome = await self._runner.run(target, clean, ctx, max_rows=max_rows)
         if outcome.pause is not None:
             await self._store.set_state(
                 owner, skill_id, from_states=frozenset({"usable"}), to_state="paused",
@@ -416,6 +418,21 @@ class UserSkillService:
         self.sessions.put_run(key, outcome.run_id, _run_snapshot(current, definition, clean,
                                                                  outcome))
         return result, outcome.status == "failed", outcome.error_code
+
+    async def export_refusal(
+        self, owner: UserSkillOwner, skill_id: str, version: int
+    ) -> str | None:
+        """None when the flow may be exported now, else a closed job refusal code."""
+
+        current = await self._store.get_current(owner, skill_id)
+        if current is None:
+            return "user_skill_unavailable"
+        if current.state != "usable" or current.current_version != version:
+            return "user_skill_changed"
+        definition = UserSkillDefinition.model_validate(current.payload.definition)
+        if not await self._exportable(definition):
+            return "user_skill_export_unsupported"
+        return None
 
     async def choice(
         self, owner: UserSkillOwner, first: Sequence[str]

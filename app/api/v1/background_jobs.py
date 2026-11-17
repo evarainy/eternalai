@@ -60,6 +60,10 @@ _ERRORS: dict[str, tuple[int, str]] = {
         422,
         "填写的数据行超过上限（OA 待办每表 2000 行，文档问答合计 30 个问题）。",
     ),
+    # Admission refusals of the personal flow export kind.
+    "user_skill_unavailable": (404, "没有找到这个功能。"),
+    "user_skill_changed": (409, "功能已更新或已暂停，请重新查询后再导出。"),
+    "user_skill_export_unsupported": (422, "这个功能暂不支持导出 Excel。"),
 }
 
 
