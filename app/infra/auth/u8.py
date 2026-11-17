@@ -21,28 +21,25 @@ _log = logging.getLogger(__name__)
 
 
 class U8Login:
-    def __init__(self, *, base_url: str, private_key_path: Path, timeout: float) -> None:
+    def __init__(self, *, base_url: str, public_key_path: Path, timeout: float) -> None:
         self._base = base_url
-        self._key_path = private_key_path
+        self._key_path = public_key_path
         self._timeout = timeout
 
     async def login(self, credential: PasswordBindingCredential) -> SecretStr:
         stage = "key"
         try:
-            # The supplied U8 PEM armor says PKCS#1, but its body is PKCS#8 DER.
-            key_body = b"".join(self._key_path.read_bytes().strip().splitlines()[1:-1])
-            private_key = serialization.load_der_private_key(
-                base64.b64decode(key_body, validate=True), None,
-            )
-            if not isinstance(private_key, rsa.RSAPrivateKey):
+            public_key = serialization.load_pem_public_key(self._key_path.read_bytes())
+            if not isinstance(public_key, rsa.RSAPublicKey):
                 raise ValueError("U8 key must be RSA")
             async with httpx2.AsyncClient(
                 timeout=self._timeout, trust_env=False, follow_redirects=False,
             ) as client:
                 response = await client.post(self._base + "/pub/common/getEncrySecrtKey", json={})
                 response.raise_for_status()
-                key = private_key.decrypt(
-                    base64.b64decode(response.json()["data"]), rsa_padding.PKCS1v15(),
+                # U8 signs the session-key block; the browser recovers it with its public key.
+                key = public_key.recover_data_from_signature(
+                    base64.b64decode(response.json()["data"]), rsa_padding.PKCS1v15(), None,
                 ).decode().split("_", 1)[0].encode()
                 body = json.dumps({
                     "user": credential.login_id.get_secret_value(),

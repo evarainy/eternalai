@@ -1322,9 +1322,9 @@ def build_production_components(
     )
     u8_login = (
         U8Login(
-            base_url=settings.u8_base_url, private_key_path=settings.u8_rsa_private_key_path,
+            base_url=settings.u8_base_url, public_key_path=settings.u8_rsa_public_key_path,
             timeout=settings.oa_timeout_seconds,
-        ) if settings.u8_rsa_private_key_path is not None else None
+        ) if settings.u8_rsa_public_key_path is not None else None
     )
     oa_tickets = None
     if settings.oa_bridge_public_base is not None:

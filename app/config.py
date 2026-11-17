@@ -533,7 +533,7 @@ class ProductionSettings:
     personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
     oa_bridge_public_base: str | None = None
     u8_base_url: str = "http://34.64.8.70:8188"
-    u8_rsa_private_key_path: Path | None = None
+    u8_rsa_public_key_path: Path | None = None
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -657,9 +657,9 @@ class ProductionSettings:
             u8_base_url=_http_base_url(
                 source, "U8_BASE_URL", default="http://34.64.8.70:8188",
             ),
-            u8_rsa_private_key_path=(
-                Path(source["U8_RSA_PRIVATE_KEY_PATH"])
-                if source.get("U8_RSA_PRIVATE_KEY_PATH") else None
+            u8_rsa_public_key_path=(
+                Path(source["U8_RSA_PUBLIC_KEY_PATH"])
+                if source.get("U8_RSA_PUBLIC_KEY_PATH") else None
             ),
             oa_base_url=_http_base_url(source, "OA_BASE_URL"),
             oa_timeout_seconds=_positive_float(
