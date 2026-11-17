@@ -334,7 +334,7 @@ def test_overview_rejects_extra_input_before_leaf_calls(key) -> None:
     [
         ("policy", "policy_denied", "blocked", 1),
         ("unbound", "identity_unbound", "failed", 1),
-        ("expired", "identity_expired", "failed", 1),
+        ("expired", "identity_expired", "blocked", 1),
         ("revoked", "identity_revoked", "failed", 1),
         ("needs_binding_scope", "needs_binding_scope", "failed", 1),
         ("adapter", "adapter_payload_invalid", "failed", 1),
@@ -364,6 +364,11 @@ def test_overview_short_circuits_each_failure(step, failure, error, envelope, at
     response = asyncio.run(run_overview(h))
     assert response.status == envelope
     assert response.data is None
+    if error == "identity_expired":
+        assert response.ui.component_type == "operator_handback_card"
+        assert response.ui.action == "bind_required"
+        assert response.ui.reason_code == "identity_expired"
+        assert "OA 登录已过期" in response.message and "重新绑定" in response.message
     assert h.store.status_updates[-1] == ("failed", error)
     assert h.gateway.execute_capability.await_count == before + attempts
     expected_adapter_calls = before + (attempts if failure in {"adapter", "timeout"} else 0)
