@@ -132,6 +132,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLSessionStore,
     PostgreSQLTaskStore,
 )
+from app.infra.persistence.user_preferences import PostgreSQLUserPreferencesStore
 from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
 from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
@@ -197,6 +198,7 @@ from app.ports.runtime import RuntimePort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import DFormCollectionStorePort, SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
+from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
 from app.ports.workflow_store import McpRecoveryPolicyPort
 from app.runtime.document_qa import DocumentQAService
@@ -262,6 +264,7 @@ class ProductionComponents:
     personal_agents: PersonalAgentService | None = None
     system_entry_service: SystemEntryService | None = None
     close_system_entry: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
+    user_preferences: UserPreferencesPort | None = None
 
 
 def build_credential_store(
@@ -1526,6 +1529,7 @@ def build_production_components(
         organization_directory_scheduler=directory_scheduler,
         diagnostic_checks=dict(readonly_checks.diagnostics),
         user_profile=user_profile,
+        user_preferences=PostgreSQLUserPreferencesStore(session_factory),
         background_jobs=background_jobs,
         file_artifacts=file_artifacts,
         im_context=im_context,

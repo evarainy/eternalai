@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
 import './shared/ui/workbench.css';
+import { startUserPreferencesSync } from './app/userPreferencesSync';
 import { removeLegacyDrafts } from './stores/sessionDraftStore';
 
 removeLegacyDrafts();
+startUserPreferencesSync();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

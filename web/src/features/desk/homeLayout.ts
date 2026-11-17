@@ -4,8 +4,8 @@ import { persist } from 'zustand/middleware';
 /**
  * 首页的摆法：每一列有哪些卡片、各是什么大小。每个人可以自己增删、排列、改大小。
  *
- * 现在记在浏览器本地（和皮肤、字号一样）；按用户保存到后端要新的存取接口。存储里出现认不得的卡片、
- * 重复的卡片或列数不对时，整份退回默认摆法，不让坏数据把首页弄空。
+ * 按登录用户保存在后端（见 `app/userPreferencesSync.ts`）；浏览器本地这份只用于刷新后的首屏，登录后以
+ * 服务器为准。存储里出现认不得的卡片、重复的卡片或列数不对时，整份退回默认摆法，不让坏数据把首页弄空。
  */
 export type CardSize = 'S' | 'M' | 'L';
 
@@ -112,6 +112,14 @@ export const useHomeLayoutStore = create<HomeLayoutState>()(
     },
   ),
 );
+
+/** 采用服务器上本人的摆法（`{ columns }`）；没有记录或认不得就是默认摆法。 */
+export function adoptHomeLayout(value: unknown): void {
+  const columns = value !== null && typeof value === 'object'
+    ? parseColumns((value as { columns?: unknown }).columns)
+    : null;
+  useHomeLayoutStore.setState({ columns: columns ?? DEFAULT_COLUMNS });
+}
 
 /** 给外壳的设置菜单用：进入自定义首页。 */
 export function startCustomizingHome(): void {

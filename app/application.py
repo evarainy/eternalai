@@ -41,6 +41,7 @@ from app.api.v1.me import make_router as make_me_router
 from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.system_entry import make_router as make_system_entry_router
+from app.api.v1.user_preferences import make_router as make_user_preferences_router
 from app.api.v1.work_object_series import make_router as make_work_object_series_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
@@ -85,6 +86,7 @@ from app.ports.browser_fill_stop import DFormManagementPort
 from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.browser_screen import BrowserScreenPort
 from app.ports.runtime import RuntimePort
+from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
 from app.system_entry.service import SystemEntryService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
@@ -101,6 +103,7 @@ def create_app(
     system_entry_service: SystemEntryService | None = None,
     close_system_entry: Callable[[], Awaitable[None]] | None = None,
     user_profile: UserProfilePort | None = None,
+    user_preferences: UserPreferencesPort | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
     session_revocations: SessionRevocationStorePort | None = None,
@@ -358,6 +361,10 @@ def create_app(
         prefix="/api/v1/me",
     )
     application.include_router(
+        make_user_preferences_router(user_preferences, csrf_protected_principal),
+        prefix="/api/v1/preferences",
+    )
+    application.include_router(
         make_credential_binding_router(
             credential_binding_service,
             csrf_protected_principal,
@@ -565,6 +572,7 @@ def create_production_app(
         system_entry_service=components.system_entry_service,
         close_system_entry=components.close_system_entry,
         user_profile=components.user_profile,
+        user_preferences=components.user_preferences,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_revocations=components.session_revocations,
