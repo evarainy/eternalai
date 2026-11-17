@@ -531,6 +531,9 @@ class ProductionSettings:
     background_self_check_max_hold_seconds: int = 0
     im_delivery: IMDeliverySettings | None = field(default=None, repr=False)
     personal_agents: PersonalAgentSettings | None = field(default=None, repr=False)
+    oa_bridge_public_base: str | None = None
+    u8_base_url: str = "http://34.64.8.70:8188"
+    u8_rsa_public_key_path: Path | None = None
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -545,6 +548,15 @@ class ProductionSettings:
             or self.zulip.host_origin not in self.csrf_allowed_origins
         ):
             raise ValueError("im_host_configuration_invalid")
+        if self.oa_bridge_public_base is not None:
+            bridge = urlsplit(self.oa_bridge_public_base)
+            if bridge.path:
+                raise ValueError("oa_bridge_requires_origin")
+            bridge_host = bridge.hostname
+            if not self.csrf_allowed_origins or any(
+                bridge_host == urlsplit(origin).hostname for origin in self.csrf_allowed_origins
+            ):
+                raise ValueError("oa_bridge_requires_separate_host")
         ids = [profile.service_config_id for profile in self.mcp_services]
         if len(ids) != len(set(ids)) or any(
             p.tenant_id != self.source_tenant_id for p in self.mcp_services
@@ -638,6 +650,17 @@ class ProductionSettings:
             environment_name=environment_name,
             database_url=get_database_url(source),
             redis_url=_redis_url(source),
+            oa_bridge_public_base=(
+                _http_base_url(source, "OA_BRIDGE_PUBLIC_BASE")
+                if source.get("OA_BRIDGE_PUBLIC_BASE") else None
+            ),
+            u8_base_url=_http_base_url(
+                source, "U8_BASE_URL", default="http://34.64.8.70:8188",
+            ),
+            u8_rsa_public_key_path=(
+                Path(source["U8_RSA_PUBLIC_KEY_PATH"])
+                if source.get("U8_RSA_PUBLIC_KEY_PATH") else None
+            ),
             oa_base_url=_http_base_url(source, "OA_BASE_URL"),
             oa_timeout_seconds=_positive_float(
                 source,

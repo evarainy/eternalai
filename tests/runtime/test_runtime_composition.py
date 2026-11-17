@@ -915,6 +915,8 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         work_object_series_service=None,
         work_object_series_scheduler=None,
         credential_binding_service=None,
+        system_entry_service=None,
+        close_system_entry=None,
         credential_polling_scheduler=None,
         organization_directory_scheduler=None,
         diagnostic_checks={},

@@ -55,10 +55,16 @@ export interface ValidationError {
   type: string;
 }
 
+export type BindPasswordApiV1CredentialBindingsTargetSystemPutBodyU8Code = string | null;
+
+export type BindPasswordApiV1CredentialBindingsTargetSystemPutBodyU8Guid = string | null;
+
 /**
- * One encrypted-at-rest user credential; repr and dumps stay masked.
+ * Captcha fields are request-only, outside the stored credential contract.
  */
 export type BindPasswordApiV1CredentialBindingsTargetSystemPutBody = {
   login_id: string;
   password: string;
+  u8_code?: BindPasswordApiV1CredentialBindingsTargetSystemPutBodyU8Code;
+  u8_guid?: BindPasswordApiV1CredentialBindingsTargetSystemPutBodyU8Guid;
 };
