@@ -131,6 +131,29 @@ class SheetFillProposed:
 
 
 @dataclass(frozen=True, slots=True)
+class UserSkillSettled:
+    """A personal flow decided the turn: proposal, input form, choice or result.
+
+    ``payload`` is the ``data.user_skill`` object; nothing else of the turn ran.
+    ``failed`` maps to a failed reply and turn task with ``error_code``.
+    """
+
+    payload: dict[str, Any] = field(repr=False)
+    failed: bool = False
+    error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserSkillExposure:
+    """One saved flow exposed as a tool this turn, locked to its version."""
+
+    skill_id: str
+    version: int
+    definition_digest: bytes = field(repr=False)
+    name: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Clarify:
     """The model asked the user for missing information with ask_user."""
 
@@ -169,7 +192,8 @@ class TurnLedger:
     failures: list[LedgerFailure] = field(default_factory=list)
     terminal: (
         BindingCard | Proposal | Unsupported | Clarify | BrowserSettled
-        | AuthorizationRequired | ReportJobSettled | SheetFillProposed | None
+        | AuthorizationRequired | ReportJobSettled | SheetFillProposed | UserSkillSettled
+        | None
     ) = None
     model_error: str | None = None
     calls: dict[int, CallSnapshot] = field(default_factory=dict)
@@ -187,6 +211,8 @@ class TurnLedger:
     # MCP authorization placeholder name -> capability id; a subset of
     # business_tools that never has an executor.
     authorization_tools: Mapping[str, str] = field(default_factory=dict)
+    # Personal flows exposed this turn (tool name -> locked version); empty when off.
+    user_skill_tools: Mapping[str, UserSkillExposure] = field(default_factory=dict)
     # Waiting proposal staged with the coordinator but not yet published.
     staged: StagedWaiting | None = None
     # Bounded futures the session waits for before rollback and release.
@@ -229,6 +255,8 @@ __all__ = (
     "ReportJobSettled",
     "SheetFillProposed",
     "TurnLedger",
+    "UserSkillExposure",
+    "UserSkillSettled",
     "Unsupported",
     "current_tool_call_id",
 )

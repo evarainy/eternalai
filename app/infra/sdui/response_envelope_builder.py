@@ -390,6 +390,12 @@ def _sanitize_value(value: Any) -> Any:
     return value
 
 
+def sanitize_response_data(value: Any) -> Any:
+    """The envelope value sanitizer, for data that is not wrapped in an envelope."""
+
+    return _sanitize_value(value)
+
+
 def _sanitize_mapping(value: dict[Any, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for raw_key, raw_item in value.items():
