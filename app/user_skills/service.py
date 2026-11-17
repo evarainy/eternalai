@@ -52,6 +52,7 @@ from app.user_skills.runner import (
 )
 from app.user_skills.session_store import SessionKey, TrialSnapshot, UserSkillSessionStore
 from app.workflow.definition_run import DefinitionReferenceError, resolve_ref
+from app.workflow.models import DefinitionRunResult
 
 _LOGGER = logging.getLogger("uvicorn.error.user_skills")
 MAX_CHOICE_OPTIONS = 5
@@ -522,9 +523,23 @@ def _savable(outcome: RunOutcome) -> tuple[bool, str | None]:
     # Saveable only when every step ran; per-item gaps or an incomplete list are
     # data-dependent, a stopped run (deadline, stop code, failed step) is not.
     run = outcome.run_result
-    if run is not None and run.status == "completed" and outcome.status != "failed":
+    if (
+        run is not None and run.status == "completed" and outcome.status != "failed"
+        and not _incomplete_list(run)
+    ):
         return True, None
+    if run is not None and _incomplete_list(run):
+        return False, "这次查到的列表不完整，暂不能保存，请稍后再试"
     return False, outcome.result.get("reason_label") or "试运行没有全部完成，请重试后再保存"
+
+
+def _incomplete_list(run: DefinitionRunResult) -> bool:
+    """A failed ``complete`` check on a non-per-item step (PLAN §3.11: not saveable)."""
+
+    if run.failed_assertion is None or run.failed_assertion[1] != "complete":
+        return False
+    step = run.steps.get(run.failed_assertion[0])
+    return step is not None and step.items is None
 
 
 _SNAPSHOT_ITEMS = 5

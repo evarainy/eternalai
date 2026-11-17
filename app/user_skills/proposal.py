@@ -365,6 +365,19 @@ def _exposed(root: Mapping[str, Any], path: Sequence[str | int]) -> bool:
     return bool(schema_at(root, path))
 
 
+_DISPLAYABLE = {"string", "integer", "number", "boolean", "null"}
+
+
+def _displayable(root: Mapping[str, Any], path: Sequence[str | int]) -> bool:
+    """A column must reach a scalar (what a cell can show), never an object or a list."""
+
+    nodes = schema_at(root, path)
+    return bool(path) and bool(nodes) and all(
+        node.get("type") in _DISPLAYABLE or ("enum" in node or "const" in node)
+        for node in nodes
+    ) and any(node.get("type") != "null" for node in nodes)
+
+
 # ------------------------------------------------------------------- proposal
 @dataclass(frozen=True)
 class _Step:
@@ -519,6 +532,7 @@ def build_proposal(
                                     "schema": param.schema, "required": True})
             internal_bindings.append({
                 "binding_id": binding_id, "step": index, "arg": arg, "label": arg_label,
+                "values": values,
                 "candidates": [c.__dict__ for c in candidates],
             })
         if step_loop_candidates:
@@ -552,7 +566,8 @@ def build_proposal(
     }
     internal = {
         "proposal_id": proposal_id,
-        "steps": [{**s.__dict__, "output_schema": specs[s.capability_id].output_schema}
+        "steps": [{**s.__dict__, "output_schema": specs[s.capability_id].output_schema,
+                   "data": by_seq[s.seqs[0]].data if len(s.seqs) == 1 else None}
                   for s in steps],
         "bindings": internal_bindings,
         "tables": tables_internal,
@@ -592,17 +607,28 @@ def _prefill(
     return only
 
 
+def _assign_distinct(options: Sequence[Sequence[int]]) -> bool:
+    """Each recorded call can be given its own list element (bipartite matching)."""
+
+    owner: dict[int, int] = {}
+
+    def place(call: int, seen: set[int]) -> bool:
+        for element in options[call]:
+            if element in seen:
+                continue
+            seen.add(element)
+            if element not in owner or place(owner[element], seen):
+                owner[element] = call
+                return True
+        return False
+
+    return all(place(call, set()) for call in range(len(options)))
+
+
 def _distinct_items(values: Sequence[Any], pool: Sequence[Any]) -> bool:
     """Each recorded value matches a different list element (a loop, not one item reused)."""
 
-    taken: set[int] = set()
-    options = [[i for i, v in enumerate(pool) if v == value] for value in values]
-    for choices in sorted(options, key=len):
-        free = [i for i in choices if i not in taken]
-        if not free:
-            return False
-        taken.add(free[0])
-    return True
+    return _assign_distinct([[i for i, v in enumerate(pool) if v == value] for value in values])
 
 
 def _check_table(table: ModelTable, spec: CapabilitySpec, sample: Any) -> None:
@@ -619,10 +645,10 @@ def _check_table(table: ModelTable, spec: CapabilitySpec, sample: Any) -> None:
         items = _list_items(root, table.list_path)
         if items is None or not isinstance(get_path(sample, table.list_path), list):
             raise invalid
-        if not all(_exposed(items, column.path) for column in table.columns):
+        if not all(_displayable(items, column.path) for column in table.columns):
             raise invalid
     elif any(
-        column.source == "item_result" and not _exposed(root, column.path)
+        column.source == "item_result" and not _displayable(root, column.path)
         for column in table.columns
     ):
         raise invalid
@@ -652,6 +678,7 @@ def compile_trial(
     params: list[dict[str, Any]] = []
     arguments: list[dict[str, Any]] = [{} for _ in steps]
     loops: dict[int, tuple[int, Path]] = {}
+    loop_fields: dict[int, list[tuple[Path, list[Any]]]] = {}
     for binding in internal["bindings"]:
         chosen = choices.binding_choices.get(binding["binding_id"])
         candidate = next((c for c in binding["candidates"] if c["candidate_id"] == chosen), None)
@@ -677,7 +704,26 @@ def compile_trial(
                 raise ProposalRejected("binding_conflict", "同一步只能对一个列表逐条查询")
             arguments[index][binding["arg"]] = {"source": "loop_item",
                                                  "path": list(candidate["path"])}
+            loop_fields.setdefault(index, []).append(
+                (tuple(candidate["path"]), list(binding["values"]))
+            )
         # omit: the capability default applies; the argument is not sent.
+    # All per-item arguments of one call must come from the same list element, and the
+    # recorded calls from different elements: otherwise the loop would run other queries.
+    for index, fields in loop_fields.items():
+        loop_step, list_path = loops[index]
+        elements = get_path(steps[loop_step]["data"], list_path)
+        calls = len(fields[0][1])
+        if not isinstance(elements, list) or not _assign_distinct([
+            [
+                position for position, element in enumerate(elements)
+                if all(get_path(element, path) == values[call] for path, values in fields)
+            ]
+            for call in range(calls)
+        ]):
+            raise ProposalRejected(
+                "loop_mismatch", "逐条查询的几个填写项不是来自列表里的同一条，请重新选择来源"
+            )
     for index in range(len(steps)):
         offered = f"f{index}"
         if offered in choices.for_each_choices and (
@@ -723,7 +769,7 @@ def compile_trial(
             loop_step, list_path = loops[step_index]
             items = _list_items(steps[loop_step]["output_schema"], list_path)
             if items is None or not all(
-                _exposed(items, c["ref"]["path"]) for c in columns
+                _displayable(items, c["ref"]["path"]) for c in columns
                 if c["ref"]["source"] == "loop_item"
             ):
                 raise ProposalRejected(

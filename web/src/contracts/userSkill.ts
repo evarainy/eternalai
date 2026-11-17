@@ -69,7 +69,7 @@ export interface UserSkillTable {
 }
 export interface UserSkillResult {
   kind: 'result';
-  run_id: string;
+  run_id?: string;
   skill_id: string | null;
   version: number | null;
   name: string;
@@ -100,7 +100,9 @@ const ROW_STATUSES = new Set(['ok', 'not_found', 'failed', 'not_executed']);
 const CANDIDATE_KINDS = new Set(['param', 'fixed', 'omit', 'step_output', 'loop_item']);
 
 const isForm = (form: unknown) => isRecord(form) && isRecord(form.schema) && isRecord(form.labels)
-  && optional(form.schema.properties, isRecord)
+  && Object.values(form.labels).every(isString)
+  && optional(form.schema.properties,
+    (v) => isRecord(v) && Object.values(v).every((property) => isRecord(property)))
   && optional(form.schema.required, (v) => Array.isArray(v) && v.every(isString));
 
 const isTable = (table: Record<string, unknown>) => isString(table.table_id) && isString(table.title)
@@ -130,7 +132,8 @@ function isProposal(value: Record<string, unknown>): boolean {
 }
 
 function isResult(value: Record<string, unknown>): boolean {
-  return isString(value.run_id) && isString(value.name)
+  // A refusal before any run (flow disabled or changed) carries no run_id.
+  return optional(value.run_id, isString) && isString(value.name)
     && (value.skill_id === null || isString(value.skill_id))
     && (value.version === null || isNumber(value.version))
     && (value.status === 'completed' || value.status === 'partial' || value.status === 'failed')

@@ -129,7 +129,7 @@ function ResultView({ result, sessionId, onExportAccepted, onAsk }: {
     }
   };
   const takeover = async () => {
-    if (sessionId === null) return;
+    if (sessionId === null || result.run_id === undefined) return;
     try {
       await requestTakeover(sessionId, result.run_id);
       onAsk?.('请接手处理刚才失败的查询');
