@@ -651,10 +651,10 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 真实写入验收未做 | 开发库无可确认的治理写能力（0 个 workflow、0 个治理 MCP 写工具，唯一写类 browser.form.fill_stop 新路径不暴露），远端无撤销入口；确认链路只有 C1–C6 与独立 Monitor 证据，未做真实确认→发送→撤销 | 业务平台提供写工具撤销/草稿可见性说明 | 首个启用治理写能力的棒（待分配） | 一次真实确认→发送→撤销通过 | 仓库外 `runtime-agentscope-20261021/M1B_H2A_CANDIDATES.md`、`M1B_PR_BODY.md` 欠债 12 |
 | R-OA 欠债 1：V3/V4/V5 待重做、V9 开发环境未运行 | 此前浏览器跑的是旧页面，后端 0 次保活请求，V3/V4/V5 结果作废；刷新后真实环境已见心跳 alive 与本地截止延长，但前台连续使用 1 小时以上（V3）、OA 网页退出后问待办（V4）、浏览器同时登录 OA（V5）须重做；开发启动器后台轮询未安装，V9 未运行、未验证 | 无（R-OA 已合并） | 待雨爷重做验收；V9 须在启用后台轮询的环境（无新 task_id） | V3/V4/V5 重做通过并取得脱敏日志；V9 与 V10 在对应环境取得脱敏日志 | `P2-AUTH-RENEWAL-OA-001` 交付记录；仓库外 `M1B_REAL_ACCEPTANCE.md`「R-OA 保活复测」、`RENEWAL_PLAN.md` §7.4 |
-| R-OA 欠债 2：E2 OA 管理员待确认项 | errorCode 002 官方含义；服务端会话 idle / 绝对超时时长；心跳是否轮换 Cookie（若轮换核心 cookie，需补“合并写回”）；多会话并存与互踢规则；登录失败锁定阈值 | 外部 E2（OA 管理员；非仓库 task_id） | 答复后由 GOV-SYNC 同步（无仓库 task_id） | 取得书面答复并核对实现假设 | 仓库外 `RENEWAL_PLAN.md` §8 E2、`oa-session-research/OA_SESSION_FACTS.md` |
-| R-OA 欠债 3：已激活浏览器绑定用户不自动恢复 | 需要单独设计“保留主体核验 + 绑定围栏”的恢复路径，R-OA 对 active 浏览器绑定不自动重登 | 无 | 待分配（另案方案获批后）；其边界并入 `P2-RUNTIME-AGENTSCOPE-M3-001`、`P2-RUNTIME-AGENTSCOPE-M5-001` 的真实使用验收 | 另案方案获批并实现，或裁决接受 | 仓库外 `RENEWAL_PLAN.md` §3.4；M3 承接边界：交接期间窗口内 OA 会话过期时 M3 不自动重登，未实测，不承接恢复设计，见 [M3 新增欠债](#runtime-替换-m3-新增欠债2026-11-01)；activation 保持原值，待 GOV-SYNC 后续裁决；[DECISIONS 2026-11-01](DECISIONS.md#2026-11-01--裁决m3-d-人工交接合同受限终结与先合并后验收) |
+| R-OA 欠债 2：E2 OA 管理员待确认项 | errorCode 002 官方含义；服务端会话 idle / 绝对超时时长；心跳是否轮换 Cookie（若轮换核心 cookie，需补“合并写回”）；多会话并存与互踢规则；登录失败锁定阈值。实测观察（非书面答复）：2026-11-16 `P2-AUTH-OA-ACTIVE-RECOVERY-001` 真实验收中，无保活、无读取时服务端会话闲置约 16–31 分钟后失效 | 外部 E2（OA 管理员；非仓库 task_id） | 答复后由 GOV-SYNC 同步（无仓库 task_id） | 取得书面答复并核对实现假设 | 仓库外 `RENEWAL_PLAN.md` §8 E2、`oa-session-research/OA_SESSION_FACTS.md` |
+| R-OA 欠债 3：已激活浏览器绑定用户不自动恢复（已关闭） | `P2-AUTH-OA-ACTIVE-RECOVERY-001` 实现“保留主体核验 + 绑定围栏”的恢复：active 本人绑定的会话证实失效时，用已保存密码自动登录一次，新登录主体与已核验主体一致才写入；按需查询、页面心跳、后台轮询、填表提案、报表与填表 worker 均已真实实测。主体不一致、恢复中解绑、交接窗口内失效等未实测分支另见[该棒新增欠债](#oa-会话自动恢复-p2-auth-oa-active-recovery-001-新增欠债2026-11-17) | 无 | `P2-AUTH-OA-ACTIVE-RECOVERY-001`（已完成） | 已满足：2026-11-16/17 真实验收各入口失效后自动登录 1 次恢复，主体核验不变 | 仓库外 `RENEWAL_PLAN.md` §3.4；M3 承接边界：交接期间窗口内 OA 会话过期时 M3 不自动重登，未实测，不承接恢复设计，见 [M3 新增欠债](#runtime-替换-m3-新增欠债2026-11-01)；activation 保持原值，待 GOV-SYNC 后续裁决；[DECISIONS 2026-11-01](DECISIONS.md#2026-11-01--裁决m3-d-人工交接合同受限终结与先合并后验收) |
 | R-OA 欠债 4：对话内 O1/N1 文案 | 对话侧失效文案在 `agent_adapter.py`，为避免与 M1B 文件重叠未在 R-OA 改 | 无（归 R-APP 范围） | `P2-AUTH-RENEWAL-APP-001` | R-APP 合并并在真实对话核对文案 | 仓库外 `RENEWAL_PLAN.md` §0、§7 |
-| R-OA 欠债 5：恢复冷却、互踢熔断与保活节流只在进程内 | 方案规定不做 DB schema 变更，进程重启即清空 | 无 | 待分配（需 schema 专项授权） | 取得 schema 专项授权后改为跨进程持久化，或裁决接受进程内语义 | 仓库外 `RENEWAL_PLAN.md` §6.1 |
+| R-OA 欠债 5：恢复冷却、互踢熔断与保活节流只在进程内 | 方案规定不做 DB schema 变更，进程重启即清空；`P2-AUTH-OA-ACTIVE-RECOVERY-001` 的 active 恢复沿用同一语义，API 进程与独立 worker 各有一套，不共享冷却与熔断 | 无 | 待分配（需 schema 专项授权） | 取得 schema 专项授权后改为跨进程持久化，或裁决接受进程内语义 | 仓库外 `RENEWAL_PLAN.md` §6.1 |
 | `talk_context_get` 远端返回不符已批准输出合同 | 2026-10-28 真实验收中一次调用以 `schema_mismatch:overlay:sources` 被按合同拒收（`adapter_payload_invalid`）；非 M1B 改动，按合同拒收属预期，远端返回与合同的差异待核对 | 业务平台合同核对（外部） | 待分配（先核对业务平台合同） | 业务平台确认返回形态并修正合同或远端，真实调用不再被拒收 | 仓库外 `M1B_REAL_ACCEPTANCE.md` 结果记录 |
 | 聊天页模型下拉框（雨爷 2026-10-28） | 需求：运行时热切换模型、不重启后端，所有人可切；仅新运行时；后端按白名单校验。新增接口属公共契约，开工前须出短方案 | 无（M6 合并后解除） | 待分配（M6 完成时做） | 短方案获批，白名单校验、热切换与新运行时限定在真实流程核对通过 | 雨爷 2026-10-28 需求；`AGENTS.md` 运行时合同（模型可由 env 覆盖） |
 | 对话进行中小字显示当前步骤（雨爷 2026-10-28） | 需求：只显示步骤名、不含业务数据；推送或短轮询均可，不做逐字流式 | 无（M6 合并后解除） | 待分配（M6 完成时做） | 步骤名在真实对话中显示，且核对不含业务数据 | 雨爷 2026-10-28 需求 |
@@ -879,7 +879,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 报表行数上限沿用 provider 现有上限（5000 条/50 页），超限只报 `oa_unavailable`，没有单独的 `report_too_large` | 不改 provider 构造参数，保持 API 行为不变 | 无 | 需要更大报表时开棒 | 真实待办超过 5000 条，或业务要求区分该提示 | IMPL_REPORT 偏离第 1 条 |
 | worker 持有系统消息的非机密配置 | `LiveOAReadProvider` 构造时同时校验两份契约包 | 无 | provider 支持只配待办时 | provider 拆分 | IMPL_REPORT 偏离第 2 条 |
-| worker 内 OA 会话不续期，过期即失败（`oa_session_expired`） | 方案 §3.6 不给 worker 续期能力 | 无 | 出现真实过期失败时 | 用户反馈报表因过期失败 | PLAN §3.6；R9 未实测 |
+| worker 内 OA 会话不续期，过期即失败（`oa_session_expired`）（已关闭） | 方案 §3.6 不给 worker 续期能力；`P2-AUTH-OA-ACTIVE-RECOVERY-001` 起，发起人本人绑定为 active 且会话证实失效时，worker 按作业台账的发起人身份自动登录一次恢复后继续；非 active 绑定或恢复失败仍报 `oa_session_expired` | 无 | `P2-AUTH-OA-ACTIVE-RECOVERY-001`（已完成） | 已满足：2026-11-16/17 报表与填表 worker 在自然失效后各自动登录 1 次并完成作业 | PLAN §3.6；`app/credential_polling.py::prepare_active_oa_read` |
 | R9（OA 会话失效）未实测（已关闭） | #276 自然失效补测得 `oa_unavailable`；PR #278 修复后 2026-11-09 再次自然失效实测得 `oa_session_expired` | 无 | — | 已满足 | PR #276 R9 段；PR #278 F1；仓库外 `bgjob-fix-20261109/acc/expiry_wait.jsonl` |
 | R3 内容人工核对待雨爷（已关闭） | 雨爷 2026-11-09 确认报表内容无问题 | 无 | — | 已满足 | 雨爷 2026-11-09 主控对话确认 |
 | 运行中取消允许“完成抢先”，已发布的产物保留 | 复用 runner 现有取消语义 | 无 | 业务要求强取消时 | — | PLAN §3.2(7) |
@@ -966,7 +966,18 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 提案阶段 OA 会话失效分支未真实验证 | 2026-11-16 甲乙丙三个账号保存的 OA 会话均有效（正常登录会保存新会话），只验证了有效分支；不为制造失效去解绑、改库或登出 OA | 无 | 本人 OA 会话自然失效时 | 已绑定但会话失效的账号上传表格请求填表，不出确认卡、提示重新授权 OA、日志 code=`oa_session_expired` | `app/background_jobs.py::oa_binding_refusal`、`::build_oa_session_probe`；仓库外 `chat-polish-20261115/ACC_r2.md` |
+| 提案阶段 OA 会话失效分支未真实验证 | 2026-11-16 甲乙丙三个账号保存的 OA 会话均有效（正常登录会保存新会话），只验证了有效分支；不为制造失效去解绑、改库或登出 OA。`P2-AUTH-OA-ACTIVE-RECOVERY-001` 起，active 本人绑定失效时先自动恢复再出确认卡（2026-11-17 已真实实测）；不出卡、提示重新授权只剩非 active 绑定或恢复失败两种情形，仍未实测 | 无 | 非 active 绑定的本人 OA 会话自然失效时 | 非 active 绑定且会话失效的账号上传表格请求填表，不出确认卡、提示重新授权 OA、日志 code=`oa_session_expired` | `app/background_jobs.py::oa_binding_refusal`、`::build_oa_session_probe`；仓库外 `chat-polish-20261115/ACC_r2.md` |
+
+### OA 会话自动恢复 `P2-AUTH-OA-ACTIVE-RECOVERY-001` 新增欠债（2026-11-17）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 主体不一致、密码被拒、验证码三个失败分支未真实实测 | 没有合法可控的样本：不改甲的账号密码，也不能让 OA 返回另一个人或验证码；只有定向既有测试与静态评审证据 | 无 | 本人 OA 改密或出现验证码时 | 对应情形下绑定转为失效并停止自动登录，日志 `outcome=subject_mismatch` 或既有拒绝码，原主体摘要与核验时间保留 | `app/infra/auth/postgresql.py::PostgreSQLCredentialStore.store`；仓库外 `oa-recover-20261116/ACC_r1.md`、`ACC_r2.md` |
+| 恢复进行中解绑或换绑的竞态未真实实测 | 不允许解绑或改绑甲；自然网络窗口不足以形成竞态，也不为此加生产延时开关 | 无 | 雨爷授权用测试账号解绑时 | 恢复期间解绑后迟到的登录结果被写围栏拒绝，不写新会话、不记失败到新绑定 | `app/credential_polling.py::CredentialSessionRecovery`；仓库外 `oa-recover-20261116/PLAN_v2.md` §9.3 A6 |
+| 恢复后的浏览器准入与交接窗口边界未实测 | 验收期间没有存活的受控交接窗口；未验证恢复后原绑定版本仍可用于后续浏览器准入、旧交接窗口不被自动刷新。M3 交接期间窗口内不自动重登的边界不变 | 无 | `P2-RUNTIME-AGENTSCOPE-M3-001` / `M5-001` 的真实使用验收 | 恢复后浏览器准入仍要求原主体核验且可用，旧交接窗口不自动刷新，取得脱敏证据 | 仓库外 `oa-recover-20261116/PLAN_v2.md` §9.3 A8；[M3 新增欠债](#runtime-替换-m3-新增欠债2026-11-01) |
+| 本地截止已到期的两个按需分支未实测 | 自然样本里服务端总先于本地截止失效，取不到本地已到期的现场（OA 仍有效时只延期、OA 已失效时恢复）；不改 TTL、不改时钟 | 无 | 出现该自然样本时 | 本地已到期且 OA 有效时只延长截止、自动登录 0 次；OA 已失效时恢复 1 次后正常读取 | `app/infra/gateway/capability_gateway.py`；仓库外 `oa-recover-20261116/PLAN_v2.md` §9.3 A2-1、A2-2 |
+| 一次首问失败原因未明 | 2026-11-16 健康会话下首次在对话中问 OA 待办，OA 读取已完成但回答失败；同代码同问题随后成功，未再复现 | 无 | 再次复现时 | 取得失败时的脱敏日志并定位，或连续使用中不再出现 | 仓库外 `oa-recover-20261116/ACC_r1.md` A1 |
+| 并发恢复只验了同一 API 进程内的对话查询与页面心跳 | 2026-11-17 同次失效时对话查询与页面心跳重叠，只登录 1 次，另一方按新会话返回 `refreshed_by_other`；后台轮询与独立 worker 同时参与的并发、跨进程冷却未实测（跨进程冷却不共享见 R-OA 欠债 5） | 无 | 后台轮询与 worker 同时运行的真实使用中 | 同次失效下 API 与 worker 合计只登录 1 次，或如实记录实际次数并核对 OA 是否互踢 | `app/credential_polling.py::CredentialSessionRecovery`；仓库外 `oa-recover-20261116/ACC_r2.md` A5 |
 
 ### 工作台前端改版第二棒 `P2-FE-WORKBENCH-V4-002` 新增欠债（2026-11-14）
 
