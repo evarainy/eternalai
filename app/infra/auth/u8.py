@@ -68,7 +68,7 @@ class U8Login:
                     "user": credential.login_id.get_secret_value(),
                     "GUID": captcha.guid,
                     "AUTHCODE": captcha.code.get_secret_value(),
-                    "ywrq": date.today().isoformat(),
+                    "ywrq": date.today().strftime("%Y%m%d"),
                     "loginType": self._base + "/login",
                     "password": base64.b64encode(
                         credential.password.get_secret_value().encode(),
@@ -81,7 +81,8 @@ class U8Login:
                 )
                 response.raise_for_status()
                 result = json.loads(_decrypt(key, response.json()))
-            if result["status"] != 200:
+            # The native client accepts 300 as a warning with a completed login.
+            if result["status"] not in (200, 300):
                 message = (result.get("msg") or "") + (result.get("errorMsg") or "")
                 if "验证码" in message:
                     raise SystemEntryError("entry_captcha_invalid")

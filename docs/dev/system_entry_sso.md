@@ -73,6 +73,7 @@ POST /api/v1/system-entry/u8/captcha 沿用本人会话与 CSRF 保护，返回�
 固定上游 GET /pub/user/getGifCode，不转发到任意地址。图片、GUID 只在当前界面内存，验证码只留表单 DOM。
 PUT /api/v1/credential-bindings/u8 增加请求专用 u8_guid / u8_code 字段，进入存储前还原为原账号密码 DTO，
 验证码不入密码容器或数据库。POST /api/v1/system-entry/u8 可提交 {guid, code}，OA 仍为空请求体。
-U8 登录体补 GUID/AUTHCODE 和当天 ywrq、原系统 loginType，原有密码编码与 AES 路径不变。
+U8 登录体补 GUID/AUTHCODE 和当天 ywrq（YYYYMMDD）、原系统 loginType，原有密码编码与 AES 路径不变。
+与原生客户端一致，业务码 200/300 且返回有效 token 才可完成绑定/跳转。
 验证码缺失/被拒绝返回固定 entry_captcha_required / entry_captcha_invalid；不透传上游消息或验证码内容。
 本次开发只做静态检查与 Astra 审查，真实绑定、验证码和落地身份测试由用户执行。
