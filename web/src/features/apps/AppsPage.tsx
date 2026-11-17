@@ -7,6 +7,7 @@ import type { SystemEntryAvailability, U8CaptchaAnswer } from '../../api/systemE
 import { useAuthStore } from '../../stores/authStore';
 import { Icon } from '../../shared/ui/Icon';
 import { PageFrame } from '../../shared/ui/PageFrame';
+import { MySkillsSection } from './MySkillsSection';
 import { NewSoftwareDialog } from './NewSoftwareDialog';
 import { U8EntryCaptcha } from './U8Captcha';
 import { SystemAccountSettings } from './SystemAccountSettings';
@@ -216,6 +217,7 @@ export default function AppsPage() {
             <b>添加软件</b>
           </button>
         </div>
+        <MySkillsSection />
       </div>
 
       <NewSoftwareDialog onClose={() => setDialogOpen(false)} open={dialogOpen} />

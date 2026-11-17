@@ -7,6 +7,7 @@ import {
   type UserActionOutcome,
 } from './userActionOutcome';
 import { parseSheetFillPlan, type SheetFillPlan } from './sheetFillPlan';
+import { parseUserSkillPayload, type UserSkillPayload } from './userSkill';
 
 export const SAFE_INCOMPATIBLE_TEXT = '当前响应无法安全显示，请稍后重试。';
 
@@ -129,6 +130,8 @@ export interface ProjectedResponse {
   reportJobId?: string;
   /** Server-validated sheet fill plan awaiting the user's confirmation (no job yet). */
   sheetFillPlan?: SheetFillPlan;
+  /** A personal saved flow card or result (`data.user_skill`). */
+  userSkill?: UserSkillPayload;
   /** The user cancelled this plan card (kept with the transcript; never submitted). An
    * accepted plan instead keeps its job in `reportJobId`. */
   sheetFillCancelled?: true;
@@ -723,6 +726,16 @@ export function projectResponse(
       return { ...base, records: null, presentationKind: 'unconfirmed' };
     }
     return incompatibleResponse();
+  }
+
+  if (isRecord(value.data) && Object.prototype.hasOwnProperty.call(value.data, 'user_skill')) {
+    const payload = parseUserSkillPayload(value.data.user_skill);
+    if (payload === null || Object.keys(value.data).length !== 1
+        || (status !== 'completed' && status !== 'failed')
+        || action !== 'none' || value.ui.component_type !== 'none') {
+      return incompatibleResponse();
+    }
+    return { ...base, records: null, presentationKind: status, userSkill: payload };
   }
 
   if (isRecord(value.data) && Object.prototype.hasOwnProperty.call(value.data, 'sheet_fill_plan')) {

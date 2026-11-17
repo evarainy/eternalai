@@ -32,6 +32,10 @@ vi.mock('../../../api/systemEntry', () => ({
   getSystemEntryAvailability: apiMocks.entryAvailability,
 }));
 
+vi.mock('../../../api/userSkills', () => ({
+  listSkills: vi.fn(async () => ({ items: [] })),
+  setSkillState: vi.fn(),
+}));
 vi.mock('../../../api/mcp', () => ({
   listMcpServices: apiMocks.mcpServices, listMcpConnections: apiMocks.mcpConnections,
   listMcpOperations: apiMocks.mcpOperations,
@@ -179,7 +183,7 @@ describe('AppsPage backend gaps', () => {
   it('locks the single business-systems section', async () => {
     await renderPage();
     expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent))
-      .toEqual(['业务系统']);
+      .toEqual(['业务系统', '我的功能']);
   });
 
   // The real user-list contract does not exist. These are admin-cache values, NOT an invented user DTO.

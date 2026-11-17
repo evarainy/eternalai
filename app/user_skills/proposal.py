@@ -446,11 +446,12 @@ def build_proposal(
             prefill = _prefill(candidates, pref, len(group))
             bindings.append({
                 "binding_id": binding_id,
+                "step_index": index,
                 "step_label": step.label,
                 "arg_label": arg_label,
                 "source_kind": prefill.kind if prefill else "undetermined",
                 "source_label": prefill.label if prefill else "来源未定，请选择",
-                "candidates": [{"candidate_id": c.candidate_id, "label": c.label}
+                "candidates": [{"candidate_id": c.candidate_id, "kind": c.kind, "label": c.label}
                                for c in candidates],
                 "prefill": prefill.candidate_id if prefill else None,
             })
@@ -463,7 +464,7 @@ def build_proposal(
                 "candidates": [c.__dict__ for c in candidates],
             })
         if step_loop_candidates:
-            offers.append({"offer_id": f"f{index}", "step_label": step.label,
+            offers.append({"offer_id": f"f{index}", "step_index": index, "step_label": step.label,
                            "list_label": "前一步列表里的每一条", "prefilled": len(step.seqs) > 1})
     columns_view: list[dict[str, Any]] = []
     tables_internal: list[dict[str, Any]] = []

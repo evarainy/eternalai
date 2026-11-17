@@ -111,6 +111,8 @@ def render_result(
             for name, value in inputs.items()
             if name in labels
         ],
+        # The caller's own values by parameter name, for re-running or exporting.
+        "input": {name: value for name, value in inputs.items() if name in labels},
         "queried_at": queried_at.isoformat(),
         "tables": [],
     }

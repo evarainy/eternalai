@@ -8,6 +8,7 @@ import type { BackgroundJobResponse } from '../../generated/background-jobs/back
 import { cancelJob, isActive, readJob } from './selfCheckApi';
 import {
   REPORT_KIND,
+  USER_SKILL_REPORT_KIND,
   reportDownloadUrl,
   reportFailureText,
   reportResult,
@@ -20,6 +21,19 @@ import {
 } from './sheetFill';
 
 const { Text, Title } = Typography;
+
+function userSkillExportFailureText(code: string | null): string {
+  switch (code) {
+    case 'user_skill_changed':
+      return '功能已更新或已暂停，请重新查询后再导出。';
+    case 'user_skill_unavailable':
+      return '没有找到这个功能。';
+    case 'user_skill_run_failed':
+      return '导出时重新查询没有成功，请稍后再试。';
+    default:
+      return reportFailureText(code);
+  }
+}
 const ACTIVE_POLL_MS = 2_000;
 const RETRY_POLL_MS = 5_000;
 
@@ -31,7 +45,7 @@ const STATUS: Record<BackgroundJobResponse['status'], { label: string; color: st
   failed: { label: '未能生成', color: 'red' },
   cancelled: { label: '已取消', color: 'default' },
 };
-const KINDS = new Set([REPORT_KIND, SHEET_FILL_KIND]);
+const KINDS = new Set([REPORT_KIND, SHEET_FILL_KIND, USER_SKILL_REPORT_KIND]);
 
 interface KindView {
   title: string;
@@ -54,6 +68,18 @@ const KIND_VIEWS: Record<string, KindView> = {
         : { artifactId: result.artifactId, text: `已生成 ${result.rowCount} 条待办。` };
     },
     failureText: reportFailureText,
+  },
+  [USER_SKILL_REPORT_KIND]: {
+    title: '功能导出',
+    activeText: '正在后台按功能重新查询并生成文件，可以离开此页面。',
+    cancelText: '取消导出',
+    resultUnavailableText: '导出结果暂不可用，请重新导出',
+    result: (job) => {
+      const result = reportResult(job);
+      return result === null ? null
+        : { artifactId: result.artifactId, text: `已导出 ${result.rowCount} 行。` };
+    },
+    failureText: userSkillExportFailureText,
   },
   [SHEET_FILL_KIND]: {
     title: '表格填写',
