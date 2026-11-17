@@ -22,7 +22,7 @@ _log = logging.getLogger(__name__)
 _MESSAGES = {
     "entry_not_configured": "免登入口未配置。",
     "entry_not_bound": "请先在账号设置中绑定账号和密码。",
-    "entry_credentials_rejected": "账号或密码未通过系统验证，请核对账号设置。",
+    "entry_credentials_rejected": "账号或密码错误，请重新输入。",
     "entry_unavailable": "暂时无法完成登录，具体原因尚未确认。",
     "entry_captcha_required": "请输入财务验证码。",
     "entry_captcha_invalid": "验证码错误，请换一张后重新填写。",
