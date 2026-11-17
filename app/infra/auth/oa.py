@@ -10,6 +10,7 @@ import socket
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 from urllib.error import HTTPError, URLError
@@ -32,6 +33,7 @@ from app.ports.auth import (
     CredentialAuthenticationResult,
     CredentialSnapshot,
     CredentialStorePort,
+    CredentialSubjectMismatch,
     CredentialWriteStamp,
     LoginCredential,
     OASessionCredential,
@@ -392,6 +394,11 @@ class OACredentialVerifier:
                 rsa_flag,
             )
             failure_stage = "oa_login_request_failed"
+            if persist_session and not reactivate_revoked_session and expected_write is not None:
+                logging.getLogger("uvicorn.error.oa_session").info(
+                    "oa_auto_login_attempt operation=automatic_recovery operation_id=%s",
+                    sha256(expected_write.operation_id.encode()).hexdigest()[:12],
+                )
             login_result = await session.post_form(
                 "/api/hrm/login/checkLogin",
                 {
@@ -675,6 +682,8 @@ def _authentication_failure_kind(
     stage: OAAuthenticationFailureStage,
     error: Exception,
 ) -> OAAuthenticationFailureKind:
+    if isinstance(error, CredentialSubjectMismatch):
+        return "identity_mismatch"
     if stage == "oa_credentials_rejected":
         return "credentials_rejected"
     if isinstance(error, OAAuthenticationDeniedError):

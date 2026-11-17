@@ -33,6 +33,7 @@ from app.background_jobs import (
     executed_by_worker,
     oa_binding_refusal,
 )
+from app.credential_polling import OASessionKeeper
 from app.file_artifacts import FileArtifactService
 from app.ports.auth import Principal
 from app.ports.file_artifacts import (
@@ -385,11 +386,13 @@ class SheetFillAdmission:
         identity_mapping: IdentityMappingPort | None,
         document_qa: DocumentQAService | None,
         oa_session_probe: OASessionProbe | None = None,
+        oa_session_keeper: OASessionKeeper | None = None,
     ) -> None:
         self._files = files
         self._identity_mapping = identity_mapping
         self._document_qa = document_qa
         self._oa_session_probe = oa_session_probe
+        self._oa_session_keeper = oa_session_keeper
 
     async def _inspect(
         self, principal: Principal, session_id: str, artifact_id: UUID
@@ -410,6 +413,7 @@ class SheetFillAdmission:
         plan: SheetFillPlan,
         *,
         session_probe: OASessionProbe | None = None,
+        session_keeper: OASessionKeeper | None = None,
     ) -> str | None:
         sources = {mapping.source for mapping in plan.mappings}
         if "document" in sources and (
@@ -421,7 +425,8 @@ class SheetFillAdmission:
             return "sheet_fill_document_forbidden"
         if "oa_pending" in sources:
             return await oa_binding_refusal(
-                self._identity_mapping, principal, session_probe=session_probe
+                self._identity_mapping, principal, session_probe=session_probe,
+                session_keeper=session_keeper,
             )
         return None
 
@@ -432,7 +437,8 @@ class SheetFillAdmission:
         plan = validate_plan(proposal, inspection)
         _require_coverage(proposal, inspection)
         refused = await self._source_refusal(
-            principal, plan, session_probe=self._oa_session_probe
+            principal, plan, session_probe=self._oa_session_probe,
+            session_keeper=self._oa_session_keeper,
         )
         if refused is not None:
             raise SheetFillRejected(refused, _SOURCE_REFUSAL_MESSAGES[refused])

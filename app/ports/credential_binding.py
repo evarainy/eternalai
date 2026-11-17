@@ -47,7 +47,7 @@ CredentialCountedFailureCode: TypeAlias = Literal[
 OASessionHeartbeatResult: TypeAlias = Literal["alive", "dead"]
 OASessionProbeResult: TypeAlias = Literal["alive", "dead", "unavailable"]
 CredentialRecoveryTrigger: TypeAlias = Literal[
-    "keepalive", "read_identity_expired", "oa_002", "local_expiry"
+    "keepalive", "read_identity_expired", "oa_002", "local_expiry", "background_poll"
 ]
 RecoveryOutcome: TypeAlias = Literal[
     "recovered",
@@ -147,6 +147,7 @@ class CredentialPollCandidate(BaseModel):
     tenant_id: str
     ai_user_id: str
     target_system: CredentialTargetSystem
+    binding_state: Literal["unverified", "active"]
     poll_failure_count: int
     updated_at: datetime
     snapshot: CredentialSnapshot

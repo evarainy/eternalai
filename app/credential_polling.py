@@ -71,6 +71,7 @@ class CredentialPollingService:
         acquirer: BackgroundCredentialAcquirerPort,
         work_objects: BackgroundWorkObjectSyncPort,
         policy: CredentialPollingPolicy,
+        session_keeper: OASessionKeeper | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if not tenant_id.strip():
@@ -80,6 +81,7 @@ class CredentialPollingService:
         self._acquirer = acquirer
         self._work_objects = work_objects
         self._policy = policy
+        self._session_keeper = session_keeper
         self._clock = clock
 
     async def run_due(self) -> int:
@@ -91,7 +93,9 @@ class CredentialPollingService:
             for candidate in await self._binding_store.list_poll_candidates(
                 tenant_id=self._tenant_id
             )
-            if candidate.tenant_id == self._tenant_id and self._is_due(candidate, now)
+            if candidate.tenant_id == self._tenant_id
+            and (self._session_keeper is not None or candidate.binding_state == "unverified")
+            and self._is_due(candidate, now)
         ][: self._policy.global_concurrency]
         await asyncio.gather(*(self._run_candidate(candidate) for candidate in candidates))
         return len(candidates)
@@ -113,6 +117,10 @@ class CredentialPollingService:
             )
             now = self._validated_now()
             if refreshed is None or not self._is_due(refreshed, now):
+                return
+            if refreshed.binding_state == "active":
+                if self._session_keeper is not None:
+                    await self._run_active_candidate_once(refreshed, self._session_keeper)
                 return
             try:
                 stamp = await self._binding_store.claim_write(refreshed.snapshot)
@@ -202,6 +210,47 @@ class CredentialPollingService:
                     expected_write=stamp,
                 )
 
+    async def _run_active_candidate_once(
+        self, candidate: CredentialPollCandidate, keeper: OASessionKeeper
+    ) -> None:
+        observed = await keeper.observe(
+            tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id
+        )
+        if observed is None or observed.snapshot != candidate.snapshot:
+            return
+        probe = await keeper.probe(
+            tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id,
+            observed=observed, credential=None,
+        )
+        if probe == "alive":
+            stamp = await self._binding_store.claim_write(observed.snapshot)
+            await self._binding_store.mark_poll_succeeded(
+                candidate.ai_user_id, "oa", tenant_id=candidate.tenant_id, expected_write=stamp
+            )
+            _SESSION_LOGGER.info("oa_active_poll outcome=alive")
+            return
+        if probe == "dead":
+            outcome = await keeper.recover(
+                tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id,
+                observed=observed, trigger="background_poll",
+            )
+            if outcome in {
+                "recovered", "refreshed_by_other", "rejected", "captcha_required",
+                "binding_unavailable",
+            }:
+                return
+        current = await keeper.observe(
+            tenant_id=candidate.tenant_id, ai_user_id=candidate.ai_user_id
+        )
+        if current is None or current.snapshot != observed.snapshot:
+            return
+        stamp = await self._binding_store.claim_write(observed.snapshot)
+        await self._binding_store.mark_non_counted_failure(
+            candidate.ai_user_id, "oa", tenant_id=candidate.tenant_id, expected_write=stamp
+        )
+        if probe == "unavailable":
+            _SESSION_LOGGER.info("oa_active_poll outcome=unavailable")
+
     def _is_due(self, candidate: CredentialPollCandidate, now: datetime) -> bool:
         return _poll_is_due(self._policy, candidate, now)
 
@@ -260,9 +309,11 @@ def _judge_recovery(
         return "rejected"
     if current.poll_status == "captcha_required":
         return "captcha_required"
-    if current.binding_state == "active":
-        return "browser_bound"
-    if current.binding_state != "unverified":
+    if (
+        current.binding_state not in {"unverified", "active"}
+        or current.snapshot.binding_revision != observed.snapshot.binding_revision
+        or current.binding_state != observed.binding_state
+    ):
         return "binding_unavailable"
     if current.session_write_marker != observed.session_write_marker:
         if (
@@ -401,6 +452,12 @@ class CredentialSessionRecovery:
         )
         if candidate is None:
             return "backoff"
+        if (
+            candidate.snapshot.binding_id != observed.snapshot.binding_id
+            or candidate.snapshot.binding_revision != observed.snapshot.binding_revision
+            or candidate.binding_state != observed.binding_state
+        ):
+            return "binding_unavailable"
         if current.poll_status == "retrying" and not _poll_is_due(
             self._policy, candidate, self._validated_now()
         ):
@@ -587,6 +644,38 @@ class OASessionKeeper:
         return await self.recover(
             tenant_id=tenant_id, ai_user_id=ai_user_id, observed=observed, trigger="keepalive"
         )
+
+
+async def prepare_active_oa_read(
+    keeper: OASessionKeeper,
+    *,
+    tenant_id: str,
+    ai_user_id: str,
+    trigger: CredentialRecoveryTrigger,
+) -> OAKeepaliveStatus:
+    """Prepare an eligible owner's active binding; only a dead heartbeat permits login."""
+
+    observed = await keeper.observe(tenant_id=tenant_id, ai_user_id=ai_user_id)
+    if observed is None:
+        return "binding_unavailable"
+    if observed.revoked or observed.poll_status == "invalid":
+        return "rejected"
+    if observed.poll_status == "captcha_required":
+        return "captcha_required"
+    if (
+        observed.binding_state != "active"
+        or not observed.has_password
+        or observed.poll_status not in {"active", "retrying"}
+    ):
+        return "binding_unavailable"
+    probe = await keeper.probe(
+        tenant_id=tenant_id, ai_user_id=ai_user_id, observed=observed, credential=None
+    )
+    if probe != "dead":
+        return probe
+    return await keeper.recover(
+        tenant_id=tenant_id, ai_user_id=ai_user_id, observed=observed, trigger=trigger
+    )
 
 
 class CredentialPollingScheduler:

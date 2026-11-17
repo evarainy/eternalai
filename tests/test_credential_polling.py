@@ -59,6 +59,7 @@ NOW = datetime(2026, 8, 21, 2, 0, tzinfo=UTC)
 CANDIDATE = CredentialPollCandidate(
     ai_user_id="usr_v1_synthetic",
     target_system="oa",
+    binding_state="unverified",
     poll_failure_count=0,
     updated_at=NOW - timedelta(minutes=11),
     tenant_id="default",
@@ -1156,7 +1157,7 @@ def _recovery(store: FakeRecoveryStore, acquirer: FakeAcquirer, clock: list[floa
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
-        (_recovery_state(binding_state="active"), "browser_bound"),
+        (_recovery_state(binding_state="active"), "binding_unavailable"),
         (_recovery_state(revoked=True), "rejected"),
         (_recovery_state(poll_status="invalid"), "rejected"),
         (_recovery_state(poll_status="captcha_required"), "captcha_required"),

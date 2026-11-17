@@ -596,7 +596,7 @@ def test_browser_activation_fences_intervening_changes_without_password_update(
     asyncio.run(exercise())
 
 
-def test_active_browser_binding_is_excluded_at_all_poll_read_boundaries(migrated_database_url):
+def test_active_browser_binding_is_eligible_at_all_poll_read_boundaries(migrated_database_url):
     async def exercise():
         async with activation_case(migrated_database_url) as case:
             _, store, principal, captured, submitted, stamp, session_credential = case
@@ -613,12 +613,29 @@ def test_active_browser_binding_is_excluded_at_all_poll_read_boundaries(migrated
                 submitted, verified=principal, session_credential=session_credential,
                 captured_session=captured, expected_write=stamp,
             )
-            assert await store.list_poll_candidates(tenant_id=tenant) == []
-            assert await store.refresh_poll_candidate(user, "oa", tenant_id=tenant) is None
-            # Even a freshly claimed writer cannot use the polling password reader.
-            fresh = await claim(store, tenant, user)
+            active = await store.list_poll_candidates(tenant_id=tenant)
+            assert len(active) == 1 and active[0].ai_user_id == user
+            assert active[0].binding_state == "active"
+            current = await store.refresh_poll_candidate(user, "oa", tenant_id=tenant)
+            assert current is not None and current.snapshot == active[0].snapshot
+            assert current.binding_state == "active"
+            # Activation fences the pre-activation writer, including its password read.
             with pytest.raises(CredentialStoreError, match=r"^password binding cannot be loaded$"):
                 await store.load_password_for_poll(
-                    user, "oa", tenant_id=tenant, expected_write=fresh,
+                    user, "oa", tenant_id=tenant, expected_write=stamp,
+                )
+            fresh = await claim(store, tenant, user)
+            loaded = await store.load_password_for_poll(
+                user, "oa", tenant_id=tenant, expected_write=fresh,
+            )
+            assert loaded.password == submitted.password
+            with pytest.raises(CredentialStoreError):
+                await store.load_password_for_poll(
+                    user, "oa", tenant_id=tenant + "-other", expected_write=fresh,
+                )
+            expired = replace(fresh, deadline=datetime.now(UTC) - timedelta(seconds=1))
+            with pytest.raises(CredentialStoreError, match=r"^password binding cannot be loaded$"):
+                await store.load_password_for_poll(
+                    user, "oa", tenant_id=tenant, expected_write=expired,
                 )
     asyncio.run(exercise())

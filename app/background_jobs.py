@@ -16,12 +16,19 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-from app.ports.auth import CredentialStorePort, OASessionCredential, Principal
+from app.credential_polling import OASessionKeeper, prepare_active_oa_read
+from app.ports.auth import (
+    CredentialStorePort,
+    OASessionCredential,
+    Principal,
+    authenticated_session,
+)
 from app.ports.background_jobs import (
     BackgroundJobAcceptance,
     BackgroundJobAcceptRequest,
@@ -194,8 +201,9 @@ async def oa_binding_refusal(
     principal: Principal,
     *,
     session_probe: OASessionProbe | None = None,
+    session_keeper: OASessionKeeper | None = None,
 ) -> str | None:
-    """Check binding metadata, then the saved Session when a read-only probe is supplied.
+    """Check metadata, then probe or prepare the authenticated owner's saved Session.
 
     Only a proven dead Session means expiry; an inconclusive probe means unavailable.
     """
@@ -209,6 +217,31 @@ async def oa_binding_refusal(
         return "oa_unbound"
     if mapping.bind_status == "verification_failed":
         return "oa_unavailable"
+    session = authenticated_session.get()
+    if (
+        session_keeper is not None
+        and session is not None
+        and session.expires_at > datetime.now(UTC)
+        and (session.principal.org_ctx.tenant_id, session.principal.ai_user_id)
+        == (principal.org_ctx.tenant_id, principal.ai_user_id)
+    ):
+        prepared = await prepare_active_oa_read(
+            session_keeper, tenant_id=principal.org_ctx.tenant_id,
+            ai_user_id=principal.ai_user_id, trigger="local_expiry",
+        )
+        if prepared == "unavailable":
+            return "oa_unavailable"
+        if prepared not in {"alive", "recovered", "refreshed_by_other", "binding_unavailable"}:
+            return "oa_session_expired"
+        if prepared != "binding_unavailable":
+            mapping = await identity_mapping.get_mapping(
+                principal.ai_user_id, "oa", tenant_id=principal.org_ctx.tenant_id
+            )
+            if mapping is None or mapping.bind_status == "revoked":
+                return "oa_unbound"
+            if mapping.bind_status != "active":
+                return "oa_session_expired"
+            return None
     if session_probe is not None:
         result = await session_probe(BackgroundJobRunOwner(
             tenant_id=principal.org_ctx.tenant_id,
