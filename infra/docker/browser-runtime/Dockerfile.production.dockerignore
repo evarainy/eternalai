@@ -462,6 +462,11 @@ services/decision/*
 !app/im_client.py
 !app/ports/im_client.py
 
+# Per-user appearance and home layout: exact source files only.
+!app/api/v1/user_preferences.py
+!app/ports/user_preferences.py
+!app/infra/persistence/user_preferences.py
+
 # System entry APIs and the optional OA bridge runtime: exact source files only.
 !app/api/v1/system_entry.py
 !app/ports/system_entry.py

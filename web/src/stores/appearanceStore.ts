@@ -15,7 +15,7 @@ import {
 
 export const APPEARANCE_STORAGE_KEY = 'eternalai-appearance';
 
-interface AppearanceChoices {
+export interface AppearanceChoices {
   skin: Skin;
   size: FontSize;
   clock: ClockStyle;
@@ -42,9 +42,22 @@ function pick<T extends string>(allowed: readonly T[], value: unknown, fallback:
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+/** 存储里出现未知取值时逐项退回默认，不让坏值把界面弄成没有样式的状态。 */
+function parseAppearance(value: unknown): AppearanceChoices {
+  const stored = (value !== null && typeof value === 'object' ? value : {}) as Partial<
+    Record<keyof AppearanceChoices, unknown>
+  >;
+  return {
+    skin: pick(SKINS, stored.skin, DEFAULTS.skin),
+    size: pick(FONT_SIZES, stored.size, DEFAULTS.size),
+    clock: pick(CLOCK_STYLES, stored.clock, DEFAULTS.clock),
+    fx: FX_MODES.includes(stored.fx as FxMode) ? (stored.fx as FxMode) : null,
+  };
+}
+
 /**
- * 外观选择：皮肤、字号、时钟样式、动效。现在记在浏览器本地；按用户保存到后端是第二期的事。
- * 存储里出现未知取值时逐项退回默认，不让坏值把界面弄成没有样式的状态。
+ * 外观选择：皮肤、字号、时钟样式、动效。按登录用户保存在后端（见 `app/userPreferencesSync.ts`）；
+ * 浏览器本地这份只是「本浏览器上次显示的样子」，用于登录前和刷新后的首屏，登录后以服务器为准。
  */
 export const useAppearanceStore = create<AppearanceState>()(
   persist(
@@ -60,19 +73,19 @@ export const useAppearanceStore = create<AppearanceState>()(
     {
       name: APPEARANCE_STORAGE_KEY,
       partialize: ({ skin, size, clock, fx }) => ({ skin, size, clock, fx }),
-      merge: (persisted, current) => {
-        const stored = (persisted ?? {}) as Partial<Record<keyof AppearanceChoices, unknown>>;
-        return {
-          ...current,
-          skin: pick(SKINS, stored.skin, DEFAULTS.skin),
-          size: pick(FONT_SIZES, stored.size, DEFAULTS.size),
-          clock: pick(CLOCK_STYLES, stored.clock, DEFAULTS.clock),
-          fx: FX_MODES.includes(stored.fx as FxMode) ? (stored.fx as FxMode) : null,
-        };
-      },
+      merge: (persisted, current) => ({ ...current, ...parseAppearance(persisted) }),
     },
   ),
 );
+
+/** 采用服务器上本人的外观；没有记录（`null`）就是默认外观。 */
+export function adoptAppearance(value: unknown): void {
+  useAppearanceStore.setState(parseAppearance(value));
+}
+
+export function appearanceChoices({ skin, size, clock, fx }: AppearanceChoices): AppearanceChoices {
+  return { skin, size, clock, fx };
+}
 
 let softwareRendering: boolean | undefined;
 
