@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from uuid import uuid4
 
 from agentscope.event import ReplyFinishedReason
@@ -78,7 +78,9 @@ from app.infra.orchestration.agentscope_runtime.catalog import (
     ToolCatalog,
     VisibleCatalog,
     build_tool_catalog,
+    read_only_catalog,
     visible_capabilities,
+    with_user_skill_tools,
 )
 from app.infra.orchestration.agentscope_runtime.document_route import (
     answer_document,
@@ -98,6 +100,8 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     SheetFillProposed,
     TurnLedger,
     Unsupported,
+    UserSkillExposure,
+    UserSkillSettled,
 )
 from app.infra.orchestration.agentscope_runtime.proposal import (
     ProposalCoordinator,
@@ -115,6 +119,12 @@ from app.infra.orchestration.agentscope_runtime.toolkit import (
     CONTROL_TOOLS,
     RESET_TOOLS,
     build_turn_toolkit,
+)
+from app.infra.orchestration.agentscope_runtime.user_skill_turn import (
+    TAKEOVER_PROMPT,
+    UserSkillTurn,
+    prepare_user_skill_turn,
+    takeover_data,
 )
 from app.knowledge import BasicKnowledge
 from app.knowledge.bounded import bound_generated_knowledge
@@ -248,6 +258,24 @@ _REPORT_REFUSALS: dict[str, tuple[str, ErrorCode]] = {
 _REPORT_REFUSED_DEFAULT = "报表任务暂时无法提交，请稍后重试。"
 # Fixed reply of the sheet fill proposal; the card shows the plan, never model text.
 SHEET_FILL_PROPOSED_MESSAGE = "请确认填表内容，确认后在后台开始填写。"
+USER_SKILL_MESSAGES = {
+    "proposal": "请确认要保存的功能内容，试运行成功后再保存。",
+    "needs_input": "请补充查询需要填写的内容。",
+    "choice": "请选择要使用的功能。",
+}
+
+
+def _user_skill_message(payload: dict[str, Any]) -> str:
+    kind = payload.get("kind")
+    if kind in USER_SKILL_MESSAGES:
+        return USER_SKILL_MESSAGES[kind]
+    name = str(payload.get("name", ""))
+    status = payload.get("status")
+    if status == "completed":
+        return f"已按「{name}」查询完成。"
+    if status == "partial":
+        return f"已按「{name}」查询，部分内容没有查到，请看表格里的状态。"
+    return f"「{name}」没有查询成功：{payload.get('reason_label') or '处理失败'}"
 
 
 def _header_columns(header: tuple[str, ...]) -> dict[str, str]:
@@ -381,6 +409,8 @@ class _Turn:
     document: str | None = None
     # Verified chat attachment metadata, read once when the turn is accepted.
     attachments: tuple[ChatAttachmentDescriptor, ...] = ()
+    # Personal saved flows of an ordinary chat turn; None on restricted turns.
+    user_skill: UserSkillTurn | None = None
 
 
 @dataclass(slots=True)
@@ -909,7 +939,8 @@ class AgentScopeRuntime:
             owner=turn.owner, browser=browser,
         )
         model_message = message
-        if turn.scope.im_source is not None or turn.attachments:
+        takeover = turn.user_skill.takeover if turn.user_skill is not None else None
+        if turn.scope.im_source is not None or turn.attachments or takeover is not None:
             data: dict[str, object] = {}
             if turn.attachments:
                 data["untrusted_attachments"] = [
@@ -937,6 +968,8 @@ class AgentScopeRuntime:
                     {"message_id": m.message_id, "text": m.text}
                     for m in turn.scope.im_source.messages
                 ]
+            if takeover is not None:
+                data["untrusted_failed_query"] = takeover_data(takeover)
             data["user_instruction"] = message
             model_message = json.dumps(data, ensure_ascii=False)
         final = await self._drive(turn, agent, proposals, model_message, ledger, progress)
@@ -1188,6 +1221,22 @@ class AgentScopeRuntime:
             assert browser is not None
             catalog, tool = expose_browser_tool(catalog, spec, self._registration())
             browser.spec = spec if tool is not None else None
+        turn.user_skill = await prepare_user_skill_turn(
+            deps.user_skills, scope, message, turn.deadline, restricted=browser is not None
+        )
+        if turn.user_skill is not None:
+            if turn.user_skill.takeover is not None:
+                # Narrow this turn's own granted tools to its read groups; never rebuild.
+                catalog = read_only_catalog(catalog)
+            elif turn.user_skill.tools:
+                catalog, named = with_user_skill_tools(catalog, turn.user_skill.tools)
+                turn.user_skill.exposures = named
+                ledger.user_skill_tools = {
+                    name: UserSkillExposure(
+                        tool.skill_id, tool.version, bytes.fromhex(tool.digest_hex), tool.name
+                    )
+                    for name, tool in named.items()
+                }
         if not catalog.tools:
             return await self._catalog_invalid(turn, catalog)
         if catalog.summary_omitted:
@@ -1227,6 +1276,7 @@ class AgentScopeRuntime:
             catalog, scope=scope, deps=deps, ledger=ledger, limits=self._limits,
             model=model, prompt_version=M1_PROMPT_VERSION,
             knowledge=knowledge, knowledge_digest=self._knowledge_digest,
+            user_skill_turn=turn.user_skill,
             authorization_recheck=(
                 None
                 if hint is None
@@ -1253,6 +1303,10 @@ class AgentScopeRuntime:
                 "用户要求填写该表格时，只能调用 propose_sheet_fill 提交列映射，"
                 "不能自己编写单元格内容。"
                 if turn.attachments else ""
+            ) + (
+                TAKEOVER_PROMPT
+                if turn.user_skill is not None and turn.user_skill.takeover is not None
+                else ""
             ) + (
                 M1_REPAIR_PROMPT
                 if browser is not None
@@ -1308,6 +1362,23 @@ class AgentScopeRuntime:
         if isinstance(terminal, ReportJobSettled):
             # The report tool runs alone; its fixed reply ends the turn (never model text).
             return self._report_outcome(turn, terminal)
+        if isinstance(terminal, UserSkillSettled):
+            # The saved-flow card or result decided the turn; never model text.
+            skill_text = _user_skill_message(terminal.payload)
+            envelope = self._deps.response_builder.build_message(
+                turn.response_id, turn.task_id, turn.scope.session_id, skill_text, skill_text,
+                turn.trace_id, status="failed" if terminal.failed else "completed",
+                data={"user_skill": terminal.payload},
+            )
+            code: ErrorCode = (
+                cast("ErrorCode", terminal.error_code)
+                if terminal.error_code in _ERROR_CODES else "internal_error"
+            )
+            return _Outcome(
+                "user_skill", envelope,
+                self._close(turn, None, "failed", code) if terminal.failed
+                else self._close(turn, None, "completed", None),
+            )
         if isinstance(terminal, SheetFillProposed):
             # Fixed reply plus the validated plan; no job until the user confirms the card.
             builder = self._deps.response_builder

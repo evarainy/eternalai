@@ -133,6 +133,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLTaskStore,
 )
 from app.infra.persistence.user_preferences import PostgreSQLUserPreferencesStore
+from app.infra.persistence.user_skills import PostgreSQLUserSkillStore
 from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
 from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
@@ -140,7 +141,8 @@ from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSer
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.system_entry.oa_login import OAEntryVerifier
-from app.infra.workflow.catalog import production_workflow_capabilities
+from app.infra.user_skills.closing import UserSkillTaskCloser
+from app.infra.workflow.catalog import OVERVIEW_ID, production_workflow_capabilities
 from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
 from app.infra.workflow.production import (
     validate_production_workflows,
@@ -205,6 +207,9 @@ from app.runtime.document_qa import DocumentQAService
 from app.runtime.runtime import RuntimeImpl
 from app.sheet_fill import SheetFillAdmission, sheet_fill_kind
 from app.system_entry.service import SystemEntryService
+from app.user_skills.runner import UserSkillRunner
+from app.user_skills.service import UserSkillService
+from app.user_skills.session_store import UserSkillSessionStore
 from app.work_dispatch.attachments import WorkObjectAttachmentService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 from app.work_dispatch.service import WorkDispatchService
@@ -265,6 +270,51 @@ class ProductionComponents:
     system_entry_service: SystemEntryService | None = None
     close_system_entry: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
     user_preferences: UserPreferencesPort | None = None
+    user_skills: UserSkillService | None = None
+
+
+def build_user_skill_service(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    capability_registry: CapabilityRegistryPort,
+    policy: CapabilityCandidatePolicyPort,
+    task_store: TaskStorePort,
+    trace_port: TracePort,
+    human_gate: HumanGatePort | None,
+    engine: WorkflowEngine,
+    projector: AgentOrchestrationAdapter,
+    evaluator: TerminalEvaluator,
+) -> UserSkillService | None:
+    """Personal saved flows; one instance shared by chat and the HTTP API."""
+
+    if human_gate is None:
+        return None
+    read_leaves = {
+        workflow_id: tuple(
+            (step.step_id, step.capability_id, dict(step.static_arguments))
+            for step in definition.steps
+        )
+        for workflow_id, definition in production_workflow_definitions().items()
+        # The read workflows the AgentScope catalog exposes as read tools (READ_WORKFLOW_IDS).
+        if workflow_id == OVERVIEW_ID
+        and all(not step.input_mapping and step.when is None for step in definition.steps)
+    }
+    return UserSkillService(
+        store=PostgreSQLUserSkillStore(session_factory),
+        sessions=UserSkillSessionStore(),
+        runner=UserSkillRunner(
+            registry=capability_registry,
+            policy=policy,
+            task_store=task_store,
+            trace_port=trace_port,
+            human_gate=human_gate,
+            engine=engine,
+            project_output=projector.project_leaf_data,
+            closer=UserSkillTaskCloser(task_store, trace_port, evaluator),
+        ),
+        registry=capability_registry,
+        read_workflow_leaves=read_leaves,
+    )
 
 
 def build_credential_store(
@@ -683,6 +733,7 @@ def _build_agentscope_runtime(
     mcp_authorization_hint: Callable[[str, str, RequestOrgContext], bool] | None = None,
     report_jobs: BackgroundJobService | None = None,
     sheet_fill: SheetFillAdmission | None = None,
+    user_skills: UserSkillService | None = None,
 ) -> tuple[RuntimePort, Callable[..., None]]:
     """The single wiring of the AgentScope path; AgentScope is imported only here.
 
@@ -746,6 +797,7 @@ def _build_agentscope_runtime(
             mcp_authorization_hint=mcp_authorization_hint,
             report_jobs=report_jobs,
             sheet_fill=sheet_fill,
+            user_skills=user_skills,
         )
     )
     return runtime, runtime.install_browser
@@ -1209,6 +1261,28 @@ def build_production_components(
     install_browser_handoff: Callable[..., None] = partial(
         _install_legacy_browser_handoff, runtime
     )
+    user_skills: UserSkillService | None = None
+    if settings.runtime_engine == "agentscope":
+        user_skills = build_user_skill_service(
+            session_factory=session_factory,
+            capability_registry=capability_registry,
+            policy=policy_guard,
+            task_store=task_store,
+            trace_port=resolved_trace_port,
+            human_gate=human_gate_port,
+            engine=workflow_engine,
+            projector=AgentOrchestrationAdapter(
+                capability_registry=capability_registry,
+                gateway=gateway,
+                workflow_engine=None,
+                response_builder=ResponseEnvelopeBuilder(),
+                capability_formatters=capability_formatters,
+                mcp_result_profiles=mcp_result_profiles,
+                approved_projections=approved_projections,
+                confirmation_barrier=True,
+            ),
+            evaluator=terminal_evaluator,
+        )
     if settings.runtime_engine == "agentscope":
         from app.infra.llm.agentscope_chat import build_chat_model
 
@@ -1238,6 +1312,7 @@ def build_production_components(
             session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
             report_jobs=background_jobs,
             sheet_fill=sheet_fill,
+            user_skills=user_skills,
             # Placeholders only for candidates the policy hid solely because
             # this user has not authorized the fixed MCP service.
             mcp_authorization_hint=(
@@ -1530,6 +1605,7 @@ def build_production_components(
         diagnostic_checks=dict(readonly_checks.diagnostics),
         user_profile=user_profile,
         user_preferences=PostgreSQLUserPreferencesStore(session_factory),
+        user_skills=user_skills,
         background_jobs=background_jobs,
         file_artifacts=file_artifacts,
         im_context=im_context,

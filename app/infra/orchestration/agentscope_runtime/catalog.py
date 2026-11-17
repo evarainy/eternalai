@@ -79,7 +79,7 @@ SCOPE_EXCLUDED_PREFIX = "browser."
 # together with a write proposal (each must be called alone).
 BROWSER_GROUP = "oa_browser"
 BROWSER_GROUP_PURPOSE = "在 OA 网页中由浏览器代为处理已登记的事项，不会保存或提交。"
-ToolKind = Literal["read", "write", "browser", "authorization"]
+ToolKind = Literal["read", "write", "browser", "authorization", "user_skill"]
 # Second-level split inside one primary group, applied only when the primary
 # group does not fit in one chunk: {group: ((subgroup, (capability suffix,
 # ...)), ...)}. Subgroup names must not contain "_other_".
@@ -393,6 +393,105 @@ def build_tool_catalog(
         excluded=tuple(sorted(excluded.items())),
         summary_omitted=sum(1 for tool in grouped if summaries[tool.capability_id] is None),
     )
+
+
+USER_SKILL_GROUP = "my_skills"
+USER_SKILL_PURPOSE = (
+    "我的功能：用户自己保存过的查询功能，按保存时的步骤固定执行。"
+    "用户点名某个功能，或要做的事与某个功能的用途一致时使用；"
+    "不要和其他工具同时调用；缺少的填写项由系统用表单收集，不需要先询问。"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class UserSkillTool:
+    """One saved personal flow to expose: its locked version and compiled schema."""
+
+    skill_id: str
+    version: int
+    digest_hex: str
+    name: str
+    purpose: str
+    input_schema: dict[str, Any]
+
+
+def with_user_skill_tools(
+    catalog: ToolCatalog, skills: Sequence[UserSkillTool]
+) -> tuple[ToolCatalog, dict[str, UserSkillTool]]:
+    """Add the caller's usable saved flows as groups of at most G_MAX tools.
+
+    A flow whose text or schema cannot be projected is left out and counted;
+    nothing is truncated. Returns the catalog and tool name -> flow.
+    """
+
+    excluded = dict(catalog.excluded)
+    tools: list[CatalogTool] = []
+    named: dict[str, UserSkillTool] = {}
+    taken = {tool.name for tool in catalog.tools}
+    for skill in sorted(skills, key=lambda item: item.skill_id):
+        name = f"myskill__{skill.skill_id.replace('-', '')[:24]}"
+        try:
+            if name in taken or _TOOL_NAME.fullmatch(name) is None:
+                raise ToolDefinitionRejected("tool_name_invalid")
+            validate_tool_text(skill.name, max_chars=CAPABILITY_NAME_MAX_LENGTH)
+            validate_tool_text(skill.purpose, max_chars=CAPABILITY_SHORT_DESCRIPTION_MAX_LENGTH)
+            schema = project_tool_input_schema(skill.input_schema)
+        except ToolDefinitionRejected as rejected:
+            _count(excluded, rejected.reason)
+            continue
+        # Missing fields are collected by the form card, not by the model.
+        for field_schema in schema.get("properties", {}).values():
+            field_schema.pop("minLength", None)
+        tools.append(
+            CatalogTool(
+                name=name,
+                capability_id=f"user_skill.{skill.skill_id}",
+                group=USER_SKILL_GROUP,
+                description=f"我的功能「{skill.name}」：{skill.purpose}",
+                input_schema=schema,
+                schema_digest=hashlib.sha256(canonical_json(schema).encode("utf-8")).hexdigest(),
+                binding=CandidateBinding(
+                    capability_id=f"user_skill.{skill.skill_id}",
+                    version=str(skill.version),
+                    fingerprint=skill.digest_hex,
+                    capability_type="user_skill",
+                    target_system=None,
+                    intent_tags=(),
+                ),
+                kind="user_skill",
+            )
+        )
+        named[name] = skill
+        taken.add(name)
+    groups: list[CatalogGroup] = []
+    for index in range(0, len(tools), G_MAX):
+        chunk = tools[index : index + G_MAX]
+        group_name = USER_SKILL_GROUP if index == 0 else f"{USER_SKILL_GROUP}_{index // G_MAX + 1}"
+        chunk = [replace(tool, group=group_name) for tool in chunk]
+        tools[index : index + G_MAX] = chunk
+        listing = "、".join(named[tool.name].name for tool in chunk)
+        description = f"{USER_SKILL_PURPOSE}包含：{listing}"
+        if len(description) > MAX_GROUP_DESCRIPTION_CHARS:
+            description = USER_SKILL_PURPOSE
+        groups.append(CatalogGroup(group_name, description, None,
+                                   tuple(tool.name for tool in chunk)))
+    return replace(
+        catalog,
+        tools=(*catalog.tools, *tools),
+        groups=(*catalog.groups, *groups),
+        visible_count=catalog.visible_count + len(skills),
+        excluded=tuple(sorted(excluded.items())),
+    ), named
+
+
+def read_only_catalog(catalog: ToolCatalog) -> ToolCatalog:
+    """Takeover turns: only the read groups already granted to this turn."""
+
+    tools = tuple(tool for tool in catalog.tools if tool.kind == "read")
+    names = {tool.name for tool in tools}
+    groups = tuple(group for group in catalog.groups if set(group.tool_names) <= names
+                   and group.tool_names)
+    return replace(catalog, tools=tools, groups=groups)
 
 
 def with_browser_tool(

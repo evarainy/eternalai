@@ -92,7 +92,9 @@ class UserSkillService:
         sessions: UserSkillSessionStore,
         runner: UserSkillRunner,
         registry: CapabilityRegistryPort,
+        read_workflow_leaves: Mapping[str, Sequence[tuple[str, str, Mapping[str, Any]]]],
     ) -> None:
+        self._read_workflow_leaves = dict(read_workflow_leaves)
         self._store = store
         self.sessions = sessions
         self._runner = runner
@@ -164,22 +166,42 @@ class UserSkillService:
                 "current_version": head.current_version}
 
     # ------------------------------------------------------------ record
-    def record(
+    async def record_call(
         self,
         key: SessionKey,
         *,
         turn_id: str,
-        capability: CapabilitySpec,
+        capability_id: str,
+        capability_type: str,
+        fingerprint: str,
         arguments: Mapping[str, Any],
         data: Mapping[str, Any],
     ) -> None:
-        if capability.type != "query" or capability.execution_identity != "user_delegated":
+        """Record one completed read call (exposed data only) for a later save.
+
+        A code-owned read workflow is recorded as its query leaves; any other
+        workflow, action or mock call is not recordable.
+        """
+
+        if capability_type == "query":
+            self.sessions.record(
+                key, turn_id=turn_id, capability_id=capability_id,
+                capability_fingerprint=fingerprint, arguments=dict(arguments), data=dict(data),
+            )
             return
-        self.sessions.record(
-            key, turn_id=turn_id, capability_id=capability.capability_id,
-            capability_fingerprint=capability_fingerprint(capability),
-            arguments=dict(arguments), data=dict(data),
-        )
+        leaves = self._read_workflow_leaves.get(capability_id)
+        if capability_type != "workflow" or leaves is None:
+            return
+        for step_id, leaf_id, static_arguments in leaves:
+            part = data.get(step_id)
+            spec = await self._registry.get(leaf_id)
+            if not isinstance(part, Mapping) or spec is None or spec.type != "query":
+                continue
+            self.sessions.record(
+                key, turn_id=turn_id, capability_id=leaf_id,
+                capability_fingerprint=capability_fingerprint(spec),
+                arguments=dict(static_arguments), data=dict(part),
+            )
 
     def has_records(self, key: SessionKey) -> bool:
         return self.sessions.has_records(key)
