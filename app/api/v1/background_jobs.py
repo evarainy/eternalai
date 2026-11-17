@@ -42,6 +42,7 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "oa_unbound": (409, "需要先在软件中心授权 OA 后才能导出。"),
     "report_session_required": (422, "OA 待办报表需要在 AI 助手对话中发起。"),
     "oa_unavailable": (503, "OA 暂不可用，请稍后重试。"),
+    "oa_session_expired": (409, "OA 登录已失效，请重新授权 OA 后再导出。"),
     # Admission refusals of the sheet fill kind (shared with the chat proposal tool).
     "sheet_fill_source_changed": (
         409,
