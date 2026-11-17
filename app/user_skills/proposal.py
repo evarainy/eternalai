@@ -365,17 +365,35 @@ def _exposed(root: Mapping[str, Any], path: Sequence[str | int]) -> bool:
     return bool(schema_at(root, path))
 
 
-_DISPLAYABLE = {"string", "integer", "number", "boolean", "null"}
+_SCALAR_TYPES = {"string", "integer", "number", "boolean"}
+
+
+def _node_kinds(node: Mapping[str, Any]) -> set[str]:
+    """Value kinds a schema node allows: its ``type`` (string or list) or its literal values."""
+
+    declared = node.get("type")
+    if isinstance(declared, str):
+        return {declared}
+    if isinstance(declared, list):
+        return {str(item) for item in declared}
+    literals = node["enum"] if isinstance(node.get("enum"), list) else (
+        [node["const"]] if "const" in node else None
+    )
+    if literals is None:
+        return {"unknown"}
+    return {
+        "null" if value is None else "boolean" if isinstance(value, bool)
+        else "number" if isinstance(value, (int, float))
+        else "string" if isinstance(value, str) else "object"
+        for value in literals
+    }
 
 
 def _displayable(root: Mapping[str, Any], path: Sequence[str | int]) -> bool:
     """A column must reach a scalar (what a cell can show), never an object or a list."""
 
-    nodes = schema_at(root, path)
-    return bool(path) and bool(nodes) and all(
-        node.get("type") in _DISPLAYABLE or ("enum" in node or "const" in node)
-        for node in nodes
-    ) and any(node.get("type") != "null" for node in nodes)
+    kinds = {kind for node in schema_at(root, path) for kind in _node_kinds(node)}
+    return bool(path) and bool(kinds & _SCALAR_TYPES) and kinds <= _SCALAR_TYPES | {"null"}
 
 
 # ------------------------------------------------------------------- proposal
