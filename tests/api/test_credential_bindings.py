@@ -179,6 +179,7 @@ def _client(authentication: FakeAuthentication, store: FakeStore) -> TestClient:
             CredentialBindingService(
                 store=store,
                 verifier=authentication,
+                u8_login=Mock(login=AsyncMock(return_value=SecretStr('synthetic-token'))),
             ),
             require_principal,
         ),

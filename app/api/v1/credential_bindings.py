@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from typing import NoReturn, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 
 from app.api.v1.auth import PrincipalDependency
+from app.api.v1.system_entry import system_entry_failure
 from app.ports.auth import LoginCredential, Principal, authenticated_session
 from app.ports.credential_binding import (
     BrowserBindingActivationRequest,
@@ -23,6 +24,15 @@ from app.ports.credential_binding import (
     OASessionRenewalPort,
     PasswordBindingCredential,
 )
+from app.ports.system_entry import SystemEntryError, U8CaptchaAnswer, U8LoginPort
+
+
+class PasswordBindingRequest(PasswordBindingCredential):
+    """Captcha fields are request-only, outside the stored credential contract."""
+
+    u8_guid: str | None = Field(default=None, min_length=1)
+    u8_code: SecretStr | None = Field(default=None, min_length=1)
+
 
 _MAX_BINDING_BODY_BYTES = 16_384
 _BINDING_REQUEST_BODY = {
@@ -30,7 +40,7 @@ _BINDING_REQUEST_BODY = {
         "required": True,
         "content": {
             "application/json": {
-                "schema": PasswordBindingCredential.model_json_schema(),
+                "schema": PasswordBindingRequest.model_json_schema(),
             }
         },
     }
@@ -53,10 +63,12 @@ class CredentialBindingService:
         store: CredentialBindingStorePort,
         verifier: CredentialBindingVerifierPort,
         oa_session_keeper: OASessionRenewalPort | None = None,
+        u8_login: U8LoginPort | None = None,
     ) -> None:
         self._store = store
         self._verifier = verifier
         self._oa_session_keeper = oa_session_keeper
+        self._u8_login = u8_login
 
     async def get(
         self,
@@ -75,7 +87,15 @@ class CredentialBindingService:
         principal: Principal,
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
+        *, u8_captcha: U8CaptchaAnswer | None = None,
     ) -> CredentialBindingView:
+        if target_system == "u8":
+            if self._u8_login is None:
+                raise system_entry_failure(SystemEntryError("entry_not_configured"))
+            try:
+                await self._u8_login.login(credential, captcha=u8_captcha)
+            except SystemEntryError as exc:
+                raise system_entry_failure(exc) from None
         try:
             async with self._store.poll_lock(
                 principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
@@ -215,10 +235,14 @@ def make_router(
         request: Request,
         principal: Principal = Depends(require_principal),
     ) -> CredentialBindingView:
-        credential = await _parse_binding_credential(request)
-        if credential is None:
+        body = await _parse_binding_credential(request)
+        if body is None:
             _raise_binding_failed()
-        return await configured().bind(principal, target_system, credential)
+        captcha = None
+        if target_system == "u8" and body.u8_guid and body.u8_code:
+            captcha = U8CaptchaAnswer(guid=body.u8_guid, code=body.u8_code)
+        credential = PasswordBindingCredential(login_id=body.login_id, password=body.password)
+        return await configured().bind(principal, target_system, credential, u8_captcha=captcha)
 
     @router.delete("/{target_system}", response_model=CredentialBindingView)
     async def unbind_password(
@@ -259,8 +283,8 @@ def make_router(
 
 async def _parse_binding_credential(
     request: Request,
-) -> PasswordBindingCredential | None:
-    return await _parse_binding_request(request, PasswordBindingCredential)
+) -> PasswordBindingRequest | None:
+    return await _parse_binding_request(request, PasswordBindingRequest)
 
 
 async def _parse_binding_request(

@@ -41,7 +41,7 @@ export function systemHref(key: BusinessSystem['key']): string | null {
   return null;
 }
 
-/** 进入系统。单点登录接入后只改这一处。 */
+/** 未配置免登时，明确提示后使用现有直链。 */
 export function openSystem(href: string): void {
   window.open(href, '_blank', 'noopener,noreferrer');
 }

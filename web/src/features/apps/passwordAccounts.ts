@@ -26,6 +26,5 @@ export function passwordStatus(query: UseQueryResult<CredentialBindingView>, tar
   if (binding.poll_status === 'invalid') return { light: 'alert', text: '密码已失效' };
   if (binding.poll_status === 'captcha_required') return { light: 'alert', text: '要验证码，已停用' };
   if (binding.poll_status === 'retrying') return { light: 'warn', text: '已绑定，暂时连不上' };
-  // 只有 OA 的账号在绑定时验证过；别的系统接入前只是存着。
-  return { light: 'on', text: target === 'oa' ? '已绑定' : '已保存，接入后验证' };
+  return { light: 'on', text: target === 'oa' ? '已绑定' : '已保存' };
 }

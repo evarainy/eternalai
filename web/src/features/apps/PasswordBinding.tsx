@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
+import { readU8Captcha, systemEntryErrorMessage } from '../../api/systemEntry';
 import { activateBrowserBinding, getBrowserBindingStatus } from '../../api/browserBinding';
 import {
   bindPasswordApiV1CredentialBindingsTargetSystemPut as bindPassword,
@@ -11,6 +12,7 @@ import { Icon } from '../../shared/ui/Icon';
 import { useAuthStore } from '../../stores/authStore';
 import { passwordBindingQueryKey, usePasswordBinding } from './passwordAccounts';
 import type { PasswordTarget } from './systems';
+import { U8CaptchaFields } from './U8Captcha';
 import styles from './Systems.module.css';
 
 type Busy = null | 'bind' | 'activate' | 'unbind';
@@ -18,8 +20,8 @@ type Busy = null | 'bind' | 'activate' | 'unbind';
 /**
  * 一个系统的账号设置：看状态、输账号密码绑定、解除绑定。OA 另有「启用自动登录」。
  *
- * 账号密码不进任何状态：提交时从表单里读出来，随即清空输入框。换了登录身份后发回来的结果一律丢弃。
- * 换了登录身份，整张表单重建：上一个人没提交的输入、进行到一半的操作和提示都不留给下一个人。
+ * 账号密码只留在当前打开的表单 DOM，不写入状态或缓存；提交后保留输入，关闭表单时卸载。
+ * 换了登录身份后丢弃旧请求结果并重建表单，不保留上一人的输入、操作或提示。
  */
 export function PasswordBinding({ name, target }: { name: string; target: PasswordTarget }) {
   const generation = useAuthStore((state) => state.generation);
@@ -38,6 +40,7 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
     refetchOnWindowFocus: 'always',
   });
   const [busy, setBusy] = useState<Busy>(null);
+  const [captchaRevision, setCaptchaRevision] = useState(0);
   const [missing, setMissing] = useState({ login_id: false, password: false });
   const [unbindArmed, setUnbindArmed] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
@@ -57,7 +60,8 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
   const fail = (error: unknown, verb: string) => {
     setMessage({
       tone: 'error',
-      text: error instanceof ApiError && error.status >= 400 && error.status < 500
+      text: target === 'u8' ? `${verb}没有成功：${systemEntryErrorMessage(error)}`
+        : error instanceof ApiError && error.status >= 400 && error.status < 500
         ? `${verb}没有成功：${name}没有通过这次验证，请核对账号和密码。`
         : `${verb}没有成功：凭证服务暂时不可用，请稍后再试。`,
     });
@@ -77,10 +81,14 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
     const nextMissing = { login_id: credential.login_id === '', password: credential.password === '' };
     setMissing(nextMissing);
     if (nextMissing.login_id || nextMissing.password) return;
+    const captcha = target === 'u8' ? readU8Captcha(data) : null;
+    if (target === 'u8' && captcha === null) {
+      setMessage({ tone: 'error', text: '请先加载并填写财务验证码。' });
+      return;
+    }
     const selection = action === 'activate' && browser?.binding_id != null && browser.binding_revision != null
       ? { binding_id: browser.binding_id, binding_revision: browser.binding_revision } : null;
     if (action === 'activate' && selection === null) return;
-    form.reset();
     setBusy(action);
     setMessage(null);
     setUnbindArmed(false);
@@ -94,21 +102,25 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
         setMessage({ tone: 'ok', text: '自动登录已启用。' });
         return;
       }
-      const updated = await bindPassword(target, credential);
+      const updated = await bindPassword(target, captcha === null ? credential
+        : { ...credential, u8_guid: captcha.guid, u8_code: captcha.code });
       if (!current()) return;
       queryClient.setQueryData(queryKey, updated);
       if (target === 'oa') await queryClient.resetQueries({ queryKey: browserQueryKey });
       if (!current()) return;
       setMessage({
         tone: 'ok',
-        text: target === 'oa' ? (bound ? '密码已更新。' : '已绑定。') : `已保存。${name}接入后会用这组账号验证。`,
+        text: bound ? '密码已更新。' : '已绑定。',
       });
     } catch (error) {
       if (!current()) return;
       fail(error, action === 'activate' ? '启用' : '绑定');
       if (target === 'oa') void queryClient.resetQueries({ queryKey: browserQueryKey });
     } finally {
-      if (current()) setBusy(null);
+      if (current()) {
+        setBusy(null);
+        if (target === 'u8') setCaptchaRevision((value) => value + 1);
+      }
     }
   };
 
@@ -183,6 +195,7 @@ function PasswordForm({ generation, name, target }: { generation: number; name: 
           type="password"
         />
       </label>
+      {target === 'u8' ? <U8CaptchaFields disabled={busy !== null} key={captchaRevision} /> : null}
       {missing.login_id || missing.password ? <p className={styles.bindingNote} data-tone="error" role="alert">请输入账号和密码。</p> : null}
       {message === null ? null : (
         <p className={styles.bindingNote} data-tone={message.tone} role={message.tone === 'error' ? 'alert' : 'status'}>

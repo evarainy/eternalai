@@ -936,6 +936,27 @@ class PostgreSQLCredentialStore:
                 )
                 await connection.commit()
 
+    async def load_password_for_entry(
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str,
+    ) -> PasswordBindingCredential:
+        from app.ports.system_entry import SystemEntryError
+
+        async with self._session_factory() as session:
+            row = (await session.execute(text(
+                "SELECT password_cipher_version, password_nonce, encrypted_password_payload,"
+                " tenant_id, target_system, binding_id FROM oa_session_credentials"
+                " WHERE tenant_id=:tenant_id AND ai_user_id=:ai_user_id"
+                " AND target_system=:target_system AND revoked_at IS NULL"
+                " AND binding_state IN ('unverified', 'active')"
+                " AND poll_status IN ('active', 'retrying')"
+                " AND encrypted_password_payload IS NOT NULL"
+            ), _key(tenant_id, ai_user_id, target_system))).mappings().one_or_none()
+        if row is None:
+            raise SystemEntryError("entry_not_bound")
+        return _decode_password_row(
+            cipher=self._cipher, ai_user_id=ai_user_id, target_system=target_system, row=row,
+        )
+
     async def load_password_for_poll(
         self,
         ai_user_id: str,
