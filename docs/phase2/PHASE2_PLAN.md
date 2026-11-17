@@ -950,7 +950,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 外观设置、案头排列未按用户保存，案头不能自定义 | 需要新的存取接口与存储；新接口是人工停点，新表是数据库红线 | 雨爷批准接口与表结构 | 待分配（工作台第二期） | 外观四项与案头卡片清单按登录用户存取，换浏览器后一致；自定义案头可增删、排列、改大小 | `web/src/stores/appearanceStore.ts`、`web/src/features/desk/Desk.tsx::DEFAULT_COLUMNS`；仓库外 `workbench-ui-20261112/GAPS_缺项与要求登记_20261113.md`第二、三节 |
+| 外观设置、案头排列未按用户保存，案头不能自定义（已关闭） | `P2-FE-WORKBENCH-V4-002` 已做自定义首页（拖动换位、改大小、移出、加回）；`P2-HOME-LAYOUT-PERSIST-001` 经雨爷 2026-11-17 授权新建 `user_preferences` 表与 `GET/PUT /api/v1/preferences`（身份只取自会话），外观四项与首页摆法按登录用户存取，浏览器本地只作首屏缓存 | 无 | `P2-HOME-LAYOUT-PERSIST-001`（已完成） | 已满足：2026-11-17 真实验收甲改外观与摆法后在全新 Chrome 用户目录登录完全一致；同一浏览器甲乙换人互不串写 | `web/src/app/userPreferencesSync.ts`、`app/api/v1/user_preferences.py`；仓库外 `home-layout-20261117/ACC_r1.md`；未实测分支见[该棒新增欠债](#首页布局与外观按用户保存-p2-home-layout-persist-001-新增欠债2026-11-17) |
 | AI 检测评分未做 | 评分维度、权重、分数线未定（样板里是占位），也没有算分接口 | 雨爷定评分规则 | 待分配（工作台第二期） | 规则定稿并有算分接口，助手页页头显示评分、扣分项与评分依据 | 仓库外 `workbench-ui-20261112/GAPS_缺项与要求登记_20261113.md`第三节 3.1 |
 | 案头只有六张卡片 | 备忘录、行程、值班表、通知公告等要新做录入功能；警力、财务、狱政等要接入外部系统 | 各自的新接口或外部系统接入授权 | 待分配（工作台第二、三期） | 卡片库中「现在就有数据」以外的卡片按批接入；每张独立取数 | 仓库外 `workbench-ui-20261112/GAPS_缺项与要求登记_20261113.md`第三节 3.3 |
 | 督办、各承办单位完成情况、交办办结统计、一句话交办未做 | 督办要以用户名义发 IM 并写对方事项状态；现有承办关系只有目录编号没有显示名；办结统计口径与 AI 解析接口均未提供 | 新接口与公共契约变更批准 | 待分配（工作台第二期） | 交办情况可督办并标记被督办、能看到哪个单位未报送、有本月办结与按期比例；新建交办可由一句话生成可修改的表单 | `web/src/features/work-dispatch/DispatchStatus.tsx`；仓库外 `workbench-ui-20261112/GAPS_缺项与要求登记_20261113.md`第五节 |
@@ -979,13 +979,19 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 一次首问失败原因未明 | 2026-11-16 健康会话下首次在对话中问 OA 待办，OA 读取已完成但回答失败；同代码同问题随后成功，未再复现 | 无 | 再次复现时 | 取得失败时的脱敏日志并定位，或连续使用中不再出现 | 仓库外 `oa-recover-20261116/ACC_r1.md` A1 |
 | 并发恢复只验了同一 API 进程内的对话查询与页面心跳 | 2026-11-17 同次失效时对话查询与页面心跳重叠，只登录 1 次，另一方按新会话返回 `refreshed_by_other`；后台轮询与独立 worker 同时参与的并发、跨进程冷却未实测（跨进程冷却不共享见 R-OA 欠债 5） | 无 | 后台轮询与 worker 同时运行的真实使用中 | 同次失效下 API 与 worker 合计只登录 1 次，或如实记录实际次数并核对 OA 是否互踢 | `app/credential_polling.py::CredentialSessionRecovery`；仓库外 `oa-recover-20261116/ACC_r2.md` A5 |
 
+### 首页布局与外观按用户保存 `P2-HOME-LAYOUT-PERSIST-001` 新增欠债（2026-11-17）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 偏好读取失败分支未真实实测 | 真实环境里后端停掉时「我是谁」先失败，页面停在身份确认，到不了「已登录但偏好读取失败」；不为此加 Mock 或故障开关。读失败时提示并不保存的逻辑只有静态评审证据 | 无 | 真实使用中出现偏好存储不可用时 | 页面提示「外观和首页摆法暂时没能从服务器读取，这次的修改不会保存。」且之后的修改不发 PUT | `web/src/app/userPreferencesSync.ts::startSession`；仓库外 `home-layout-20261117/ACC_r1.md` 场景 7 |
+
 ### 工作台前端改版第二棒 `P2-FE-WORKBENCH-V4-002` 新增欠债（2026-11-14）
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | 业务服务的授权与断开未做真实验证 | 账号设置的绑定、更新密码、解除绑定、启用自动登录已于 2026-11-15 经雨爷授权用真实账号补验通过；业务服务「重新授权」在验收环境被后端拒绝（409，`mcp_action_unavailable`），只验到前端如实提示失败。只读排查指向固定只读授权批准配置 `MCP_FIXED_READ_APPROVAL_JSON` 从未生成安装（本人主体与批准依据未取得），原始错误码因 `_SafeMcpRoute` 不记日志尚未实测确认；断开后无法重新连接，故未测断开 | 固定只读授权批准配置与批准依据 | 待分配（业务服务接入） | 授权链接可取得、断开后可重新连接，并在页面实测 | `web/src/features/apps/McpConnectionsPanel.tsx`、`app/api/v1/mcp.py::_SafeMcpRoute`、`app/mcp/oauth.py::OAuthConnections.service`；仓库外 `workbench-ui-20261112/round3/` |
 | 部分业务系统尚未接入 | 对应关系已由雨爷 2026-11-15 确认：财务软件对应 `u8` 凭证目标、综合业务平台对应业务服务连接；但 `u8` 账号后端只保存不验证，数据中台、执法办案平台只有占位，OA 卡片不免登 | 各系统的接入代码与地址；OA 单点登录接入 | 待分配 | 各系统卡片可进入对应系统且账号可验证；或确认不接并移除 | `web/src/features/apps/systems.ts::SYSTEMS`、`::openSystem` |
-| 自定义首页的布局只存在浏览器本地 | 换浏览器或清缓存后恢复默认；按人保存要后端接口，本棒不改后端 | 个人偏好保存接口 | 待分配 | 布局按登录人保存并跨设备一致 | `web/src/features/desk/homeLayout.ts` |
+| 自定义首页的布局只存在浏览器本地（已关闭） | 由 `P2-HOME-LAYOUT-PERSIST-001` 改为按登录人存后端 | 无 | `P2-HOME-LAYOUT-PERSIST-001`（已完成） | 已满足：2026-11-17 真实验收换浏览器后摆法一致 | `web/src/features/desk/homeLayout.ts`、`web/src/app/userPreferencesSync.ts` |
 | 助手回复的排版只认粗体和清单（已关闭） | `P2-FE-POLISH-001` 补小标题、表格（超过 5 行卡片内翻页、列多横向滚动）、链接（只认 http(s) 与本站路径）与行内代码，分隔线不显示 | 无 | `P2-FE-POLISH-001`（已完成） | 已满足：2026-11-16 真实对话中表格、小标题、链接、行内代码均正确排版，本站链接页内跳转后对话保留 | `web/src/shared/ui/AnswerText.tsx` |
 | 添加软件对话框、周期任务页其余部分仍用旧样式变量（已关闭） | `P2-FE-POLISH-001` 两处样式改用新令牌、不再引用 `--workbench-*` 别名，观感与新版一致；页面结构与 antd 控件未重做，若需按 v7 重做另开任务 | 无 | `P2-FE-POLISH-001`（已完成） | 已满足：2026-11-16 真实页面截图核对描边、选项卡片、聚焦环与列表/编辑视图 | `web/src/features/apps/NewSoftwareDialog.module.css`、`web/src/features/work-dispatch/WorkObjectSeriesPage.module.css` |
 
