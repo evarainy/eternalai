@@ -587,8 +587,14 @@ def _workflow_execution_result(
             trace_id=result.trace_id,
         )
     if result.status == "failed":
+        # The read workflow collapses a leaf's binding_required into failed.
+        # Restore the OA expiry handback before Runtime chooses its terminal.
         return ExecutionResult(
-            status="failed",
+            status=(
+                "binding_required"
+                if result.workflow_id == OVERVIEW_ID and result.error_code == "identity_expired"
+                else "failed"
+            ),
             data=_mcp_recovery_reference(result.workflow_id, result.output),
             error_code=result.error_code,
             trace_id=result.trace_id,
