@@ -2,17 +2,26 @@ import message from 'antd/es/message';
 import { getUserPreferences, putUserPreferences } from '../api/userPreferences';
 import type { UserPreferencesDocument } from '../api/userPreferences';
 import { readMeApiV1MeGet } from '../generated/me/me';
-import { adoptHomeLayout, useHomeLayoutStore } from '../features/desk/homeLayout';
-import { adoptAppearance, appearanceChoices, useAppearanceStore } from '../stores/appearanceStore';
 import { useAuthStore } from '../stores/authStore';
 
 /** 连续操作（拖动、连点皮肤）合并成一次保存。 */
 const SAVE_DELAY_MS = 600;
 
-function snapshot(): UserPreferencesDocument {
+/**
+ * 两个 store 带浏览器本地缓存，加载时就会读存储；启动入口（`main.tsx`）在首屏前不读任何存储，
+ * 所以等到第一次登录才加载它们。应用本身（`App.tsx`）早已静态引入，这里拿到的是同一份模块。
+ */
+type Stores = [typeof import('../stores/appearanceStore'), typeof import('../features/desk/homeLayout')];
+let stores: Promise<Stores> | undefined;
+function loadStores(): Promise<Stores> {
+  stores ??= Promise.all([import('../stores/appearanceStore'), import('../features/desk/homeLayout')]);
+  return stores;
+}
+
+function snapshot([appearance, layout]: Stores): UserPreferencesDocument {
   return {
-    appearance: { ...appearanceChoices(useAppearanceStore.getState()) },
-    home_layout: { columns: useHomeLayoutStore.getState().columns },
+    appearance: { ...appearance.appearanceChoices(appearance.useAppearanceStore.getState()) },
+    home_layout: { columns: layout.useHomeLayoutStore.getState().columns },
   };
 }
 
@@ -28,6 +37,7 @@ function snapshot(): UserPreferencesDocument {
  */
 function startSession(generation: number): () => void {
   let live = true;
+  let loaded: Stores | undefined;
   let unsubscribe: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saved = '';
@@ -41,12 +51,12 @@ function startSession(generation: number): () => void {
   };
 
   const flush = async () => {
-    if (!current()) return;
+    if (!current() || loaded === undefined) return;
     if (saving) {
       again = true;
       return;
     }
-    const document = snapshot();
+    const document = snapshot(loaded);
     const body = JSON.stringify(document);
     if (body === saved) return;
     saving = true;
@@ -74,19 +84,22 @@ function startSession(generation: number): () => void {
     timer = setTimeout(() => void flush(), SAVE_DELAY_MS);
   };
 
-  void Promise.all([readMeApiV1MeGet(), getUserPreferences()]).then(
-    ([identity, document]) => {
+  void Promise.all([loadStores(), readMeApiV1MeGet(), getUserPreferences()]).then(
+    ([modules, identity, document]) => {
       if (!current()) return;
+      const [appearance, layout] = modules;
+      loaded = modules;
       owner = identity.restore_scope ?? null;
-      adoptAppearance(document.appearance);
-      adoptHomeLayout(document.home_layout);
-      saved = JSON.stringify(snapshot());
-      const offAppearance = useAppearanceStore.subscribe((state, previous) => {
+      appearance.adoptAppearance(document.appearance);
+      layout.adoptHomeLayout(document.home_layout);
+      saved = JSON.stringify(snapshot(modules));
+      const { appearanceChoices } = appearance;
+      const offAppearance = appearance.useAppearanceStore.subscribe((state, previous) => {
         if (JSON.stringify(appearanceChoices(state)) !== JSON.stringify(appearanceChoices(previous))) {
           schedule();
         }
       });
-      const offLayout = useHomeLayoutStore.subscribe((state, previous) => {
+      const offLayout = layout.useHomeLayoutStore.subscribe((state, previous) => {
         if (state.columns !== previous.columns) schedule();
       });
       unsubscribe = () => {
