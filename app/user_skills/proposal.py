@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ports.capability_registry import CapabilitySpec
@@ -26,6 +28,12 @@ from app.user_skills.definition import (
     NAME_MAX,
     PURPOSE_MAX,
     RULES_MAX,
+    FixedArg,
+    ForEachRows,
+    ListRows,
+    LoopItemRef,
+    ParamArg,
+    StepOutputRef,
     UserSkillDefinition,
     text_slots,
 )
@@ -627,6 +635,11 @@ def build_proposal(
         "bindings": bindings,
         "for_each_offers": offers,
         "column_options": columns_view,
+        "check_offers": [
+            {"offer_id": t["table_id"], "table_title": t["title"], "step_index": t["step"],
+             "step_label": steps[t["step"]].label}
+            for t in tables_internal if _checkable(t)
+        ],
         "draft": {"name": model.name, "purpose": model.purpose, "rules": model.rules},
         "update_targets": [],
         "rejections": [],
@@ -748,6 +761,50 @@ def _list_fields_hint(root: Mapping[str, Any]) -> str:
     return "；".join(hints) or "无"
 
 
+def _checkable(table: Mapping[str, Any]) -> bool:
+    """A plain list table (not per item) can carry the user's list checks."""
+
+    return table.get("list_path") is not None and all(
+        column["source"] == "row" for column in table["columns"]
+    )
+
+
+def _checks(
+    raw: Sequence[Any], tables: Mapping[str, Mapping[str, Any]], kept: set[str]
+) -> list[tuple[int, dict[str, Any]]]:
+    """(step index, assertion) of the user's checks; strict, else ``check_invalid``."""
+
+    invalid = ProposalRejected("check_invalid", "结果检查的设置不正确，请重新选择")
+    chosen: list[tuple[int, dict[str, Any]]] = []
+    seen: set[tuple[int, str]] = set()
+    for item in raw:
+        if not isinstance(item, Mapping) or not set(item) <= {"offer_id", "op", "value"}:
+            raise invalid
+        offer = item.get("offer_id")
+        table = tables.get(offer) if isinstance(offer, str) else None
+        op = item.get("op")
+        if table is None or not _checkable(table) or table["table_id"] not in kept:
+            raise invalid
+        if op == "non_empty":
+            if "value" in item:
+                raise invalid
+            assertion: dict[str, Any] = {"op": op}
+        elif op == "max_count":
+            value = item.get("value")
+            if type(value) is not int or not 1 <= value <= HARD_MAX_ITEMS:
+                raise invalid
+            assertion = {"op": op, "value": value}
+        else:
+            raise invalid
+        if (table["step"], op) in seen:
+            raise ProposalRejected("check_invalid", "同一项查询的同一种检查只能设一个")
+        seen.add((table["step"], op))
+        assertion["ref"] = {"source": "step_output", "step_id": f"s{table['step'] + 1}",
+                            "path": list(table["list_path"])}
+        chosen.append((table["step"], assertion))
+    return chosen
+
+
 # ----------------------------------------------------------- trial compile
 class TrialChoices(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -759,6 +816,7 @@ class TrialChoices(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=NAME_MAX)]
     purpose: Annotated[str, Field(min_length=1, max_length=PURPOSE_MAX)]
     rules: Annotated[str, Field(min_length=1, max_length=RULES_MAX)]
+    checks: list[Any] = []
 
 
 def compile_trial(
@@ -844,6 +902,7 @@ def compile_trial(
     selected = set(choices.column_ids)
     completeness: dict[int, dict[str, Any]] = {}
     tables = []
+    kept: set[str] = set()
     for table in internal["tables"]:
         columns = [
             {"label": column["label"], "ref": {"source": column["source"],
@@ -883,11 +942,17 @@ def compile_trial(
                 }
         tables.append({"table_id": table["table_id"], "title": table["title"],
                        "rows": rows, "columns": columns})
+        if step_index not in loops:
+            kept.add(table["table_id"])
     if not tables:
         raise ProposalRejected("no_columns", "请至少选择一列要显示的内容")
-    # Leaves that report their own completeness get the ``complete`` check automatically.
+    # Leaves that report their own completeness get the ``complete`` check automatically;
+    # the user's list checks are added beside it.
     for index, assertion in completeness.items():
-        step_specs[index]["assert"] = [assertion]
+        step_specs[index].setdefault("assert", []).append(assertion)
+    by_id = {table["table_id"]: table for table in internal["tables"]}
+    for index, assertion in _checks(choices.checks, by_id, kept):
+        step_specs[index].setdefault("assert", []).append(assertion)
     try:
         definition = UserSkillDefinition.model_validate({
             "format": FORMAT, "params": params, "steps": step_specs,
@@ -900,6 +965,192 @@ def compile_trial(
     return definition, inputs
 
 
+# ------------------------------------------------------- regenerate (rebase)
+_LOWER_BOUNDS = ("minLength", "minItems", "minimum")
+_UPPER_BOUNDS = ("maxLength", "maxItems", "maximum")
+_EXACT_KEYS = ("pattern", "format", "exclusiveMinimum", "exclusiveMaximum", "multipleOf")
+_COMBINATORS = ("allOf", "not", "if", "then", "else", "dependentSchemas")
+
+
+def _strict_nodes(
+    root: Mapping[str, Any], path: Sequence[str | int]
+) -> list[Mapping[str, Any]] | None:
+    """Every schema branch ``path`` must end at, or None when a value is not guaranteed.
+
+    Each named segment must be a required property of every branch on the way;
+    an index segment can never be proven in range.
+    """
+
+    nodes = _branches(root, root)
+    for segment in path:
+        if isinstance(segment, int) or not nodes:
+            return None
+        following: list[Mapping[str, Any]] = []
+        for node in nodes:
+            properties, required = node.get("properties"), node.get("required")
+            if not (isinstance(properties, Mapping) and segment in properties
+                    and isinstance(required, list) and segment in required):
+                return None
+            branches = _branches(root, properties[segment])
+            if not branches:
+                return None
+            following += branches
+        nodes = following
+    return nodes or None
+
+
+def _strict_list_root(
+    root: Mapping[str, Any], path: Sequence[str | int]
+) -> Mapping[str, Any] | None:
+    """A root for one element of the always-present list at ``path``."""
+
+    nodes = _strict_nodes(root, path)
+    if nodes is None or any(node.get("type") != "array" for node in nodes):
+        return None
+    items = [branch for node in nodes for branch in _branches(root, node.get("items"))]
+    return {"anyOf": items, "$defs": root.get("$defs", {})} if items else None
+
+
+def _literals(node: Mapping[str, Any]) -> list[Any] | None:
+    if isinstance(node.get("enum"), list):
+        return list(node["enum"])
+    return [node["const"]] if "const" in node else None
+
+
+def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
+    """Every value ``source`` allows is accepted by ``target`` (decidable subset only)."""
+
+    if any(key in target for key in _COMBINATORS) or any(key in source for key in _COMBINATORS):
+        return False
+    kinds, accepted = _node_kinds(source), _node_kinds(target)
+    if "number" in accepted:
+        accepted = accepted | {"integer"}
+    if "unknown" in kinds or "unknown" in accepted or not kinds <= accepted:
+        return False
+    allowed = _literals(target)
+    if allowed is not None:
+        values = _literals(source)
+        if values is None or any(value not in allowed for value in values):
+            return False
+    for key in _LOWER_BOUNDS:
+        if key in target and not (key in source and source[key] >= target[key]):
+            return False
+    for key in _UPPER_BOUNDS:
+        if key in target and not (key in source and source[key] <= target[key]):
+            return False
+    return all(key not in target or source.get(key) == target[key] for key in _EXACT_KEYS)
+
+
+def _values_fit(
+    sources: Sequence[Mapping[str, Any]] | None, targets: Sequence[Mapping[str, Any]]
+) -> bool:
+    return bool(sources) and bool(targets) and all(
+        any(_node_fits(source, target) for target in targets) for source in sources or ()
+    )
+
+
+def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
+    properties = spec.input_schema.get("properties")
+    prop = properties.get(arg) if isinstance(properties, Mapping) else None
+    return _branches(spec.input_schema, prop) if isinstance(prop, Mapping) else None
+
+
+def _fixed_fits(spec: CapabilitySpec, arg: str, value: Any) -> bool:
+    """The saved fixed value is valid for the whole new argument and still a fixed choice."""
+
+    properties = spec.input_schema.get("properties")
+    prop = properties.get(arg) if isinstance(properties, Mapping) else None
+    if not isinstance(prop, Mapping) or _fixed_kind(spec, arg, value) is None:
+        return False
+    schema = {**prop, "$defs": spec.input_schema.get("$defs", {})}
+    try:
+        return Draft202012Validator(schema).is_valid(value)
+    except SchemaError:
+        return False
+
+
+def rebase_definition(
+    definition: UserSkillDefinition,
+    specs: Mapping[str, CapabilitySpec],
+    fingerprints: Mapping[str, str],
+) -> UserSkillDefinition:
+    """The same saved structure, checked against and pinned to the current contracts.
+
+    Only what can be decided is accepted; anything not provably compatible is
+    refused (``regenerate_failed``) and the saved version is kept.
+    """
+
+    def refuse(reason: str) -> ProposalRejected:
+        return ProposalRejected(
+            "regenerate_failed", "查询合同变化较大，请在聊天里重新查询后保存新版本", reason
+        )
+
+    params = {param.name: param for param in definition.params}
+    steps = {step.step_id: step for step in definition.steps}
+
+    def output(step_id: str) -> Mapping[str, Any]:
+        return specs[steps[step_id].capability_id].output_schema
+
+    for step in definition.steps:
+        spec = specs.get(step.capability_id)
+        if spec is None or spec.type != "query":
+            raise refuse("leaf")
+    loop_roots: dict[str, Mapping[str, Any]] = {}
+    for step in definition.steps:
+        spec = specs[step.capability_id]
+        required = spec.input_schema.get("required")
+        if isinstance(required, list) and not set(required) <= set(step.arguments):
+            raise refuse("required")
+        if step.for_each is not None:
+            loop_root = _strict_list_root(
+                output(step.for_each.items.step_id), step.for_each.items.path
+            )
+            if loop_root is None:
+                raise refuse("for_each")
+            loop_roots[step.step_id] = loop_root
+        for arg, source in step.arguments.items():
+            targets = _property(spec, arg)
+            if targets is None:
+                raise refuse("argument")
+            if isinstance(source, ParamArg):
+                fits = _values_fit([params[source.name].schema_], targets)
+            elif isinstance(source, FixedArg):
+                fits = _fixed_fits(spec, arg, source.value)
+            elif isinstance(source, StepOutputRef):
+                fits = _values_fit(_strict_nodes(output(source.step_id), source.path), targets)
+            else:
+                assert isinstance(source, LoopItemRef)
+                loop_root = loop_roots.get(step.step_id)
+                fits = loop_root is not None and _values_fit(
+                    _strict_nodes(loop_root, source.path), targets
+                )
+            if not fits:
+                raise refuse("argument")
+        for assertion in step.assertions:
+            nodes = _strict_nodes(output(step.step_id), assertion.ref.path)
+            kind = "boolean" if assertion.op == "complete" else "array"
+            if nodes is None or any(node.get("type") != kind for node in nodes):
+                raise refuse("assertion")
+    for table in definition.output.tables:
+        rows = table.rows
+        roots: dict[str, Mapping[str, Any] | None]
+        if isinstance(rows, ListRows):
+            roots = {"row": _strict_list_root(output(rows.list.step_id), rows.list.path)}
+        else:
+            assert isinstance(rows, ForEachRows)
+            roots = {"loop_item": loop_roots.get(rows.for_each_step),
+                     "item_result": output(rows.for_each_step)}
+        for column in table.columns:
+            root = roots.get(column.ref.source)
+            # Cells may be empty: a displayable column only has to reach a scalar.
+            if root is None or not _displayable(root, column.ref.path):
+                raise refuse("column")
+    dumped = definition.model_dump(mode="json", by_alias=True)
+    for step in dumped["steps"]:
+        step["capability_fingerprint"] = fingerprints[step["capability_id"]]
+    return UserSkillDefinition.model_validate(dumped)
+
+
 __all__ = (
     "ProposalRejected",
     "TrialChoices",
@@ -907,5 +1158,6 @@ __all__ = (
     "check_texts",
     "compile_trial",
     "model_proposal_schema",
+    "rebase_definition",
     "summarize",
 )

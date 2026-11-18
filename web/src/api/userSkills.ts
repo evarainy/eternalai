@@ -25,7 +25,13 @@ export interface TrialRequest {
   purpose: string;
   rules: string;
   target: TrialTarget;
+  /** 用户勾选的结果检查；服务端逐项严格核对。 */
+  checks?: TrialCheck[];
 }
+
+export type TrialCheck =
+  | { offer_id: string; op: 'non_empty' }
+  | { offer_id: string; op: 'max_count'; value: number };
 
 export interface TrialResponse {
   trial_id: string;
@@ -40,6 +46,8 @@ export interface SkillListItem {
   purpose: string;
   state: 'usable' | 'paused' | 'disabled';
   pause_reason_label: string | null;
+  /** 已暂停且叶子还在：可按新合同重新生成。 */
+  can_regenerate: boolean;
   current_version: number;
   updated_at: string | null;
   exportable: boolean;
@@ -67,6 +75,26 @@ export function setSkillState(skillId: string, state: 'usable' | 'disabled', ver
   return customInstance({
     url: `${BASE}/${encodeURIComponent(skillId)}`, method: 'PATCH',
     data: { state, expected_current_version: version },
+  });
+}
+
+export function renameSkill(skillId: string, name: string):
+  Promise<{ skill_id: string; name: string }> {
+  return customInstance({
+    url: `${BASE}/${encodeURIComponent(skillId)}/name`, method: 'PUT', data: { name },
+  });
+}
+
+export function deleteSkill(skillId: string): Promise<null> {
+  return customInstance({ url: `${BASE}/${encodeURIComponent(skillId)}`, method: 'DELETE' });
+}
+
+/** 已暂停的功能：结构不变，按新合同试运行一次；保存仍走 saveSkill。 */
+export function regenerateSkill(sessionId: string, skillId: string, version: number,
+  input: Record<string, unknown>): Promise<TrialResponse> {
+  return customInstance({
+    url: `${BASE}/${encodeURIComponent(skillId)}/regenerations`, method: 'POST',
+    data: { session_id: sessionId, expected_current_version: version, input },
   });
 }
 

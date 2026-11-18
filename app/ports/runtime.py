@@ -35,6 +35,11 @@ d_form_collection_reference: ContextVar[DFormCollectionReference | None] = Conte
 chat_client_request_id: ContextVar[str | None] = ContextVar(
     "chat_client_request_id", default=None,
 )
+# The saved personal flow the user explicitly named (``$``), by canonical id; set by the
+# runtime router after its combination checks, read only by the AgentScope runtime.
+user_skill_ref_reference: ContextVar[str | None] = ContextVar(
+    "user_skill_ref_reference", default=None,
+)
 im_source_context: ContextVar[AuthorizedIMContext | None] = ContextVar(
     "im_source_context", default=None,
 )
@@ -151,4 +156,5 @@ __all__ = (
     "WaitingProposal",
     "chat_client_request_id",
     "d_form_collection_reference",
+    "user_skill_ref_reference",
 )

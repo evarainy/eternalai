@@ -7,6 +7,7 @@ head row holds the state and the current version.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
@@ -14,6 +15,8 @@ from pydantic import BaseModel, ConfigDict
 
 UserSkillState = Literal["usable", "paused", "disabled"]
 UserSkillPauseReason = Literal["capability_changed", "capability_unavailable"]
+# (tenant_id, ai_user_id, bound session_id) from the trusted scope.
+SessionKey = tuple[str, str, str]
 
 
 class UserSkillOwner(BaseModel):
@@ -50,12 +53,42 @@ class UserSkillVersion(BaseModel):
     version: int
     display_name: str
     state: UserSkillState
+    pause_reason: UserSkillPauseReason | None
     current_version: int
+    updated_at: datetime
     payload: UserSkillVersionPayload
 
 
+@dataclass(frozen=True)
+class RecordEntry:
+    """One completed read call of this session (exposed data only)."""
+
+    seq: int
+    turn_id: str
+    capability_id: str
+    capability_fingerprint: str
+    arguments: dict[str, Any]
+    data: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TrialSnapshot:
+    """An immutable trial: the definition, texts and target a save publishes."""
+
+    trial_id: str
+    proposal_id: str | None
+    payload: dict[str, Any]
+    savable: bool
+    saved_result: dict[str, Any] | None = None
+
+    @property
+    def saved(self) -> bool:
+        return self.saved_result is not None
+
+
 class UserSkillError(Exception):
-    """Storage unavailable, or a closed code: ``name_taken``, ``conflict``, ``not_found``."""
+    """Storage unavailable, or a closed code: ``name_taken``, ``conflict``, ``not_found``,
+    ``trial_expired``, ``not_savable``."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -96,12 +129,70 @@ class UserSkillStorePort(Protocol):
         expected_current_version: int,
     ) -> UserSkillHead | None: ...
 
+    async def rename(
+        self, owner: UserSkillOwner, skill_id: str, display_name: str
+    ) -> UserSkillHead | None: ...
+
+    async def delete(self, owner: UserSkillOwner, skill_id: str) -> bool: ...
+
+    async def save_trial(
+        self, key: SessionKey, trial_id: str, payload: UserSkillVersionPayload,
+        *, refused: bool = False,
+    ) -> dict[str, Any]:
+        """Publish a ready trial and mark it saved in one transaction; replay a saved one.
+
+        ``refused`` (a failed admission) is raised as ``not_admissible`` only after
+        the saved replay, under the same locks.
+        """
+        ...
+
+
+class UserSkillSessionStorePort(Protocol):
+    """Session working state, keyed by the trusted (tenant, user, bound session)."""
+
+    async def record(
+        self,
+        key: SessionKey,
+        *,
+        turn_id: str,
+        capability_id: str,
+        capability_fingerprint: str,
+        arguments: dict[str, Any],
+        data: dict[str, Any],
+    ) -> bool: ...
+
+    async def records(self, key: SessionKey) -> tuple[tuple[RecordEntry, ...], int]: ...
+
+    async def has_records(self, key: SessionKey) -> bool: ...
+
+    async def put_proposal(
+        self, key: SessionKey, proposal_id: str, payload: dict[str, Any]
+    ) -> None: ...
+
+    async def proposal(self, key: SessionKey, proposal_id: str) -> dict[str, Any] | None: ...
+
+    async def put_trial(self, key: SessionKey, trial: TrialSnapshot) -> None: ...
+
+    async def trial(self, key: SessionKey, trial_id: str) -> TrialSnapshot | None: ...
+
+    async def put_run(self, key: SessionKey, run_id: str, snapshot: dict[str, Any]) -> None: ...
+
+    async def run(self, key: SessionKey, run_id: str) -> dict[str, Any] | None: ...
+
+    async def set_takeover(self, key: SessionKey, context: dict[str, Any]) -> None: ...
+
+    async def take_takeover(self, key: SessionKey) -> dict[str, Any] | None: ...
+
 
 __all__ = (
+    "RecordEntry",
+    "SessionKey",
+    "TrialSnapshot",
     "UserSkillError",
     "UserSkillHead",
     "UserSkillOwner",
     "UserSkillPauseReason",
+    "UserSkillSessionStorePort",
     "UserSkillState",
     "UserSkillStorePort",
     "UserSkillVersion",

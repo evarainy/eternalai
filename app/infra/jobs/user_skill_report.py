@@ -38,7 +38,10 @@ from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
-from app.infra.persistence.user_skills import PostgreSQLUserSkillStore
+from app.infra.persistence.user_skills import (
+    PostgreSQLUserSkillSessionStore,
+    PostgreSQLUserSkillStore,
+)
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.spreadsheets.user_skill_report import (
@@ -55,7 +58,6 @@ from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.user_skills import UserSkillOwner
 from app.user_skills.runner import RunContext, UserSkillRunner
 from app.user_skills.service import UserSkillFailure, UserSkillService
-from app.user_skills.session_store import UserSkillSessionStore
 from app.workflow.engine import WorkflowEngine
 
 USER_SKILL_REPORT_KIND = "report.user_skill_xlsx"
@@ -313,7 +315,7 @@ def build_worker_user_skill_report_kind(
     )
     service = UserSkillService(
         store=PostgreSQLUserSkillStore(sessions),
-        sessions=UserSkillSessionStore(),
+        sessions=PostgreSQLUserSkillSessionStore(sessions),
         runner=UserSkillRunner(
             registry=view,
             policy=policy,

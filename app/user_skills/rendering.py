@@ -88,6 +88,41 @@ def _empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
+# A user check that did not pass closes the run as failed with these closed codes.
+CHECK_TRACE_CODES: dict[str, ErrorCode] = {
+    "non_empty": "adapter_payload_invalid",
+    "max_count": "adapter_payload_invalid",
+}
+
+
+def user_check_failure(target: RunTarget, run: DefinitionRunResult) -> str | None:
+    """The reason when a user's ``non_empty``/``max_count`` check stopped the run.
+
+    Only for a non-loop step whose checked value really is a list; a missing
+    path or a non-list stays a data contract error, a loop limit keeps its own
+    meaning, and ``complete`` is never a user check.
+    """
+
+    if run.failed_assertion is None:
+        return None
+    step_id, op = run.failed_assertion
+    if op not in CHECK_TRACE_CODES:
+        return None
+    step = next((s for s in target.definition.steps if s.step_id == step_id), None)
+    if step is None or step.for_each is not None:
+        return None
+    assertion = next((a for a in step.assertions if a.op == op), None)
+    outcome = run.steps.get(step_id)
+    if assertion is None or outcome is None or outcome.data is None:
+        return None
+    value = _value(tuple(assertion.ref.path), outcome.data)
+    if not isinstance(value, list):
+        return None
+    if op == "non_empty":
+        return "结果为空，未通过「列表不能为空」检查"
+    return f"结果有 {len(value)} 条，超过「最多 {assertion.value} 条」检查"
+
+
 def render_result(
     target: RunTarget,
     inputs: Mapping[str, Any],
@@ -214,7 +249,21 @@ def render_result(
     if mismatch:
         result.update(status="failed", error_code="adapter_payload_invalid",
                       reason_label=reason_label("adapter_payload_invalid"))
+        return result
+    check = user_check_failure(target, run)
+    if check is not None:
+        assert run.failed_assertion is not None
+        result.pop("notice_label", None)
+        result.update(status="failed", check_failed=True, reason_label=check,
+                      error_code=CHECK_TRACE_CODES[run.failed_assertion[1]])
     return result
 
 
-__all__ = ("MAX_DISPLAY_ROWS", "derive_status", "reason_label", "render_result")
+__all__ = (
+    "CHECK_TRACE_CODES",
+    "MAX_DISPLAY_ROWS",
+    "derive_status",
+    "reason_label",
+    "render_result",
+    "user_check_failure",
+)

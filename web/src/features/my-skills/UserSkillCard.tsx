@@ -1,7 +1,7 @@
 /** 「我的功能」卡片：保存确认、补填表单、选择功能、查询结果四种，全部用业务话显示。
  * 表格内容只来自服务端按功能定义取出的数据；卡片不改写结果。 */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Flex, Input, InputNumber, Radio, Select, Space, Switch, Table,
   Tag, Typography,
@@ -12,8 +12,10 @@ import type {
   UserSkillResult, UserSkillRowStatus,
 } from '../../contracts/userSkill';
 import {
-  requestTakeover, runSkill, saveSkill, submitExport, trialSkill, type TrialResponse,
+  requestTakeover, runSkill, saveSkill, submitExport, trialSkill, type TrialCheck,
+  type TrialResponse,
 } from '../../api/userSkills';
+import { useRefreshMySkills } from './useMySkills';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -45,6 +47,12 @@ interface CardProps {
 export function UserSkillCard(props: CardProps) {
   const [current, setCurrent] = useState<UserSkillPayload>(props.payload);
   const next = (payload: UserSkillPayload) => setCurrent(payload);
+  const refresh = useRefreshMySkills();
+  const failed = current.kind === 'result' && current.status === 'failed';
+  useEffect(() => {
+    // A failed run may have paused or lost the flow: let the lists read its state again.
+    if (failed) refresh();
+  }, [failed, refresh]);
   switch (current.kind) {
     case 'proposal':
       return <ProposalView proposal={current} sessionId={props.sessionId} />;
@@ -113,7 +121,8 @@ function ResultView({ result, sessionId, onExportAccepted, onAsk }: {
   const [notice, setNotice] = useState('');
   const statusTag = result.status === 'completed'
     ? <Tag color="green">查询完成</Tag>
-    : result.status === 'partial' ? <Tag color="orange">部分完成</Tag> : <Tag color="red">没有成功</Tag>;
+    : result.status === 'partial' ? <Tag color="orange">部分完成</Tag>
+      : result.check_failed ? <Tag color="orange">未通过检查</Tag> : <Tag color="red">没有成功</Tag>;
 
   const exportFile = async () => {
     if (sessionId === null || result.skill_id === null || result.version === null) return;
@@ -151,7 +160,9 @@ function ResultView({ result, sessionId, onExportAccepted, onAsk }: {
           </Text>
         </Paragraph>
       ) : null}
-      {result.reason_label ? <Alert type="error" showIcon title={result.reason_label} /> : null}
+      {result.reason_label ? (
+        <Alert type={result.check_failed ? 'warning' : 'error'} showIcon title={result.reason_label} />
+      ) : null}
       {result.notice_label ? <Paragraph>{result.notice_label}</Paragraph> : null}
       {result.tables.map((table) => (
         <div key={table.table_id} style={{ marginTop: 12 }}>
@@ -270,6 +281,10 @@ function ChoiceView({ payload, sessionId, onResult }: {
 }
 
 // ---------------------------------------------------------------- proposal
+interface CheckChoice { nonEmpty: boolean; maxOn: boolean; max: number | null }
+const NO_CHECK: CheckChoice = { nonEmpty: false, maxOn: false, max: null };
+const MAX_CHECK = 200;
+
 function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; sessionId: string | null }) {
   const [choices, setChoices] = useState<Record<string, string>>(() => Object.fromEntries(
     proposal.bindings.filter((b) => b.prefill !== null).map((b) => [b.binding_id, b.prefill!]),
@@ -281,7 +296,9 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   const [rules, setRules] = useState(proposal.draft.rules);
   const [target, setTarget] = useState<string>('new');
   const [inputs, setInputs] = useState<Record<string, unknown>>({});
+  const [checks, setChecks] = useState<Record<string, CheckChoice>>({});
   const [trial, setTrial] = useState<TrialResponse | null>(null);
+  const refresh = useRefreshMySkills();
   // Every edit bumps the version; a trial answer for an older version is dropped, so the
   // save button always belongs to what the card shows now.
   const editVersion = useRef(0);
@@ -306,8 +323,34 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
     const choice = choices[b.binding_id];
     return choice === undefined || chosenKind(b) !== 'param';
   });
+  const offers = proposal.check_offers ?? [];
+  // A check reads a table that is still shown; one check of each kind per query step.
+  const shown = (tableId: string) => columns.some((column) => column.startsWith(`${tableId}.`));
+  const checkOf = (offerId: string) => checks[offerId] ?? NO_CHECK;
+  const takenBy = (stepIndex: number, kind: 'nonEmpty' | 'maxOn', offerId: string) => offers.some(
+    (other) => other.offer_id !== offerId && other.step_index === stepIndex
+      && shown(other.offer_id) && checkOf(other.offer_id)[kind],
+  );
+  const chosenChecks: TrialCheck[] = offers.filter((offer) => shown(offer.offer_id)).flatMap(
+    (offer) => {
+      const check = checkOf(offer.offer_id);
+      const list: TrialCheck[] = [];
+      if (check.nonEmpty) list.push({ offer_id: offer.offer_id, op: 'non_empty' });
+      if (check.maxOn && check.max !== null) {
+        list.push({ offer_id: offer.offer_id, op: 'max_count', value: check.max });
+      }
+      return list;
+    },
+  );
+  const checksReady = offers.every((offer) => !checkOf(offer.offer_id).maxOn
+    || !shown(offer.offer_id) || checkOf(offer.offer_id).max !== null);
+  const setCheck = (offerId: string, patch: Partial<CheckChoice>) => {
+    setChecks((old) => ({ ...old, [offerId]: { ...(old[offerId] ?? NO_CHECK), ...patch } }));
+    changed();
+  };
   const ready = proposal.bindings.every((b) => choices[b.binding_id] !== undefined)
-    && needsConfirm.every((b) => confirmed[b.binding_id] === true) && columns.length > 0;
+    && needsConfirm.every((b) => confirmed[b.binding_id] === true) && columns.length > 0
+    && checksReady;
   const changed = () => { editVersion.current += 1; setTrial(null); setNotice(''); };
 
   const tryRun = async () => {
@@ -327,6 +370,7 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
         column_ids: columns,
         inputs,
         name, purpose, rules,
+        checks: chosenChecks,
         target: update === undefined ? { mode: 'new' }
           : { mode: 'update', skill_id: update.skill_id, expected_current_version: update.current_version },
       });
@@ -346,6 +390,7 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
     try {
       await saveSkill(sessionId, trial.trial_id);
       setPhase('saved');
+      refresh();
     } catch (error) {
       setNotice(errorText(error));
       setPhase('edit');
@@ -404,6 +449,38 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
             options={proposal.column_options.map((c) => ({ value: c.column_id, label: c.label }))}
             onChange={(next) => { setColumns(next as string[]); changed(); }} />
         </div>
+        {offers.length > 0 ? (
+          <div>
+            <Text strong>结果检查（可不选）：</Text>
+            {offers.map((offer) => {
+              const check = checkOf(offer.offer_id);
+              const usable = shown(offer.offer_id);
+              return (
+                <Flex key={offer.offer_id} align="center" gap={8} wrap>
+                  <Text>「{offer.table_title}」：</Text>
+                  <Checkbox checked={check.nonEmpty && usable}
+                    disabled={!usable || takenBy(offer.step_index, 'nonEmpty', offer.offer_id)}
+                    onChange={(event) => setCheck(offer.offer_id, { nonEmpty: event.target.checked })}>
+                    列表不能为空
+                  </Checkbox>
+                  <Checkbox checked={check.maxOn && usable}
+                    disabled={!usable || takenBy(offer.step_index, 'maxOn', offer.offer_id)}
+                    onChange={(event) => setCheck(offer.offer_id, { maxOn: event.target.checked })}>
+                    最多
+                  </Checkbox>
+                  <InputNumber size="small" min={1} max={MAX_CHECK} precision={0}
+                    aria-label={`「${offer.table_title}」最多几条`}
+                    disabled={!usable || !check.maxOn} value={check.max}
+                    onChange={(value) => setCheck(offer.offer_id, {
+                      max: typeof value === 'number' && Number.isInteger(value)
+                        && value >= 1 && value <= MAX_CHECK ? value : null,
+                    })} />
+                  <Text>条</Text>
+                </Flex>
+              );
+            })}
+          </div>
+        ) : null}
         {proposal.update_targets.length > 0 ? (
           <div>
             <Text strong>保存方式：</Text>
@@ -427,7 +504,11 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
         <Button type="primary" onClick={() => void save()} loading={phase === 'saving'}
           disabled={trial === null || !trial.savable || phase !== 'edit'}>保存</Button>
       </Space>
-      {!ready ? <Paragraph type="secondary">请把每一项的来源选好并确认，至少选一列。</Paragraph> : null}
+      {!ready ? (
+        <Paragraph type="secondary">
+          {checksReady ? '请把每一项的来源选好并确认，至少选一列。' : '勾选了「最多」请填写 1 到 200 之间的条数。'}
+        </Paragraph>
+      ) : null}
       {trial !== null && !trial.savable ? (
         <Alert type="warning" showIcon title={trial.not_savable_reason ?? '试运行没有成功，不能保存'} />
       ) : null}
