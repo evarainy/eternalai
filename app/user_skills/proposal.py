@@ -39,10 +39,11 @@ COMPLETENESS_FIELD = "is_complete"
 
 
 class ProposalRejected(ValueError):
-    def __init__(self, code: str, label: str) -> None:
+    def __init__(self, code: str, label: str, reason: str = "none") -> None:
         super().__init__(code)
         self.code = code
         self.label = label
+        self.reason = reason  # closed set, for logs only
 
 
 # ---------------------------------------------------------------- model input
@@ -273,6 +274,26 @@ def _contract_values(spec: CapabilitySpec) -> set[str]:
     return found
 
 
+def _contract_text(spec: CapabilitySpec) -> str:
+    """Normalized names, titles and descriptions of a capability contract."""
+
+    parts = [spec.name, spec.short_description or ""]
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            parts.extend(str(node[key]) for key in ("title", "description")
+                         if isinstance(node.get(key), str))
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(spec.input_schema)
+    walk(spec.output_schema)
+    return "|".join(_norm(part) for part in parts)
+
+
 def sample_values(records: Sequence[RecordEntry], exempt: set[str]) -> set[str]:
     values: set[str] = set()
 
@@ -415,9 +436,12 @@ def build_proposal(
 
     try:
         model = ModelProposal.model_validate(raw)
-    except ValidationError:
+    except ValidationError as error:
+        where = "；".join(
+            f"{'.'.join(map(str, item['loc']))}（{item['type']}）" for item in error.errors()[:4]
+        )
         raise ProposalRejected(
-            "proposal_invalid", "提案内容不完整，请重新说「保存为功能」"
+            "proposal_invalid", f"提案格式不对：{where}", "schema"
         ) from None
     by_seq = {record.seq: record for record in records}
     used: set[int] = set()
@@ -444,7 +468,10 @@ def build_proposal(
     exempt: set[str] = set()
     for spec in specs.values():
         exempt |= _contract_values(spec)
-    samples = sample_values(records, exempt)
+    contract_text = "".join(_contract_text(spec) for spec in specs.values())
+    # A value that is also the contract's own wording (e.g. a source named like the
+    # query) is a general term, not something this run found.
+    samples = {s for s in sample_values(records, exempt) if s not in contract_text}
     field_labels = {(f.step, tuple(f.path)): f.label for f in model.field_labels}
     check_texts(
         [model.name, model.purpose, model.rules, *(s.label for s in steps),
@@ -560,7 +587,12 @@ def build_proposal(
     tables_internal: list[dict[str, Any]] = []
     for t_index, table in enumerate(model.tables):
         if table.step >= len(steps):
-            raise ProposalRejected("proposal_invalid", "表格引用了不存在的步骤")
+            raise ProposalRejected(
+                "proposal_invalid",
+                f"表格「{table.title}」的 step={table.step} 不存在：step 是 steps 数组的下标，"
+                f"从 0 开始，只能是 0 到 {len(steps) - 1}，不是记录的 seq",
+                "table_step",
+            )
         _check_table(table, specs[steps[table.step].capability_id],
                      by_seq[steps[table.step].seqs[0]].data)
         table_id = f"t{t_index + 1}"
@@ -654,22 +686,49 @@ def _check_table(table: ModelTable, spec: CapabilitySpec, sample: Any) -> None:
 
     root = spec.output_schema
     sources = {column.source for column in table.columns}
-    invalid = ProposalRejected(
-        "table_path_invalid", f"表格「{table.title}」引用了查询结果里没有的内容"
-    )
+
+    def invalid(reason: str) -> ProposalRejected:
+        return ProposalRejected(
+            "table_path_invalid",
+            f"表格「{table.title}」引用了这一步查询结果里没有的内容。"
+            f"这一步可用的列表与列：{_list_fields_hint(root)}。"
+            "列表表格的 list_path 填列表路径，columns 的 source 都填 row，"
+            "path 填列名（相对列表里的一项，例如 [\"title\"]）；"
+            "如果这张表格对应的是另一步，检查 step 是不是填成了 seq",
+            reason,
+        )
+
     if "row" in sources:
-        if sources != {"row"} or not table.list_path:
-            raise invalid
+        if sources != {"row"}:
+            raise invalid("mixed_sources")
+        if not table.list_path:
+            raise invalid("no_list_path")
         items = _list_items(root, table.list_path)
         if items is None or not isinstance(get_path(sample, table.list_path), list):
-            raise invalid
+            raise invalid("list_path")
         if not all(_displayable(items, column.path) for column in table.columns):
-            raise invalid
+            raise invalid("row_column")
     elif any(
         column.source == "item_result" and not _displayable(root, column.path)
         for column in table.columns
     ):
-        raise invalid
+        raise invalid("item_result_column")
+
+
+def _list_fields_hint(root: Mapping[str, Any]) -> str:
+    """Field names (never values) of the top-level lists a leaf exposes."""
+
+    hints = []
+    for node in _branches(root, root):
+        properties = node.get("properties")
+        if not isinstance(properties, Mapping):
+            continue
+        for name in properties:
+            items = _list_items(root, [name])
+            fields = items.get("properties") if items is not None else None
+            if isinstance(fields, Mapping):
+                hints.append(f"list_path [\"{name}\"]，列 {'、'.join(map(str, fields))}")
+    return "；".join(hints) or "无"
 
 
 # ----------------------------------------------------------- trial compile
