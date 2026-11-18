@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -207,8 +208,12 @@ class PostgreSQLUserSkillStore:
             raise UserSkillError(type(exc).__name__) from None
 
     async def save_trial(
-        self, key: SessionKey, trial_id: str, payload: UserSkillVersionPayload,
-        *, refused: bool = False,
+        self,
+        key: SessionKey,
+        trial_id: str,
+        payload: UserSkillVersionPayload,
+        *,
+        refused: bool = False,
     ) -> dict[str, Any]:
         """Publish a ready trial and mark it saved atomically; a saved trial replays.
 
@@ -485,13 +490,18 @@ class PostgreSQLUserSkillSessionStore:
         )
         await self._drop_expired_items(session, key)
 
-    async def _drop_expired_items(self, session: AsyncSession, key: SessionKey) -> None:
+    async def _drop_expired_items(
+        self, session: AsyncSession, key: SessionKey, at: datetime | None = None
+    ) -> None:
+        """Drop this session's expired items, as of ``at`` (default: the transaction start)."""
+
         await session.execute(
             text(
                 "DELETE FROM public.user_skill_session_items WHERE tenant_id=:tenant AND "
-                "owner_user_id=:owner AND session_id=:session AND expires_at <= now()"
+                "owner_user_id=:owner AND session_id=:session AND "
+                "expires_at <= COALESCE(CAST(:at AS TIMESTAMPTZ), now())"
             ),
-            _key(key),
+            {**_key(key), "at": at},
         )
 
     async def _touch(self, session: AsyncSession, key: SessionKey) -> int | None:
@@ -755,9 +765,10 @@ class PostgreSQLUserSkillSessionStore:
         """Make a live, hand-over-able run of a live flow the pending slot, atomically.
 
         Lock order: session head, then the target flow head (``FOR SHARE`` blocks a
-        concurrent soft delete). Checked with the statement clock after the locks.
-        A refusal changes nothing: an earlier pending slot and the head stay as
-        they were. Success refreshes the head and cleans this session like any write.
+        concurrent soft delete). One clock reading taken after both locks decides
+        whether the session and the run are still live and dates the renewal and
+        this session's cleanup. A refusal changes nothing: an earlier pending slot
+        and the head stay as they were.
         """
 
         params = _key(key)
@@ -774,36 +785,45 @@ class PostgreSQLUserSkillSessionStore:
                 ).one_or_none()
                 if head is None:
                     return False
-                row = (
+                run_item = (
+                    "FROM public.user_skill_session_items i WHERE i.tenant_id=:tenant AND "
+                    "i.owner_user_id=:owner AND i.session_id=:session AND i.kind='run' AND "
+                    "i.item_id=:run AND (i.payload->>'takeover_allowed')::boolean IS TRUE"
+                )
+                found = (
                     await session.execute(
-                        text(
-                            "SELECT i.payload FROM public.user_skill_session_items i JOIN "
-                            "public.user_skill_sessions s ON s.tenant_id=i.tenant_id AND "
-                            "s.owner_user_id=i.owner_user_id AND s.session_id=i.session_id "
-                            "WHERE i.tenant_id=:tenant AND i.owner_user_id=:owner AND "
-                            "i.session_id=:session AND i.kind='run' AND i.item_id=:run AND "
-                            "s.expires_at > clock_timestamp() AND "
-                            "i.expires_at > clock_timestamp() AND "
-                            "(i.payload->>'takeover_allowed')::boolean IS TRUE"
-                        ),
+                        text("SELECT i.payload->>'skill_id' " + run_item),
                         {**params, "run": run_id},
                     )
                 ).one_or_none()
-                if row is None:
+                if found is None:
                     return False
-                snapshot = _json(row[0])
                 flow = (
                     await session.execute(
                         text(
                             "SELECT 1 FROM public.user_skills WHERE tenant_id=:tenant AND "
                             "owner_user_id=:owner AND skill_id::text=:skill AND "
-                            + _LIVE + " FOR SHARE"
+                            + _LIVE
+                            + " FOR SHARE"
                         ),
-                        {"tenant": key[0], "owner": key[1],
-                         "skill": str(snapshot.get("skill_id"))},
+                        {"tenant": key[0], "owner": key[1], "skill": str(found[0])},
                     )
                 ).one_or_none()
                 if flow is None:
+                    return False
+                at = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT i.payload " + run_item + " AND i.expires_at > :at AND "
+                            "EXISTS (SELECT 1 FROM public.user_skill_sessions s WHERE "
+                            "s.tenant_id=:tenant AND s.owner_user_id=:owner AND "
+                            "s.session_id=:session AND s.expires_at > :at)"
+                        ),
+                        {**params, "run": run_id, "at": at},
+                    )
+                ).one_or_none()
+                if row is None:
                     return False
                 await session.execute(
                     text(
@@ -813,17 +833,17 @@ class PostgreSQLUserSkillSessionStore:
                         "(tenant_id, owner_user_id, session_id, kind, item_id) DO UPDATE SET "
                         "payload = EXCLUDED.payload"
                     ),
-                    {**params, "payload": json.dumps(snapshot, ensure_ascii=False)},
+                    {**params, "payload": json.dumps(_json(row[0]), ensure_ascii=False)},
                 )
                 await session.execute(
                     text(
-                        "UPDATE public.user_skill_sessions SET expires_at = now() + " + _IDLE
-                        + " WHERE tenant_id=:tenant AND owner_user_id=:owner AND "
-                        "session_id=:session"
+                        "UPDATE public.user_skill_sessions SET expires_at = CAST(:at AS "
+                        "TIMESTAMPTZ) + " + _IDLE + " WHERE tenant_id=:tenant AND "
+                        "owner_user_id=:owner AND session_id=:session"
                     ),
-                    params,
+                    {**params, "at": at},
                 )
-                await self._drop_expired_items(session, key)
+                await self._drop_expired_items(session, key, at)
                 await self._sweep(session)
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=claim_takeover error=%s", type(exc).__name__)

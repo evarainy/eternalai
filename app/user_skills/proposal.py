@@ -1072,8 +1072,9 @@ def _plain(root: Mapping[str, Any], node: Any) -> Mapping[str, Any] | None:
 
 
 _ANNOTATIONS = frozenset({"title", "description", "default", "examples"})
-_ROOT_COMBINATORS = ("anyOf", "oneOf", "allOf", "not", "if", "dependentSchemas",
-                     "dependentRequired")
+# Input-root keywords that cannot constrain one declared property's values.
+_PLAIN_ROOT = frozenset({"type", "properties", "required", "additionalProperties", "$defs",
+                         "$schema", "$id", "title", "description"})
 _UNION_FREE = _COMBINATORS + ("oneOf", "anyOf")
 
 
@@ -1087,7 +1088,7 @@ def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
     """
 
     root = spec.input_schema
-    if any(key in root for key in _ROOT_COMBINATORS):
+    if not set(root) <= _PLAIN_ROOT:
         return None
     properties = root.get("properties")
     prop = _plain(root, properties.get(arg)) if isinstance(properties, Mapping) else None
@@ -1098,10 +1099,13 @@ def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
         return [prop]
     if not isinstance(variants, list) or not set(prop) - {"anyOf"} <= _ANNOTATIONS:
         return None
-    plain = [_plain(root, variant) for variant in variants]
-    if any(node is None or any(key in node for key in _UNION_FREE) for node in plain):
-        return None
-    return [node for node in plain if node is not None]
+    plain: list[Mapping[str, Any]] = []
+    for variant in variants:
+        node = _plain(root, variant)
+        if node is None or any(key in node for key in _UNION_FREE):
+            return None
+        plain.append(node)
+    return plain
 
 
 def _fixed_fits(spec: CapabilitySpec, arg: str, value: Any) -> bool:

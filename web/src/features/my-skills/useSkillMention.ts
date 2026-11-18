@@ -16,7 +16,8 @@ import { useMySkills } from './useMySkills';
 interface Binding {
   skillId: string;
   name: string;
-  /** `$name` occupies [start, end) of the draft. */
+  /** The mention exactly as it stands in the draft at [start, end) (typed variants included). */
+  text: string;
   start: number;
   end: number;
   generation: number;
@@ -30,7 +31,7 @@ export interface SkillBinding {
 /** The chosen flow of one sent message, with its `$name` span in that message (if known). */
 export interface SkillSelection {
   skillId: string;
-  span: { name: string; start: number; end: number } | null;
+  span: { name: string; text: string; start: number; end: number } | null;
 }
 
 export type MentionResolution =
@@ -50,6 +51,7 @@ const MAX_CANDIDATES = 8;
 const TRIGGERS = new Set(['$', '＄']);
 const DIGIT = /^[\d.,]/;
 const STANDALONE_AMOUNT = /^[\d.,]+(?=\s|$)/;
+const ONLY_AMOUNT = /^[\d.,]+$/;
 
 function norm(text: string): string {
   return text.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
@@ -63,20 +65,33 @@ const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(ch
 const endsWord = (char: string | undefined) => char === undefined || /[\s\p{P}]/u.test(char);
 const mentionText = (name: string) => `$${name}`;
 
-/** `$name` stands alone at [start, end) of ``value``. */
-function standaloneAt(value: string, start: number, end: number, name: string): boolean {
-  return start >= 0 && value.slice(start, end) === mentionText(name)
+/** ``text`` stands alone at [start, end) of ``value``. */
+function standaloneAt(value: string, start: number, end: number, text: string): boolean {
+  return start >= 0 && value.slice(start, end) === text
     && (start === 0 || isSpace(value[start - 1])) && endsWord(value[end]);
 }
 
-/** The binding after ``prev`` became ``next``: shifted, kept, or gone when its span changed. */
-function follow(prev: string, next: string, binding: Binding): Binding | null {
-  let common = 0;
+/** The binding after ``prev`` became ``next`` under one alignment of the edit. */
+function followAligned(prev: string, next: string, binding: Binding, prefixFirst: boolean):
+  Binding | null {
   const shortest = Math.min(prev.length, next.length);
-  while (common < shortest && prev[common] === next[common]) common += 1;
+  let common = 0;
   let tail = 0;
-  while (tail < shortest - common
-      && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail += 1;
+  const growCommon = (limit: number) => {
+    while (common < limit && prev[common] === next[common]) common += 1;
+  };
+  const growTail = (limit: number) => {
+    while (tail < limit && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) {
+      tail += 1;
+    }
+  };
+  if (prefixFirst) {
+    growCommon(shortest);
+    growTail(shortest - common);
+  } else {
+    growTail(shortest);
+    growCommon(shortest - tail);
+  }
   const editedUntil = prev.length - tail;
   let { start, end } = binding;
   if (editedUntil <= start) {
@@ -86,17 +101,30 @@ function follow(prev: string, next: string, binding: Binding): Binding | null {
   } else if (common < end) {
     return null;
   }
-  return standaloneAt(next, start, end, binding.name) ? { ...binding, start, end } : null;
+  return standaloneAt(next, start, end, binding.text) ? { ...binding, start, end } : null;
 }
 
-function tokenAt(value: string, caret: number): Token | null {
+/** The binding after an edit; when repeated text makes the edited place ambiguous, it is gone. */
+function follow(prev: string, next: string, binding: Binding): Binding | null {
+  const a = followAligned(prev, next, binding, true);
+  const b = followAligned(prev, next, binding, false);
+  return a !== null && b !== null && a.start === b.start ? a : null;
+}
+
+/** The `$word` under the caret, digits included (they only never open the list). */
+function triggerAt(value: string, caret: number): Token | null {
   let start = caret;
   while (start > 0 && !isSpace(value[start - 1])) start -= 1;
   let end = caret;
   while (end < value.length && !isSpace(value[end])) end += 1;
   if (!TRIGGERS.has(value[start] ?? '')) return null;
-  if (DIGIT.test(value.slice(start + 1, end).normalize('NFKC'))) return null;
   return { start, end, text: value.slice(start + 1, caret) };
+}
+
+function tokenAt(value: string, caret: number): Token | null {
+  const token = triggerAt(value, caret);
+  if (token === null) return null;
+  return DIGIT.test(value.slice(token.start + 1, token.end).normalize('NFKC')) ? null : token;
 }
 
 function rank(items: readonly SkillListItem[], text: string): SkillListItem[] {
@@ -126,8 +154,8 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   if (!rest.trim()) return { kind: 'none' };
   const amount = STANDALONE_AMOUNT.test(rest.normalize('NFKC'));
   if (state !== 'ready' || items === undefined) {
-    // Only a bare amount may go without the list; a name must be checked first.
-    if (amount) return { kind: 'none' };
+    // Only a message that is nothing but an amount may go without the list.
+    if (ONLY_AMOUNT.test(rest.normalize('NFKC').trim())) return { kind: 'none' };
     return { kind: 'blocked', reason: state === 'failed'
       ? '我的功能暂时读不到，请稍后再发送。' : '正在读取我的功能，请稍后再发送。' };
   }
@@ -149,12 +177,18 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
     return { kind: 'blocked', reason: '有多个同名的功能，请从列表中选择。' };
   }
   const item = top[0]!;
-  const end = 1 + item.name.length;
+  // The raw text that folds to the name (a full-width or other-case variant as typed).
+  const name = fold(item.name);
+  let length = 1;
+  while (length <= rest.length && fold(rest.slice(0, length)) !== name) length += 1;
+  const end = 1 + length;
+  const text = message.slice(0, end);
   return {
     kind: 'ref',
     selection: {
       skillId: item.skill_id,
-      span: standaloneAt(message, 0, end, item.name) ? { name: item.name, start: 0, end } : null,
+      span: length <= rest.length && standaloneAt(message, 0, end, text)
+        ? { name: item.name, text, start: 0, end } : null,
     },
   };
 }
@@ -209,15 +243,15 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       setBinding((current) => (current === null ? null : follow(before, value, current)));
     }
     if (composing.current) return;
-    const next = caret === null ? null : tokenAt(value, caret);
-    if (next !== null) setWanted(true);
-    setToken(next);
+    // Any `$word` (a digit-led name too) starts reading the list, ready for sending.
+    if (caret !== null && triggerAt(value, caret) !== null) setWanted(true);
+    setToken(caret === null ? null : tokenAt(value, caret));
   }, []);
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
+    const text = mentionText(item.name);
     setBinding({
-      skillId: item.skill_id, name: item.name, start,
-      end: start + mentionText(item.name).length, generation,
+      skillId: item.skill_id, name: item.name, text, start, end: start + text.length, generation,
     });
     setToken(null);
     onBind?.();
@@ -229,7 +263,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     let start = from;
     let end = to;
     const current = binding !== null && standaloneAt(value, binding.start, binding.end,
-      binding.name) ? binding : null;
+      binding.text) ? binding : null;
     if (current !== null && current.start < end && start < current.end) {
       // The choice is being changed in place: replace the whole bound span.
       start = Math.min(start, current.start);
@@ -238,10 +272,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     const inserted = `${mentionText(item.name)} `;
     const after = value.slice(end);
     const next = value.slice(0, start) + inserted + (after.startsWith(' ') ? after.slice(1) : after);
-    if (current === null || (current.start < end && start < current.end)
-        || (current.start <= start && end <= current.end)) {
-      return [next, start];
-    }
+    if (current === null || (current.start < end && start < current.end)) return [next, start];
     // An earlier choice elsewhere is removed (one flow per message).
     if (current.end <= start) {
       const without = cut(next, current.start, current.end);
@@ -262,7 +293,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
 
   /** From the panel: the chosen flow goes to the start of the message. */
   const insert = useCallback((item: SkillListItem) => {
-    const base = binding !== null && standaloneAt(draft, binding.start, binding.end, binding.name)
+    const base = binding !== null && standaloneAt(draft, binding.start, binding.end, binding.text)
       ? cut(draft, binding.start, binding.end) : draft;
     const next = `${mentionText(item.name)} ${base.trimStart()}`;
     setDraft(next);
@@ -272,7 +303,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   }, [binding, draft, setDraft, bindAt, focusAt]);
 
   const clear = useCallback(() => {
-    if (binding !== null && standaloneAt(draft, binding.start, binding.end, binding.name)) {
+    if (binding !== null && standaloneAt(draft, binding.start, binding.end, binding.text)) {
       const next = cut(draft, binding.start, binding.end);
       setDraft(next);
       previous.current = next;
@@ -290,9 +321,9 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const restore = useCallback((value: string, selection: SkillSelection | null) => {
     const span = selection?.span;
     if (selection == null || span == null) return;
-    if (standaloneAt(value, span.start, span.end, span.name)) {
-      setBinding({ skillId: selection.skillId, name: span.name, start: span.start,
-        end: span.end, generation });
+    if (standaloneAt(value, span.start, span.end, span.text)) {
+      setBinding({ skillId: selection.skillId, name: span.name, text: span.text,
+        start: span.start, end: span.end, generation });
     }
   }, [generation]);
 
@@ -344,9 +375,9 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     if (binding !== null) {
       const start = binding.start - lead;
       const end = binding.end - lead;
-      if (standaloneAt(message, start, end, binding.name)) {
-        return { kind: 'ref',
-          selection: { skillId: binding.skillId, span: { name: binding.name, start, end } } };
+      if (standaloneAt(message, start, end, binding.text)) {
+        return { kind: 'ref', selection: { skillId: binding.skillId,
+          span: { name: binding.name, text: binding.text, start, end } } };
       }
     }
     if (TRIGGERS.has(message[0] ?? '')) {
