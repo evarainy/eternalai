@@ -125,6 +125,7 @@ from app.infra.orchestration.agentscope_runtime.user_skill_turn import (
     UserSkillTurn,
     prepare_user_skill_turn,
     run_explicit_user_skill,
+    session_context_note,
     takeover_data,
 )
 from app.knowledge import BasicKnowledge
@@ -1021,6 +1022,10 @@ class AgentScopeRuntime:
             # One absolute deadline covers the reply, every parked-call check,
             # every ERROR continuation and the proposal core with its marks.
             async with bounded_turn_scope(turn.deadline):
+                skills = turn.user_skill
+                if not agent.state.context and skills is not None and skills.summary is not None:
+                    # Fresh history (e.g. after a restart) but persisted records: name them.
+                    message = session_context_note(skills.summary) + message
                 final = await agent.reply(UserMsg(name="user", content=message))
                 return await proposals.drive(agent, final)
         except AgentScopeModelError as exc:

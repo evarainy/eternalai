@@ -110,6 +110,24 @@ async def prepare_user_skill_turn(
     return turn
 
 
+def session_context_note(summary: dict[str, Any]) -> str:
+    """Names of this session's completed queries, for a turn without conversation history.
+
+    The AgentScope history is process memory (lost on restart) while the records
+    persist; without this note the model answers that it saw no earlier query.
+    """
+
+    names = list(dict.fromkeys(
+        str(record.get("query")) for record in summary.get("records", [])
+        if isinstance(record, dict)
+    ))
+    return (
+        "<session_context>本会话此前已完成以下查询（对话历史里看不到之前的轮次，以此为准）："
+        + "、".join(names)
+        + "。这些查询的记录见 propose_user_skill 的说明。</session_context>\n"
+    )
+
+
 def summary_text(summary: dict[str, Any]) -> str:
     text = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     return text if len(text) <= MAX_SUMMARY_CHARS else text[:MAX_SUMMARY_CHARS] + "…"
