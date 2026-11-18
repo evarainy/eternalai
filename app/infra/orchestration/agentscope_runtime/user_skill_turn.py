@@ -98,6 +98,10 @@ async def prepare_user_skill_turn(
         turn.tools = tools
         if service.has_records(turn.key):
             turn.summary = await service.summary(turn.key, [message])
+        _LOGGER.info(
+            "user_skill.turn_prepared usable=%d records=%s",
+            turn.usable_count, turn.summary is not None,
+        )
     except Exception as exc:
         _LOGGER.info("user_skill.turn_prepare_failed error=%s", type(exc).__name__)
         return None
