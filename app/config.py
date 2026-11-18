@@ -534,6 +534,8 @@ class ProductionSettings:
     oa_bridge_public_base: str | None = None
     u8_base_url: str = "http://34.64.8.70:8188"
     u8_rsa_public_key_path: Path | None = None
+    zhyw_base_url: str | None = None
+    zhyw_sso_key: bytes | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
     mcp_tls_ca: McpTlsCaConfig | None = field(default=None, repr=False)
@@ -661,6 +663,10 @@ class ProductionSettings:
                 Path(source["U8_RSA_PUBLIC_KEY_PATH"])
                 if source.get("U8_RSA_PUBLIC_KEY_PATH") else None
             ),
+            zhyw_base_url=_http_base_url(source, "ZHYW_BASE_URL")
+            if source.get("ZHYW_BASE_URL") else None,
+            zhyw_sso_key=_base64_key(source, "ZHYW_SSO_KEY_B64", minimum_bytes=32)
+            if source.get("ZHYW_SSO_KEY_B64") else None,
             oa_base_url=_http_base_url(source, "OA_BASE_URL"),
             oa_timeout_seconds=_positive_float(
                 source,

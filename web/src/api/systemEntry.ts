@@ -10,8 +10,23 @@ export function getSystemEntryAvailability(signal?: AbortSignal): Promise<System
 }
 
 /** Navigation URLs contain credentials: keep them outside Query and persistent storage. */
-export function createSystemEntry(target: 'oa' | 'u8', captcha?: U8CaptchaAnswer): Promise<{ url: string }> {
+export function createSystemEntry(target: 'oa' | 'u8' | 'zhyw', captcha?: U8CaptchaAnswer): Promise<{ url: string }> {
   return customInstance({ url: `/api/v1/system-entry/${target}`, method: 'POST', data: captcha });
+}
+
+export interface ZhywBinding {
+  configured: boolean;
+  bound: boolean;
+}
+
+const ZHYW_BINDING_URL = '/api/v1/system-entry/zhyw/binding';
+
+export function getZhywBinding(signal?: AbortSignal): Promise<ZhywBinding> {
+  return customInstance({ url: ZHYW_BINDING_URL, method: 'GET', signal });
+}
+
+export function bindZhyw(loginId: string): Promise<ZhywBinding> {
+  return customInstance({ url: ZHYW_BINDING_URL, method: 'PUT', data: { login_id: loginId } });
 }
 
 export interface U8CaptchaAnswer {

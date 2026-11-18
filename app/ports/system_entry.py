@@ -6,9 +6,10 @@ from typing import Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from app.ports.auth import Principal
 from app.ports.credential_binding import CredentialTargetSystem, PasswordBindingCredential
 
-SystemEntryTarget: TypeAlias = Literal["oa", "u8"]
+SystemEntryTarget: TypeAlias = Literal["oa", "u8", "zhyw"]
 SystemEntryFailureCode: TypeAlias = Literal[
     "entry_not_configured",
     "entry_not_bound",
@@ -22,6 +23,10 @@ SystemEntryFailureCode: TypeAlias = Literal[
     "entry_upstream_rejected",
     "entry_invalid_response",
     "entry_configuration_error",
+    "entry_account_required",
+    "entry_account_mismatch",
+    "entry_oa_login_required",
+    "entry_zhyw_not_bound",
     "entry_unavailable",
 ]
 
@@ -48,6 +53,19 @@ class U8CaptchaView(BaseModel):
 
     guid: str = Field(repr=False)
     image: str = Field(repr=False)
+
+
+class ZhywBindingView(BaseModel):
+    configured: bool
+    bound: bool
+
+
+class ZhywEntryPort(Protocol):
+    async def is_bound(self, principal: Principal) -> bool: ...
+
+    async def bind(self, principal: Principal, login_id: str) -> None: ...
+
+    async def enter(self, principal: Principal) -> str: ...
 
 
 class SystemEntryError(RuntimeError):
@@ -107,4 +125,6 @@ __all__ = (
     "U8CaptchaAnswer",
     "U8CaptchaView",
     "U8LoginPort",
+    "ZhywBindingView",
+    "ZhywEntryPort",
 )

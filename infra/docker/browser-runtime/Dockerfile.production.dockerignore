@@ -482,6 +482,7 @@ app/infra/system_entry/*
 !app/infra/system_entry/oa_login.py
 !app/infra/system_entry/oa_bridge.py
 !app/infra/system_entry/tickets.py
+!app/infra/system_entry/zhyw.py
 
 # Personal saved read flows (我的功能): exact source files only.
 !app/api/v1/my_skills.py

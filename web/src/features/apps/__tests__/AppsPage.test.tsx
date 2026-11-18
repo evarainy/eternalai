@@ -30,6 +30,7 @@ const FABRICATED_STATUS_LABELS = ['未开通'];
 const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn(), mcpServices: vi.fn(), mcpConnections: vi.fn(), mcpOperations: vi.fn(), entryAvailability: vi.fn() }));
 vi.mock('../../../api/systemEntry', () => ({
   getSystemEntryAvailability: apiMocks.entryAvailability,
+  getZhywBinding: () => Promise.resolve({ configured: false, bound: false }),
 }));
 
 vi.mock('../../../api/mcp', () => ({

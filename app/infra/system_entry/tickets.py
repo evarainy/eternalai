@@ -19,14 +19,18 @@ from app.ports.system_entry import SystemEntryError
 _PREFIX = "eternalai:system-entry:oa:v1:"
 
 
+def make_entry_redis(redis_url: RedisConnectionURL) -> Redis:
+    return Redis(
+        host=redis_url.host, port=redis_url.port, db=redis_url.database,
+        username=redis_url.username, password=redis_url.password_for_connection(),
+        ssl=redis_url.scheme == "rediss", socket_connect_timeout=5, socket_timeout=5,
+        retry=Retry(NoBackoff(), 0),
+    )
+
+
 class RedisOAEntryTickets:
     def __init__(self, *, redis_url: RedisConnectionURL, encryption_key: bytes) -> None:
-        self._redis = Redis(
-            host=redis_url.host, port=redis_url.port, db=redis_url.database,
-            username=redis_url.username, password=redis_url.password_for_connection(),
-            ssl=redis_url.scheme == "rediss", socket_connect_timeout=5, socket_timeout=5,
-            retry=Retry(NoBackoff(), 0),
-        )
+        self._redis = make_entry_redis(redis_url)
         key = hmac.digest(encryption_key, b"eternalai-oa-entry-ticket-v1", "sha256")
         self._cipher = AESGCM(key)
 

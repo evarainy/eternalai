@@ -48,6 +48,12 @@ def identity_surrogate(loginid: str, *, key: bytes) -> str:
     return f"usr_v1_{_base64url_encode(digest)}"
 
 
+def exact_oa_login_proof(login_id: str, *, key: bytes) -> str:
+    """Prove the verified login value without placing the account in a session token."""
+    message = b"eternalai-exact-oa-login-v1\0" + login_id.strip().encode()
+    return hmac.digest(key, message, "sha256").hex()
+
+
 class _TokenClaims(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
