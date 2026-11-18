@@ -1,9 +1,9 @@
 /** `$` 指定调用：在输入框里用 `$`（或全角 `＄`）选本人可用的功能。
  *
- * 选中时记下功能 id 和它在草稿里的那一段文字（结构化绑定，随编辑移动；那段文字被改掉即解除），
- * 发送时只把 id 交给服务端，由服务端按本人当前版本直接执行；不写 `$` 时照旧由模型判断。
- * 手输完整的 `$功能名` 也能绑定：最长的完整名称优先；单独的 `$100` 这类金额按普通文字发送。
- * 中文输入法组字期间不弹、不选、不发送。换账号即清空。 */
+ * 选中时记下功能 id 和它在草稿里的那一段文字的起止位置（结构化绑定）：前面的编辑只平移位置，
+ * 改到这一段即解除。发送时只把 id 交给服务端，由服务端按本人当前版本直接执行；不写 `$` 时照旧
+ * 由模型判断。手输完整的 `$功能名` 也能绑定（最长的完整名称优先）；单独的 `$100` 这类金额按普通
+ * 文字发送。中文输入法组字期间不弹、不选、不发送。换账号即清空。 */
 
 import {
   useCallback, useEffect, useMemo, useRef, useState, type CompositionEvent, type KeyboardEvent,
@@ -16,8 +16,9 @@ import { useMySkills } from './useMySkills';
 interface Binding {
   skillId: string;
   name: string;
-  /** Where `$name` starts in the draft. */
+  /** `$name` occupies [start, end) of the draft. */
   start: number;
+  end: number;
   generation: number;
 }
 
@@ -26,9 +27,15 @@ export interface SkillBinding {
   name: string;
 }
 
+/** The chosen flow of one sent message, with its `$name` span in that message (if known). */
+export interface SkillSelection {
+  skillId: string;
+  span: { name: string; start: number; end: number } | null;
+}
+
 export type MentionResolution =
   | { kind: 'none' }
-  | { kind: 'ref'; skillId: string }
+  | { kind: 'ref'; selection: SkillSelection }
   | { kind: 'blocked'; reason: string };
 
 interface Token {
@@ -54,6 +61,33 @@ function fold(text: string): string {
 
 const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(char);
 const endsWord = (char: string | undefined) => char === undefined || /[\s\p{P}]/u.test(char);
+const mentionText = (name: string) => `$${name}`;
+
+/** `$name` stands alone at [start, end) of ``value``. */
+function standaloneAt(value: string, start: number, end: number, name: string): boolean {
+  return start >= 0 && value.slice(start, end) === mentionText(name)
+    && (start === 0 || isSpace(value[start - 1])) && endsWord(value[end]);
+}
+
+/** The binding after ``prev`` became ``next``: shifted, kept, or gone when its span changed. */
+function follow(prev: string, next: string, binding: Binding): Binding | null {
+  let common = 0;
+  const shortest = Math.min(prev.length, next.length);
+  while (common < shortest && prev[common] === next[common]) common += 1;
+  let tail = 0;
+  while (tail < shortest - common
+      && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail += 1;
+  const editedUntil = prev.length - tail;
+  let { start, end } = binding;
+  if (editedUntil <= start) {
+    const delta = next.length - prev.length;
+    start += delta;
+    end += delta;
+  } else if (common < end) {
+    return null;
+  }
+  return standaloneAt(next, start, end, binding.name) ? { ...binding, start, end } : null;
+}
 
 function tokenAt(value: string, caret: number): Token | null {
   let start = caret;
@@ -61,7 +95,7 @@ function tokenAt(value: string, caret: number): Token | null {
   let end = caret;
   while (end < value.length && !isSpace(value[end])) end += 1;
   if (!TRIGGERS.has(value[start] ?? '')) return null;
-  if (DIGIT.test(value.slice(start + 1, end))) return null;
+  if (DIGIT.test(value.slice(start + 1, end).normalize('NFKC'))) return null;
   return { start, end, text: value.slice(start + 1, caret) };
 }
 
@@ -77,39 +111,25 @@ function rank(items: readonly SkillListItem[], text: string): SkillListItem[] {
   return scored.slice(0, MAX_CANDIDATES).map(({ item }) => item);
 }
 
-const mentionText = (name: string) => `$${name}`;
-
-/** Where the binding's `$name` is now: its old place, else its only standalone place. */
-function locate(value: string, binding: Binding): number | null {
-  const text = mentionText(binding.name);
-  const standalone = (at: number) => value.startsWith(text, at)
-    && (at === 0 || isSpace(value[at - 1])) && endsWord(value[at + text.length]);
-  if (standalone(binding.start)) return binding.start;
-  const found: number[] = [];
-  for (let at = value.indexOf(text); at >= 0; at = value.indexOf(text, at + 1)) {
-    if (standalone(at)) found.push(at);
-  }
-  return found.length === 1 ? found[0]! : null;
-}
-
-/** ``value`` without ``length`` chars at ``start`` (and one space after them). */
-function cut(value: string, start: number, length: number): string {
-  const end = start + length;
+/** ``value`` without [start, end) and one space right after it. */
+function cut(value: string, start: number, end: number): string {
   return value.slice(0, start) + value.slice(value[end] === ' ' ? end + 1 : end);
 }
 
+type ListState = 'ready' | 'loading' | 'failed';
+
 /** A typed `$name` at the start of the message: the longest complete usable name wins. */
-function resolveTyped(message: string, items: readonly SkillListItem[] | undefined):
-  MentionResolution {
-  const text = message.trimStart();
-  if (!TRIGGERS.has(text[0] ?? '')) return { kind: 'none' };
-  const rest = text.slice(1);
+function resolveTyped(message: string, items: readonly SkillListItem[] | undefined,
+  state: ListState): MentionResolution {
+  if (!TRIGGERS.has(message[0] ?? '')) return { kind: 'none' };
+  const rest = message.slice(1);
   if (!rest.trim()) return { kind: 'none' };
-  const amount = STANDALONE_AMOUNT.test(rest);
-  if (items === undefined) {
+  const amount = STANDALONE_AMOUNT.test(rest.normalize('NFKC'));
+  if (state !== 'ready' || items === undefined) {
     // Only a bare amount may go without the list; a name must be checked first.
-    return amount ? { kind: 'none' }
-      : { kind: 'blocked', reason: '正在读取我的功能，请稍后再发送。' };
+    if (amount) return { kind: 'none' };
+    return { kind: 'blocked', reason: state === 'failed'
+      ? '我的功能暂时读不到，请稍后再发送。' : '正在读取我的功能，请稍后再发送。' };
   }
   const folded = fold(rest);
   const usable = items.filter((item) => item.state === 'usable');
@@ -128,7 +148,15 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   if (top.length > 1 || same.length > 1) {
     return { kind: 'blocked', reason: '有多个同名的功能，请从列表中选择。' };
   }
-  return { kind: 'ref', skillId: top[0]!.skill_id };
+  const item = top[0]!;
+  const end = 1 + item.name.length;
+  return {
+    kind: 'ref',
+    selection: {
+      skillId: item.skill_id,
+      span: standaloneAt(message, 0, end, item.name) ? { name: item.name, start: 0, end } : null,
+    },
+  };
 }
 
 export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: {
@@ -149,6 +177,9 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [stored, setBinding] = useState<Binding | null>(null);
   const composing = useRef(false);
+  // The draft the last edit started from (the prop lags one render behind an edit).
+  const previous = useRef(draft);
+  previous.current = draft;
   // Another account's choice is never shown or sent.
   const binding = stored !== null && stored.generation === generation ? stored : null;
   useEffect(() => {
@@ -172,11 +203,11 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
 
   /** After every edit or caret move: follow or drop the binding, re-read the token. */
   const sync = useCallback((value: string, caret: number | null) => {
-    setBinding((current) => {
-      if (current === null) return null;
-      const at = locate(value, current);
-      return at === null ? null : at === current.start ? current : { ...current, start: at };
-    });
+    const before = previous.current;
+    previous.current = value;
+    if (before !== value) {
+      setBinding((current) => (current === null ? null : follow(before, value, current)));
+    }
     if (composing.current) return;
     const next = caret === null ? null : tokenAt(value, caret);
     if (next !== null) setWanted(true);
@@ -184,60 +215,86 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   }, []);
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
-    setBinding({ skillId: item.skill_id, name: item.name, start, generation });
+    setBinding({
+      skillId: item.skill_id, name: item.name, start,
+      end: start + mentionText(item.name).length, generation,
+    });
     setToken(null);
     onBind?.();
   }, [generation, onBind]);
 
-  /** The draft without the current binding's text, and where ``position`` moves to. */
-  const unbound = useCallback((value: string, position: number): [string, number] => {
-    if (binding === null) return [value, position];
-    const at = locate(value, binding);
-    if (at === null) return [value, position];
-    const next = cut(value, at, mentionText(binding.name).length);
-    return [next, at < position ? position - (value.length - next.length) : position];
+  /** The draft with [start, end) replaced by the chosen `$name `; one flow per message. */
+  const place = useCallback((value: string, from: number, to: number, item: SkillListItem):
+    [string, number] => {
+    let start = from;
+    let end = to;
+    const current = binding !== null && standaloneAt(value, binding.start, binding.end,
+      binding.name) ? binding : null;
+    if (current !== null && current.start < end && start < current.end) {
+      // The choice is being changed in place: replace the whole bound span.
+      start = Math.min(start, current.start);
+      end = Math.max(end, current.end);
+    }
+    const inserted = `${mentionText(item.name)} `;
+    const after = value.slice(end);
+    const next = value.slice(0, start) + inserted + (after.startsWith(' ') ? after.slice(1) : after);
+    if (current === null || (current.start < end && start < current.end)
+        || (current.start <= start && end <= current.end)) {
+      return [next, start];
+    }
+    // An earlier choice elsewhere is removed (one flow per message).
+    if (current.end <= start) {
+      const without = cut(next, current.start, current.end);
+      return [without, start - (next.length - without.length)];
+    }
+    const shift = next.length - value.length;
+    return [cut(next, current.start + shift, current.end + shift), start];
   }, [binding]);
 
   const select = useCallback((item: SkillListItem) => {
-    if (token === null) return;
-    const inserted = `${mentionText(item.name)} `;
-    const replaced = draft.slice(0, token.start) + inserted + draft.slice(token.end).trimStart();
-    // One flow per message: an earlier choice elsewhere is removed.
-    const [next, start] = binding !== null && locate(draft, binding) !== token.start
-      ? unbound(replaced, token.start) : [replaced, token.start];
+    if (token === null || composing.current) return;
+    const [next, start] = place(draft, token.start, token.end, item);
     setDraft(next);
+    previous.current = next;
     bindAt(item, start);
-    focusAt(start + inserted.length);
-  }, [token, draft, binding, unbound, setDraft, bindAt, focusAt]);
+    focusAt(start + mentionText(item.name).length + 1);
+  }, [token, draft, place, setDraft, bindAt, focusAt]);
 
   /** From the panel: the chosen flow goes to the start of the message. */
   const insert = useCallback((item: SkillListItem) => {
-    const [rest] = unbound(draft, 0);
-    const next = `${mentionText(item.name)} ${rest.trimStart()}`;
+    const base = binding !== null && standaloneAt(draft, binding.start, binding.end, binding.name)
+      ? cut(draft, binding.start, binding.end) : draft;
+    const next = `${mentionText(item.name)} ${base.trimStart()}`;
     setDraft(next);
+    previous.current = next;
     bindAt(item, 0);
     focusAt(next.length);
-  }, [draft, unbound, setDraft, bindAt, focusAt]);
+  }, [binding, draft, setDraft, bindAt, focusAt]);
 
   const clear = useCallback(() => {
-    setDraft(unbound(draft, 0)[0]);
+    if (binding !== null && standaloneAt(draft, binding.start, binding.end, binding.name)) {
+      const next = cut(draft, binding.start, binding.end);
+      setDraft(next);
+      previous.current = next;
+    }
     setBinding(null);
     setToken(null);
-  }, [draft, unbound, setDraft]);
+  }, [binding, draft, setDraft]);
 
   const reset = useCallback(() => {
     setBinding(null);
     setToken(null);
   }, []);
 
-  /** Put back the choice of a message that was refused before any work. */
-  const restore = useCallback((value: string, skillId: string | null) => {
-    const item = skillId === null ? undefined : items?.find((each) => each.skill_id === skillId);
-    if (item === undefined) return;
-    const candidate: Binding = { skillId: item.skill_id, name: item.name, start: 0, generation };
-    const at = locate(value, candidate);
-    if (at !== null) setBinding({ ...candidate, start: at });
-  }, [items, generation]);
+  /** Put back the frozen choice of a message that was refused before any work. */
+  const restore = useCallback((value: string, selection: SkillSelection | null) => {
+    const span = selection?.span;
+    if (selection == null || span == null) return;
+    if (standaloneAt(value, span.start, span.end, span.name)) {
+      setBinding({ skillId: selection.skillId, name: span.name, start: span.start,
+        end: span.end, generation });
+    }
+  }, [generation]);
 
   /** True when the key belonged to the candidate list (the caller must not send). */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
@@ -270,6 +327,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const composition = {
     onCompositionStart: () => {
       composing.current = true;
+      setToken(null);
     },
     onCompositionEnd: (event: CompositionEvent<HTMLTextAreaElement>) => {
       composing.current = false;
@@ -277,20 +335,33 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     },
   };
 
-  /** What this message names: the chosen id, a uniquely typed full name, or nothing. */
+  /** The IME is composing: neither the list nor the page may act on keys. */
+  const isComposing = () => composing.current;
+
+  /** What the trimmed ``message`` (from the current draft) names. */
   const resolveForSend = (message: string): MentionResolution => {
-    if (binding !== null && locate(message, binding) !== null) {
-      return { kind: 'ref', skillId: binding.skillId };
+    const lead = draft.length - draft.trimStart().length;
+    if (binding !== null) {
+      const start = binding.start - lead;
+      const end = binding.end - lead;
+      if (standaloneAt(message, start, end, binding.name)) {
+        return { kind: 'ref',
+          selection: { skillId: binding.skillId, span: { name: binding.name, start, end } } };
+      }
     }
-    if (TRIGGERS.has(message.trimStart()[0] ?? '')) setWanted(true);
-    return resolveTyped(message, skills.isSuccess ? items : undefined);
+    if (TRIGGERS.has(message[0] ?? '')) {
+      setWanted(true);
+      if (skills.isError) void skills.refetch();
+    }
+    const state: ListState = skills.isSuccess ? 'ready' : skills.isError ? 'failed' : 'loading';
+    return resolveTyped(message, items, state);
   };
 
   const shown: SkillBinding | null = binding === null ? null
     : { skillId: binding.skillId, name: binding.name };
   return {
     open, candidates, active, select, insert, clear, reset, restore, sync, onKeyDown,
-    composition, binding: shown, resolveForSend,
+    composition, isComposing, binding: shown, resolveForSend,
     loading: skills.isLoading, failed: skills.isError,
     setActiveId,
   };

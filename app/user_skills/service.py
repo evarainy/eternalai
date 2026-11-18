@@ -567,10 +567,8 @@ class UserSkillService:
         }
 
     # ---------------------------------------------------------- takeover
-    async def request_takeover(
-        self, key: SessionKey, owner: UserSkillOwner, run_id: str
-    ) -> bool:
-        del owner  # the trusted session key already names the owner
+    async def request_takeover(self, key: SessionKey, run_id: str) -> bool:
+        # The trusted session key already names the owner.
         return await self.sessions.claim_takeover(key, run_id)
 
     async def take_takeover(

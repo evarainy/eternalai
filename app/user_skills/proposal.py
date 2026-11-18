@@ -1049,38 +1049,59 @@ def _values_fit(
     )
 
 
+def _plain(root: Mapping[str, Any], node: Any) -> Mapping[str, Any] | None:
+    """``node`` with local references followed, or None when a reference has company.
+
+    A ``$ref`` beside any keyword other than an annotation would add constraints
+    the referenced schema alone does not show; that is not decidable here.
+    """
+
+    for _ in range(10):
+        if not isinstance(node, Mapping):
+            return None
+        ref = node.get("$ref")
+        if not isinstance(ref, str):
+            return node
+        if not set(node) - {"$ref"} <= _ANNOTATIONS or not ref.startswith("#/"):
+            return None
+        target: Any = root
+        for part in ref[2:].split("/"):
+            target = target.get(part) if isinstance(target, Mapping) else None
+        node = target
+    return None
+
+
 _ANNOTATIONS = frozenset({"title", "description", "default", "examples"})
 _ROOT_COMBINATORS = ("anyOf", "oneOf", "allOf", "not", "if", "dependentSchemas",
                      "dependentRequired")
+_UNION_FREE = _COMBINATORS + ("oneOf", "anyOf")
 
 
 def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
     """The new argument as plain alternatives, or None when that is not decidable.
 
-    Accepted: a plain schema (after local ``$ref``) or a bare ``anyOf`` of plain
-    schemas with only annotations beside it (e.g. an optional field). Anything
-    with ``oneOf``/``allOf``/``not`` or constraints next to a union is refused, as
-    is an input root that itself combines schemas.
+    Accepted: a plain schema (local ``$ref`` with only annotations beside it) or
+    a bare ``anyOf`` of such schemas with only annotations beside it (e.g. an
+    optional field). ``oneOf``/``allOf``/``not``, constraints next to a union or
+    a reference, and an input root that itself combines schemas are refused.
     """
 
     root = spec.input_schema
     if any(key in root for key in _ROOT_COMBINATORS):
         return None
     properties = root.get("properties")
-    prop = _deref(root, properties.get(arg)) if isinstance(properties, Mapping) else None
-    if not isinstance(prop, Mapping) or any(key in prop for key in _COMBINATORS + ("oneOf",)):
+    prop = _plain(root, properties.get(arg)) if isinstance(properties, Mapping) else None
+    if prop is None or any(key in prop for key in _COMBINATORS + ("oneOf",)):
         return None
     variants = prop.get("anyOf")
     if variants is None:
         return [prop]
     if not isinstance(variants, list) or not set(prop) - {"anyOf"} <= _ANNOTATIONS:
         return None
-    plain = [_deref(root, variant) for variant in variants]
-    if not all(isinstance(node, Mapping) and not any(
-        key in node for key in _COMBINATORS + ("oneOf", "anyOf")
-    ) for node in plain):
+    plain = [_plain(root, variant) for variant in variants]
+    if any(node is None or any(key in node for key in _UNION_FREE) for node in plain):
         return None
-    return plain
+    return [node for node in plain if node is not None]
 
 
 def _fixed_fits(spec: CapabilitySpec, arg: str, value: Any) -> bool:

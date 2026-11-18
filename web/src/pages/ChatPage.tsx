@@ -30,7 +30,7 @@ import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard
 import { UserSkillCard } from '../features/my-skills/UserSkillCard';
 import { MySkillsPanel } from '../features/my-skills/MySkillsPanel';
 import { SkillMentionList, SkillMentionTag } from '../features/my-skills/SkillMention';
-import { useSkillMention } from '../features/my-skills/useSkillMention';
+import { useSkillMention, type SkillSelection } from '../features/my-skills/useSkillMention';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -121,8 +121,8 @@ interface ChatSubmission {
   readonly message: string;
   readonly sessionId: string;
   readonly authGeneration: number;
-  /** The saved flow the user named with `$` (id only); frozen with the message. */
-  readonly userSkillRef: string | null;
+  /** The saved flow the user named with `$` and its span in the message; frozen with it. */
+  readonly userSkill: SkillSelection | null;
   readonly browser: null | {
     readonly skillId: string;
     readonly requestId: string;
@@ -803,7 +803,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         ? await submitOrdinaryBrowserCapableMessage(
           submission.message, submission.sessionId, submission.requestId, controller.signal,
           submission.collection, submission.attachments.map((item) => item.artifact_id),
-          submission.userSkillRef === null ? null : { skill_id: submission.userSkillRef },
+          submission.userSkill === null ? null : { skill_id: submission.userSkill.skillId },
         )
         : await submitBrowserMessage(
           submission.message, submission.sessionId, browser.skillId, browser.requestId,
@@ -836,8 +836,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             channel: 'web', session_id: sessionId, message, client_request_id: submission.requestId,
             client_capabilities: {},
             ...(submission.collection === null ? {} : { d_form_collection: submission.collection }),
-            ...(submission.userSkillRef === null ? {} : {
-              user_skill_ref: { skill_id: submission.userSkillRef },
+            ...(submission.userSkill === null ? {} : {
+              user_skill_ref: { skill_id: submission.userSkill.skillId },
             }),
             ...(submission.attachments.length === 0 ? {} : {
               attachment_ids: submission.attachments.map((item) => item.artifact_id),
@@ -951,9 +951,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const store = useAIDockStore.getState();
           const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
           store.setDraft(restored);
-          if (submission.authGeneration === useAuthStore.getState().generation) {
-            mentionRef.current.restore(restored, submission.userSkillRef);
-          }
+          mentionRef.current.restore(restored, submission.userSkill);
           if (submission.attachments.length > 0) {
             store.setDraftAttachments(
               [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
@@ -974,7 +972,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const store = useAIDockStore.getState();
           const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
           store.setDraft(restored);
-          mentionRef.current.restore(restored, submission.userSkillRef);
+          mentionRef.current.restore(restored, submission.userSkill);
           const notice = projectTextResponse(error.message, 'validation');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
@@ -1050,15 +1048,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (retry === undefined && (browserOptIn || activeSkillId === 'd_form_fill_stop')
         && ((browserTarget !== null && !browserTerminal && !browserHandoff)
           || pendingSubmission !== null)) return;
-    let userSkillRef = retry?.userSkillRef ?? null;
+    let userSkill = retry?.userSkill ?? null;
     if (retry === undefined) {
       const named = mention.resolveForSend(message);
       if (named.kind === 'blocked') {
         setMentionNotice(named.reason);
         return;
       }
-      userSkillRef = named.kind === 'ref' ? named.skillId : null;
-      const conflict = userSkillRef === null ? null
+      userSkill = named.kind === 'ref' ? named.selection : null;
+      const conflict = userSkill === null ? null
         : browserOptIn ? '指定功能和浏览器只读技能不能同时使用，请取消其中一个。'
           : currentCollection !== null ? '正在填写表单时不能指定功能。'
             : useAIDockStore.getState().draftAttachments.length > 0 ? '指定功能时不能带附件，请先移除附件。'
@@ -1075,7 +1073,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       } : null);
     const submission: ChatSubmission = retry ?? {
       attachments: useAIDockStore.getState().draftAttachments,
-      message, sessionId, authGeneration: useAuthStore.getState().generation, browser, userSkillRef,
+      message, sessionId, authGeneration: useAuthStore.getState().generation, browser, userSkill,
       requestId: browser?.requestId ?? crypto.randomUUID(),
       owner: browserAvailable ? browserOwner : null,
       collection: currentCollection === null ? null : { ...currentCollection },
@@ -1533,6 +1531,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             onCompositionEnd={mention.composition.onCompositionEnd}
             onKeyDown={(event) => {
               if (mention.onKeyDown(event)) return;
+              // While the IME composes, Enter belongs to the IME, never to sending.
+              if (mention.isComposing()) return;
               handleRequestKeyDown(event);
             }}
             placeholder="交代一件事，或者问个问题"

@@ -316,7 +316,7 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> Response:
         key = bind(principal, body.session_id)
-        if not await guarded(configured().request_takeover(key, _owner(principal), run_id)):
+        if not await guarded(configured().request_takeover(key, run_id)):
             _fail(404, "run_not_found", "这次查询已过期，请重新查询")
         return Response(status_code=status.HTTP_204_NO_CONTENT, headers=_NO_STORE)
 
