@@ -246,16 +246,17 @@ def render_result(
         if completeness is not None:
             entry["completeness_label"] = completeness
         result["tables"].append(entry)
-    if mismatch:
-        result.update(status="failed", error_code="adapter_payload_invalid",
-                      reason_label=reason_label("adapter_payload_invalid"))
-        return result
     check = user_check_failure(target, run)
     if check is not None:
+        # The check stopped the run: its reason wins over gaps the stop left elsewhere.
         assert run.failed_assertion is not None
         result.pop("notice_label", None)
         result.update(status="failed", check_failed=True, reason_label=check,
                       error_code=CHECK_TRACE_CODES[run.failed_assertion[1]])
+        return result
+    if mismatch:
+        result.update(status="failed", error_code="adapter_payload_invalid",
+                      reason_label=reason_label("adapter_payload_invalid"))
     return result
 
 

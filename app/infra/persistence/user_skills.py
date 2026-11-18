@@ -245,7 +245,7 @@ class PostgreSQLUserSkillStore:
                     (
                         await session.execute(
                             text(
-                                "SELECT payload, trial_state, saved_result, "
+                                "SELECT payload, trial_state, saved_result, expires_at, "
                                 "(expires_at IS NULL OR expires_at > now()) AS live "
                                 "FROM public.user_skill_session_items WHERE tenant_id=:tenant AND "
                                 "owner_user_id=:owner AND session_id=:session AND kind='trial' AND "
@@ -292,6 +292,31 @@ class PostgreSQLUserSkillStore:
                         "session_id=:session AND kind='trial' AND item_id=:trial"
                     ),
                     {**params, "trial": trial_id, "result": json.dumps(result)},
+                )
+                # Lock waits may have outlived the trial: decide with the clock, else roll back.
+                still = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM public.user_skill_sessions s JOIN "
+                            "public.user_skill_session_items i ON i.tenant_id=s.tenant_id AND "
+                            "i.owner_user_id=s.owner_user_id AND i.session_id=s.session_id "
+                            "WHERE s.tenant_id=:tenant AND s.owner_user_id=:owner AND "
+                            "s.session_id=:session AND s.expires_at > clock_timestamp() AND "
+                            "i.kind='trial' AND i.item_id=:trial AND "
+                            "CAST(:expires AS TIMESTAMPTZ) > clock_timestamp()"
+                        ),
+                        {**params, "trial": trial_id, "expires": trial["expires_at"]},
+                    )
+                ).one_or_none()
+                if still is None:
+                    raise UserSkillError("trial_expired")
+                await session.execute(
+                    text(
+                        "DELETE FROM public.user_skill_session_items WHERE tenant_id=:tenant "
+                        "AND owner_user_id=:owner AND session_id=:session AND "
+                        "expires_at <= now()"
+                    ),
+                    params,
                 )
                 return result
         except IntegrityError as exc:
@@ -851,7 +876,11 @@ class PostgreSQLUserSkillSessionStore:
         return True
 
     async def take_takeover(self, key: SessionKey) -> dict[str, Any] | None:
-        """Atomically take the pending slot once; never creates or extends the head."""
+        """Take the pending slot once, with its flow still live; never extends the head.
+
+        Consuming and the flow check share one transaction: a deleted flow consumes
+        the slot (None), a storage fault rolls back and keeps it.
+        """
 
         try:
             async with self._sessions() as session, session.begin():
@@ -868,10 +897,23 @@ class PostgreSQLUserSkillSessionStore:
                         _key(key),
                     )
                 ).one_or_none()
+                if row is None:
+                    return None
+                context = dict(_json(row[0]))
+                flow = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM public.user_skills WHERE tenant_id=:tenant AND "
+                            "owner_user_id=:owner AND skill_id::text=:skill AND "
+                            + _LIVE + " FOR SHARE"
+                        ),
+                        {"tenant": key[0], "owner": key[1], "skill": str(context.get("skill_id"))},
+                    )
+                ).one_or_none()
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=take_takeover error=%s", type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
-        return None if row is None else dict(_json(row[0]))
+        return None if flow is None else context
 
 
 __all__ = ("PostgreSQLUserSkillSessionStore", "PostgreSQLUserSkillStore")

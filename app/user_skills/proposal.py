@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from app.ports.capability_registry import CapabilitySpec
 from app.user_skills.definition import (
@@ -813,7 +813,9 @@ class TrialChoices(BaseModel):
     for_each_choices: dict[str, bool] = {}
     column_ids: list[str]
     inputs: dict[str, Any] = {}
-    name: Annotated[str, Field(min_length=1, max_length=NAME_MAX)]
+    name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_MAX)
+    ]
     purpose: Annotated[str, Field(min_length=1, max_length=PURPOSE_MAX)]
     rules: Annotated[str, Field(min_length=1, max_length=RULES_MAX)]
     checks: list[Any] = []
@@ -1012,9 +1014,20 @@ def _strict_list_root(
 
 
 def _literals(node: Mapping[str, Any]) -> list[Any] | None:
-    if isinstance(node.get("enum"), list):
-        return list(node["enum"])
-    return [node["const"]] if "const" in node else None
+    """The finite values ``node`` allows (``enum`` and ``const`` together intersect)."""
+
+    values = list(node["enum"]) if isinstance(node.get("enum"), list) else None
+    if "const" in node:
+        values = [node["const"]] if values is None or node["const"] in values else []
+    return values
+
+
+def _accepts_all(target: Mapping[str, Any], values: Sequence[Any]) -> bool:
+    try:
+        validator = Draft202012Validator(dict(target))
+        return all(validator.is_valid(value) for value in values)
+    except SchemaError:
+        return False
 
 
 def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
@@ -1028,10 +1041,12 @@ def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
     if "unknown" in kinds or "unknown" in accepted or not kinds <= accepted:
         return False
     allowed = _literals(target)
-    if allowed is not None:
-        values = _literals(source)
-        if values is None or any(value not in allowed for value in values):
-            return False
+    values = _literals(source)
+    if allowed is not None and (values is None or any(value not in allowed for value in values)):
+        return False
+    if values is not None:
+        # A finite source is decided exactly: each of its values against the whole target.
+        return _accepts_all(target, values)
     for key in _LOWER_BOUNDS:
         if key in target and not (key in source and source[key] >= target[key]):
             return False
@@ -1151,6 +1166,8 @@ def rebase_definition(
     loop_roots: dict[str, Mapping[str, Any]] = {}
     for step in definition.steps:
         spec = specs[step.capability_id]
+        if not set(spec.input_schema) <= _PLAIN_ROOT:
+            raise refuse("argument")
         required = spec.input_schema.get("required")
         if isinstance(required, list) and not set(required) <= set(step.arguments):
             raise refuse("required")

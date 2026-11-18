@@ -117,10 +117,7 @@ def session_context_note(summary: dict[str, Any]) -> str:
     persist; without this note the model answers that it saw no earlier query.
     """
 
-    names = list(dict.fromkeys(
-        str(record.get("query")) for record in summary.get("records", [])
-        if isinstance(record, dict)
-    ))
+    names = list(dict.fromkeys(record["query"] for record in summary["records"]))
     return (
         "<session_context>本会话此前已完成以下查询（对话历史里看不到之前的轮次，以此为准）："
         + "、".join(names)
@@ -218,6 +215,8 @@ async def run_explicit_user_skill(
                 expected_digest=current.payload.definition_digest,
             )
         except UserSkillFailure as failure:
+            if failure.code == "not_found":
+                raise missing from None
             _LOGGER.info("user_skill.explicit result=%s", failure.code)
             return UserSkillSettled(
                 _failure_card(current.display_name, current.skill_id,

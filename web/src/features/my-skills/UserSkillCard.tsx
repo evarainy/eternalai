@@ -48,7 +48,8 @@ export function UserSkillCard(props: CardProps) {
   const [current, setCurrent] = useState<UserSkillPayload>(props.payload);
   const next = (payload: UserSkillPayload) => setCurrent(payload);
   const refresh = useRefreshMySkills();
-  const failed = current.kind === 'result' && current.status === 'failed';
+  const failed = current.kind === 'result' && current.status === 'failed'
+    && current.check_failed !== true;
   useEffect(() => {
     // A failed run may have paused or lost the flow: let the lists read its state again.
     if (failed) refresh();

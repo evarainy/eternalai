@@ -574,10 +574,8 @@ class UserSkillService:
     async def take_takeover(
         self, key: SessionKey, owner: UserSkillOwner
     ) -> dict[str, Any] | None:
-        context = await self.sessions.take_takeover(key)
-        if context is None or await self.current(owner, str(context.get("skill_id"))) is None:
-            return None
-        return context
+        del owner  # the trusted session key names the owner; the store checks the flow
+        return await self.sessions.take_takeover(key)
 
 
 _PAUSE_LABELS = {

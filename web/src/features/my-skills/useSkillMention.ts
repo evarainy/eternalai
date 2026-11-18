@@ -50,7 +50,7 @@ interface Token {
 const MAX_CANDIDATES = 8;
 const TRIGGERS = new Set(['$', '＄']);
 const DIGIT = /^[\d.,]/;
-const STANDALONE_AMOUNT = /^[\d.,]+(?=\s|$)/;
+const STANDALONE_AMOUNT = /^[\d.,]+(?=[\s\p{P}]|$)/u;
 const ONLY_AMOUNT = /^[\d.,]+$/;
 
 function norm(text: string): string {
@@ -63,7 +63,12 @@ function fold(text: string): string {
 
 const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(char);
 const endsWord = (char: string | undefined) => char === undefined || /[\s\p{P}]/u.test(char);
-const mentionText = (name: string) => `$${name}`;
+const mentionText = (name: string) => `$${name.trim()}`;
+/** The leading `$word` of a message, if any. */
+const leadOf = (value: string) => {
+  const word = value.trimStart().split(/\s/)[0] ?? '';
+  return TRIGGERS.has(word[0] ?? '') ? word : null;
+};
 
 /** ``text`` stands alone at [start, end) of ``value``. */
 function standaloneAt(value: string, start: number, end: number, text: string): boolean {
@@ -162,7 +167,7 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   const folded = fold(rest);
   const usable = items.filter((item) => item.state === 'usable');
   const matches = usable.filter((item) => {
-    const name = fold(item.name);
+    const name = fold(item.name.trim());
     return folded.startsWith(name) && endsWord(folded[name.length]);
   });
   if (matches.length === 0) {
@@ -170,15 +175,15 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
     const word = rest.split(/\s/)[0] ?? rest;
     return { kind: 'blocked', reason: `没有找到名为「${word}」的可用功能，请从列表中选择。` };
   }
-  const longest = Math.max(...matches.map((item) => fold(item.name).length));
-  const top = matches.filter((item) => fold(item.name).length === longest);
+  const longest = Math.max(...matches.map((item) => fold(item.name.trim()).length));
+  const top = matches.filter((item) => fold(item.name.trim()).length === longest);
   const same = usable.filter((item) => norm(item.name) === norm(top[0]!.name));
   if (top.length > 1 || same.length > 1) {
     return { kind: 'blocked', reason: '有多个同名的功能，请从列表中选择。' };
   }
   const item = top[0]!;
   // The raw text that folds to the name (a full-width or other-case variant as typed).
-  const name = fold(item.name);
+  const name = fold(item.name.trim());
   let length = 1;
   while (length <= rest.length && fold(rest.slice(0, length)) !== name) length += 1;
   const end = 1 + length;
@@ -210,16 +215,29 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const [token, setToken] = useState<Token | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [stored, setBinding] = useState<Binding | null>(null);
+  // The leading `$word` left behind when the user undid a choice: sent as plain text.
+  const [plainLead, setPlainLead] = useState<string | null>(null);
   const composing = useRef(false);
   // The draft the last edit started from (the prop lags one render behind an edit).
   const previous = useRef(draft);
   previous.current = draft;
   // Another account's choice is never shown or sent.
   const binding = stored !== null && stored.generation === generation ? stored : null;
+  const bindingRef = useRef(binding);
+  bindingRef.current = binding;
   useEffect(() => {
     setBinding(null);
     setToken(null);
+    setPlainLead(null);
   }, [generation]);
+  // A draft replaced from elsewhere (a quick prompt) takes the choice with it.
+  useEffect(() => {
+    if (binding !== null && !standaloneAt(draft, binding.start, binding.end, binding.text)) {
+      setBinding(null);
+      setToken(null);
+      setPlainLead(leadOf(draft));
+    }
+  }, [draft, binding]);
 
   const candidates = useMemo(() => (token === null ? [] : rank(usable, token.text)),
     [token, usable]);
@@ -239,8 +257,11 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const sync = useCallback((value: string, caret: number | null) => {
     const before = previous.current;
     previous.current = value;
-    if (before !== value) {
-      setBinding((current) => (current === null ? null : follow(before, value, current)));
+    const current = bindingRef.current;
+    if (before !== value && current !== null) {
+      const next = follow(before, value, current);
+      setBinding(next);
+      if (next === null) setPlainLead(leadOf(value));
     }
     if (composing.current) return;
     // Any `$word` (a digit-led name too) starts reading the list, ready for sending.
@@ -250,6 +271,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
     const text = mentionText(item.name);
+    setPlainLead(null);
     setBinding({
       skillId: item.skill_id, name: item.name, text, start, end: start + text.length, generation,
     });
@@ -307,6 +329,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       const next = cut(draft, binding.start, binding.end);
       setDraft(next);
       previous.current = next;
+      setPlainLead(leadOf(next));
     }
     setBinding(null);
     setToken(null);
@@ -315,6 +338,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const reset = useCallback(() => {
     setBinding(null);
     setToken(null);
+    setPlainLead(null);
   }, []);
 
   /** Put back the frozen choice of a message that was refused before any work. */
@@ -380,6 +404,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
           span: { name: binding.name, text: binding.text, start, end } } };
       }
     }
+    if (plainLead !== null && leadOf(message) === plainLead) return { kind: 'none' };
     if (TRIGGERS.has(message[0] ?? '')) {
       setWanted(true);
       if (skills.isError) void skills.refetch();
