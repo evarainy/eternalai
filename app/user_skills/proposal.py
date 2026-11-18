@@ -211,7 +211,16 @@ def summarize(
                             f"第{record.seq}条的入参 {name} 等于第{earlier.seq}条结果的 "
                             f"{'.'.join(map(str, path))}"
                         )
-    return {"records": items, "hints": sorted(set(hints))[:80]}
+    groups: dict[str, list[int]] = {}
+    for record in records:
+        groups.setdefault(record.capability_id, []).append(record.seq)
+    return {
+        # First, so a cut summary keeps it: one step per distinct query, in order
+        # (the same query repeated = one per-item step).
+        "suggested_steps": list(groups.values()),
+        "records": items,
+        "hints": sorted(set(hints))[:80],
+    }
 
 
 # ------------------------------------------------------------ candidate model
@@ -453,11 +462,19 @@ def build_proposal(
             or used & set(item.record_seqs)
             or len(set(item.record_seqs)) != len(item.record_seqs)
         ):
-            raise ProposalRejected("proposal_invalid", "提案引用了不存在的查询记录")
+            raise ProposalRejected(
+                "proposal_invalid", "提案引用了不存在或重复的查询记录 seq", "record_seqs"
+            )
         entries = [entry for entry in found if entry is not None]
         capability_ids = {entry.capability_id for entry in entries}
         if len(capability_ids) != 1:
-            raise ProposalRejected("proposal_invalid", "同一步里混入了不同的查询")
+            raise ProposalRejected(
+                "proposal_invalid",
+                f"seq {'、'.join(map(str, item.record_seqs))} 是不同的查询，"
+                "不能放进同一个 steps 项；请按 suggested_steps 每种查询各占一个 steps 项，"
+                "并各给一张表格",
+                "mixed_step",
+            )
         capability_id = capability_ids.pop()
         spec = specs.get(capability_id)
         recorded = {entry.capability_fingerprint for entry in entries}
