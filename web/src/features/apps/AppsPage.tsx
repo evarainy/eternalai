@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/mutator';
 import { createSystemEntry, getSystemEntryAvailability, systemEntryErrorMessage } from '../../api/systemEntry';
@@ -166,7 +166,8 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
  * 软件中心：一个业务系统一张卡片。看灯就知道哪个系统绑了账号、哪个要处理；点卡片进入系统，
  * 点齿轮绑定账号。系统清单在 `systems.ts`。
  */
-export default function AppsPage() {
+/** `extra`: sections other features add below the systems grid (wired by the app routes). */
+export default function AppsPage({ extra }: { extra?: ReactNode }) {
   const [openKey, setOpenKey] = useState<BusinessSystem['key'] | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const close = useCallback(() => setOpenKey(null), []);
@@ -216,6 +217,7 @@ export default function AppsPage() {
             <b>添加软件</b>
           </button>
         </div>
+        {extra}
       </div>
 
       <NewSoftwareDialog onClose={() => setDialogOpen(false)} open={dialogOpen} />

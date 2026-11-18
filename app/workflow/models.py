@@ -95,7 +95,88 @@ class GovernedFinalizationError(RuntimeError):
         self.result = result
 
 
+# Definition-run entry (``WorkflowEngine.execute_definition``) only. These are
+# separate types so existing definitions, and the digests bound to them, keep
+# exactly their current shape.
+DefinitionRefSource: TypeAlias = Literal["workflow_input", "step_output", "loop_item"]
+DefinitionAssertionOp: TypeAlias = Literal["non_empty", "max_count", "complete"]
+DefinitionCallStatus: TypeAlias = Literal["ok", "failed", "not_executed"]
+DefinitionRunStatus: TypeAlias = Literal["completed", "failed", "empty", "over_limit", "deadline"]
+
+
+@dataclass(frozen=True)
+class DefinitionRef:
+    source: DefinitionRefSource
+    path: tuple[str | int, ...] = ()
+    step_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DefinitionForEach:
+    """Run the step once per element of a list, serially, within ``max_items``."""
+
+    items: DefinitionRef
+    max_items: int
+
+
+@dataclass(frozen=True)
+class DefinitionAssertion:
+    """Checked after the step completes, against its projected output."""
+
+    op: DefinitionAssertionOp
+    ref: DefinitionRef
+    value: int | None = None
+
+
+@dataclass(frozen=True)
+class DefinitionStep(WorkflowStep):
+    """A read step whose arguments are path references; never confirmable."""
+
+    arguments: Mapping[str, DefinitionRef] = field(default_factory=dict)
+    for_each: DefinitionForEach | None = None
+    assertions: tuple[DefinitionAssertion, ...] = ()
+
+
+@dataclass(frozen=True)
+class DefinitionItemOutcome:
+    index: int
+    status: DefinitionCallStatus
+    data: dict[str, Any] | None = None
+    error_code: ErrorCode | None = None
+    attempts: int = 0
+
+
+@dataclass(frozen=True)
+class DefinitionStepOutcome:
+    step_id: str
+    status: DefinitionCallStatus
+    data: dict[str, Any] | None = None
+    items: tuple[DefinitionItemOutcome, ...] | None = None
+    error_code: ErrorCode | None = None
+    attempts: int = 0
+
+
+@dataclass(frozen=True)
+class DefinitionRunResult:
+    """Outcome of ``execute_definition``; business partial is derived by the caller."""
+
+    workflow_id: str
+    workflow_version: str
+    trace_id: str
+    status: DefinitionRunStatus
+    steps: Mapping[str, DefinitionStepOutcome]
+    error_code: ErrorCode | None = None
+    failed_assertion: tuple[str, DefinitionAssertionOp] | None = None
+
+
 __all__ = (
+    "DefinitionAssertion",
+    "DefinitionForEach",
+    "DefinitionItemOutcome",
+    "DefinitionRef",
+    "DefinitionRunResult",
+    "DefinitionStep",
+    "DefinitionStepOutcome",
     "GovernedFinalizationError",
     "GovernedTerminalResult",
     "WorkflowCondition",

@@ -42,6 +42,7 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "oa_unbound": (409, "需要先在软件中心授权 OA 后才能导出。"),
     "report_session_required": (422, "OA 待办报表需要在 AI 助手对话中发起。"),
     "oa_unavailable": (503, "OA 暂不可用，请稍后重试。"),
+    "oa_session_expired": (409, "OA 登录已失效，请重新授权 OA 后再导出。"),
     # Admission refusals of the sheet fill kind (shared with the chat proposal tool).
     "sheet_fill_source_changed": (
         409,
@@ -60,6 +61,10 @@ _ERRORS: dict[str, tuple[int, str]] = {
         422,
         "填写的数据行超过上限（OA 待办每表 2000 行，文档问答合计 30 个问题）。",
     ),
+    # Admission refusals of the personal flow export kind.
+    "user_skill_unavailable": (404, "没有找到这个功能。"),
+    "user_skill_changed": (409, "功能已更新或已暂停，请重新查询后再导出。"),
+    "user_skill_export_unsupported": (422, "这个功能暂不支持导出 Excel。"),
 }
 
 

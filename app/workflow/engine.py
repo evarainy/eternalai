@@ -36,7 +36,9 @@ from app.version_binding import (
     workflow_confirmation_action_digest,
     workflow_version_binding,
 )
+from app.workflow.definition_run import DefinitionRunDeps, ProjectOutput, run_definition
 from app.workflow.models import (
+    DefinitionRunResult,
     GovernedFinalizationError,
     GovernedWorkflowDefinition,
     WorkflowDefinition,
@@ -840,6 +842,47 @@ class WorkflowEngine:
             output=final_output,
             step_outputs=step_outputs,
             evaluation_observations=tuple(observations),
+        )
+
+    async def execute_definition(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        workflow_capability: CapabilitySpec,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        initial_input: Mapping[str, Any],
+        request_context: RequestOrgContext,
+        retryable_error_codes: frozenset[ErrorCode],
+        stop_error_codes: frozenset[ErrorCode],
+        deadline: float,
+        project_output: ProjectOutput,
+    ) -> DefinitionRunResult:
+        """Run a caller-built read definition; see ``app.workflow.definition_run``.
+
+        Not registered in ``definitions``; the caller owns task, bindings and close.
+        """
+
+        self._validate_workflow_capability(workflow_capability, definition)
+        return await run_definition(
+            DefinitionRunDeps(
+                gateway=self._gateway,
+                registry=self._capability_registry,
+                trace_port=self._trace_port,
+                task_store=self._task_store,
+                human_gate=self._human_gate_port,
+            ),
+            definition,
+            task_id=task_id,
+            session_id=session_id,
+            ai_user_id=ai_user_id,
+            initial_input=initial_input,
+            request_context=request_context,
+            retryable_error_codes=retryable_error_codes,
+            stop_error_codes=stop_error_codes,
+            deadline=deadline,
+            project_output=project_output,
         )
 
     def _snapshot_definition(

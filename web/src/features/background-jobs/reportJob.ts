@@ -3,6 +3,8 @@ import { clearRecovery, loadRecovery, updateRecovery } from './recoveryStorage';
 import type { BackgroundJobResponse } from '../../generated/background-jobs/background-jobs.schemas';
 
 export const REPORT_KIND = 'report.oa_pending_workflows_xlsx';
+/** Export of a personal saved flow; same result summary shape as the OA report. */
+export const USER_SKILL_REPORT_KIND = 'report.user_skill_xlsx';
 const STORAGE_KEY = 'eternalai.report-jobs.v1';
 const MAX_STORED = 5;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

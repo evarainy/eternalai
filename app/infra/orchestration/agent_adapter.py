@@ -14,7 +14,10 @@ from app.evaluator.overview import required_postcondition_rule
 from app.infra.adapters.business_mcp.fixed_query_contracts import record_fixed_query_failure
 from app.infra.adapters.business_mcp.reads import READ_TOOLS
 from app.infra.orchestration.overview_evaluation import build_overview_evaluation_input
-from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.sdui.response_envelope_builder import (
+    ResponseEnvelopeBuilder,
+    sanitize_response_data,
+)
 from app.infra.sdui.response_projection import project_approved_response_data
 from app.infra.workflow.catalog import OVERVIEW_ID, OAReadOverviewInput, OAReadOverviewOutput
 from app.mcp.diagnostics import record_mcp_event
@@ -73,6 +76,50 @@ class AgentOrchestrationAdapter:
         self._mcp_result_profiles = dict(mcp_result_profiles or {})
         # capability_id -> (version, policy_digest, output_schema_digest, rules)
         self._approved_projections = dict(approved_projections or {})
+
+    def _project_completed_data(
+        self,
+        capability_id: str,
+        execution: ExecutionResult,
+        projection: ProjectionContractSnapshot | None,
+    ) -> dict[str, Any] | None:
+        approved = self._approved_projections.get(capability_id)
+        if approved is not None:
+            # Third projection under the same frozen rules; any mismatch or
+            # rejection raises instead of producing a completed response.
+            version, _, output_digest, policy = approved
+            if (
+                projection is None
+                or projection.capability_id != capability_id
+                or projection.capability_version != version
+                or projection.declared_output_schema_digest != output_digest
+                or projection.output_schema_json != policy.output_schema_json
+            ):
+                raise ApprovedResponseProjectionError("policy_mismatch")
+            return project_approved_response_data(
+                execution.data, projection.load_output_schema(), policy
+            )
+        return project_response_data(
+            execution.data,
+            projection.load_output_schema() if projection is not None else None,
+        )
+
+    def project_leaf_data(
+        self, capability: CapabilitySpec, execution: ExecutionResult
+    ) -> dict[str, Any]:
+        """A completed leaf's data exactly as a chat reply would expose it.
+
+        Same approved/plain projection as ``_build_response`` plus the envelope
+        value sanitizer; raises on any projection rejection.
+        """
+
+        self._assert_approved_capability(capability)
+        projection = ProjectionContractSnapshot.from_capability(capability)
+        data = self._project_completed_data(capability.capability_id, execution, projection)
+        sanitized = sanitize_response_data(data or {})
+        if not isinstance(sanitized, dict):
+            raise ApprovedResponseProjectionError("unsupported_value")
+        return sanitized
 
     def _assert_approved_capability(self, capability: CapabilitySpec) -> None:
         approved = self._approved_projections.get(capability.capability_id)
@@ -390,27 +437,7 @@ class AgentOrchestrationAdapter:
                 context.trace_id,
             )
         if execution.status == "completed":
-            approved = self._approved_projections.get(context.capability_id)
-            if approved is not None:
-                # Third projection under the same frozen rules; any mismatch or
-                # rejection raises instead of producing a completed response.
-                version, _, output_digest, policy = approved
-                if (
-                    projection is None
-                    or projection.capability_id != context.capability_id
-                    or projection.capability_version != version
-                    or projection.declared_output_schema_digest != output_digest
-                    or projection.output_schema_json != policy.output_schema_json
-                ):
-                    raise ApprovedResponseProjectionError("policy_mismatch")
-                data: dict[str, Any] | None = project_approved_response_data(
-                    execution.data, projection.load_output_schema(), policy
-                )
-            else:
-                data = project_response_data(
-                    execution.data,
-                    projection.load_output_schema() if projection is not None else None,
-                )
+            data = self._project_completed_data(context.capability_id, execution, projection)
             formatter = self._capability_formatters.get(context.capability_id)
             message = (
                 formatter(data or {})

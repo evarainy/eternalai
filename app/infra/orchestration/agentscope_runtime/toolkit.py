@@ -84,6 +84,12 @@ from app.infra.orchestration.agentscope_runtime.ledger import (
     Unsupported,
     current_tool_call_id,
 )
+from app.infra.orchestration.agentscope_runtime.user_skill_turn import (
+    ProposeUserSkill,
+    SavedFlowTool,
+    UserSkillTurn,
+    handle_user_skill_response,
+)
 from app.knowledge.bounded import KNOWLEDGE_SYSTEM_PROMPT
 from app.knowledge.capability_selection import canonical_json
 from app.ports.auth import authenticated_session
@@ -188,6 +194,7 @@ async def build_turn_toolkit(
     knowledge: Sequence[str] = (),
     knowledge_digest: str | None = None,
     authorization_recheck: Callable[[str], bool] | None = None,
+    user_skill_turn: UserSkillTurn | None = None,
 ) -> TurnToolkit:
     """Register this turn's catalog as tool groups plus the two control tools.
 
@@ -206,6 +213,10 @@ async def build_turn_toolkit(
                 continue
             if tool.kind == "browser":
                 tools.append(BrowserTool(tool.name, tool.description, tool.input_schema))
+                continue
+            if tool.kind == "user_skill":
+                # Never dispatched: the middleware decides saved-flow calls.
+                tools.append(SavedFlowTool(tool.name, tool.description, tool.input_schema))
                 continue
             if tool.kind == "authorization":
                 # Never a ToolExecutor: selecting it only ends the turn.
@@ -267,6 +278,11 @@ async def build_turn_toolkit(
                 frozenset(attachment.artifact_id for attachment in attachments),
             )
         )
+    if user_skill_turn is not None and user_skill_turn.takeover is not None:
+        # Takeover turns may only read and ask; no export, fill or save tools.
+        controls = [AskUser(ledger)]
+    elif user_skill_turn is not None and user_skill_turn.summary is not None:
+        controls.append(ProposeUserSkill(ledger, user_skill_turn, _control_conflict))
     toolkit = Toolkit(
         tools=controls,
         tool_groups=groups,
@@ -293,6 +309,7 @@ async def build_turn_toolkit(
         knowledge=knowledge,
         knowledge_digest=knowledge_digest,
         authorization_recheck=authorization_recheck,
+        user_skill_turn=user_skill_turn,
     )
     return TurnToolkit(toolkit=toolkit, middleware=middleware, group_of=group_of)
 
@@ -739,9 +756,11 @@ class M1Middleware(MiddlewareBase):
         knowledge: Sequence[str] = (),
         knowledge_digest: str | None = None,
         authorization_recheck: Callable[[str], bool] | None = None,
+        user_skill_turn: UserSkillTurn | None = None,
     ) -> None:
         self._catalog = catalog
         self._authorization_recheck = authorization_recheck
+        self._user_skill_turn = user_skill_turn
         # Bounded once per turn by the runtime; never part of AgentState.
         self._knowledge = tuple(knowledge)
         self._knowledge_digest = knowledge_digest
@@ -832,6 +851,22 @@ class M1Middleware(MiddlewareBase):
                     ):
                         _log_d_input_shape(block)
             ledger.response_tools[index] = tuple(names)
+            user_skill_turn = self._user_skill_turn
+            if user_skill_turn is not None and any(
+                name in ledger.user_skill_tools for name in names
+            ):
+                # Whole response: decided before any of its calls is dispatched.
+                ledger.terminal = await handle_user_skill_response(
+                    user_skill_turn, ledger,
+                    [block for block in response.content if isinstance(block, ToolCallBlock)],
+                )
+                return ChatResponse(
+                    content=[TextBlock(text=TERMINAL_TEXT)],
+                    is_last=True,
+                    id=response.id,
+                    usage=response.usage,
+                    finished_reason=FinishedReason.COMPLETED,
+                )
             selected = next((name for name in names if name in ledger.authorization_tools), None)
             if selected is not None:
                 # Whole response: no call of it, business or control, is dispatched.

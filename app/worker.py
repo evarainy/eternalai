@@ -120,6 +120,12 @@ async def run_worker(settings: WorkerSettings) -> None:
                 settings.oa_report, sessions, session_keeper=oa_session_keeper
             )
             kinds[report.name] = report
+            from app.infra.jobs.user_skill_report import build_worker_user_skill_report_kind
+
+            export = build_worker_user_skill_report_kind(
+                settings.oa_report, sessions, session_keeper=oa_session_keeper
+            )
+            kinds[export.name] = export
         if file_artifacts is not None:
             from app.infra.jobs.sheet_fill import build_worker_sheet_fill_kind
 

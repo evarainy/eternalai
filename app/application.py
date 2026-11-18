@@ -38,6 +38,7 @@ from app.api.v1.im_inbound import make_router as make_im_inbound_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
+from app.api.v1.my_skills import make_router as make_my_skills_router
 from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.system_entry import make_router as make_system_entry_router
@@ -89,6 +90,7 @@ from app.ports.runtime import RuntimePort
 from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
 from app.system_entry.service import SystemEntryService
+from app.user_skills.service import UserSkillService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
@@ -104,6 +106,7 @@ def create_app(
     close_system_entry: Callable[[], Awaitable[None]] | None = None,
     user_profile: UserProfilePort | None = None,
     user_preferences: UserPreferencesPort | None = None,
+    user_skills: UserSkillService | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
     session_revocations: SessionRevocationStorePort | None = None,
@@ -365,6 +368,10 @@ def create_app(
         prefix="/api/v1/preferences",
     )
     application.include_router(
+        make_my_skills_router(user_skills, csrf_protected_principal, session_binder=session_binder),
+        prefix="/api/v1/my-skills",
+    )
+    application.include_router(
         make_credential_binding_router(
             credential_binding_service,
             csrf_protected_principal,
@@ -573,6 +580,7 @@ def create_production_app(
         close_system_entry=components.close_system_entry,
         user_profile=components.user_profile,
         user_preferences=components.user_preferences,
+        user_skills=components.user_skills,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_revocations=components.session_revocations,

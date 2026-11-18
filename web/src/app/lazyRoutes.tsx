@@ -11,7 +11,14 @@ const LazyAuthenticatedAppShell = lazy(() =>
   })),
 );
 const LazyAccountBindingsPage = lazy(() => import('../features/apps/AccountBindingsPage'));
-const LazyAppsPage = lazy(() => import('../features/apps/AppsPage'));
+const LazyAppsPage = lazy(() => Promise.all([
+  import('../features/apps/AppsPage'),
+  import('../features/my-skills/MySkillsSection'),
+]).then(([apps, mySkills]) => ({
+  default: function AppsWithMySkills() {
+    return <apps.default extra={<mySkills.MySkillsSection />} />;
+  },
+})));
 const LazyLeaderRosterPage = lazy(() => import('../features/leader-roster/LeaderRosterPage'));
 const LazyMessagesPage = lazy(() => import('../features/messages/MessagesPage'));
 const LazyWorkDispatchPage = lazy(() =>

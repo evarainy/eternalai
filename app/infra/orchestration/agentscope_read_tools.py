@@ -96,6 +96,7 @@ if TYPE_CHECKING:
 
     from app.background_jobs import BackgroundJobService
     from app.sheet_fill import SheetFillAdmission
+    from app.user_skills.service import UserSkillService
 
 MAX_TOOL_RESULT_BYTES = 8192
 _READ_FAILED_TEXT = "读取失败。"
@@ -146,6 +147,8 @@ class AgentScopeRuntimeDependencies:
     report_jobs: BackgroundJobService | None = None
     # Checks sheet fill proposals over this turn's attachment; None hides the fill tool.
     sheet_fill: SheetFillAdmission | None = None
+    # Personal saved flows; None hides recording, the save tool and saved-flow tools.
+    user_skills: UserSkillService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,6 +522,7 @@ class ToolExecutor:
             )
             self._log("failed", "internal_error", started, task_id=ledger.task_id)
             return _chunk(_READ_FAILED_TEXT, error_code="internal_error", task_id=ledger.task_id)
+        await self._record_for_user_skill(arguments, outcome)
         return self._record(state, call_id, call, "attach", ledger.task_id, outcome, started)
 
     async def _own(
@@ -586,9 +590,38 @@ class ToolExecutor:
                 task_id, trace_id, outcome.envelope.response_id, "internal_error",
                 _READ_FAILED_TEXT,
             )
+        await self._record_for_user_skill(arguments, outcome)
         return self._record(
             state, call_id, call, "own", task_id, outcome, started, trace_id=trace_id
         )
+
+    async def _record_for_user_skill(
+        self, arguments: dict[str, Any], outcome: _TaskOutcome
+    ) -> None:
+        """Keep a completed ordinary-chat read for a later save; never affects the call."""
+
+        service, scope = self._deps.user_skills, self._scope
+        data = outcome.envelope.data
+        if (
+            service is None
+            or scope.im_source is not None
+            or outcome.execution.status != "completed"
+            or not isinstance(data, dict)
+        ):
+            return
+        try:
+            await service.record_call(
+                (scope.tenant_id, scope.ai_user_id, scope.session_id),
+                turn_id=current_turn_id(),
+                capability_id=self._binding.capability_id,
+                capability_type=self._binding.capability_type,
+                fingerprint=self._binding.fingerprint,
+                arguments=arguments,
+                data=data,
+            )
+        except Exception as exc:
+            # Recording is an aid for saving; a failure never changes the read result.
+            _TOOL_LOGGER.info("user_skill.record_failed error=%s", type(exc).__name__)
 
     def _record(
         self,

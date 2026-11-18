@@ -27,6 +27,7 @@ import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
 import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import { ReportJobCard } from '../features/background-jobs/ReportJobCard';
 import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard';
+import { UserSkillCard } from '../features/my-skills/UserSkillCard';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -1262,9 +1263,30 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                             onCancel={() => settleSheetFill(entry.responseId!, 'cancelled')}
                           />
                         ) : null}
+                        {entry.role === 'assistant' && entry.userSkill !== undefined ? (
+                          <UserSkillCard
+                            key={`${authGeneration}/${entry.responseId ?? index}`}
+                            payload={entry.userSkill}
+                            sessionId={currentSessionId}
+                            onAsk={askFromDesk}
+                            onExportAccepted={(jobId) => {
+                              rememberReportJob(recoveryScope, jobId);
+                              setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
+                            }}
+                          />
+                        ) : null}
+                        {entry.role === 'assistant' && entry.presentationKind === 'completed'
+                          && entry.userSkill === undefined && entry.reportJobId === undefined
+                          && entry.sheetFillPlan === undefined && index === transcript.length - 1
+                          && entry.text.trim() ? (
+                          <Button size="small" type="link"
+                            onClick={() => askFromDesk('把刚才的查询保存为功能')}>
+                            保存为功能
+                          </Button>
+                        ) : null}
                         {entry.role === 'assistant' && entry.presentationKind === 'completed'
                           && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
-                          && entry.text.trim() ? (
+                          && entry.userSkill === undefined && entry.text.trim() ? (
                           <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
                             text={entry.text} attachments={deliveryAttachments} />
                         ) : null}
