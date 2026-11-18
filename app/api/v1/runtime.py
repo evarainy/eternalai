@@ -365,8 +365,10 @@ def make_router(
                 await im_context.revalidate(principal, session_id, tuple(body.source_refs))
             return result
         except IMContextError as error:
-            raise HTTPException(error.http_status, {"code": error.code},
-                                headers=_PRIVATE_HEADERS) from None
+            detail = {"code": error.code}
+            if error.code == "user_skill_ref_not_allowed":
+                detail["message"] = "当前运行模式不支持指定功能，请不写 $ 直接描述要办的事。"
+            raise HTTPException(error.http_status, detail, headers=_PRIVATE_HEADERS) from None
         except DFormCollectionError as error:
             raise HTTPException(
                 404 if error.code == "collection_not_found" else 409,

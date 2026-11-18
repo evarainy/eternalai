@@ -447,7 +447,14 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
           <Text strong>显示哪些列：</Text>
           <Checkbox.Group value={columns}
             options={proposal.column_options.map((c) => ({ value: c.column_id, label: c.label }))}
-            onChange={(next) => { setColumns(next as string[]); changed(); }} />
+            onChange={(next) => {
+              const kept = next as string[];
+              setColumns(kept);
+              setChecks((old) => Object.fromEntries(Object.entries(old).filter(
+                ([tableId]) => kept.some((column) => column.startsWith(`${tableId}.`)),
+              )));
+              changed();
+            }} />
         </div>
         {offers.length > 0 ? (
           <div>

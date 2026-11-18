@@ -95,6 +95,7 @@ import { AnswerText } from '../shared/ui/AnswerText';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
+const USER_SKILL_REF_NOT_ALLOWED = 'user_skill_ref_not_allowed';
 
 interface ChatPageProps {
   /** A trusted server configuration must supply the one published skill ID. */
@@ -573,6 +574,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       });
     },
   });
+  // The send path runs after this render; it reads the current mention state through a ref.
+  const mentionRef = useRef(mention);
+  mentionRef.current = mention;
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
   // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
@@ -945,13 +949,33 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           }
           if (!submissionIsCurrent(submission)) return null;
           const store = useAIDockStore.getState();
-          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
+          store.setDraft(restored);
+          if (submission.authGeneration === useAuthStore.getState().generation) {
+            mentionRef.current.restore(restored, submission.userSkillRef);
+          }
           if (submission.attachments.length > 0) {
             store.setDraftAttachments(
               [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
             );
           }
           const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
+          store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
+        if (error instanceof ApiError && error.status === 422
+            && error.code === USER_SKILL_REF_NOT_ALLOWED) {
+          // Refused before any work: the text and the chosen flow go back; nothing to retry.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          const store = useAIDockStore.getState();
+          const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
+          store.setDraft(restored);
+          mentionRef.current.restore(restored, submission.userSkillRef);
+          const notice = projectTextResponse(error.message, 'validation');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
         }

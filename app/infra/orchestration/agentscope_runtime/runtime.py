@@ -1239,12 +1239,12 @@ class AgentScopeRuntime:
             assert browser is not None
             catalog, tool = expose_browser_tool(catalog, spec, self._registration())
             browser.spec = spec if tool is not None else None
-        # Restricted only where this turn exposes the browser tool or continues/hands off D.
+        # Restricted only where this turn continues or hands off D; an ordinary turn of a
+        # browser-capable account keeps personal flows (one tool per response decides).
         turn.user_skill = await prepare_user_skill_turn(
             deps.user_skills, scope, message, turn.deadline,
             restricted=browser is not None and (
-                browser.spec is not None or browser.collection is not None
-                or browser.handoff_active
+                browser.collection is not None or browser.handoff_active
             ),
         )
         if turn.user_skill is not None:

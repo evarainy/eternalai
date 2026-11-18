@@ -542,10 +542,7 @@ class PostgreSQLUserSkillSessionStore:
                         "INSERT INTO public.user_skill_session_items (tenant_id, owner_user_id, "
                         "session_id, kind, item_id, payload, trial_state, expires_at) VALUES "
                         "(:tenant, :owner, :session, :kind, :item, CAST(:payload AS JSONB), "
-                        ":state, " + ("now() + " + _SNAPSHOT if ttl else "NULL") + ") "
-                        "ON CONFLICT (tenant_id, owner_user_id, session_id, kind, item_id) "
-                        "DO UPDATE SET payload = EXCLUDED.payload, "
-                        "expires_at = EXCLUDED.expires_at"
+                        ":state, " + ("now() + " + _SNAPSHOT if ttl else "NULL") + ")"
                     ),
                     {
                         **_key(key),
@@ -569,7 +566,7 @@ class PostgreSQLUserSkillSessionStore:
                     (
                         await session.execute(
                             text(
-                                "SELECT payload, trial_state, saved_result FROM "
+                                "SELECT payload, saved_result FROM "
                                 "public.user_skill_session_items WHERE tenant_id=:tenant AND "
                                 "owner_user_id=:owner AND session_id=:session AND kind=:kind AND "
                                 "item_id=:item AND (expires_at IS NULL OR expires_at > now())"
@@ -620,46 +617,52 @@ class PostgreSQLUserSkillSessionStore:
                         ),
                         _key(key),
                     )
-                    return False
-                seq = (
-                    await session.execute(
-                        text(
-                            "INSERT INTO public.user_skill_sessions AS h (tenant_id, "
-                            "owner_user_id, session_id, next_seq, expires_at) VALUES (:tenant, "
-                            ":owner, :session, 2, now() + " + _IDLE + ") ON CONFLICT "
-                            "(tenant_id, owner_user_id, session_id) DO UPDATE SET "
-                            "next_seq = h.next_seq + 1, expires_at = now() + "
-                            + _IDLE
-                            + " RETURNING h.next_seq - 1"
-                        ),
-                        _key(key),
-                    )
-                ).scalar_one()
-                await session.execute(
-                    text(
-                        "INSERT INTO public.user_skill_session_items (tenant_id, owner_user_id, "
-                        "session_id, kind, item_id, seq, payload) VALUES (:tenant, :owner, "
-                        ":session, 'record', :item, :seq, CAST(:payload AS JSONB))"
-                    ),
-                    {**_key(key), "item": str(seq), "seq": seq, "payload": body},
-                )
-                await session.execute(
-                    text(
-                        "WITH gone AS (DELETE FROM public.user_skill_session_items WHERE "
-                        "tenant_id=:tenant AND owner_user_id=:owner AND session_id=:session AND "
-                        "kind='record' AND seq <= :oldest RETURNING 1) "
-                        "UPDATE public.user_skill_sessions SET dropped = dropped + "
-                        "(SELECT count(*) FROM gone) WHERE tenant_id=:tenant AND "
-                        "owner_user_id=:owner AND session_id=:session"
-                    ),
-                    {**_key(key), "oldest": seq - MAX_RECORDS},
-                )
+                else:
+                    await self._insert_record(session, key, body)
+                # Both branches end with the same expired-row cleanup.
                 await self._drop_expired_items(session, key)
                 await self._sweep(session)
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=record error=%s", type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
-        return True
+        return not oversized
+
+    async def _insert_record(self, session: AsyncSession, key: SessionKey, body: str) -> None:
+        """Allocate the next seq, insert the record and keep only the newest records."""
+
+        seq = (
+            await session.execute(
+                text(
+                    "INSERT INTO public.user_skill_sessions AS h (tenant_id, "
+                    "owner_user_id, session_id, next_seq, expires_at) VALUES (:tenant, "
+                    ":owner, :session, 2, now() + " + _IDLE + ") ON CONFLICT "
+                    "(tenant_id, owner_user_id, session_id) DO UPDATE SET "
+                    "next_seq = h.next_seq + 1, expires_at = now() + "
+                    + _IDLE
+                    + " RETURNING h.next_seq - 1"
+                ),
+                _key(key),
+            )
+        ).scalar_one()
+        await session.execute(
+            text(
+                "INSERT INTO public.user_skill_session_items (tenant_id, owner_user_id, "
+                "session_id, kind, item_id, seq, payload) VALUES (:tenant, :owner, "
+                ":session, 'record', :item, :seq, CAST(:payload AS JSONB))"
+            ),
+            {**_key(key), "item": str(seq), "seq": seq, "payload": body},
+        )
+        await session.execute(
+            text(
+                "WITH gone AS (DELETE FROM public.user_skill_session_items WHERE "
+                "tenant_id=:tenant AND owner_user_id=:owner AND session_id=:session AND "
+                "kind='record' AND seq <= :oldest RETURNING 1) "
+                "UPDATE public.user_skill_sessions SET dropped = dropped + "
+                "(SELECT count(*) FROM gone) WHERE tenant_id=:tenant AND "
+                "owner_user_id=:owner AND session_id=:session"
+            ),
+            {**_key(key), "oldest": seq - MAX_RECORDS},
+        )
 
     async def records(self, key: SessionKey) -> tuple[tuple[RecordEntry, ...], int]:
         try:
@@ -754,8 +757,59 @@ class PostgreSQLUserSkillSessionStore:
         row = await self._get(key, "run", run_id)
         return None if row is None else dict(_json(row["payload"]))
 
-    async def set_takeover(self, key: SessionKey, context: dict[str, Any]) -> None:
-        await self._put(key, "takeover", "pending", context, ttl=False)
+    async def claim_takeover(self, key: SessionKey, run_id: str) -> bool:
+        """Replace the pending slot with a live run snapshot, all checked under the head lock.
+
+        The run must be live, hand-over-able and of the owner's live flow; otherwise
+        nothing changes (an earlier pending slot stays).
+        """
+
+        params = _key(key)
+        try:
+            async with self._sessions() as session, session.begin():
+                head = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM public.user_skill_sessions WHERE tenant_id=:tenant "
+                            "AND owner_user_id=:owner AND session_id=:session AND "
+                            "expires_at > now() FOR UPDATE"
+                        ),
+                        params,
+                    )
+                ).one_or_none()
+                if head is None:
+                    return False
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT i.payload FROM public.user_skill_session_items i WHERE "
+                            "i.tenant_id=:tenant AND i.owner_user_id=:owner AND "
+                            "i.session_id=:session AND i.kind='run' AND i.item_id=:run AND "
+                            "i.expires_at > now() AND "
+                            "(i.payload->>'takeover_allowed')::boolean IS TRUE AND EXISTS ("
+                            "SELECT 1 FROM public.user_skills h WHERE h.tenant_id=i.tenant_id "
+                            "AND h.owner_user_id=i.owner_user_id AND "
+                            "h.skill_id::text = i.payload->>'skill_id' AND h.deleted_at IS NULL)"
+                        ),
+                        {**params, "run": run_id},
+                    )
+                ).one_or_none()
+                if row is None:
+                    return False
+                await session.execute(
+                    text(
+                        "INSERT INTO public.user_skill_session_items (tenant_id, owner_user_id, "
+                        "session_id, kind, item_id, payload) VALUES (:tenant, :owner, :session, "
+                        "'takeover', 'pending', CAST(:payload AS JSONB)) ON CONFLICT "
+                        "(tenant_id, owner_user_id, session_id, kind, item_id) DO UPDATE SET "
+                        "payload = EXCLUDED.payload"
+                    ),
+                    {**params, "payload": json.dumps(_json(row[0]), ensure_ascii=False)},
+                )
+        except SQLAlchemyError as exc:
+            _LOGGER.info("user_skill.session_store op=claim_takeover error=%s", type(exc).__name__)
+            raise UserSkillError(type(exc).__name__) from None
+        return True
 
     async def take_takeover(self, key: SessionKey) -> dict[str, Any] | None:
         """Atomically take the pending slot once; never creates or extends the head."""

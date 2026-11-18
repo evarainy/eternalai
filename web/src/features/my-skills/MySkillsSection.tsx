@@ -3,7 +3,7 @@
  * 停用、启用只在可用与停用之间切换；已暂停且依赖的查询还在的功能可「重新生成」：
  * 步骤、列和检查不变，按新的查询合同试运行一次，确认后保存为新版本。 */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Button, Input, Popconfirm, Space, Tag, Typography } from 'antd';
 import { ApiError } from '../../api/mutator';
 import {
@@ -72,17 +72,20 @@ function RegeneratePanel({ item, onSaved }: { item: SkillListItem; onSaved: () =
   const [phase, setPhase] = useState<'edit' | 'trying' | 'saving' | 'saved'>('edit');
   const [notice, setNotice] = useState('');
   const [trial, setTrial] = useState<{ sessionId: string; response: TrialResponse } | null>(null);
+  // An answer for inputs the user has since changed is dropped.
+  const editVersion = useRef(0);
   const hasFields = Object.keys(item.form.schema.properties ?? {}).length > 0;
   const tryRun = async () => {
+    const version = editVersion.current;
     setPhase('trying');
     setNotice('');
     setTrial(null);
     try {
       const session = useAIDockStore.getState().ensureSession();
       const response = await regenerateSkill(session, item.skill_id, item.current_version, values);
-      setTrial({ sessionId: session, response });
+      if (version === editVersion.current) setTrial({ sessionId: session, response });
     } catch (error) {
-      setNotice(errorText(error));
+      if (version === editVersion.current) setNotice(errorText(error));
     } finally {
       setPhase('edit');
     }
@@ -107,7 +110,11 @@ function RegeneratePanel({ item, onSaved }: { item: SkillListItem; onSaved: () =
       <Text type="secondary">步骤、显示的列和结果检查都不变，按现在的查询方式试运行一次，确认结果后保存为新版本。</Text>
       {hasFields ? (
         <FormFields form={item.form} values={values}
-          onChange={(name, value) => setValues((old) => ({ ...old, [name]: value }))} />
+          onChange={(name, value) => {
+            setValues((old) => ({ ...old, [name]: value }));
+            editVersion.current += 1;
+            setTrial(null);
+          }} />
       ) : null}
       <Space style={{ marginTop: 8 }}>
         <Button size="small" loading={phase === 'trying'} disabled={phase !== 'edit'}

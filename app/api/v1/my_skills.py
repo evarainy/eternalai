@@ -120,7 +120,7 @@ class TakeoverRequest(_Strict):
 
 class RenameRequest(_Strict):
     # Length and characters are checked by the use case (closed ``name_invalid``).
-    name: str = Field(max_length=200)
+    name: str
 
 
 class RenameResponse(BaseModel):

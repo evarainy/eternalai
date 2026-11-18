@@ -454,6 +454,8 @@ class UserSkillService:
             _LOGGER.info("user_skill.regenerate rejected=%s reason=%s",
                          rejected.code, rejected.reason)
             raise UserSkillFailure(rejected.code, 409, rejected.label) from None
+        check_skill_texts(current.display_name, current.payload.purpose)
+        _require_exposable(rebased)
         clean = {name: value for name, value in inputs.items() if value not in (None, "")}
         trial_id = str(uuid4())
         run_target = RunTarget(
@@ -568,13 +570,8 @@ class UserSkillService:
     async def request_takeover(
         self, key: SessionKey, owner: UserSkillOwner, run_id: str
     ) -> bool:
-        snapshot = await self.sessions.run(key, run_id)
-        if snapshot is None or not snapshot.get("takeover_allowed"):
-            return False
-        if await self.current(owner, str(snapshot.get("skill_id"))) is None:
-            return False
-        await self.sessions.set_takeover(key, snapshot)
-        return True
+        del owner  # the trusted session key already names the owner
+        return await self.sessions.claim_takeover(key, run_id)
 
     async def take_takeover(
         self, key: SessionKey, owner: UserSkillOwner
@@ -677,8 +674,6 @@ def _savable(outcome: RunOutcome) -> tuple[bool, str | None]:
     # Saveable only when every step ran; per-item gaps or an incomplete list are
     # data-dependent, a stopped run (deadline, stop code, failed step) is not.
     run = outcome.run_result
-    if outcome.result.get("check_failed"):
-        return False, str(outcome.result.get("reason_label"))
     if (
         run is not None and run.status == "completed" and outcome.status != "failed"
         and not _incomplete_list(run)

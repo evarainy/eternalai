@@ -81,10 +81,6 @@ class TrialSnapshot:
     savable: bool
     saved_result: dict[str, Any] | None = None
 
-    @property
-    def saved(self) -> bool:
-        return self.saved_result is not None
-
 
 class UserSkillError(Exception):
     """Storage unavailable, or a closed code: ``name_taken``, ``conflict``, ``not_found``,
@@ -179,7 +175,9 @@ class UserSkillSessionStorePort(Protocol):
 
     async def run(self, key: SessionKey, run_id: str) -> dict[str, Any] | None: ...
 
-    async def set_takeover(self, key: SessionKey, context: dict[str, Any]) -> None: ...
+    async def claim_takeover(self, key: SessionKey, run_id: str) -> bool:
+        """Atomically make a live, hand-over-able run of a live flow the pending slot."""
+        ...
 
     async def take_takeover(self, key: SessionKey) -> dict[str, Any] | None: ...
 
