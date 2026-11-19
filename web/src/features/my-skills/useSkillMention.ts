@@ -1,9 +1,10 @@
 /** `$` 指定调用：在输入框里用 `$`（或全角 `＄`）选本人可用的功能。
  *
  * 选中时记下功能 id 和它在草稿里的那一段文字的起止位置（结构化绑定）：前面的编辑只平移位置，
- * 改到这一段即解除。发送时只把 id 交给服务端，由服务端按本人当前版本直接执行；不写 `$` 时照旧
- * 由模型判断。手输完整的 `$功能名` 也能绑定（最长的完整名称优先）；单独的 `$100` 这类金额按普通
- * 文字发送。中文输入法组字期间不弹、不选、不发送。换账号即清空。 */
+ * 改到这一段即解除。发送只认正在显示的标签：把 id 交给服务端，由服务端按本人当前版本直接执行；
+ * 没有标签的 `$名称`（含用户取消的）一律按普通文字发送，不写 `$` 时照旧由模型判断。手输句首的
+ * 完整 `$功能名` 时当场显示标签（最长的完整名称优先）；单独的 `$100` 这类金额按普通文字。中文
+ * 输入法组字期间不弹、不选、不发送，上屏后再判断。换账号即清空。 */
 
 import {
   useCallback, useEffect, useMemo, useRef, useState, type CompositionEvent, type KeyboardEvent,
@@ -13,17 +14,22 @@ import type { SkillListItem } from '../../api/userSkills';
 import { useAuthStore } from '../../stores/authStore';
 import { useMySkills } from './useMySkills';
 
-/** A `$name` exactly as it stands in the draft at [start, end) (typed variants included). */
-export interface MentionSpan {
+interface Binding {
+  skillId: string;
+  name: string;
+  /** The mention exactly as it stands in the draft at [start, end) (typed variants included). */
   text: string;
   start: number;
   end: number;
+  generation: number;
+  /** Bound by typing the full name (a longer name typed on may replace it). */
+  typed: boolean;
 }
 
-interface Binding extends MentionSpan {
-  skillId: string;
-  name: string;
-  generation: number;
+interface MentionSpan {
+  text: string;
+  start: number;
+  end: number;
 }
 
 export interface SkillBinding {
@@ -38,8 +44,7 @@ export interface SkillSelection {
 }
 
 export type MentionResolution =
-  /** ``plain``: a `$name` the user undid, sent as text (frozen with the message). */
-  | { kind: 'none'; plain?: MentionSpan }
+  | { kind: 'none' }
   | { kind: 'ref'; selection: SkillSelection }
   | { kind: 'blocked'; reason: string };
 
@@ -106,6 +111,17 @@ function followAligned<T extends MentionSpan>(prev: string, next: string, bindin
     return null;
   }
   return standaloneAt(next, start, end, binding.text) ? { ...binding, start, end } : null;
+}
+
+/** [from, to) of ``next`` that an edit from ``prev`` wrote (common prefix first). */
+function editedRange(prev: string, next: string): [number, number] {
+  const shortest = Math.min(prev.length, next.length);
+  let common = 0;
+  while (common < shortest && prev[common] === next[common]) common += 1;
+  let tail = 0;
+  while (tail < shortest - common
+    && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail += 1;
+  return [common, next.length - tail];
 }
 
 /** The span after an edit; when repeated text makes the edited place ambiguous, it is gone. */
@@ -197,23 +213,17 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   };
 }
 
-/** The leading `$name` of ``value`` left behind when the choice of ``skillId`` was undone.
- *
- * It stays plain text while it stands unchanged; a different flow's name is a new choice. */
-function leftover(value: string, items: readonly SkillListItem[] | undefined, skillId: string):
-  MentionSpan | null {
+/** The full usable `$name` the user typed at the start of ``value`` within [from, to]. */
+function typedAt(value: string, items: readonly SkillListItem[], from: number, to: number):
+  (MentionSpan & { skillId: string; name: string }) | null {
   const lead = value.length - value.trimStart().length;
-  const message = value.slice(lead);
-  if (!TRIGGERS.has(message[0] ?? '')) return null;
-  if (items !== undefined) {
-    const named = resolveTyped(message, items, 'ready');
-    if (named.kind !== 'ref' || named.selection.span === null
-      || named.selection.skillId !== skillId) return null;
-    const { text, start, end } = named.selection.span;
-    return { text, start: start + lead, end: end + lead };
-  }
-  const word = (message.split(/\s/)[0] ?? '').replace(/\p{P}+$/u, '');
-  return word.length > 1 ? { text: word, start: lead, end: lead + word.length } : null;
+  const named = resolveTyped(value.slice(lead), items, 'ready');
+  if (named.kind !== 'ref' || named.selection.span === null) return null;
+  const { span, skillId } = named.selection;
+  const start = span.start + lead;
+  const end = span.end + lead;
+  // Only an edit that wrote into the name or the character right after it binds.
+  return from <= end && to >= start ? { ...span, start, end, skillId } : null;
 }
 
 export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: {
@@ -233,11 +243,11 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const [token, setToken] = useState<Token | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [stored, setBinding] = useState<Binding | null>(null);
-  // The leading `$name` left behind when the user undid a choice: sent as plain text.
-  const [dismissed, setDismissed] = useState<(MentionSpan & { generation: number }) | null>(null);
   const composing = useRef(false);
-  // A choice undone while the IME composes: what it leaves is read once the text is final.
-  const undone = useRef<string | null>(null);
+  // The draft before the IME started: the edit is judged once the text is final.
+  const composeBase = useRef<string | null>(null);
+  // A leading `$word` was typed before the list arrived: bind it once the list is read.
+  const awaiting = useRef(false);
   const itemsRef = useRef(items);
   itemsRef.current = items;
   // The draft the last edit started from (the prop lags one render behind an edit).
@@ -247,14 +257,10 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const binding = stored !== null && stored.generation === generation ? stored : null;
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
-  const plain = dismissed !== null && dismissed.generation === generation ? dismissed : null;
-  const plainRef = useRef(plain);
-  plainRef.current = plain;
   useEffect(() => {
     setBinding(null);
     setToken(null);
-    setDismissed(null);
-    undone.current = null;
+    awaiting.current = false;
   }, [generation]);
   // A draft replaced from elsewhere (a quick prompt) takes the choice with it.
   useEffect(() => {
@@ -262,16 +268,27 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       setBinding(null);
       setToken(null);
     }
-    if (plain !== null && !standaloneAt(draft, plain.start, plain.end, plain.text)) {
-      setDismissed(null);
-    }
-  }, [draft, binding, plain]);
+  }, [draft, binding]);
 
-  /** Remember what undoing the choice of ``skillId`` left at the start of ``value``. */
-  const dismiss = useCallback((value: string, skillId: string) => {
-    const span = leftover(value, itemsRef.current, skillId);
-    setDismissed(span === null ? null : { ...span, generation });
+  /** Show the tag for a full name the edit [from, to] just typed at the start. */
+  const bindTyped = useCallback((value: string, from: number, to: number,
+    current: Binding | null) => {
+    if (current !== null && !current.typed) return;
+    const list = itemsRef.current;
+    if (list === undefined) {
+      const word = value.trimStart();
+      awaiting.current = TRIGGERS.has(word[0] ?? '');
+      return;
+    }
+    awaiting.current = false;
+    const found = typedAt(value, list, from, to);
+    if (found === null || (current !== null && current.start !== found.start)) return;
+    setBinding({ ...found, generation, typed: true });
   }, [generation]);
+  useEffect(() => {
+    if (items === undefined || !awaiting.current || binding !== null) return;
+    bindTyped(draft, 0, draft.length, null);
+  }, [items, draft, binding, bindTyped]);
 
   const candidates = useMemo(() => (token === null ? [] : rank(usable, token.text)),
     [token, usable]);
@@ -291,32 +308,26 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const sync = useCallback((value: string, caret: number | null) => {
     const before = previous.current;
     previous.current = value;
-    if (before !== value) {
-      const current = bindingRef.current;
-      if (current !== null) {
-        const next = follow(before, value, current);
-        setBinding(next);
-        if (next === null) undone.current = current.skillId;
-      }
-      const text = plainRef.current;
-      if (text !== null) setDismissed(follow(before, value, text));
+    let current = bindingRef.current;
+    if (before !== value && current !== null) {
+      current = follow(before, value, current);
+      setBinding(current);
     }
     if (composing.current) return;
-    if (undone.current !== null) {
-      dismiss(value, undone.current);
-      undone.current = null;
-    }
+    const base = composeBase.current ?? before;
+    composeBase.current = null;
+    if (base !== value) bindTyped(value, ...editedRange(base, value), current);
     // Any `$word` (a digit-led name too) starts reading the list, ready for sending.
     if (caret !== null && triggerAt(value, caret) !== null) setWanted(true);
     setToken(caret === null ? null : tokenAt(value, caret));
-  }, [dismiss]);
+  }, [bindTyped]);
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
     const text = mentionText(item.name);
-    setDismissed(null);
-    undone.current = null;
+    awaiting.current = false;
     setBinding({
       skillId: item.skill_id, name: item.name, text, start, end: start + text.length, generation,
+      typed: false,
     });
     setToken(null);
     onBind?.();
@@ -372,29 +383,24 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       const next = cut(draft, binding.start, binding.end);
       setDraft(next);
       previous.current = next;
-      dismiss(next, binding.skillId);
     }
     setBinding(null);
     setToken(null);
-  }, [binding, draft, setDraft, dismiss]);
+  }, [binding, draft, setDraft]);
 
   const reset = useCallback(() => {
     setBinding(null);
     setToken(null);
-    setDismissed(null);
-    undone.current = null;
+    awaiting.current = false;
   }, []);
 
-  /** Put back the frozen choice (or plain-text `$name`) of a message refused before any work. */
-  const restore = useCallback((value: string, selection: SkillSelection | null,
-    text: MentionSpan | null) => {
+  /** Put back the frozen choice of a message that was refused before any work. */
+  const restore = useCallback((value: string, selection: SkillSelection | null) => {
     const span = selection?.span;
-    if (selection != null && span != null && standaloneAt(value, span.start, span.end, span.text)) {
+    if (selection == null || span == null) return;
+    if (standaloneAt(value, span.start, span.end, span.text)) {
       setBinding({ skillId: selection.skillId, name: span.name, text: span.text,
-        start: span.start, end: span.end, generation });
-    }
-    if (text !== null && standaloneAt(value, text.start, text.end, text.text)) {
-      setDismissed({ ...text, generation });
+        start: span.start, end: span.end, generation, typed: false });
     }
   }, [generation]);
 
@@ -429,6 +435,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const composition = {
     onCompositionStart: () => {
       composing.current = true;
+      composeBase.current ??= previous.current;
       setToken(null);
     },
     onCompositionEnd: (event: CompositionEvent<HTMLTextAreaElement>) => {
@@ -451,19 +458,13 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
           span: { name: binding.name, text: binding.text, start, end } } };
       }
     }
-    if (plain !== null) {
-      const start = plain.start - lead;
-      const end = plain.end - lead;
-      if (start === 0 && standaloneAt(message, start, end, plain.text)) {
-        return { kind: 'none', plain: { text: plain.text, start, end } };
-      }
-    }
-    if (TRIGGERS.has(message[0] ?? '')) {
-      setWanted(true);
-      if (skills.isError) void skills.refetch();
-    }
+    if (!TRIGGERS.has(message[0] ?? '')) return { kind: 'none' };
+    setWanted(true);
+    if (skills.isError) void skills.refetch();
     const state: ListState = skills.isSuccess ? 'ready' : skills.isError ? 'failed' : 'loading';
-    return resolveTyped(message, items, state);
+    const typed = resolveTyped(message, items, state);
+    // Only the shown tag is sent: a full name without one (undone, or never bound) is text.
+    return typed.kind === 'ref' ? { kind: 'none' } : typed;
   };
 
   const shown: SkillBinding | null = binding === null ? null

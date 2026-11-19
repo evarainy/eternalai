@@ -30,7 +30,7 @@ import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard
 import { UserSkillCard } from '../features/my-skills/UserSkillCard';
 import { MySkillsPanel } from '../features/my-skills/MySkillsPanel';
 import { SkillMentionList, SkillMentionTag } from '../features/my-skills/SkillMention';
-import { useSkillMention, type MentionSpan, type SkillSelection } from '../features/my-skills/useSkillMention';
+import { useSkillMention, type SkillSelection } from '../features/my-skills/useSkillMention';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -123,8 +123,6 @@ interface ChatSubmission {
   readonly authGeneration: number;
   /** The saved flow the user named with `$` and its span in the message; frozen with it. */
   readonly userSkill: SkillSelection | null;
-  /** A `$name` the user undid, sent as text; restored as text if the message comes back. */
-  readonly plainMention: MentionSpan | null;
   readonly browser: null | {
     readonly skillId: string;
     readonly requestId: string;
@@ -938,9 +936,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           }
           if (!submissionIsCurrent(submission)) return null;
           const store = useAIDockStore.getState();
-          const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
-          store.setDraft(restored);
-          mentionRef.current.restore(restored, submission.userSkill, submission.plainMention);
+          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
           const notice = projectTextResponse(chatUploadMessage(error), 'validation');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
@@ -955,7 +951,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const store = useAIDockStore.getState();
           const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
           store.setDraft(restored);
-          mentionRef.current.restore(restored, submission.userSkill, submission.plainMention);
+          mentionRef.current.restore(restored, submission.userSkill);
           if (submission.attachments.length > 0) {
             store.setDraftAttachments(
               [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
@@ -976,7 +972,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const store = useAIDockStore.getState();
           const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
           store.setDraft(restored);
-          mentionRef.current.restore(restored, submission.userSkill, submission.plainMention);
+          mentionRef.current.restore(restored, submission.userSkill);
           const notice = projectTextResponse(error.message, 'validation');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
@@ -1053,7 +1049,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         && ((browserTarget !== null && !browserTerminal && !browserHandoff)
           || pendingSubmission !== null)) return;
     let userSkill = retry?.userSkill ?? null;
-    let plainMention = retry?.plainMention ?? null;
     if (retry === undefined) {
       const named = mention.resolveForSend(message);
       if (named.kind === 'blocked') {
@@ -1061,7 +1056,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         return;
       }
       userSkill = named.kind === 'ref' ? named.selection : null;
-      plainMention = named.kind === 'none' ? named.plain ?? null : null;
       const conflict = userSkill === null ? null
         : browserOptIn ? '指定功能和浏览器只读技能不能同时使用，请取消其中一个。'
           : currentCollection !== null ? '正在填写表单时不能指定功能。'
@@ -1080,7 +1074,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const submission: ChatSubmission = retry ?? {
       attachments: useAIDockStore.getState().draftAttachments,
       message, sessionId, authGeneration: useAuthStore.getState().generation, browser, userSkill,
-      plainMention,
       requestId: browser?.requestId ?? crypto.randomUUID(),
       owner: browserAvailable ? browserOwner : null,
       collection: currentCollection === null ? null : { ...currentCollection },

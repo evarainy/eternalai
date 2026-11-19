@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
@@ -1021,10 +1021,28 @@ def _literals(node: Mapping[str, Any]) -> list[Any] | None:
     return values
 
 
-def _has_ref(node: Any) -> bool:
-    if isinstance(node, Mapping):
-        return "$ref" in node or any(_has_ref(value) for value in node.values())
-    return isinstance(node, list) and any(_has_ref(value) for value in node)
+_REFS = ("$ref", "$dynamicRef", "$recursiveRef")
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "dependentSchemas"})
+_SUBSCHEMAS = frozenset({
+    "items", "prefixItems", "additionalProperties", "contains", "propertyNames",
+    "unevaluatedItems", "unevaluatedProperties", "not", "if", "then", "else",
+    "anyOf", "oneOf", "allOf",
+})
+
+
+def _schema_parts(node: Any) -> Iterator[Mapping[str, Any]]:
+    """``node`` and every subschema validating with it uses (definitions and data aside)."""
+
+    if not isinstance(node, Mapping):
+        return
+    yield node
+    for key, value in node.items():
+        if key in _SCHEMA_MAPS and isinstance(value, Mapping):
+            for sub in value.values():
+                yield from _schema_parts(sub)
+        elif key in _SUBSCHEMAS:
+            for sub in value if isinstance(value, list) else [value]:
+                yield from _schema_parts(sub)
 
 
 def _finite_fits(
@@ -1032,17 +1050,20 @@ def _finite_fits(
 ) -> bool:
     """Each value ``source`` really allows is valid for the whole ``target``.
 
-    The validator only annotates ``format``, so a target format must be the
-    source's own; a nested reference cannot be resolved on its own and is refused.
+    Formats are checked as the runner checks inputs. A reference (it needs the
+    outer document) or a format the checker cannot verify is not decidable here.
     """
 
-    if _has_ref(source) or _has_ref(target):
-        return False
-    if "format" in target and source.get("format") != target["format"]:
-        return False
+    checker = FormatChecker()
+    for part in (*_schema_parts(source), *_schema_parts(target)):
+        fmt = part.get("format")
+        if any(key in part for key in _REFS) or (
+            isinstance(fmt, str) and fmt not in checker.checkers
+        ):
+            return False
     try:
-        own = Draft202012Validator(dict(source))
-        validator = Draft202012Validator(dict(target))
+        own = Draft202012Validator(dict(source), format_checker=checker)
+        validator = Draft202012Validator(dict(target), format_checker=checker)
         return all(validator.is_valid(value) for value in values if own.is_valid(value))
     except SchemaError:
         return False
@@ -1053,15 +1074,15 @@ def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
 
     if any(key in target for key in _COMBINATORS) or any(key in source for key in _COMBINATORS):
         return False
+    values = _literals(source)
+    if values is not None:
+        # A finite source is decided exactly: each of its values against the whole target.
+        return _finite_fits(source, target, values)
     kinds, accepted = _node_kinds(source), _node_kinds(target)
     if "number" in accepted:
         accepted = accepted | {"integer"}
     if "unknown" in kinds or "unknown" in accepted or not kinds <= accepted:
         return False
-    values = _literals(source)
-    if values is not None:
-        # A finite source is decided exactly: each of its values against the whole target.
-        return _finite_fits(source, target, values)
     if _literals(target) is not None:
         return False
     for key in _LOWER_BOUNDS:

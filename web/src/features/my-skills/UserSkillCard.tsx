@@ -357,9 +357,10 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   const tryRun = async () => {
     if (sessionId === null) return;
     const version = editVersion.current;
-    const trialName = name;
     setPhase('trying');
     const update = proposal.update_targets.find((item) => item.skill_id === target);
+    // An update keeps the flow's own name (a new version); a new flow takes the typed one.
+    const trialName = update === undefined ? name.trim() : update.name;
     const loopSteps = new Set(proposal.bindings.filter((b) => chosenKind(b) === 'loop_item')
       .map((b) => b.step_index));
     try {
@@ -377,7 +378,7 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
       });
       if (version === editVersion.current) {
         setTrial(response);
-        setSavedName(trialName.trim());
+        setSavedName(trialName);
       }
       setPhase('edit');
     } catch (error) {

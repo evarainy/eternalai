@@ -45,7 +45,7 @@ class TrialRequest(_Strict):
     for_each_choices: dict[str, bool] = Field(default_factory=dict)
     column_ids: list[str] = Field(min_length=1, max_length=60)
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
-    name: str = Field(min_length=1, max_length=40)
+    name: str
     purpose: str = Field(min_length=1, max_length=120)
     rules: str = Field(min_length=1, max_length=300)
     target: UpdateTarget

@@ -44,6 +44,26 @@ _IDLE = "interval '4 hours'"
 _SNAPSHOT = "interval '600 seconds'"
 _SWEEP_EVERY_SECONDS = 600.0
 _SWEEP_BATCH = 200
+# One sweep cadence per process, shared by every store that writes session data.
+_last_sweep: float | None = None
+
+
+async def _sweep(session: AsyncSession) -> None:
+    """Drop a small batch of other expired session heads, at most every ten minutes."""
+
+    global _last_sweep
+    now = monotonic()
+    if _last_sweep is not None and now - _last_sweep < _SWEEP_EVERY_SECONDS:
+        return
+    _last_sweep = now
+    await session.execute(
+        text(
+            "DELETE FROM public.user_skill_sessions WHERE ctid IN (SELECT ctid FROM "
+            "public.user_skill_sessions WHERE expires_at <= now() ORDER BY expires_at "
+            "LIMIT :limit FOR UPDATE SKIP LOCKED) AND expires_at <= now()"
+        ),
+        {"limit": _SWEEP_BATCH},
+    )
 
 
 def _owner(owner: UserSkillOwner) -> dict[str, str]:
@@ -290,7 +310,12 @@ class PostgreSQLUserSkillStore:
                     return at
 
                 if target["mode"] == "new":
-                    saved = await _create(session, owner, content["name"], payload)
+                    try:
+                        async with session.begin_nested():
+                            saved = await _create(session, owner, content["name"], payload)
+                    except IntegrityError:
+                        await live_at()
+                        raise
                     at = await live_at()
                 else:
                     await session.execute(
@@ -330,6 +355,7 @@ class PostgreSQLUserSkillStore:
                     ),
                     {**params, "at": at},
                 )
+                await _sweep(session)
                 return result
         except IntegrityError as exc:
             raise UserSkillError("name_taken" if _name_taken(exc) else "conflict") from None
@@ -492,14 +518,8 @@ class PostgreSQLUserSkillSessionStore:
     heads (cascading) in small batches at most every ten minutes per process.
     """
 
-    def __init__(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        clock: Any = monotonic,
-    ) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
-        self._clock = clock
-        self._last_sweep: float | None = None
 
     # ----------------------------------------------------------- helpers
     async def _drop_expired_head(self, session: AsyncSession, key: SessionKey) -> None:
@@ -557,20 +577,6 @@ class PostgreSQLUserSkillSessionStore:
         ).one_or_none()
         return None if row is None else int(row[0])
 
-    async def _sweep(self, session: AsyncSession) -> None:
-        now = self._clock()
-        if self._last_sweep is not None and now - self._last_sweep < _SWEEP_EVERY_SECONDS:
-            return
-        self._last_sweep = now
-        await session.execute(
-            text(
-                "DELETE FROM public.user_skill_sessions WHERE ctid IN (SELECT ctid FROM "
-                "public.user_skill_sessions WHERE expires_at <= now() ORDER BY expires_at "
-                "LIMIT :limit FOR UPDATE SKIP LOCKED) AND expires_at <= now()"
-            ),
-            {"limit": _SWEEP_BATCH},
-        )
-
     async def _put(
         self,
         key: SessionKey,
@@ -598,7 +604,7 @@ class PostgreSQLUserSkillSessionStore:
                         "payload": json.dumps(payload, ensure_ascii=False),
                     },
                 )
-                await self._sweep(session)
+                await _sweep(session)
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=put_%s error=%s", kind, type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
@@ -667,7 +673,7 @@ class PostgreSQLUserSkillSessionStore:
                     await self._insert_record(session, key, body)
                 # Both branches end with the same expired-row cleanup.
                 await self._drop_expired_items(session, key)
-                await self._sweep(session)
+                await _sweep(session)
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=record error=%s", type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
@@ -881,7 +887,7 @@ class PostgreSQLUserSkillSessionStore:
                     {**params, "at": at},
                 )
                 await self._drop_expired_items(session, key, at)
-                await self._sweep(session)
+                await _sweep(session)
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=claim_takeover error=%s", type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
@@ -901,8 +907,12 @@ class PostgreSQLUserSkillSessionStore:
                 head = (
                     await session.execute(
                         text(
-                            "SELECT 1 FROM public.user_skill_sessions WHERE tenant_id=:tenant "
-                            "AND owner_user_id=:owner AND session_id=:session FOR UPDATE"
+                            "SELECT 1 FROM public.user_skill_sessions s WHERE "
+                            "s.tenant_id=:tenant AND s.owner_user_id=:owner AND "
+                            "s.session_id=:session AND EXISTS (SELECT 1 FROM "
+                            "public.user_skill_session_items i WHERE i.tenant_id=s.tenant_id AND "
+                            "i.owner_user_id=s.owner_user_id AND i.session_id=s.session_id AND "
+                            "i.kind='takeover' AND i.item_id='pending') FOR UPDATE OF s"
                         ),
                         _key(key),
                     )
