@@ -192,7 +192,7 @@ jobs:
           done
 
       - name: Run pytest
-        run: uv run pytest -v -n 4 --dist loadfile --max-worker-restart=0
+        run: uv run pytest -v
 
       # ── Golden task regression gate ──────────────────────────────────
       # Activates the deferred CI step from P0-GT-002 §6 + P0-INFRA-007 pending actions.
