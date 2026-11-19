@@ -55,11 +55,16 @@ jobs:
                   return (
                       (len(p.parts) == 1 and p.suffix == ".md")
                       or (path.startswith("docs/") and p.suffix == ".md")
-                      or path.startswith("docs/phase2/archive/")
+                      or (path.startswith("docs/phase2/archive/")
+                          and (p.suffix == ".source"
+                               or (p.suffix == ".toml"
+                                   and (p.parent.name == "codex-agents"
+                                        or p.name.startswith("codex-config_")))))
                       or (path.startswith((".agents/skills/", ".claude/skills/"))
                           and p.name == "SKILL.md")
                       or (path.startswith(".claude/agents/") and p.suffix == ".md")
-                      or (path.startswith(".codex/") and p.suffix == ".toml")
+                      or path == ".codex/config.toml"
+                      or (str(p.parent) == ".codex/agents" and p.suffix == ".toml")
                   )
               docs_only = bool(paths) and all(is_doc(p) for p in paths)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -79,7 +84,7 @@ jobs:
           import tomllib
           import yaml
 
-          for path in sorted(Path('.codex').rglob('*.toml')):
+          for path in [Path('.codex/config.toml'), *sorted(Path('.codex/agents').glob('*.toml'))]:
               tomllib.loads(path.read_text(encoding='utf-8'))
               print(f'Parsed {path}')
 
