@@ -437,7 +437,9 @@ def _is_worker(config: Any) -> bool:
 
 
 def _is_xdist_controller(config: Any) -> bool:
-    return not _is_worker(config) and config.pluginmanager.hasplugin("xdist")
+    # xdist registers "dsession" only when it actually distributes tests; the
+    # "xdist" plugin itself is also present in plain single-process runs.
+    return not _is_worker(config) and config.pluginmanager.hasplugin("dsession")
 
 
 def _restore_original(config: Any) -> None:

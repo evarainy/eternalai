@@ -45,6 +45,7 @@ from app.ports.human_gate import HumanGateDecisionRecord, build_task_version_bin
 from app.ports.task_store import TaskRecord
 from app.ports.workflow_engine import GovernedFinalizationError
 from app.workflow.engine import WorkflowEngine
+from scripts.reset_test_db import is_fixed_test_database_name
 from tests.infra.mcp.test_transport import serving
 from tests.infra.persistence.test_mcp_store import Revocations
 from tests.workflow.test_mcp_recovery import BusinessPeer, harness
@@ -394,11 +395,8 @@ def _public_contract():
 def read_result_in_fresh_process(payload):
     async def run():
         engine = make_async_engine(os.environ["DATABASE_URL"])
-        assert (engine.url.host, engine.url.port, engine.url.database) == (
-            "127.0.0.1",
-            15432,
-            "eternalai_test",
-        )
+        assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+        assert is_fixed_test_database_name(engine.url.database)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         store = PostgreSQLMcpStore(sessions, b"s" * 32, Revocations())
         workflows = PostgreSQLWorkflowStore(store)

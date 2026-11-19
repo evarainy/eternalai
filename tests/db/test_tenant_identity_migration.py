@@ -13,6 +13,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.db.config import normalize_database_url
+from scripts.reset_test_db import is_fixed_test_database_name
 
 BASE = "20260920_180000"
 HEAD = "20260922_190000"
@@ -22,11 +23,8 @@ TABLES = ("sessions", "principal_roles", "oa_session_credentials")
 @pytest.fixture
 def migration_db():
     engine = create_engine(normalize_database_url(os.environ["DATABASE_URL"]))
-    assert (engine.url.host, engine.url.port, engine.url.database) == (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
-    )
+    assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(engine.url.database)
     with engine.connect() as connection:
         transaction = connection.begin()
         schema = "tenant_s1_" + uuid4().hex

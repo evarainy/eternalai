@@ -68,6 +68,7 @@ from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import MatchedIntent
 from app.runtime.runtime import RuntimeImpl
+from scripts.reset_test_db import is_fixed_test_database_name
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
@@ -204,7 +205,8 @@ def orchestration_clean_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterato
     database_url = os.environ.get("DATABASE_URL")
     assert database_url, "DATABASE_URL must be set by the test runner environment"
     url = make_url(normalize_database_url(database_url))
-    assert (url.host, url.port, url.database) == ("127.0.0.1", 15432, "eternalai_test")
+    assert (url.host, url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(url.database)
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
     engine = create_engine(url)

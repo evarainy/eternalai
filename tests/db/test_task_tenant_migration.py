@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.exc import IntegrityError
 
 from app.db.config import normalize_database_url
+from scripts.reset_test_db import is_fixed_test_database_name
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = REPO_ROOT / "alembic" / "versions" / "20260901_120000_task_tenant.py"
@@ -31,10 +32,8 @@ def _database_url() -> str:
     if value is None:
         raise AssertionError("DATABASE_URL must be set by the test runner environment")
     url = make_url(normalize_database_url(value))
-    if (url.host, url.port, url.database) != (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
+    if (url.host, url.port) != ("127.0.0.1", 15432) or not (
+        is_fixed_test_database_name(url.database)
     ):
         raise AssertionError("task tenant migration tests require the fixed CI test database")
     return value

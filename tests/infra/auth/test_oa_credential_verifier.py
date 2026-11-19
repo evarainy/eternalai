@@ -50,6 +50,7 @@ from app.ports.credential_binding import (
     CredentialTerminalFailure,
     PasswordBindingCredential,
 )
+from scripts.reset_test_db import is_fixed_test_database_name
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -61,10 +62,8 @@ def _require_test_db() -> str:
     if not DATABASE_URL:
         raise AssertionError("DATABASE_URL must be set by the test runner environment")
     url = make_url(DATABASE_URL)
-    if (url.host, url.port, url.database) != (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
+    if (url.host, url.port) != ("127.0.0.1", 15432) or not (
+        is_fixed_test_database_name(url.database)
     ):
         raise AssertionError("credential verifier DB test requires the fixed test database")
     return DATABASE_URL
