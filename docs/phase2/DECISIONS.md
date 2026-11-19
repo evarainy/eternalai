@@ -50,7 +50,7 @@
 
 - AI 从聊天里最多只能生成 Work Candidate / 待办候选；转正式 Work Object、启动流程或外部写操作都须人明确确认，执行仍走 Gateway → Policy → Adapter → Evaluator → Trace。
 - 领导发言、`@`、表情、已读、「好的/收到」都不算授权；责任归确认人，Trace 记确认人、时间、候选版本、来源消息、补充字段、结果和后续 Work Object。
-- 聊天原文不得灌入全局知识库或无边界 RAG，只读当前消息、引用链和有限上下文。
+- 聊天原文不得灌入全局知识库或无边界 RAG；只能在显式触发且 Policy 允许的范围内读取当前消息、引用链及必要的有限上下文。
 
 ## 2026-08-18 — 聊天只做卡片路由，不承载自由文本执行
 ## 2026-08-18 — 卡片动作的授权边界：引用不传递权限
@@ -186,7 +186,7 @@
 
 - 首个写入是 OA 待办「审批同意」；只能用操作者本人的真实待办；确认卡即授权，不叠加审批层；确认即生效，本系统不能撤销。
 - 确认卡须写明提交后不能自行撤销；未确认不执行、不重复提交、确认与提交内容不一致即拒绝，Golden 须覆盖这三条。
-- 确认卡展示姓名、标题、正文、附件名（默认只显示姓名与标题），不设展示字段白名单；用户或 LLM 传入的参数值仍走 allowlist（见 2026-08-28「参数值 allowlist…」）。
+- 确认卡展示姓名、标题、正文、附件名（默认只显示姓名与标题），不设展示字段白名单，但预览只能由服务端按权威绑定从 OA / Work Object 补取；用户或 LLM 传入的参数值仍走 allowlist（见 2026-08-28「参数值 allowlist…」）。
 - 凭证字段（`sessionkey`、`datakey`、`password`、`token`、`cookie`、`sessionid` 等）不得进入 ResponseEnvelope、Trace、日志或 fixture。
 
 ## 2026-08-19 — 裁决：DB Gateway 移出 P2
@@ -304,10 +304,10 @@ HAR 清洗脚本进 `scripts/`，独立实现，不挂靠 `scripts/sanitize_oa_c
 
 ### 四、AppShell、顶栏、搜索与空状态
 
-- 左导航（可折叠并记住）+ 主内容；Dock 是跨路由单例浮层，不改主内容宽度。不写死页面宽度。
+- 左导航（形态按 2026-11-13：76px 窄栏）+ 主内容；Dock 是跨路由单例浮层，不改主内容宽度。不写死页面宽度。
 - 顶栏系统状态与通知分开计数，凭证失效时系统状态显示红点和数字并可重新绑定；「部门 / 姓名」只读，不做全局选择器；顶栏 AI 入口只打开 Dock。
 - P2 搜索只搜 Work Object 的标题、来源编号、责任人，授权范围与列表相同；不做 AI 补全、语义改写、「猜你想问」；搜索框与 AI 输入框分开。
-- 空状态必须说明为什么为空、下一步能做什么。
+- 空状态、失败态、降级态都要用人话说明原因并给出下一步。
 
 ### 五、工作事项列表、工作室与办理按钮
 
@@ -326,7 +326,7 @@ HAR 清洗脚本进 `scripts/`，独立实现，不挂靠 `scripts/sanitize_oa_c
 ### 七、任务交办
 
 - 单一入口：自然语言输入后同页展开预填表单，也可直接填；不做并列入口。
-- 发布前展示九类字段（标签与闭集见 2026-09-02「任务交办界面的控件闭集、附件字段与主动作按钮样式」，责任人与可见范围只读见 2026-09-10「前端交办接线方案的六项未决点」第 4 条）。
+- 发布前固定展示九类字段：类型、标题、责任人或责任部门、截止时间、办理要求与交付物、回执要求、提醒策略、可见范围、批量目标解析与去重结果（闭集见 2026-09-02「任务交办界面的控件闭集、附件字段与主动作按钮样式」第 2 条；责任人与可见范围为只读摘要，见 2026-09-10「前端交办接线方案的六项未决点」第 4 条）。
 - AI 草稿不是发布，发布必须由人显式操作。
 
 ### 八、前端目录、状态与 API 边界
@@ -415,7 +415,7 @@ HAR 清洗脚本进 `scripts/`，独立实现，不挂靠 `scripts/sanitize_oa_c
 ## 2026-08-28 — 裁决：参数值 allowlist 与「不设字段白名单」分层共存，互不推翻
 
 - 用户或 LLM 传入的参数值（`ui.payload.displayed_argument_values`）走 allowlist，默认空集，须在 `CapabilitySpec.displayable_argument_fields` 声明。
-- 服务端从 OA / Work Object 取来的业务对象预览不设白名单。两侧都做凭证扫描。
+- 服务端按权威绑定从 OA / Work Object 补取的业务对象预览不设白名单。两侧都做凭证扫描。
 
 ## 2026-08-28 — 裁决：插入 `P2-USER-ACTION-SEAM-001`，结构化 `UserAction` 先于 Renderer
 
@@ -614,13 +614,13 @@ PR #144 永久记为不合规，事后 Review 不得冒充合并前记录。合�
 ## 2026-09-08 — 裁决：内部任务派发的三轴授权模型
 ## 2026-09-20 — 补登：内部派发改为显式跨部门允许集合
 
-任务派发模块的派发与查看规则，以 2026-10-18 业务规则确认及 WORK_DISPATCH §2 为准。本组仍有效的部分：
+任务派发的派发与查看授权以 2026-10-18「任务派发业务规则确认（待技术落地）」及 [WORK_DISPATCH §2](WORK_DISPATCH.md) 为准。下面标「旧路径」的负责人、跨部门、监区集合规则**不参与新派发授权**，只说明旧路径与代码常量现状；其余为仍有效的通用要求。
 
 - **三轴分开**：谁能派、能派给谁、能看什么分开判断。把任务派到别的部门，不会因此看到那个部门的资料。
-- **负责人**：只看 `jobtitle` 数字 ID 是否在 `{75, 380, 1405, 1701, 1999}`。不在集合里就不是负责人，admin 也一样。
-- **跨部门**：只有部门 ID 列在代码常量 `_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS` 里的负责人能跨部门派发，该集合初始为空。监区只能派本部门，部门判不出来也只能派本部门。
+- **负责人（旧路径）**：只看 `jobtitle` 数字 ID 是否在 `{75, 380, 1405, 1701, 1999}`。不在集合里就不是负责人，admin 也一样。
+- **跨部门（旧路径）**：只有部门 ID 列在代码常量 `_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS` 里的负责人能跨部门派发，该集合初始为空。监区只能派本部门，部门判不出来也只能派本部门。
 - **名单写在代码里**：负责人、跨部门、监区集合都是代码常量。不从数据库、配置或环境变量读，改动要在 diff 里看得见。领导集合除外，见 [2026-10-26 裁决](#2026-10-26--裁决领导名单按单位存库由管理员维护通讯录本地镜像同步)。
-- **集合冲突**：如果一个部门同时在监区集合和跨部门集合里，它不能跨部门派发，并且要通过守卫或诊断报出来。诊断本身不给权限。
+- **集合冲突（旧路径）**：如果一个部门同时在监区集合和跨部门集合里，它不能跨部门派发，并且要通过守卫或诊断报出来。诊断本身不给权限。
 - **授权一致**：候选列表、派发提交、重放用同一个授权函数，每次重新查目录。候选、cursor、旧回执都不能当授权凭证。批量里有一个目标没权限，整批拒绝。
 - **Trace**：只记部门 ID、分类结果和命中的规则，不记岗位、人员关联键、姓名或凭证。
 
@@ -667,9 +667,12 @@ A 档的格式化改动和功能改动分开提交，不加 CI 检查。
 
 ## 2026-09-10 — 裁决：前端交办接线方案的六项未决点
 
-- 截止时间按浏览器时区并显示偏移；没有时区的旧草稿要用户重新确认。
-- 不能悄悄忽略用户输入后照常发布。
-- 刷新后显示「结果待确认」，不说已完成。
+2. 截止时间按浏览器时区解释并显示实际偏移；没有时区的旧草稿要用户重新确认，夏令时歧义不自行默认。
+4. 交办页「责任人 / 可见范围」是只读摘要，保留九字段版位；不能悄悄忽略用户输入后照常发布。
+5. 跨刷新恢复不做；刷新后如实显示「结果待确认」，不说已完成。
+6. 内部事项当时按 `view_only` 呈现、不扩生命周期；任务派发的办理生命周期现以 [WORK_DISPATCH](WORK_DISPATCH.md) 为准。
+
+第 1、3 条的目录前置与端点已交付，原文见底本。
 
 ## 2026-09-16 — 裁决：候选标签碰撞与属性键敏感检测
 ## 2026-09-20 — 补登：Top-K 安全摘要恢复及 b1/b2/b3 结项
@@ -697,8 +700,8 @@ Workflow 被拒返回 `blocked`，超时用尽返回 `failed`，原 `error_code`
 
 ## 2026-09-20 — 补登：D-6 有界列表排序的有限替换
 
-- **排序**：Work Object 列表先过滤，再按 due_at ASC NULLS LAST、created_at DESC NULLS LAST、work_object_id COLLATE "C" ASC 排序，最多返回 200 条并带 limit_exceeded。
-- 不加客户端排序或分页。「近 30 天已完成」视图按 completed_at DESC 排序。
+- **排序**：Work Object 列表先过滤，再按 due_at ASC NULLS LAST、created_at DESC NULLS LAST、work_object_id COLLATE "C" ASC 排序，再读最多 201 条判断溢出，保序返回前 200 条并带 limit_exceeded。
+- 不加客户端排序或分页。「近 30 天已完成」视图按 completed_at DESC、work_object_id ASC 排序。
 
 ## 2026-09-22 — P2-GOV-SYNC-066：LOGOUT-002 缓存 B2 判据精化
 
@@ -753,10 +756,10 @@ LOGOUT-002 测试里，空身份查询只在以下条件同时成立时豁免：
 3. **HQ4**：确认卡绑定 tenant + ai_user_id，不绑登录令牌指纹；确认时须当前登录有效；同账号重授权仍有效，换账号作废。
 4. **D5**：MCP 不做“到期提醒 + 人工重授权”过渡；等授权服务提供 refresh_token、吊销端点与 offline_access（E1）后再做 R-MCP，此前到期即需手动重授权，记欠债。
 5. **模型可切换**：开发与验收模型可随时切换，不改运行时合同。
-6. **H4：新路径 Golden 合同**：required Golden 现为新旧两条路径并存，见 [2026-11-02 裁决](#2026-11-02--裁决云端自动办理方向聊天上传填表后续技术选型定稿与开发顺序调整) 第 9 条。**不修改 Golden fixtures，不改 `FROZEN_GT_IDS`，不改判卷断言。**
+6. **H4：新路径 Golden 合同**：本条只约束新路径（`RUNTIME_ENGINE=agentscope`）的 Golden 回放；required Golden 的现状（新旧两条路径）见 [PLAN「Runtime 替换 M6 登记」](PHASE2_PLAN.md#runtime-替换-m6-登记2026-11-02)。**不修改 Golden fixtures，不改 `FROZEN_GT_IDS`，不改判卷断言。**
    - (a) `match=none` 时回放模型只发一次 `report_unsupported()`，映射为 `no_capability_found`。
-   - (b) 命中能力先 `reset_tools` 激活所在组（`catalog.group_of`），再按 fixture 参数调用。
-   - (c) 写工具调用后生成确认卡并 `waiting_user`；第二轮“确认”由前置入口处理，不再调模型。
+   - (b) 命中能力先 `reset_tools` 激活所在组（`catalog.group_of`），再按 fixture 参数原样调用，读最后一个工具结果的 `message` 作文字回复。
+   - (c) 写工具调用后生成确认卡并 `waiting_user`；第二轮“确认”由前置入口处理，不再调模型（回放模型被调用即报错）。
    - (d) 新路径只暴露 `query`、`workflow`；GT-006、GT-007、GT-029～033 不适用，单列报告。
    - (e) GT-014 别名选择不承接，单列报告。
    - (f) 缺 `input_schema` 的 fixture 只在回放进程内补空对象 schema；生产目录缺 schema 仍失败关闭。
@@ -779,20 +782,20 @@ LOGOUT-002 测试里，空身份查询只在以下条件同时成立时豁免：
 
 ## 2026-11-01 — 裁决：M3 D 人工交接合同、受限终结与先合并后验收
 
-1. **Q1 受限终结**：注销、会话失效、绑定失效，或封存超时且 worker 失联的交接 run，只能走“仅终结 + 清理”：历史授权限同 tenant/user/binding/发布、binding revision 不新于安装值；不解密、不做浏览器 IO、无用户入口，只写 `failed/browser_verification_failed/incomplete`。入口 `PostgreSQLBrowserRunStore.expire_lost_handoff`、`record_historical_handoff_quarantine`（`app/infra/persistence/browser/runs.py`）。终结不等于释放租约；worker 卡住时不承诺滞留上限。
-2. **Q2 交接合同**：`BrowserRunResponse.handoff` 含 `sealed_at`、`deadline` 和本人三项 `fields`（category、position、description），只回本人本会话。`POST /api/v1/browser-runs/{task_id}/{run_id}/verify-result` 复用认证、CSRF 与 bound session，返回 202。“我已提交”精确匹配，取可信 bound session，恰一个活动交接才核实。交接期间新路径隐藏同会话 D 工具。交接期间同会话新 D 请求返回 409 `browser_handoff_active`。
+1. **Q1 受限终结**：注销、会话失效、绑定失效，或封存超时且 worker 失联的交接 run，只能走“仅终结 + 清理”：历史授权限同 tenant/user/binding/发布、binding revision 不新于安装值，并核对精确 run 行；在既定锁序内用 SQL 重核负面事实或封存时限，且要求 worker 失联，仅续期延迟、时限未到且无负面事实时拒绝。不调用 `validate`、不解密、不做浏览器 IO、无用户入口，只写 `failed/browser_verification_failed/incomplete`。入口 `PostgreSQLBrowserRunStore.expire_lost_handoff`、`record_historical_handoff_quarantine`（`app/infra/persistence/browser/runs.py`）。终结不等于释放租约；worker 卡住时不承诺滞留上限。
+2. **Q2 交接合同**：`BrowserRunResponse.handoff` 含 `sealed_at`、`deadline` 和本人三项 `fields`（category、position、description），受当前读授权约束，只回本人本会话。`POST /api/v1/browser-runs/{task_id}/{run_id}/verify-result` 复用认证、CSRF 与 bound session，返回 202；`handoff_check` 按所有者 + 当前授权判定（同取消授权口径）。“我已提交”精确匹配，取可信 bound session，恰一个活动交接才核实。交接期间新路径隐藏同会话 D 工具。交接期间同会话新 D 请求返回 409 `browser_handoff_active`。
 3. **Q3**：助手不取密、不代登录；开发库租约人工恢复、重启后端须执行时另行授权。
 4. **Q4**：核实器 `DFormRuntime.check_handoff` 恒 `unsupported`，“我已提交”不写 completed；提示用户到 OA 核对、勿重复提交。历史 D completed 只表示填写完成。
 5. **Q5**：重启后无法证明旧窗口已关，租约不自动回收（欠债）；已请求取消的封存 run 写 `failed/browser_verification_failed/incomplete`，不写 cancelled。人工恢复不能核销自动回收。
 6. **Q6**：底线④只约束自动化，不拦用户在交接窗口手动浏览。
 7. **离开期间授权**：已执行完；现按 2026-11-19 第 2 节第 1 项。
-8. **首版验证 run**：由 `TeachingPlan.purpose == initial_validation` 判定，填写核验通过即 completed 并关窗，不进人工交接；不放宽业务 verified 条件。
+8. **首版验证 run**：只有已激活发布的业务 run 进入人工交接；首版验证 run 由已持久化、MAC 绑定的 `TeachingPlan.purpose == initial_validation` 判定（不用 prepared 状态、HTTP 参数、配置模式或管理员身份判定，坏计划报错不回退），填写核验通过即 completed 并关窗，不进人工交接；不放宽业务 verified 条件。
 9. **verify-result 503**：`browser_chat_unavailable` 或 `authentication_unavailable`，仅说明，不新增失败条件。
 10. **验收义务**：H 系列未取证项、actors 首版管理全链、legacy D 人工交接仍须真实验收；CI 与静态 PASS 不能核销。见 [PLAN M3 新增欠债](PHASE2_PLAN.md#runtime-替换-m3-新增欠债2026-11-01)。
 
 ## 2026-11-02 — 裁决：云端自动办理方向、聊天上传填表、后续技术选型定稿与开发顺序调整
 
-1. **云端自动办理**：浏览器任务在服务端执行，用户离线照常继续。确认卡用业务语言写清办什么、填什么；确认后自动执行到最终提交。真实启用自动提交按流程逐项授权，测试阶段由人手动提交。自动提交复用 `BrowserSubmissionService.decide_write`、`reserve_write_dispatch`、`resolve_dispatch` 的 unknown 不重放语义；每个流程须有结果查询方式与成功判据，结果不明就保持待核实、不重复提交。
+1. **云端自动办理**：浏览器任务在服务端执行，用户离线照常继续。确认卡用业务语言写清办什么、填什么；确认后自动执行到最终提交。真实启用自动提交按流程逐项授权，测试阶段由人手动提交。自动提交复用 `BrowserSubmissionService.decide_write`、`reserve_write_dispatch`、`resolve_dispatch` 的 unknown 不重放语义；每个流程须有结果查询方式与成功判据，按原身份与业务唯一键核对单号或业务后态；结果不明就保持待核实、不重复提交。
 2. **远程画面**：可选，默认只看、可接管；浏览器不在用户终端，不迁移 cookie。用 Playwright screencast + 服务端白名单输入转发；人机切换：停收新动作 → 排空在途 → 人工独占 → 交还后重新观察。输入法不过关时改 KasmVNC。
 3. **上传 Excel 填表**：模型只提列到字段的映射，不产生行数据；确认卡绑定原件哈希、工作表、范围与映射，服务端确定性填写，查不到显式标注。首版只收 `.xlsx`；LibreOffice 兼容导入在样表验收后才开。默认在原表副本只填确认过的空格。
 4. **后台执行**：所有任务类型确认后持久入队，由独立 worker 执行（离线继续、重启续跑、取消、限并发），统一用 Procrastinate（PostgreSQL）。浏览器业务账本与租约仍以 PG run 存储为准，队列只派发；重启续跑不重放 unknown 写入。四个旧进程内调度器逐步迁移，迁移前修正“入队即完成”假设。队列 schema 安装须专项授权。
@@ -834,15 +837,16 @@ LOGOUT-002 测试里，空身份查询只在以下条件同时成立时豁免：
 
 1. **批准**：三棒按方案 v1.6 施工。
 2. **一次性授权（限三棒施工与验收期）**：
-   - 对开发库 `127.0.0.1:5432/eternalai` 与测试库 `127.0.0.1:15432/eternalai_test` 只 upgrade 方案附录 A/B 的 schema（哈希不符即停，执行前核对目标），并写 `background_jobs`、`file_artifacts`、`eternalai_queue.*` 记账行。
-   - 雨爷本人账号验收；跨账号只用雨爷本人登录的第二测试账号。
-   - 启停本机 18005 与 `python -m app.worker`。
-   - 在 `E:/eternalai-data/file-artifacts-standard` 与 `E:/eternalai-data/file-artifacts-acceptance-sample` 两根内按方案删除到期文件。
-   - `uv sync` 安装方案所列版本，哈希不符即停。
-   - MAC 钥由雨爷本人写入 `.env`，施工方不碰。
-   - 第 8 条：施工方可在测试库 `eternalai_test` 执行一次受控故障注入脚本，验证接收事务回滚；脚本不提交，不含其他库。
-   - **不含**：合并、部署、downgrade；其他库、路径、进程；业务凭据；两根以外的删除；真实业务数据。
-3. **已决项**：J1 后台骨架以自检 + `background_jobs.reconcile` 验收，不代表业务处理或旧调度器迁移已验收；J5 本机上传检查只剥离环境变量（开发期例外）；J6 标准根保留 14 天；J9 MAC 钥 `key_id=v1`，暂不轮换；J10 附件只在当前会话可见，本人直链有效至到期。
+   - Schema 只 upgrade（R1、R2 随首棒，R3 随产物棒），内容以方案附录 A/B 为准，哈希不符即停；目标只限开发库 `127.0.0.1:5432/eternalai`（容器 `eternalai-postgres-1`）与测试库 `127.0.0.1:15432/eternalai_test`（容器 `eternalai_test_db-postgres-1`），每次执行前按方案 §4 核对目标。
+   - 两库中只写 `public.background_jobs`、`public.file_artifacts` 与 `eternalai_queue.*` 记账行，不改其他表数据。
+   - 雨爷本人账号验收：后台服务自检的提交、重放、取消；指定非敏感 xlsx 样表与仓库外合成测试文件的上传、引用、下载。跨账号隔离只用雨爷提供并本人登录的第二测试账号，没有则标未真实验收。
+   - 进程：启动或重启本机 18005；`python -m app.worker` 的启动、Ctrl+C 停止与强杀。
+   - 存储根：创建 `E:/eternalai-data/file-artifacts-standard` 与 `E:/eternalai-data/file-artifacts-acceptance-sample`；只在两根下按方案 §6 的 D1a、D1b、D2 删除元数据对应文件，D4 为队列库内部记账行删除。
+   - 依赖：项目内 `uv sync` 下载方案 §5 所列版本，按棒引入，wheel 哈希不符即停。
+   - 密钥：产物 MAC 钥由雨爷本人生成并写入 `.env`，施工方不生成、不读取、不写入。
+   - 第 8 条：在测试库 `eternalai_test` 执行一次受控故障注入脚本，验证接收事务回滚；脚本不提交。
+   - **不含**：合并、部署、downgrade；其他库（含同实例 `eternalai_dispatch_test`、`eternalai_pilot`）、路径与进程；OA 或业务凭据的获取与持有；两根以外的文件删除，以及根目录、元数据行、已完成作业行的删除；生产或真实业务数据。
+3. **已决项**：J1 后台骨架以自检 + `background_jobs.reconcile` 验收，不代表业务处理或旧调度器迁移已验收；J5 本机上传检查只剥离环境变量（开发期例外），网络与文件隔离随 Linux 容器实现；J6 标准根保留 14 天；J9 MAC 钥 `key_id=v1`，暂不轮换；J10 附件只在当前会话界面可见，401 重登可恢复，刷新或主动退出后不显示，本人直链有效至到期。
 4. **作业恢复**：一条队列行最多执行一次，不用 Procrastinate 原地 retry；按 `claim_token` 与账本心跳判停，恢复换新行，派发含首次不超过 3 次。
 
 ## 2026-11-03 — 裁决：后台作业同事务入队改用官方 SQL 函数与开发库目标识别口径
@@ -869,21 +873,21 @@ LOGOUT-002 测试里，空身份查询只在以下条件同时成立时豁免：
 ## 2026-11-04 — 裁决：IM 机会层执行口径（评审、数据库、SSO 与部署条件）
 
 1. **IP + HTTPS**：内网只用 IP；HTTPS 用内部 CA，证书含实际 IP SAN。
-2. **SSO 例外**：只有专用 SSO 登录接口可把 **60 秒短期登录 token** 交给本人浏览器内存，用于 **POST 到固定 IM 登录地址**；不得进响应、URL、postMessage、持久化或日志。
+2. **SSO 例外**：只有专用 SSO 登录接口可把 **60 秒短期登录 token** 交给**已认证的本人**浏览器内存，用于 **POST 到固定 IM 登录地址**；不得扩展到普通业务响应、URL、postMessage 或持久化，不得写日志；其余凭据边界不变。
 3. **数据库**：IM 升级只在复制出的新容器、新端口测试，现有两库不动；通过后才申请合并。
 4. **评审**：改按 2026-11-19 分工；先完成功能再评审，重点删过度设计。
-5. **最低安全四条**：①不串身份；②凭据不进日志、响应、URL、postMessage 与持久化（例外仅第 2 条）；③未经本人确认不写业务；④引文不当指令。其余不加无依据的护栏。
+5. **最低安全四条**：①不串身份；②凭据不进日志、普通业务响应、URL、postMessage 与持久化（例外仅第 2 条）；③未经本人确认不写业务；④引文不当指令。其余不加无依据的护栏。
 6. **CI 临时库迁移**：允许；开 PR、触发 CI 不用请示。不授权本机或真实库迁移。
 
 ## 2026-11-05 — 裁决：IM 验收自动执行与持久登录口径
 
 1. 内网默认开，不再问；IM 验收复用各账号持久 profile，授权内自动推进。
-2. 会话失效时可点登录用浏览器已存凭据；不读、不输入、不保存密码，身份不符即停。
+2. IM 验收中会话失效时，脚本只可在对应账号窗口点击登录、使用浏览器已保存的凭据；不读、不输入、不另存账号密码，身份不符即停，不扩大账号或业务动作范围。
 3. 合并仍等雨爷说“合并”；正式写入仍须本人确认卡。
 
 ## 2026-11-06 — 裁决：IM 机会层 V4 委托触发语义、schema 与第 4 轮监理
 
-1. **委托语义**：群内“委托 @本人助手 @目标助手 问题”即本人确认转交。A 只回固定回执；B 只用已授权给请求人的资料，答案私回请求人；不借用主人权限。
+1. **委托语义**：群内“委托 @本人助手 @目标助手 问题”即本人确认转交。A 只回固定回执；B 只用 B 已授权给请求人的已发布资料，答案只私回请求人；两位主人的权限都不借用。前提是 A、B 两个助手 Bot 都订阅该频道；不符合格式的消息沿用 V3。
 2. **schema**：`im_inbox.delegate_agent_id`，migration `20261105_120000`，两库已 upgrade。
 3. 合并与升级授权已执行完。
 4. **前缀剥离**：只剥离开头的“委托”和两个已验证提及，正文不动。第 4 轮监理是本 task 特例。
@@ -898,8 +902,8 @@ LOGOUT-002 测试里，空身份查询只在以下条件同时成立时豁免：
 ## 2026-11-06 / 2026-11-08 — 裁决：V2b 文件来源、schema、下载信任边界与 IM 身份方向
 
 1. **文件来源**：私发授权绑定 artifact_id + sha256。
-2. **schema**：`im_deliveries` 加可空 `artifact_id`、`artifact_sha256`、`grant_expires_at`、`grant_revoked_at`，migration `20261106_120000`，两库已 upgrade。
-3. **下载边界**：甲确认私发后乙本人可下载同一版本，至多到文件到期（≤14 天）；甲可撤销。撤销或到期后不能新下载；已下载不可召回。乙不获得甲的其他权限；持有卡片或 URL 不算权限。
+2. **schema**：`im_deliveries` 加四个可空列 `artifact_id UUID REFERENCES file_artifacts(artifact_id)`、`artifact_sha256 BYTEA`、`grant_expires_at TIMESTAMPTZ`、`grant_revoked_at TIMESTAMPTZ`，migration `20261106_120000`，两库已 upgrade。
+3. **下载边界**：甲本人确认私发后，乙以本人登录在原统一下载地址下载同一版本，至多到文件到期（≤14 天）；甲可撤销。撤销或到期后乙不能新下载或新增核实，可看历史；已下载不可召回，转发无效。乙不获得甲的会话、聊天附件读取或其他文件权限；持有卡片或 URL 不算权限。
 4. **身份**：工作台账号即 IM 账号，一人一号；`im_account_bindings` 只是技术对应。映射保留/删除期限到 V5 试点前再定。
 
 ## 2026-11-09 — 裁决：IM 通用交互先纯配置试用，再定统一会话左栏
