@@ -1,13 +1,10 @@
 # 任务派发模块集成说明
 
-业务唯一来源是 [WORK_DISPATCH.md](docs/phase2/WORK_DISPATCH.md)，Schema A 唯一范围是该文件 §11。本文记录模块与宿主接线，不另设业务规则。当前是阶段 B 静态候选；独立 Opus Review、数据库执行和真实业务验收均未完成。
+业务唯一来源是 [WORK_DISPATCH.md](docs/phase2/WORK_DISPATCH.md)，当次 Schema A 清单见其 §11。本文记录模块与宿主接线。PR #225 已合并；专用 `eternalai_dispatch_test` 的一次性迁移往返及合成验证已完成，真实 E01–E10 仍开放。原阶段 B 时点详见[阶段 B 原记录](docs/phase2/archive/INTEGRATION_to_20261119.md)。
 
 ## 仓库与候选
 
-- 工作树：`C:/Users/Administrator/.codex/worktrees/work-dispatch-001/eternalai`，分支 `phase2/P2-WORK-DISPATCH-001`。
-- 已成功 fetch 的开发 base：`1801124622f50fd74e34ed5a7dfed288199cdb88`。静态集成前文档 HEAD：`cecad1caff8bf612967ea0ddae5716f7a1b8e5d3`；本文首次写入时实现尚未提交，具体文件由 W1–W5 分工维护。
-- 最终候选 SHA、完整原始 diff、逐行规格、实际检查结果和评审记录绑定在仓库外 `C:/Users/Administrator/.codex/visualizations/2026/10/22/01a16307-69db-71d1-a0af-0b7682bf0a05/p2-work-dispatch-001/review-packet/`。从 Git 获取候选实际 HEAD；不将本文的文档 HEAD 冒称实现候选。
-- 不从旧 ZIP/source/b4bab5b 施工，不改共享 checkout 或 AgentScope/runtime 工作树。没有 push、PR、merge 或部署。
+PR #225 记录最终候选、独立评审和集成证据。2026-10-22 开工时工作树、基线和未推送/未合并状态见[阶段 B 原记录](docs/phase2/archive/INTEGRATION_to_20261119.md)。
 
 ## 模块与迁移接缝
 
@@ -52,18 +49,10 @@ OpenAPI 当前含 21 个路径、25 个操作，来自上述两个实际路由�
 
 没有读取真实存量，保留可验证身份下的显式旧任务转换，身份无法确定则明确受阻。周期每期/每目标独立 BYTEA 快照，不挪用历史任务 FK；100 MiB 每周单目标约 5.08 GiB/年，100 独立目标约 508 GiB/年只是容量计算，未测量实际数据。无新增全局存储门、共享 blob schema、自动清理或保留期政策。
 
-Schema A 仅代码编写；没有数据库连接、查询、DDL、upgrade/downgrade、数据迁移或业务写入。Schema B 未批准，后续用户实机测试也不自动授予数据库、取密、登录、保存或提交权限。
+2026-10-22 静态阶段仅有 Schema A 代码授权。后续专库一次性授权和迁移往返见 [WORK_DISPATCH §9](docs/phase2/WORK_DISPATCH.md#9-统一待确认和外部条件清单) X02；其他专项动作依各自授权办理。
 
 ## 静态结果与交付边界
 
-- W1 核心和 W2 周期/附件已有各自定向 Ruff/mypy 静态结果，见仓库外 W1_RESULT/W2_RESULT；不是运行验收。
-- W5 API/宿主/生成器授权文件 Ruff 通过；W5 五源 focused mypy 通过。完整 `mypy app/` 检查 278 源，剩 31 条既有 Browser/MCP/Windows 依赖/stub/类型错误，本任务代码未报错；原始输出为仓库外 mypy-app-final.txt，未顺手改范围外代码。
-- 完整 `tsc --noEmit -p web/tsconfig.json` 剩两条既有测试夹具与新合同不兼容：dispatchApi.test.ts 缺新增必填 mode，workObjectLifecycleApi.test.ts 的 accept 缺 relation ID。生产源码报告中的一处 reminder 默认值由原 owner 修复。没有修改测试、削弱断言或改 tsconfig 排除测试；不能称全量 typecheck 通过；当前既有 build 的类型检查步骤也会被这两条测试夹具合同阻断，未擅自修改它们换绿。
-- W5 改动前端文件 ESLint 通过。首次从仓库根调用因未找到 web 配置失败，改为 web 工作目录后通过。未新增配置。
-- 导出器静态核对只导入路由/DTO/认证工厂、裸 FastAPI，无 production app/composition/config/数据库/服务构造或 lifespan 执行，只写 work-objects.openapi.json。已执行生成；Orval 7.21.0 只运行 `--project workObjects`，只生成其两个文件并仅对它们去尾空白。未调用全项目 generate:api/normalize。
-- 任务 web/node_modules 是经允许建立的精确 junction，复用 `E:/code/eternalai/web/node_modules`；保留用于静态工具，不跟踪、不安装、不改锁、不删除共享目录。W2 留下的空 .venv 未扫描或删除。
-- `git diff --check` 通过；最终精确清单、候选和状态以外部 packet 为准。没有新增/修改/执行测试、pytest/Golden/E2E、应用/后台/业务构建或 CI。required checks 未豁免；本轮无 PR。
+2026-10-22 阶段 B 的静态结果、工具输出及当时尚未独立评审的时点见[阶段 B 原记录](docs/phase2/archive/INTEGRATION_to_20261119.md)。PR #225 已经独立静态评审、修复、专用库合成验证并合并；按已登记结果，2026-10-24/25 合成覆盖后端 E01–E10 和页面 E05/E06/E07。真实 E01–E10 与未完成的 M 项以 [WORK_DISPATCH §8](docs/phase2/WORK_DISPATCH.md#8-必要验证与真实业务验收) 和 [PLAN](docs/phase2/PHASE2_PLAN.md#既有活欠债) 为准。
 
-独立 Opus 5.5 C 尚未执行。B01–B12 的代码路径与宿主接线已形成静态候选供 Review，不能据此宣称真实业务完成。E01–E10 和 M 项运行验收均未执行；用户在全部代码及独立 Review 修复后亲自实机测试。
-
-Q07 唯一负责人已明确批准，缺失/多人在创建前整体拒绝。Q03/Q05 已批准。Q01/Q02/Q04、Q06 持续委托与停用联动、漏期策略、Q08 撤回终态仍按规格默认记录；无账号停用源不是禁止全部周期生成的新门。真实目录 Source、领导岗位名单、账号停用事实、旧数据分布、可操作账号/任务/附件和相应授权仍是现场缺项。没有用 Mock、空成功或额外门禁替代这些条件。
+Q03/Q05/Q06/Q07/Q08 已登记裁决，Q06 的生产账号停用事实仍未接；真实目录 Source、领导名单、唯一负责人资料及获准账号、环境和业务动作仍待现场证据。见 [WORK_DISPATCH §9](docs/phase2/WORK_DISPATCH.md#9-统一待确认和外部条件清单)。
