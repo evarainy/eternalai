@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from app.db.config import normalize_database_url
-from scripts.reset_test_db import reset_public_schema, validate_test_database_url
+from scripts.reset_test_db import reset_xdist_worker_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260831_120000"
@@ -208,10 +208,9 @@ def _cleanup(prefix: str) -> None:
 
 def test_backfill_assigns_only_unique_exact_owner_and_roundtrip_loses_no_rows() -> None:
     # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
-    # Start from an empty head instead of relying on which test files ran earlier here.
-    reset_url = _database_url()
-    validate_test_database_url(reset_url, allow_xdist_worker_databases=True)
-    reset_public_schema(normalize_database_url(reset_url))
+    # In a throwaway CI xdist worker database, start from an empty head instead of
+    # relying on which test files ran earlier there; other databases are left alone.
+    reset_xdist_worker_database(normalize_database_url(_database_url()))
     config = _alembic_config()
     prefix = f"trace-owner-{uuid4().hex}"
     command.upgrade(config, "head")

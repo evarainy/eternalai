@@ -19,6 +19,7 @@ ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost"})
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # CI runs pytest-xdist with one database per worker on the same fixed instance.
 _FIXED_TEST_DATABASE_NAME = re.compile(r"eternalai_test(?:_gw[0-9]+)?")
+_XDIST_WORKER_DATABASE_NAME = re.compile(r"eternalai_test_gw[0-9]+")
 
 
 class UnsafeTestDatabaseUrlError(ValueError):
@@ -89,6 +90,20 @@ def reset_public_schema(database_url: str) -> None:
             connection.execute(text("CREATE SCHEMA public"))
     finally:
         engine.dispose()
+
+
+def reset_xdist_worker_database(database_url: str) -> None:
+    """Empty a throwaway CI pytest-xdist worker database; leave any other database alone.
+
+    Only ``eternalai_test_gw<N>`` (created per CI run) is reset. The shared fixed test
+    database keeps its migration downgrade guards' protection.
+    """
+
+    if not _XDIST_WORKER_DATABASE_NAME.fullmatch(make_url(database_url).database or ""):
+        return
+    reset_public_schema(
+        validate_test_database_url(database_url, allow_xdist_worker_databases=True)
+    )
 
 
 def upgrade_schema(database_url: str) -> None:

@@ -24,7 +24,7 @@ from app.infra.auth.postgresql import (
     PostgreSQLCredentialStore,
     credential_associated_data,
 )
-from scripts.reset_test_db import reset_public_schema, validate_test_database_url
+from scripts.reset_test_db import reset_xdist_worker_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260821_090000"
@@ -87,10 +87,9 @@ def test_primary_key_is_tenant_user_and_target_system() -> None:
 
 def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
     # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
-    # Start from an empty head instead of relying on which test files ran earlier here.
-    reset_url = _database_url()
-    validate_test_database_url(reset_url, allow_xdist_worker_databases=True)
-    reset_public_schema(normalize_database_url(reset_url))
+    # In a throwaway CI xdist worker database, start from an empty head instead of
+    # relying on which test files ran earlier there; other databases are left alone.
+    reset_xdist_worker_database(normalize_database_url(_database_url()))
     config = _alembic_config()
     command.upgrade(config, "head")
     database_url = normalize_database_url(_database_url())
