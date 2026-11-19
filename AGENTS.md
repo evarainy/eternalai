@@ -40,7 +40,7 @@
 4. 不得弱化测试换绿（空断言、宽泛 skip、删除断言等）；失败路径保留 error code，不报成功；不得回归 session/tenant/user 隔离。Golden negative/boundary 必须 100% 通过，包括 GT-012 多绑定 scope clarification；下游 descriptor 存在不释放依赖门。
 5. 安全分流只依赖可真实校验的协议事实或配置值，不以 `ENV` 等自由文本标签承担安全开关。
 6. 明文 password/token/cookie/sessionid/access_token/refresh_token 不得进入代码、Trace、ResponseEnvelope、fixture expected、日志或报告；不得用 `not_applicable` 隐藏失败，未完成义务按「Git 与永久任务记录」登记欠债。
-7. **读取未脱敏素材须雨爷当次人工显式授权**，包括 `_scratch/oa/` 原始 HAR、登录日志、截图和未确认清洗的采集件。只读、提取字段、排查泄漏不构成授权；核查泄漏限已生成且符合读取授权的日志与产物，不读原始件。相关委派必须带此限制，授权不外溢到其他文件或后续动作。唯一常设例外：已交代任务所需的最小素材可由 OpenCode 调用的内网 qwen 模型在内网只读分析并只回脱敏结论，范围与排除项见 DECISIONS 2026-11-19 第 2.2 项。
+7. **读取未脱敏素材须雨爷当次人工显式授权**，包括 `_scratch/oa/` 原始 HAR、登录日志、截图和未确认清洗的采集件。只读、提取字段、排查泄漏不构成授权；核查泄漏限已生成且符合读取授权的日志与产物，不读原始件。相关委派必须带此限制，授权不外溢到其他文件或后续动作。唯一常设例外：经确认的 OpenCode 内网 qwen 模型可对已交代任务所需的既有最小素材做内网只读分析并只回脱敏结论，Claude 与 codex 不得凭此经手原件，范围与排除项见 DECISIONS 2026-11-19 第 2 节第 2 项。
 8. 删除文件/目录或改写 Git 历史、修改 secrets/`.env`、DB schema/真实数据或迁移、全局/系统变更、公开发布/生产部署、rebase、reset-hard、force push、修改分支保护设置，均须对应动作专项授权；`FROZEN_GT_IDS` / Golden fixtures 也须人工显式批准。不得绕过 hooks 或 branch protection。限定范围的常设授权（离开期间普通 PR 合并、IM 验收测试证书续签、固定测试库迁移版本回退）见 DECISIONS 2026-11-19 第 2 节，范围外仍须专项授权。
 9. 一次性作业禁令不原样固化为长期合同；只维护经现役设计验证的永久约束。
 
