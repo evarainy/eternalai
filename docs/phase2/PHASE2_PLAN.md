@@ -972,14 +972,31 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 执行记录与提案、试运行、运行快照只在会话内存 | 第一版不落库，服务重启即丢失，用户需重新查询再保存；「让 AI 接手」的失败快照同样随重启丢失 | 无 | 持久执行记录棒（待排） | 需要跨重启保存时 | `app/user_skills/session_store.py`；仓库外 `readonly-skill-20261117/PLAN.v3.1.md` §6-1 |
+| 执行记录与提案、试运行、运行快照只在会话内存（已关闭） | 由 `P2-READONLY-SKILL-002` 改存会话两表，按租户、本人、绑定会话隔离；待接手跨重启等未实测项转记该棒欠债 | 无 | `P2-READONLY-SKILL-002`（已完成） | 已满足：2026-11-18 真实验收两次后端重启后「把刚才的查询保存为功能」均出含原两步的审阅卡 | `app/infra/persistence/user_skills.py::PostgreSQLUserSkillSessionStore`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r4.md` |
 | Excel 导出只支持纯 OA 功能 | worker 的网关只接 OA 会话，含其他系统步骤的功能导出被拒（`user_skill_export_unsupported`） | 新系统只读能力接入 | 新系统接入后的导出扩展 | 新系统只读能力接入时 | `app/infra/jobs/user_skill_report.py` |
 | 参数、前后传值、逐项查询未真实验收 | OA 两个叶子没有入参，真实环境里走不到「每次填写」「来自前一步」「对列表逐条查」；只有静态评审证据（雨爷选方案 A） | 新系统带入参的「列表→单条」只读能力 | 新系统接入棒补跑 V7–V9 | 新系统接入时 | 仓库外 `PLAN.v3.1.md` §9.3 |
-| 能力变化后暂停与「让 AI 接手」未真实触发 | 需要可控地改变能力合同或制造失败，现有环境不允许 | 无 | 具备隔离能力环境时 | 能力指纹变化后功能转「已暂停」、失败结果可交给 AI 只读接手 | 仓库外 `PLAN.v3.1.md` §5 |
-| `non_empty`、`max_count` 断言审阅卡无选择入口 | 定义格式与引擎已支持，第一版只自动生成 `complete` 断言；PLAN 未规定由谁、如何选择这两种 | 无 | 「我的功能」第二阶段 | 有明确选择方式需求时 | `app/user_skills/proposal.py::compile_trial`；Sol r2 |
+| 能力变化后暂停与「让 AI 接手」未真实触发 | 需要可控地改变能力合同或制造失败，现有环境不允许。`P2-READONLY-SKILL-002` 已在开发库手工暂停一行并真实验证「重新生成」恢复可用；由真实合同变化触发的暂停与「让 AI 接手」仍未实测 | 无 | 具备隔离能力环境时 | 能力指纹变化后功能转「已暂停」、失败结果可交给 AI 只读接手 | 仓库外 `PLAN.v3.1.md` §5；`readonly-skill-phase2-20261118/acc/ACC_r1.md` V7 |
+| `non_empty`、`max_count` 断言审阅卡无选择入口（已关闭） | `P2-READONLY-SKILL-002` 在审阅卡提供「列表不能为空 / 最多 N 条」检查，失败显示具体原因、不可保存、不可接手 | 无 | `P2-READONLY-SKILL-002`（已完成） | 已满足：2026-11-18 真实验收阈值超限提示失败且不可保存，调整后保存成功 | `app/user_skills/rendering.py::user_check_failure`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` V6 |
 | worker 被硬杀遗留 `running` 任务无清扫 | 导出作业中途被杀，任务行停在 running | 无 | 任务存储清扫任务（待排） | 清扫任务立项时 | 仓库外 `PLAN.v3.1.md` §10 |
 | 执行前先复述查询口径的时序未取证 | 最终回复与日志不能证明「先复述、后执行」的先后 | 无 | 下一次涉及聊天口径的真实验收 | 取得逐条流式时序证据时 | 仓库外 `readonly-skill-20261117/acc/ACC_r6.md` |
 | 第二阶段能力未做 | 条件分支、内嵌智能体步骤、并发逐项、共享与审核、自动翻页属第二版 | 无 | 「我的功能」第二阶段 | — | 仓库外 `PLAN.v3.1.md` §1.2 |
+
+### 「我的功能」第二阶段第一批 `P2-READONLY-SKILL-002` 新增欠债（2026-11-19）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 待接手跨重启、会话到期、40 条剪裁与物理清理未真实实测 | 真实验收只覆盖重启后保存提案；4 小时 / 600 秒到期与限批清理需要等待或改时钟，未做 | 无 | 「我的功能」后续批次 | 下一批真实验收覆盖待接手跨重启、到期失效与清理 | `app/infra/persistence/user_skills.py::PostgreSQLUserSkillSessionStore`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` 未实测清单 |
+| 系统中文输入法组字未真实触发 | 验收环境的系统输入法未进入组字，组字期间不弹、不选、不发送只以合成事件验证 | 无 | 「我的功能」后续批次 | 在可用输入法的桌面环境人工复验一次 | 仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` V8 |
+| AgentScope 对话历史仍为进程内 | 重启后模型只看到本会话已完成查询的名称，看不到此前的对话内容 | 无 | 待雨爷裁决是否需要 | 裁定不做，或另立持久对话历史任务 | `app/infra/orchestration/agentscope_runtime/runtime.py`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r4.md` |
+| 评审修复后未重跑真实验收 | 真实验收候选早于 Astra 第四至第七轮修复；手输即显标签、名单读取失败提示、重新生成的格式与结构判定只有静态检查与定向既有测试 | 无 | 「我的功能」后续批次 | 下一批真实验收覆盖上述行为 | 仓库外 `readonly-skill-phase2-20261118/review/`、`acc/ACC_r4.md` |
+| Astra 第八轮聊天侧发现未修 | 另一页改名并把旧名让给另一功能、且本页名单刷新失败时，手输、候选或面板可用旧名单建立标签；组字期间名单回包可丢失较长名称的编辑；另有名称附近编辑重新显标等四项 P1。后果为执行本人另一只读功能，结果卡显示服务端现名 | 无 | 「我的功能」后续批次 | 候选与面板只用当前成功名单，名单更新时复核已有标签，或裁定不做 | 仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-01～03、P1-01～04 |
+| Astra 第八轮重新生成发现未修 | 非枚举步骤输出凭同名 `format` 放行、相同 `additionalProperties` 覆盖不同字段、自定义 format 或 `deprecated` 误拒、`items: true` 误拒；当前可保存的 OA 叶子无参数，比较不可达 | 首个带参数的只读叶子接入个人功能 | 该叶子接入棒 | 重新生成对步骤输出 `format` 与对象关联约束保守拒绝，误拒两项按需放宽 | `app/user_skills/proposal.py::rebase_definition`；仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-04、P0-05、P1-05、P1-06 |
+
+### 综合业务平台账号绑定与免密跳转 `P2-ZHYW-SYSTEM-ENTRY-001` 新增欠债（2026-11-19）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| 真实账号绑定、更新及免登尚待验收 | 只有本地检查与静态复审，真实目标系统登录未执行 | 待目标运行环境配置及本人验收授权 | 未分配 | 本人在目标环境绑定并更新账号，点击软件卡片落在 `/index`，确认目标系统显示为本人 | `docs/dev/system_entry_sso.md`；PR #296 |
 
 ### OA 失效提示修复 `P2-OA-EXPIRED-HINT-001` 新增欠债（2026-11-17）
 
