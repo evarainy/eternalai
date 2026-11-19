@@ -29,6 +29,9 @@ class PrincipalOrgContext(BaseModel):
     department_id: str | None = None
     # Stable directory join key only; mutable authorization attributes stay in the mirror.
     directory_user_id: str | None = Field(default=None, repr=False)
+    oa_login_id_proof: str | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None,
+    )
 
 
 class Principal(BaseModel):

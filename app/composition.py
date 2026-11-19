@@ -142,6 +142,8 @@ from app.infra.persistence.work_object.recurrence import PostgreSQLWorkObjectSer
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.system_entry.oa_login import OAEntryVerifier
+from app.infra.system_entry.tickets import RedisOAEntryTickets, make_entry_redis
+from app.infra.system_entry.zhyw import ZhywEntry
 from app.infra.user_skills.closing import UserSkillTaskCloser
 from app.infra.workflow.catalog import OVERVIEW_ID, production_workflow_capabilities
 from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
@@ -349,6 +351,7 @@ def build_authentication_port(
     identity_hmac_key: bytes,
     credential_ttl_seconds: int,
     tenant_id: str,
+    include_login_id_proof: bool = False,
 ) -> AuthenticationPort:
     """Build the OA verifier without introducing a production HTTP dependency."""
 
@@ -362,6 +365,7 @@ def build_authentication_port(
         identity_hmac_key=identity_hmac_key,
         credential_ttl_seconds=credential_ttl_seconds,
         tenant_id=tenant_id,
+        include_login_id_proof=include_login_id_proof,
     )
 
 
@@ -880,6 +884,9 @@ def build_production_components(
             identity_hmac_key=settings.identity_hmac_key,
             credential_ttl_seconds=settings.oa_credential_ttl_seconds,
             tenant_id=settings.source_tenant_id,
+            include_login_id_proof=(
+                settings.zhyw_base_url is not None and settings.zhyw_sso_key is not None
+            ),
         )
         if authentication is None
         else authentication
@@ -1433,15 +1440,31 @@ def build_production_components(
     )
     oa_tickets = None
     if settings.oa_bridge_public_base is not None:
-        from app.infra.system_entry.tickets import RedisOAEntryTickets
-
         oa_tickets = RedisOAEntryTickets(
             redis_url=settings.redis_url, encryption_key=settings.credential_encryption_key,
         )
+    zhyw_redis = None
+    zhyw_entry = None
+    if settings.zhyw_base_url is not None and settings.zhyw_sso_key is not None:
+        zhyw_redis = make_entry_redis(settings.redis_url)
+        zhyw_entry = ZhywEntry(
+            redis=zhyw_redis, base_url=settings.zhyw_base_url, signing_key=settings.zhyw_sso_key,
+            identity_key=settings.identity_hmac_key,
+            encryption_key=settings.credential_encryption_key,
+        )
+
+    async def close_system_entry() -> None:
+        try:
+            if oa_tickets is not None:
+                await oa_tickets.aclose()
+        finally:
+            if zhyw_redis is not None:
+                await zhyw_redis.aclose()
+
     system_entry_service = SystemEntryService(
         reader=credential_store, oa_verifier=OAEntryVerifier(resolved_binding_verifier),
         oa_tickets=oa_tickets, oa_bridge_base=settings.oa_bridge_public_base,
-        u8_login=u8_login, u8_base=settings.u8_base_url,
+        u8_login=u8_login, u8_base=settings.u8_base_url, zhyw=zhyw_entry,
     )
     credential_binding_service = CredentialBindingService(
         store=credential_store,
@@ -1597,7 +1620,9 @@ def build_production_components(
         leader_roster_admin_service=leader_roster_admin_service,
         credential_binding_service=credential_binding_service,
         system_entry_service=system_entry_service,
-        close_system_entry=oa_tickets.aclose if oa_tickets is not None else None,
+        close_system_entry=(
+            close_system_entry if oa_tickets is not None or zhyw_redis is not None else None
+        ),
         credential_polling_job_queue=credential_polling_job_queue,
         credential_polling_scheduler=credential_polling_scheduler,
         authentication=resolved_authentication,

@@ -11,6 +11,10 @@ import AccountBindingsPage from '../AccountBindingsPage';
  * 原有分节顺序与两个 MCP 面板的挂载意图保留，改查实际的 section 可访问名称。
  */
 const apiMocks = vi.hoisted(() => ({ getBinding: vi.fn(), browserBinding: vi.fn(), mcpServices: vi.fn(), mcpConnections: vi.fn(), mcpOperations: vi.fn() }));
+vi.mock(import('../../../api/systemEntry'), async (importOriginal) => ({
+  ...await importOriginal(),
+  getZhywBinding: () => Promise.resolve({ configured: false, bound: false }),
+}));
 vi.mock('../../../api/mcp', () => ({
   listMcpServices: apiMocks.mcpServices, listMcpConnections: apiMocks.mcpConnections,
   listMcpOperations: apiMocks.mcpOperations,

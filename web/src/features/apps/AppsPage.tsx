@@ -11,6 +11,7 @@ import { NewSoftwareDialog } from './NewSoftwareDialog';
 import { U8EntryCaptcha } from './U8Captcha';
 import { SystemAccountSettings } from './SystemAccountSettings';
 import { SystemLight } from './SystemStatus';
+import { useZhywBinding } from './zhywBindingState';
 import { SYSTEMS, openSystem, systemHref } from './systems';
 import type { BusinessSystem } from './systems';
 import styles from './Systems.module.css';
@@ -42,18 +43,25 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
   const [captchaOpen, setCaptchaOpen] = useState(false);
   const [captchaRevision, setCaptchaRevision] = useState(0);
   const [entryError, setEntryError] = useState<string | null>(null);
-  const target = system.account.kind === 'password' ? system.account.target : null;
-  const sso = target !== null && availability?.[target] === true;
+  const target = system.key === 'integrated' ? 'zhyw'
+    : system.account.kind === 'password' ? system.account.target : null;
+  const zhywBinding = useZhywBinding(target === 'zhyw');
+  const sso = target === 'zhyw' ? !zhywBinding.isError && zhywBinding.data?.configured === true
+    : target !== null && availability?.[target] === true;
   const canEnter = sso || (target === 'oa' && availability !== undefined && href !== null);
-  const hint = target === null ? null
+  const hint = target === null || target === 'zhyw' ? null
     : availabilityFailed ? '读不到免登入口状态，请刷新重试'
     : availability === undefined ? '正在读取入口'
     : sso ? null : target === 'oa' && href !== null
       ? '免登入口未配置，打开原系统' : '免登入口未配置';
 
   const enter = async (captcha?: U8CaptchaAnswer) => {
-    if (!sso) {
+    if (!sso || target === null) {
       if (href !== null) openSystem(href);
+      return;
+    }
+    if (target === 'zhyw' && !zhywBinding.data?.bound) {
+      if (!open) onToggle();
       return;
     }
     if (target === 'u8' && captcha === undefined) {
@@ -71,14 +79,14 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
     setEntryError(null);
     const current = () => useAuthStore.getState().generation === generation;
     try {
-      const entry = await createSystemEntry(target!, captcha);
+      const entry = await createSystemEntry(target, captcha);
       if (!current()) { popup.close(); return; }
       if (!popup.closed) popup.location.replace(entry.url);
       setCaptchaOpen(false);
     } catch (error) {
       popup.close();
       if (!current()) return;
-      setEntryError(target === 'u8' ? systemEntryErrorMessage(error) : error instanceof ApiError
+      setEntryError(target !== 'oa' ? systemEntryErrorMessage(error) : error instanceof ApiError
         ? error.message : '暂时无法进入系统，请稍后再试。');
     } finally {
       if (current()) {
@@ -119,7 +127,8 @@ function SystemCard({ index, availability, availabilityFailed, onClose, onToggle
         aria-busy={busy}
         disabled={!canEnter || busy}
         onClick={() => { void enter(); }}
-        title={canEnter ? `打开${system.name}` : undefined}
+        title={canEnter ? target === 'zhyw' && !zhywBinding.data?.bound
+          ? '绑定综合业务平台登录账号' : `打开${system.name}` : undefined}
         type="button"
       >
         <span aria-hidden="true" className={styles.mono}>{system.mark}</span>

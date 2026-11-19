@@ -26,7 +26,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from pydantic import SecretStr
 
-from app.infra.auth.crypto import ensure_json_object, identity_surrogate, require_hmac_key
+from app.infra.auth.crypto import (
+    ensure_json_object,
+    exact_oa_login_proof,
+    identity_surrogate,
+    require_hmac_key,
+)
 from app.ports.auth import (
     AuthenticationError,
     AuthenticationPort,
@@ -276,11 +281,13 @@ class OACredentialVerifier:
         identity_hmac_key: bytes,
         credential_ttl_seconds: int,
         tenant_id: str,
+        include_login_id_proof: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("source_profile_configuration_invalid")
         self._tenant_id = tenant_id
+        self._include_login_id_proof = include_login_id_proof
         self._session_factory = session_factory
         self._credential_store = credential_store
         self._role_reader = role_reader
@@ -462,7 +469,11 @@ class OACredentialVerifier:
                 display_name=display_name,
                 roles=roles,
                 org_ctx=PrincipalOrgContext(
-                    tenant_id=self._tenant_id, directory_user_id=oa_user_id
+                    tenant_id=self._tenant_id, directory_user_id=oa_user_id,
+                    oa_login_id_proof=(
+                        exact_oa_login_proof(loginid, key=self._identity_hmac_key)
+                        if self._include_login_id_proof else None
+                    ),
                 ),
             )
             session_credential = OASessionCredential(

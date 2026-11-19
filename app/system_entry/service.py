@@ -16,6 +16,8 @@ from app.ports.system_entry import (
     U8CaptchaAnswer,
     U8CaptchaView,
     U8LoginPort,
+    ZhywBindingView,
+    ZhywEntryPort,
 )
 
 _log = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ class SystemEntryService:
     def __init__(
         self, *, reader: EntryPasswordReaderPort, oa_verifier: CredentialBindingVerifierPort,
         oa_tickets: OAEntryTicketPort | None, oa_bridge_base: str | None,
-        u8_login: U8LoginPort | None, u8_base: str,
+        u8_login: U8LoginPort | None, u8_base: str, zhyw: ZhywEntryPort | None = None,
     ) -> None:
         self._reader = reader
         self._oa_verifier = oa_verifier
@@ -33,9 +35,22 @@ class SystemEntryService:
         self._oa_bridge_base = oa_bridge_base
         self._u8_login = u8_login
         self._u8_base = u8_base
+        self._zhyw = zhyw
 
     def availability(self) -> dict[str, bool]:
         return {"oa": self._tickets is not None, "u8": self._u8_login is not None}
+
+    async def zhyw_binding(self, principal: Principal) -> ZhywBindingView:
+        if self._zhyw is None:
+            return ZhywBindingView(configured=False, bound=False)
+        return ZhywBindingView(configured=True, bound=await self._zhyw.is_bound(principal))
+
+    async def bind_zhyw(self, principal: Principal, login_id: str) -> ZhywBindingView:
+        if self._zhyw is None:
+            raise SystemEntryError("entry_not_configured")
+        await self._zhyw.bind(principal, login_id)
+        _log.info("system_entry target=zhyw stage=binding result=saved")
+        return ZhywBindingView(configured=True, bound=True)
 
     async def u8_captcha(self) -> U8CaptchaView:
         if self._u8_login is None:
@@ -46,6 +61,12 @@ class SystemEntryService:
         self, principal: Principal, target: SystemEntryTarget, *,
         captcha: U8CaptchaAnswer | None = None,
     ) -> SystemEntryView:
+        if target == "zhyw":
+            if self._zhyw is None:
+                raise SystemEntryError("entry_not_configured")
+            entry = await self._zhyw.enter(principal)
+            _log.info("system_entry target=%s stage=handoff result=ready", target)
+            return SystemEntryView(url=entry)
         if not self.availability()[target]:
             raise SystemEntryError("entry_not_configured")
         credential = await self._reader.load_password_for_entry(

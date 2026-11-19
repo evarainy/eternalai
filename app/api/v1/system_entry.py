@@ -6,6 +6,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
@@ -15,6 +16,7 @@ from app.ports.system_entry import (
     SystemEntryView,
     U8CaptchaAnswer,
     U8CaptchaView,
+    ZhywBindingView,
 )
 from app.system_entry.service import SystemEntryService
 
@@ -33,6 +35,10 @@ _MESSAGES = {
     "entry_upstream_rejected": "财务系统拒绝本次登录，具体原因尚未确认。",
     "entry_invalid_response": "财务系统响应无法按当前协议解析，暂不能完成登录。",
     "entry_configuration_error": "财务免登配置无法读取或格式不正确，请联系管理员。",
+    "entry_account_required": "请输入本人 OA 登录账号。",
+    "entry_account_mismatch": "账号与当前工作台登录身份不一致。",
+    "entry_oa_login_required": "请重新登录工作台，再绑定或进入综合业务平台。",
+    "entry_zhyw_not_bound": "请先绑定综合业务平台账号。",
 }
 _STATUS = {
     "entry_not_configured": 503, "entry_not_bound": 409,
@@ -40,12 +46,20 @@ _STATUS = {
     "entry_captcha_required": 400, "entry_captcha_invalid": 400, "entry_captcha_expired": 400,
     "entry_timeout": 504, "entry_connection_failed": 502, "entry_upstream_http_error": 502,
     "entry_upstream_rejected": 502, "entry_invalid_response": 502, "entry_configuration_error": 503,
+    "entry_account_required": 400, "entry_account_mismatch": 403,
+    "entry_oa_login_required": 409, "entry_zhyw_not_bound": 409,
 }
 _NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
 
+class ZhywAccountInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    login_id: str = Field(max_length=256, repr=False)
+
+
 def system_entry_failure(exc: SystemEntryError) -> HTTPException:
-    """Share fixed, redacted U8 failures between binding and browser entry."""
+    """Render fixed, redacted failures for binding and browser entry."""
     message = _MESSAGES[exc.code]
     if exc.upstream_status is not None:
         if exc.code == "entry_upstream_rejected":
@@ -67,6 +81,39 @@ def make_router(
     ) -> dict[str, bool]:
         response.headers.update(_NO_STORE)
         return service.availability() if service is not None else {"oa": False, "u8": False}
+
+    @router.get("/zhyw/binding", response_model=ZhywBindingView)
+    async def zhyw_binding(
+        response: Response, principal: Principal = Depends(require_principal),
+    ) -> ZhywBindingView:
+        response.headers.update(_NO_STORE)
+        try:
+            if service is None:
+                return ZhywBindingView(configured=False, bound=False)
+            return await service.zhyw_binding(principal)
+        except SystemEntryError as exc:
+            raise system_entry_failure(exc) from None
+
+    @router.put(
+        "/zhyw/binding", response_model=ZhywBindingView,
+        openapi_extra={"requestBody": {"required": True, "content": {
+            "application/json": {"schema": ZhywAccountInput.model_json_schema()},
+        }}},
+    )
+    async def bind_zhyw(
+        request: Request, response: Response, principal: Principal = Depends(require_principal),
+    ) -> ZhywBindingView:
+        response.headers.update(_NO_STORE)
+        try:
+            if service is None:
+                raise SystemEntryError("entry_not_configured")
+            try:
+                account = ZhywAccountInput.model_validate_json(await request.body())
+            except ValidationError:
+                raise SystemEntryError("entry_account_required") from None
+            return await service.bind_zhyw(principal, account.login_id)
+        except SystemEntryError as exc:
+            raise system_entry_failure(exc) from None
 
     @router.post("/u8/captcha", response_model=U8CaptchaView)
     async def u8_captcha(
