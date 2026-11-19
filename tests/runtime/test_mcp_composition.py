@@ -49,6 +49,9 @@ from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
 from tests.infra.mcp.test_transport import serving
 from tests.infra.persistence.test_mcp_store import bind, database
 from tests.mcp.test_contracts import VALID
+from tests.runtime.test_runtime_composition import (  # noqa: F401 - pytest fixture
+    orchestration_clean_database_url,
+)
 from tests.workflow.test_engine import RecordingTrace
 from tests.workflow.test_mcp_recovery import (
     BusinessPeer,
@@ -58,8 +61,12 @@ from tests.workflow.test_mcp_recovery import (
 
 
 def test_http_runtime_confirmation_failure_and_apps_recovery_are_wired(
-    migrated_database_url, monkeypatch
+    orchestration_clean_database_url, monkeypatch  # noqa: F811 - imported pytest fixture
 ):
+    # Relevance selection reads every active capability in the database. Use a schema
+    # migrated from empty so committed rows retained by other test files cannot become
+    # candidates for this request.
+    migrated_database_url = orchestration_clean_database_url
     peer = BusinessPeer("2025-11-25", fault="http500")
     with serving(peer) as profile:
 

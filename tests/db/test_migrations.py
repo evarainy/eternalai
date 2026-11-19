@@ -735,8 +735,8 @@ def test_capability_automation_downgrade_allows_declarations_with_guard(
 
 
 def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:
-    # Downgrading below 20261003_212000 requires empty browser history. Start from an
-    # empty head instead of relying on which test files ran earlier on this database.
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # Start from an empty head instead of relying on which test files ran earlier here.
     reset_url = _database_url_from_environment()
     validate_test_database_url(reset_url, allow_xdist_worker_databases=True)
     reset_public_schema(normalize_database_url(reset_url))
@@ -753,8 +753,8 @@ def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:
 
 
 def test_revocation_migration_preserves_schema_and_sentinel_row() -> None:
-    # Downgrading below 20261003_212000 requires empty browser history. Start from an
-    # empty head instead of relying on which test files ran earlier on this database.
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # Start from an empty head instead of relying on which test files ran earlier here.
     reset_url = _database_url_from_environment()
     validate_test_database_url(reset_url, allow_xdist_worker_databases=True)
     reset_public_schema(normalize_database_url(reset_url))

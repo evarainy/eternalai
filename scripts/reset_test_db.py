@@ -75,11 +75,16 @@ def validate_test_database_url(
 
 
 def reset_public_schema(database_url: str) -> None:
-    """Drop all test data by recreating the public schema."""
+    """Drop all test data: recreate public and drop the migration-owned queue schema.
+
+    ``eternalai_queue`` is created by the procrastinate migration (20261103_120000)
+    outside public; leaving it makes the following ``upgrade head`` fail.
+    """
 
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA IF EXISTS eternalai_queue CASCADE"))
             connection.execute(text("DROP SCHEMA public CASCADE"))
             connection.execute(text("CREATE SCHEMA public"))
     finally:

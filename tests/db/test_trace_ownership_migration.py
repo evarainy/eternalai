@@ -207,8 +207,8 @@ def _cleanup(prefix: str) -> None:
 
 
 def test_backfill_assigns_only_unique_exact_owner_and_roundtrip_loses_no_rows() -> None:
-    # Downgrading below 20261003_212000 requires empty browser history. Start from an
-    # empty head instead of relying on which test files ran earlier on this database.
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # Start from an empty head instead of relying on which test files ran earlier here.
     reset_url = _database_url()
     validate_test_database_url(reset_url, allow_xdist_worker_databases=True)
     reset_public_schema(normalize_database_url(reset_url))
