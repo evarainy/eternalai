@@ -12,6 +12,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.db.config import normalize_database_url
+from scripts.reset_test_db import is_fixed_test_database_name
 
 BASE, FOUNDATION, HEAD = "20260922_190000", "20260930_090000", "20260930_100000"
 TABLES = {
@@ -38,11 +39,8 @@ def migrate(connection, target):
 
 def test_exact_eight_tables_roundtrip_and_retained_data_refuses_downgrade(migrated_database_url):
     engine = create_engine(normalize_database_url(migrated_database_url))
-    assert (engine.url.host, engine.url.port, engine.url.database) == (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
-    )
+    assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(engine.url.database)
     with engine.connect() as conn:
         transaction = conn.begin()
         schema = "mcp_migration_" + uuid4().hex

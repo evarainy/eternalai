@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from app.db.config import normalize_database_url
+from scripts.reset_test_db import reset_xdist_worker_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REVOCATION_PARENT_REVISION = "20260724_090000"
@@ -734,6 +735,10 @@ def test_capability_automation_downgrade_allows_declarations_with_guard(
 
 
 def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # In a throwaway CI xdist worker database, start from an empty head instead of
+    # relying on which test files ran earlier there; other databases are left alone.
+    reset_xdist_worker_database(normalize_database_url(_database_url_from_environment()))
     config = _alembic_config()
 
     command.upgrade(config, "head")
@@ -747,6 +752,10 @@ def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:
 
 
 def test_revocation_migration_preserves_schema_and_sentinel_row() -> None:
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # In a throwaway CI xdist worker database, start from an empty head instead of
+    # relying on which test files ran earlier there; other databases are left alone.
+    reset_xdist_worker_database(normalize_database_url(_database_url_from_environment()))
     config = _alembic_config()
     database_url = normalize_database_url(_database_url_from_environment())
     ai_user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"

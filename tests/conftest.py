@@ -74,6 +74,41 @@ def _load_missing_environment(path: Path) -> None:
 _load_missing_environment(_repository_env_path())
 
 
+def _route_xdist_worker_database() -> None:
+    """Point each CI pytest-xdist worker at its own pre-migrated database.
+
+    CI creates and migrates ``eternalai_test_gw<N>`` before pytest starts. This runs at
+    import time, before application modules snapshot DATABASE_URL, and only inside
+    xdist workers; single-process runs are untouched. The DSN is never printed.
+    """
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is None:
+        return
+    raw_url = os.environ.get("DATABASE_URL")
+    url = None
+    if raw_url is not None and re.fullmatch(r"gw[0-9]+", worker):
+        try:
+            url = make_url(raw_url)
+        except (ArgumentError, ValueError):
+            url = None
+    if (
+        url is None
+        or url.get_backend_name() != "postgresql"
+        or (url.host, url.port, url.database) != ("127.0.0.1", 15432, "eternalai_test")
+        or url.query
+    ):
+        raise RuntimeError("xdist_worker_database_target_invalid") from None
+    os.environ["DATABASE_URL"] = url.set(database=f"eternalai_test_{worker}").render_as_string(
+        hide_password=False
+    )
+
+
+_route_xdist_worker_database()
+
+
 @pytest.fixture(scope="module")
 def migrated_database_url() -> str:
     """Prepare real DB tests with the existing Alembic upgrade-to-head path."""

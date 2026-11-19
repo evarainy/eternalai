@@ -18,6 +18,7 @@ from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
 from app.infra.persistence.mcp.schema import grants, transactions
 from app.mcp.models import McpFailure, ServiceConfig
 from app.ports.mcp import McpAuthorizationContext
+from scripts.reset_test_db import is_fixed_test_database_name
 
 
 class Revocations:
@@ -53,11 +54,8 @@ def config(service: str = "service-a") -> ServiceConfig:
 @asynccontextmanager
 async def database(url: str) -> AsyncIterator[tuple[PostgreSQLMcpStore, Any, Revocations]]:
     engine = make_async_engine(url)
-    assert (engine.url.host, engine.url.port, engine.url.database) == (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
-    )
+    assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(engine.url.database)
     async with engine.connect() as conn:
         outer = await conn.begin()
         sessions = async_sessionmaker(

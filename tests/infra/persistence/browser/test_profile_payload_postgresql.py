@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 
 from alembic import command
 from app.db.config import normalize_database_url
+from scripts.reset_test_db import is_fixed_test_database_name
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -28,9 +29,8 @@ def _database_url() -> str:
     assert value, "explicit synthetic DATABASE_URL required"
     normalized = normalize_database_url(value)
     url = make_url(normalized)
-    assert (url.host, url.port, url.database) == (
-        "127.0.0.1", 15432, "eternalai_test",
-    )
+    assert (url.host, url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(url.database)
     return normalized
 
 

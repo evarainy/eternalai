@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import ssl
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
@@ -967,10 +968,9 @@ def build_production_components(
         from sqlalchemy.engine import make_url
 
         test_database = make_url(settings.database_url)
-        if (test_database.host, test_database.port, test_database.database) != (
-            "127.0.0.1",
-            15432,
-            "eternalai_test",
+        # CI's pytest-xdist workers use eternalai_test_gw<N> on the same fixed instance.
+        if (test_database.host, test_database.port) != ("127.0.0.1", 15432) or not (
+            re.fullmatch(r"eternalai_test(?:_gw[0-9]+)?", test_database.database or "")
         ) or any(
             urlsplit(profile.endpoint).hostname not in {"127.0.0.1", "::1"}
             for profile in mcp_profiles.values()

@@ -712,7 +712,7 @@ def topk_identity_mapping(request: pytest.FixtureRequest) -> Iterator[Any]:
     from app.db.session import make_async_session_factory
     from scripts.check_dev_environment import resolve_database_configuration
 
-    resolution = resolve_database_configuration()
+    resolution = resolve_database_configuration(allow_xdist_worker_databases=True)
     assert resolution.check.passed, "The fixed synthetic test database must be available"
     assert resolution.database_url is not None
     from app.db.config import normalize_database_url

@@ -24,6 +24,7 @@ from app.infra.auth.postgresql import (
     PostgreSQLCredentialStore,
     credential_associated_data,
 )
+from scripts.reset_test_db import reset_xdist_worker_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260821_090000"
@@ -85,7 +86,12 @@ def test_primary_key_is_tenant_user_and_target_system() -> None:
 
 
 def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
+    # Downgrade guards (e.g. 20261003_212000 browser history) require an empty database.
+    # In a throwaway CI xdist worker database, start from an empty head instead of
+    # relying on which test files ran earlier there; other databases are left alone.
+    reset_xdist_worker_database(normalize_database_url(_database_url()))
     config = _alembic_config()
+    command.upgrade(config, "head")
     database_url = normalize_database_url(_database_url())
     ai_user_id = f"usr_v1_{uuid4().hex}"
     encryption_key = bytes(range(32))
@@ -180,10 +186,7 @@ def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
                 loaded = await store.load(ai_user_id, "oa", tenant_id="default")
                 assert loaded is not None
                 assert loaded.oa_user_id.get_secret_value() == oa_user_id
-                assert (
-                    loaded.cookies["ecology_JSessionid"].get_secret_value()
-                    == cookie_value
-                )
+                assert loaded.cookies["ecology_JSessionid"].get_secret_value() == cookie_value
                 assert loaded.expires_at == expires_at
             finally:
                 await async_engine.dispose()
@@ -191,9 +194,7 @@ def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
         if sys.platform == "win32":
             asyncio.run(
                 load_session(),
-                loop_factory=lambda: asyncio.SelectorEventLoop(
-                    selectors.SelectSelector()
-                ),
+                loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
             )
         else:
             asyncio.run(load_session())
@@ -201,10 +202,7 @@ def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
         command.upgrade(config, "head")
         with engine.begin() as connection:
             connection.execute(
-                text(
-                    "DELETE FROM oa_session_credentials"
-                    " WHERE ai_user_id = :ai_user_id"
-                ),
+                text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                 {"ai_user_id": ai_user_id},
             )
         engine.dispose()

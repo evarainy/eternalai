@@ -43,7 +43,9 @@ def postgresql_registry_sandbox() -> Iterator[_RegistrySandbox]:
     raw_database_url = os.environ.get("DATABASE_URL")
     if raw_database_url is None:
         raise AssertionError("DATABASE_URL must be set for PostgreSQL proof tests")
-    database_url = validate_test_database_url(raw_database_url)
+    database_url = validate_test_database_url(
+        raw_database_url, allow_xdist_worker_databases=True
+    )
     schema_name = f"p2_registry_bootstrap_{uuid.uuid4().hex}"
     metadata = sa.MetaData()
     table = production_capabilities.to_metadata(metadata, schema=schema_name)

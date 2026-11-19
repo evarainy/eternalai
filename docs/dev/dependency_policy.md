@@ -110,6 +110,8 @@ explicitly names a future dedicated allowlist file.
 | python | types-jsonschema | >=4.23,<5 | backend-tooling | pending_internal_mirror_confirmation | P2-SMOKE-AUTH-DIAG-001; jsonschema mypy 类型守卫 |
 | python | types-psutil | ==7.2.2.20260906 | backend-tooling | public_registry_development_only | P2-CHAT-BROWSER-READ-001 2026-10-16 required-CI type closure; official typeshed stubs for pinned psutil 7.2.2, development only |
 | python | pytest | >=8,<9 | backend-test | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend test runner for TDD/validation) |
+| python | pytest-xdist | >=3.8,<4 | backend-test | public_registry_development_only | P2-CI-XDIST-001；雨爷 2026-11-20 授权 CI 提速（后端 required CI 同一 pytest session 内 4 进程并行）；MIT；本地全量不启用 |
+| python | execnet | >=2.1,<3 | backend-test-transitive | public_registry_development_only | P2-CI-XDIST-001 pytest-xdist required dependency, pinned by uv.lock；MIT |
 | python | ruff | >=0.8,<1 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend linting / formatting validation) |
 | python | mypy | >=1.13,<2 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend static type checking) |
 | python | httpx | >=0.24.0 | spike; backend-test | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements; P0-INFRA-002 backend skeleton (backend test client / HTTP validation support) |

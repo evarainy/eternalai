@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -16,17 +17,29 @@ EXPECTED_DATABASE = "eternalai_test"
 EXPECTED_PORT = 15432
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost"})
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# CI runs pytest-xdist with one database per worker on the same fixed instance.
+_FIXED_TEST_DATABASE_NAME = re.compile(r"eternalai_test(?:_gw[0-9]+)?")
+_XDIST_WORKER_DATABASE_NAME = re.compile(r"eternalai_test_gw[0-9]+")
 
 
 class UnsafeTestDatabaseUrlError(ValueError):
     """Raised before a reset when the supplied URL is not the fixed local test DB."""
 
 
-def validate_test_database_url(database_url: str) -> str:
+def is_fixed_test_database_name(name: str | None) -> bool:
+    """Whether ``name`` is the fixed test database or a per-xdist-worker sibling of it."""
+
+    return name is not None and _FIXED_TEST_DATABASE_NAME.fullmatch(name) is not None
+
+
+def validate_test_database_url(
+    database_url: str, *, allow_xdist_worker_databases: bool = False
+) -> str:
     """Return a URL only when it targets the exact fixed local test database.
 
     No connection is opened here. Query parameters are rejected so they cannot override
-    the parsed network target through driver-specific connection options.
+    the parsed network target through driver-specific connection options. Per-worker
+    database names are accepted only when a caller opts in; the reset CLI never does.
     """
 
     try:
@@ -36,7 +49,12 @@ def validate_test_database_url(database_url: str) -> str:
 
     if parsed_url.get_backend_name() != "postgresql":
         raise UnsafeTestDatabaseUrlError("DATABASE_URL must use a PostgreSQL backend")
-    if parsed_url.database != EXPECTED_DATABASE:
+    database_allowed = (
+        is_fixed_test_database_name(parsed_url.database)
+        if allow_xdist_worker_databases
+        else parsed_url.database == EXPECTED_DATABASE
+    )
+    if not database_allowed:
         raise UnsafeTestDatabaseUrlError(
             f"Refusing to reset database {parsed_url.database!r}; expected {EXPECTED_DATABASE!r}"
         )
@@ -58,15 +76,34 @@ def validate_test_database_url(database_url: str) -> str:
 
 
 def reset_public_schema(database_url: str) -> None:
-    """Drop all test data by recreating the public schema."""
+    """Drop all test data: recreate public and drop the migration-owned queue schema.
+
+    ``eternalai_queue`` is created by the procrastinate migration (20261103_120000)
+    outside public; leaving it makes the following ``upgrade head`` fail.
+    """
 
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA IF EXISTS eternalai_queue CASCADE"))
             connection.execute(text("DROP SCHEMA public CASCADE"))
             connection.execute(text("CREATE SCHEMA public"))
     finally:
         engine.dispose()
+
+
+def reset_xdist_worker_database(database_url: str) -> None:
+    """Empty a throwaway CI pytest-xdist worker database; leave any other database alone.
+
+    Only ``eternalai_test_gw<N>`` (created per CI run) is reset. The shared fixed test
+    database keeps its migration downgrade guards' protection.
+    """
+
+    if not _XDIST_WORKER_DATABASE_NAME.fullmatch(make_url(database_url).database or ""):
+        return
+    reset_public_schema(
+        validate_test_database_url(database_url, allow_xdist_worker_databases=True)
+    )
 
 
 def upgrade_schema(database_url: str) -> None:

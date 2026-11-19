@@ -53,6 +53,7 @@ from app.ports.mcp import McpSubmitPermit
 from app.ports.task_store import TaskRecord
 from app.ports.workflow_store import GovernedWorkflowAuthorization, RecoveryResolution
 from app.workflow.engine import WorkflowEngine
+from scripts.reset_test_db import is_fixed_test_database_name
 from tests.infra.mcp.test_transport import Peer, serving
 from tests.infra.persistence.test_mcp_store import Revocations, bind, database
 from tests.mcp.test_contracts import VALID
@@ -487,11 +488,8 @@ def test_six_writes_require_durable_confirmation_and_do_not_replay(
 async def durable_database(url, profile):
     """Committed synthetic rows for child-process tests; clean only this random service."""
     engine = make_async_engine(url)
-    assert (engine.url.host, engine.url.port, engine.url.database) == (
-        "127.0.0.1",
-        15432,
-        "eternalai_test",
-    )
+    assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+    assert is_fixed_test_database_name(engine.url.database)
     assert profile.service_config_id.startswith("process-")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     revocations = Revocations()
@@ -583,11 +581,8 @@ def process_probe(payload):
         from app.mcp.models import ServiceConfig
 
         engine = make_async_engine(os.environ["DATABASE_URL"])
-        assert (engine.url.host, engine.url.port, engine.url.database) == (
-            "127.0.0.1",
-            15432,
-            "eternalai_test",
-        )
+        assert (engine.url.host, engine.url.port) == ("127.0.0.1", 15432)
+        assert is_fixed_test_database_name(engine.url.database)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         store = PostgreSQLMcpStore(sessions, b"s" * 32, Revocations())
         workflows = PostgreSQLWorkflowStore(store)

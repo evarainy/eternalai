@@ -48,6 +48,7 @@ from app.ports.credential_vault import (
     BrowserAuthorizationError,
     BrowserBindingFact,
 )
+from scripts.reset_test_db import is_fixed_test_database_name
 
 _WHERE = "tenant_id=:tenant AND ai_user_id=:user AND target_system='oa' AND binding_id=:binding"
 
@@ -225,7 +226,8 @@ class PgHarness:
 @asynccontextmanager
 async def harness(database_url: str) -> AsyncIterator[PgHarness]:
     url = make_url(normalize_database_url(database_url))
-    assert url.host == "127.0.0.1" and url.port == 15432 and url.database == "eternalai_test"
+    assert url.host == "127.0.0.1" and url.port == 15432
+    assert is_fixed_test_database_name(url.database)
     name = "browser_lease_waiter_" + uuid4().hex
     first = create_async_engine(url, connect_args={"application_name": name + "_one"})
     second = create_async_engine(url, connect_args={"application_name": name})
