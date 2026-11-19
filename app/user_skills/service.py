@@ -1,8 +1,8 @@
 """Use cases of personal flows shared by the chat runtime and the HTTP API.
 
-Owner and session keys always come from the trusted caller. Proposal, trial and
-run snapshots stay in this process's session memory; only saved versions are
-persisted.
+Owner and session keys always come from the trusted caller. Session working
+state (records, proposals, trials, run snapshots, the pending takeover) and
+saved versions are persisted by the injected stores.
 """
 
 from __future__ import annotations
@@ -12,21 +12,38 @@ import logging
 import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-from app.knowledge.capability_selection import capability_fingerprint
-from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.infra.sdui.credential_markers import has_credential_marker
+from app.knowledge.capability_selection import (
+    ToolDefinitionRejected,
+    capability_fingerprint,
+    project_tool_input_schema,
+    validate_tool_text,
+)
+from app.ports.capability_registry import (
+    CAPABILITY_NAME_MAX_LENGTH,
+    CAPABILITY_SHORT_DESCRIPTION_MAX_LENGTH,
+    CapabilityName,
+    CapabilityRegistryPort,
+    CapabilityShortDescription,
+    CapabilitySpec,
+)
 from app.ports.user_skills import (
+    SessionKey,
+    TrialSnapshot,
     UserSkillError,
     UserSkillOwner,
+    UserSkillSessionStorePort,
     UserSkillState,
     UserSkillStorePort,
     UserSkillVersion,
     UserSkillVersionPayload,
 )
 from app.user_skills.definition import (
+    NAME_MAX,
     UserSkillDefinition,
     canonical_definition_json,
     compile_definition,
@@ -37,8 +54,8 @@ from app.user_skills.proposal import (
     ProposalRejected,
     TrialChoices,
     build_proposal,
-    check_texts,
     compile_trial,
+    rebase_definition,
     summarize,
 )
 from app.user_skills.rendering import MAX_DISPLAY_ROWS
@@ -50,7 +67,6 @@ from app.user_skills.runner import (
     UserSkillRunner,
     check_inputs,
 )
-from app.user_skills.session_store import SessionKey, TrialSnapshot, UserSkillSessionStore
 from app.workflow.definition_run import DefinitionReferenceError, resolve_ref
 from app.workflow.models import DefinitionRunResult
 
@@ -69,6 +85,8 @@ TAKEOVER_ERRORS = frozenset(
         "internal_error",
     }
 )
+_NAME = TypeAdapter(CapabilityName)
+_PURPOSE = TypeAdapter(CapabilityShortDescription)
 
 
 class UserSkillFailure(Exception):
@@ -89,12 +107,57 @@ def workflow_id(skill_id: str | None, trial_id: str | None = None) -> str:
     return f"user_skill.{skill_id}" if skill_id else f"user_skill.trial.{trial_id}"
 
 
+def skill_uuid(raw: Any) -> str | None:
+    """The canonical id of a client-supplied flow id, or None when it is not a UUID."""
+
+    if not isinstance(raw, str):
+        return None
+    try:
+        return str(UUID(raw))
+    except ValueError:
+        return None
+
+
+def skill_name(raw: str) -> str:
+    """The name without outer spaces, within the length limit."""
+
+    name = raw.strip()
+    if not 1 <= len(name) <= NAME_MAX:
+        raise UserSkillFailure("name_invalid", 422, f"名称要在 1 到 {NAME_MAX} 个字之间")
+    return name
+
+
+def check_skill_texts(name: str, purpose: str | None) -> None:
+    """The flow's name and purpose pass the run descriptor and model tool-text rules."""
+
+    try:
+        _NAME.validate_python(name)
+        validate_tool_text(name, max_chars=CAPABILITY_NAME_MAX_LENGTH)
+    except (ValidationError, ToolDefinitionRejected):
+        raise UserSkillFailure("name_invalid", 422, "名称里有不能使用的字符，请修改") from None
+    if purpose is None:
+        return
+    try:
+        _PURPOSE.validate_python(purpose)
+        validate_tool_text(purpose, max_chars=CAPABILITY_SHORT_DESCRIPTION_MAX_LENGTH)
+    except (ValidationError, ToolDefinitionRejected):
+        raise UserSkillFailure("purpose_invalid", 422, "用途里有不能使用的字符，请修改") from None
+
+
+def unusable_label(current: UserSkillVersion) -> str:
+    if current.state == "disabled":
+        return "该功能已停用"
+    if current.pause_reason == "capability_unavailable":
+        return "该功能依赖的查询已不可用"
+    return "该功能依赖的查询已变化，可在「我的功能」中重新生成"
+
+
 class UserSkillService:
     def __init__(
         self,
         *,
         store: UserSkillStorePort,
-        sessions: UserSkillSessionStore,
+        sessions: UserSkillSessionStorePort,
         runner: UserSkillRunner,
         registry: CapabilityRegistryPort,
         read_workflow_leaves: Mapping[str, Sequence[tuple[str, str, Mapping[str, Any]]]],
@@ -109,26 +172,30 @@ class UserSkillService:
     async def usable(self, owner: UserSkillOwner) -> list[UserSkillVersion]:
         return await self._store.list_current(owner, frozenset({"usable"}))
 
+    async def current(self, owner: UserSkillOwner, skill_id: str) -> UserSkillVersion | None:
+        canonical = skill_uuid(skill_id)
+        return None if canonical is None else await self._store.get_current(owner, canonical)
+
     async def list(self, owner: UserSkillOwner) -> list[dict[str, Any]]:
         versions = await self._store.list_current(
             owner, frozenset({"usable", "paused", "disabled"})
         )
-        heads = {head.skill_id: head for head in await self._store.list_for_owner(owner)}
         items: list[dict[str, Any]] = []
         for version in versions:
             definition = UserSkillDefinition.model_validate(version.payload.definition)
-            head = heads.get(version.skill_id)
             items.append({
                 "skill_id": version.skill_id,
                 "name": version.display_name,
                 "purpose": version.payload.purpose,
                 "state": version.state,
                 "pause_reason_label": (
-                    None if head is None or head.pause_reason is None
-                    else _PAUSE_LABELS[head.pause_reason]
+                    None if version.pause_reason is None else _PAUSE_LABELS[version.pause_reason]
+                ),
+                "can_regenerate": (
+                    version.state == "paused" and version.pause_reason == "capability_changed"
                 ),
                 "current_version": version.current_version,
-                "updated_at": None if head is None else head.updated_at.isoformat(),
+                "updated_at": version.updated_at.isoformat(),
                 "exportable": await self._exportable(definition),
                 "form": _form(definition),
             })
@@ -151,7 +218,7 @@ class UserSkillService:
         source: frozenset[UserSkillState] = frozenset(
             {"disabled"} if state == "usable" else {"usable"}
         )
-        version = await self._store.get_current(owner, skill_id)
+        version = await self.current(owner, skill_id)
         if version is None:
             raise UserSkillFailure("not_found", 404, "功能不存在")
         if state == "usable":
@@ -159,16 +226,41 @@ class UserSkillService:
             admission = await self._runner.admit(definition, _admin_context(owner))
             if admission.error_code is not None:
                 raise UserSkillFailure(
-                "not_admissible", 409, "该功能依赖的查询已不可用，不能启用"
-            )
+                    "not_admissible", 409, "该功能依赖的查询已不可用，不能启用"
+                )
         head = await self._store.set_state(
-            owner, skill_id, from_states=source, to_state=state, pause_reason=None,
+            owner, version.skill_id, from_states=source, to_state=state, pause_reason=None,
             expected_current_version=expected_current_version,
         )
         if head is None:
+            if await self.current(owner, skill_id) is None:
+                raise UserSkillFailure("not_found", 404, "功能不存在")
             raise UserSkillFailure("conflict", 409, "功能状态已变化，请刷新后重试")
         return {"skill_id": head.skill_id, "state": head.state,
                 "current_version": head.current_version}
+
+    async def rename(self, owner: UserSkillOwner, skill_id: str, name: str) -> dict[str, Any]:
+        canonical = skill_uuid(skill_id)
+        if canonical is None:
+            raise UserSkillFailure("not_found", 404, "功能不存在")
+        name = skill_name(name)
+        check_skill_texts(name, None)
+        try:
+            head = await self._store.rename(owner, canonical, name)
+        except UserSkillError as exc:
+            if exc.code == "name_taken":
+                raise UserSkillFailure("name_taken", 409, "已经有同名功能，请换个名称") from None
+            raise
+        if head is None:
+            raise UserSkillFailure("not_found", 404, "功能不存在")
+        _LOGGER.info("user_skill.renamed skill=%s", head.skill_id)
+        return {"skill_id": head.skill_id, "name": head.display_name}
+
+    async def delete(self, owner: UserSkillOwner, skill_id: str) -> None:
+        canonical = skill_uuid(skill_id)
+        if canonical is None or not await self._store.delete(owner, canonical):
+            raise UserSkillFailure("not_found", 404, "功能不存在")
+        _LOGGER.info("user_skill.deleted skill=%s", canonical)
 
     # ------------------------------------------------------------ record
     async def record_call(
@@ -188,8 +280,11 @@ class UserSkillService:
         workflow, action or mock call is not recordable.
         """
 
+        if _has_credential(arguments):
+            _LOGGER.info("user_skill.record skipped=credential_marker")
+            return
         if capability_type == "query":
-            self.sessions.record(
+            await self.sessions.record(
                 key, turn_id=turn_id, capability_id=capability_id,
                 capability_fingerprint=fingerprint, arguments=dict(arguments), data=dict(data),
             )
@@ -202,17 +297,17 @@ class UserSkillService:
             spec = await self._registry.get(leaf_id)
             if not isinstance(part, Mapping) or spec is None or spec.type != "query":
                 continue
-            self.sessions.record(
+            await self.sessions.record(
                 key, turn_id=turn_id, capability_id=leaf_id,
                 capability_fingerprint=capability_fingerprint(spec),
                 arguments=dict(static_arguments), data=dict(part),
             )
 
-    def has_records(self, key: SessionKey) -> bool:
-        return self.sessions.has_records(key)
+    async def has_records(self, key: SessionKey) -> bool:
+        return await self.sessions.has_records(key)
 
     async def summary(self, key: SessionKey, user_texts: Sequence[str]) -> dict[str, Any]:
-        records, _ = self.sessions.records(key)
+        records, _ = await self.sessions.records(key)
         specs = await self._specs({record.capability_id for record in records})
         return summarize(records, specs, user_texts)
 
@@ -228,7 +323,7 @@ class UserSkillService:
     async def propose(
         self, key: SessionKey, owner: UserSkillOwner, raw: Mapping[str, Any]
     ) -> dict[str, Any]:
-        records, dropped = self.sessions.records(key)
+        records, dropped = await self.sessions.records(key)
         if not records:
             raise ProposalRejected(
                 "no_record", "这次会话还没有可以保存的查询，请先完成一次查询"
@@ -246,11 +341,11 @@ class UserSkillService:
             view["rejections"].append(
                 {"code": "record_truncated", "label": "较早的查询记录已超出保留范围，未列入"}
             )
-        self.sessions.put_proposal(key, view["proposal_id"], internal)
+        await self.sessions.put_proposal(key, view["proposal_id"], internal)
         _LOGGER.info(
-            "user_skill.proposal records=%d steps=%d bindings=%d tables=%d",
+            "user_skill.proposal records=%d steps=%d bindings=%d tables=%d checks=%d",
             len(records), len(view["steps"]), len(view["bindings"]),
-            len(view["column_options"]),
+            len(view["column_options"]), len(view["check_offers"]),
         )
         return view
 
@@ -263,43 +358,40 @@ class UserSkillService:
         proposal_id: str,
         raw: Mapping[str, Any],
     ) -> dict[str, Any]:
-        internal = self.sessions.proposal(key, proposal_id)
+        internal = await self.sessions.proposal(key, proposal_id)
         if internal is None:
             raise UserSkillFailure("proposal_expired", 410, "提案已过期，请重新说「保存为功能」")
-        target_raw = raw.get("target")
+        target = _target(raw.get("target"))
+        if target is None:
+            raise UserSkillFailure("trial_invalid", 422, "请选择新建还是更新已有功能")
         try:
             choices = TrialChoices.model_validate(
                 {k: v for k, v in raw.items() if k != "target"}
             )
         except ValidationError:
             raise UserSkillFailure("trial_invalid", 422, "卡片内容不完整") from None
-        target = _target(target_raw)
-        if target is None:
-            raise UserSkillFailure("trial_invalid", 422, "请选择新建还是更新已有功能")
+        check_skill_texts(skill_name(choices.name), choices.purpose)
         try:
             definition, inputs = compile_trial(internal, choices)
         except ProposalRejected as rejected:
             raise UserSkillFailure(rejected.code, 422, rejected.label) from None
+        _require_exposable(definition)
         trial_id = str(uuid4())
         run_target = RunTarget(
             workflow_id=workflow_id(None, trial_id), version_label=f"trial-{trial_id}",
             name=choices.name, purpose=choices.purpose, definition=definition,
         )
-        async with self.sessions.lock(key):
-            try:
-                outcome = await self._runner.run(run_target, inputs, ctx)
-            except InputInvalid:
-                raise UserSkillFailure("input_invalid", 422, "请把每次要填写的内容填完整") from None
+        try:
+            outcome = await self._runner.run(run_target, inputs, ctx)
+        except InputInvalid:
+            raise UserSkillFailure("input_invalid", 422, "请把每次要填写的内容填完整") from None
         savable, reason = _savable(outcome)
         payload = {
             "definition": definition.model_dump(mode="json", by_alias=True),
             "name": choices.name, "purpose": choices.purpose, "rules": choices.rules,
-            "target": target, "inputs": inputs,
+            "target": target,
         }
-        self.sessions.put_trial(key, TrialSnapshot(
-            trial_id=trial_id, proposal_id=proposal_id, created=self.sessions.now(),
-            payload=payload, savable=savable,
-        ))
+        await self.sessions.put_trial(key, TrialSnapshot(trial_id, proposal_id, payload, savable))
         result = dict(outcome.result)
         result["trial_id"] = trial_id
         return {"trial_id": trial_id, "result": result, "savable": savable,
@@ -308,66 +400,93 @@ class UserSkillService:
     async def save(
         self, key: SessionKey, owner: UserSkillOwner, trial_id: str
     ) -> dict[str, Any]:
-        async with self.sessions.lock(key):
-            trial = self.sessions.trial(key, trial_id)
-            if trial is None:
-                raise UserSkillFailure("trial_expired", 410, "试运行已过期，请重新试运行")
-            if trial.state == "saved":
-                assert trial.saved_result is not None
-                return trial.saved_result
-            if trial.state == "saving":
-                raise UserSkillFailure("trial_busy", 409, "正在保存，请稍候")
-            if not trial.savable:
-                raise UserSkillFailure("not_savable", 409, "试运行没有成功，不能保存")
-            payload = trial.payload
-            definition = UserSkillDefinition.model_validate(payload["definition"])
-            internal = self.sessions.proposal(key, trial.proposal_id)
-            samples = set() if internal is None else set(internal["samples"])
-            try:
-                check_texts([payload["name"], payload["purpose"], payload["rules"]], samples)
-            except ProposalRejected as rejected:
-                raise UserSkillFailure(rejected.code, 422, rejected.label) from None
-            admission = await self._runner.admit(definition, _admin_context(owner))
-            if admission.error_code is not None:
-                raise UserSkillFailure("not_admissible", 409, "依赖的查询已变化，请重新试运行")
-            version_payload = UserSkillVersionPayload(
-                definition=definition.model_dump(mode="json", by_alias=True),
-                definition_digest=definition_digest(definition),
-                purpose=payload["purpose"],
-                business_rules=payload["rules"],
-            )
-            trial.state = "saving"
-            try:
-                target = payload["target"]
-                if target["mode"] == "new":
-                    head = await self._store.create(owner, payload["name"], version_payload)
-                else:
-                    head = await self._store.add_version(
-                        owner, target["skill_id"], target["expected_current_version"],
-                        version_payload,
-                    )
-            except UserSkillError as exc:
-                trial.state = "ready"
-                if exc.code == "name_taken":
-                    raise UserSkillFailure(
-                        "name_taken", 409, "已经有同名功能，请换个名称"
-                    ) from None
-                if exc.code == "not_found":
-                    raise UserSkillFailure("not_found", 404, "功能不存在") from None
-                if exc.code == "conflict":
-                    raise UserSkillFailure(
-                        "conflict", 409, "功能已被更新，请重新试运行"
-                    ) from None
-                raise
-            except BaseException:
-                trial.state = "ready"
-                raise
-            trial.state = "saved"
-            trial.saved_result = {"skill_id": head.skill_id, "version": head.current_version,
-                                  "state": head.state}
-            _LOGGER.info("user_skill.saved skill=%s version=%d mode=%s",
-                         head.skill_id, head.current_version, target["mode"])
+        trial = await self.sessions.trial(key, trial_id)
+        if trial is None:
+            raise UserSkillFailure("trial_expired", 410, "试运行已过期，请重新试运行")
+        if trial.saved_result is not None:
             return trial.saved_result
+        if not trial.savable:
+            raise UserSkillFailure("not_savable", 409, "试运行没有成功，不能保存")
+        payload = trial.payload
+        definition = UserSkillDefinition.model_validate(payload["definition"])
+        admission = await self._runner.admit(definition, _admin_context(owner))
+        version_payload = UserSkillVersionPayload(
+            definition=definition.model_dump(mode="json", by_alias=True),
+            definition_digest=definition_digest(definition),
+            purpose=payload["purpose"],
+            business_rules=payload["rules"],
+        )
+        try:
+            # A refusal is raised in the transaction after the saved replay, so a
+            # concurrent save's receipt always wins over a later admission change.
+            saved = await self._store.save_trial(
+                key, trial_id, version_payload, refused=admission.error_code is not None
+            )
+        except UserSkillError as exc:
+            failure = _SAVE_FAILURES.get(exc.code)
+            if failure is None:
+                raise
+            raise UserSkillFailure(*failure) from None
+        _LOGGER.info("user_skill.saved skill=%s version=%d mode=%s",
+                     saved["skill_id"], saved["version"], payload["target"]["mode"])
+        return saved
+
+    # -------------------------------------------------------- regenerate
+    async def regenerate(
+        self,
+        key: SessionKey,
+        owner: UserSkillOwner,
+        ctx: RunContext,
+        skill_id: str,
+        expected_current_version: int,
+        inputs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Re-pin a paused flow's unchanged structure to the current contracts and try it."""
+
+        current = await self.current(owner, skill_id)
+        if current is None:
+            raise UserSkillFailure("not_found", 404, "功能不存在")
+        if current.state != "paused" or current.current_version != expected_current_version:
+            raise UserSkillFailure("conflict", 409, "功能状态已变化，请刷新后重试")
+        if current.pause_reason != "capability_changed":
+            raise UserSkillFailure(
+                "not_regenerable", 409, "依赖的查询已不可用，不能重新生成"
+            )
+        definition = UserSkillDefinition.model_validate(current.payload.definition)
+        specs = await self._specs({step.capability_id for step in definition.steps})
+        fingerprints = {cid: capability_fingerprint(spec) for cid, spec in specs.items()}
+        try:
+            rebased = rebase_definition(definition, specs, fingerprints)
+        except ProposalRejected as rejected:
+            _LOGGER.info("user_skill.regenerate rejected=%s reason=%s",
+                         rejected.code, rejected.reason)
+            raise UserSkillFailure(rejected.code, 409, rejected.label) from None
+        check_skill_texts(current.display_name, current.payload.purpose)
+        _require_exposable(rebased)
+        clean = {name: value for name, value in inputs.items() if value not in (None, "")}
+        trial_id = str(uuid4())
+        run_target = RunTarget(
+            workflow_id=workflow_id(None, trial_id), version_label=f"trial-{trial_id}",
+            name=current.display_name, purpose=current.payload.purpose, definition=rebased,
+        )
+        try:
+            outcome = await self._runner.run(run_target, clean, ctx)
+        except InputInvalid:
+            raise UserSkillFailure("input_invalid", 422, "请把每次要填写的内容填完整") from None
+        savable, reason = _regenerate_savable(outcome, rebased)
+        payload = {
+            "definition": rebased.model_dump(mode="json", by_alias=True),
+            "name": current.display_name, "purpose": current.payload.purpose,
+            "rules": current.payload.business_rules,
+            "target": {"mode": "update", "skill_id": current.skill_id,
+                       "expected_current_version": current.current_version},
+        }
+        await self.sessions.put_trial(key, TrialSnapshot(trial_id, None, payload, savable))
+        _LOGGER.info("user_skill.regenerate skill=%s savable=%s", current.skill_id, savable)
+        result = dict(outcome.result)
+        result["trial_id"] = trial_id
+        return {"trial_id": trial_id, "result": result, "savable": savable,
+                "not_savable_reason": reason}
 
     # --------------------------------------------------------------- run
     async def run_saved(
@@ -384,15 +503,11 @@ class UserSkillService:
     ) -> tuple[dict[str, Any], bool, str | None]:
         """(``data.user_skill`` payload, failed, error code) for a saved flow."""
 
-        current = await self._store.get_current(owner, skill_id)
+        current = await self.current(owner, skill_id)
         if current is None:
             raise UserSkillFailure("not_found", 404, "功能不存在")
         if current.state != "usable":
-            raise UserSkillFailure(
-                "not_usable", 409,
-                "该功能已暂停，需要重新查询并保存新版本" if current.state == "paused"
-                else "该功能已停用",
-            )
+            raise UserSkillFailure("not_usable", 409, unusable_label(current))
         if current.current_version != version or (
             expected_digest is not None and current.payload.definition_digest != expected_digest
         ):
@@ -404,25 +519,27 @@ class UserSkillService:
         except InputInvalid as invalid:
             return needs_input(current, definition, clean, invalid.missing), False, None
         target = RunTarget(
-            workflow_id=workflow_id(skill_id), version_label=str(version),
+            workflow_id=workflow_id(current.skill_id), version_label=str(version),
             name=current.display_name, purpose=current.payload.purpose,
-            definition=definition, skill_id=skill_id, version=version,
+            definition=definition, skill_id=current.skill_id, version=version,
         )
         outcome = await self._runner.run(target, clean, ctx, max_rows=max_rows)
         if outcome.pause is not None:
             await self._store.set_state(
-                owner, skill_id, from_states=frozenset({"usable"}), to_state="paused",
+                owner, current.skill_id, from_states=frozenset({"usable"}), to_state="paused",
                 pause_reason=outcome.pause, expected_current_version=version,
             )
-            _LOGGER.info("user_skill.paused skill=%s reason=%s", skill_id, outcome.pause)
+            _LOGGER.info("user_skill.paused skill=%s reason=%s", current.skill_id, outcome.pause)
         result = dict(outcome.result)
         result["exportable"] = await self._exportable(definition)
-        result["takeover_allowed"] = (
-            outcome.status != "completed"
-            and (outcome.error_code in TAKEOVER_ERRORS or _row_failures(outcome))
-        )
-        self.sessions.put_run(key, outcome.run_id, _run_snapshot(current, definition, clean,
-                                                                 outcome))
+        # Inputs that look like credentials are never kept for a takeover.
+        takeover = _takeover_allowed(outcome) and not _has_credential(clean)
+        result["takeover_allowed"] = takeover
+        if ctx.entry != "worker" and not _has_credential(clean):
+            # An export has no chat to hand a failure over to.
+            await self.sessions.put_run(key, outcome.run_id, _run_snapshot(
+                current, definition, clean, outcome, takeover
+            ))
         return result, outcome.status == "failed", outcome.error_code
 
     async def export_refusal(
@@ -430,7 +547,7 @@ class UserSkillService:
     ) -> str | None:
         """None when the flow may be exported now, else a closed job refusal code."""
 
-        current = await self._store.get_current(owner, skill_id)
+        current = await self.current(owner, skill_id)
         if current is None:
             return "user_skill_unavailable"
         if current.state != "usable" or current.current_version != version:
@@ -457,26 +574,56 @@ class UserSkillService:
         }
 
     # ---------------------------------------------------------- takeover
-    def request_takeover(self, key: SessionKey, run_id: str) -> bool:
-        snapshot = self.sessions.run(key, run_id)
-        if snapshot is None or not snapshot.get("takeover_allowed"):
-            return False
-        self.sessions.set_takeover(key, snapshot)
-        return True
+    async def request_takeover(self, key: SessionKey, run_id: str) -> bool:
+        # The trusted session key already names the owner.
+        return await self.sessions.claim_takeover(key, run_id)
 
-    def take_takeover(self, key: SessionKey) -> dict[str, Any] | None:
-        return self.sessions.take_takeover(key)
+    async def take_takeover(
+        self, key: SessionKey, owner: UserSkillOwner
+    ) -> dict[str, Any] | None:
+        del owner  # the trusted session key names the owner; the store checks the flow
+        return await self.sessions.take_takeover(key)
 
 
 _PAUSE_LABELS = {
     "capability_changed": "依赖的查询已变化",
     "capability_unavailable": "依赖的查询已不可用",
 }
+_SAVE_FAILURES: dict[str, tuple[str, int, str]] = {
+    "name_taken": ("name_taken", 409, "已经有同名功能，请换个名称"),
+    "not_found": ("not_found", 404, "功能不存在"),
+    "conflict": ("conflict", 409, "功能已被更新，请重新试运行"),
+    "trial_expired": ("trial_expired", 410, "试运行已过期，请重新试运行"),
+    "not_savable": ("not_savable", 409, "试运行没有成功，不能保存"),
+    "not_admissible": ("not_admissible", 409, "依赖的查询已变化，请重新试运行"),
+}
+
+
+def _has_credential(value: Any) -> bool:
+    if isinstance(value, str):
+        return has_credential_marker(value)
+    if isinstance(value, Mapping):
+        return any(has_credential_marker(str(key)) or _has_credential(item)
+                   for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_has_credential(item) for item in value)
+    return False
 
 
 def _form(definition: UserSkillDefinition) -> dict[str, Any]:
     return {"schema": params_schema(definition),
             "labels": {param.name: param.label for param in definition.params}}
+
+
+def _require_exposable(definition: UserSkillDefinition) -> None:
+    """A saved flow must be offerable to the model as a tool (same projection as the catalog)."""
+
+    try:
+        project_tool_input_schema(params_schema(definition))
+    except ToolDefinitionRejected:
+        raise UserSkillFailure(
+            "trial_invalid", 422, "该功能的填写项无法提供给助手，请调整后再试"
+        ) from None
 
 
 def needs_input(
@@ -501,13 +648,10 @@ def _target(raw: Any) -> dict[str, Any] | None:
         return None
     if raw.get("mode") == "new":
         return {"mode": "new"}
-    if (
-        raw.get("mode") == "update"
-        and isinstance(raw.get("skill_id"), str)
-        and isinstance(raw.get("expected_current_version"), int)
-    ):
-        return {"mode": "update", "skill_id": raw["skill_id"],
-                "expected_current_version": raw["expected_current_version"]}
+    skill_id = skill_uuid(raw.get("skill_id"))
+    expected = raw.get("expected_current_version")
+    if raw.get("mode") == "update" and skill_id is not None and type(expected) is int:
+        return {"mode": "update", "skill_id": skill_id, "expected_current_version": expected}
     return None
 
 
@@ -516,6 +660,16 @@ def _row_failures(outcome: RunOutcome) -> bool:
         row.get("status") == "failed"
         for table in outcome.result.get("tables", [])
         for row in table.get("rows", [])
+    )
+
+
+def _takeover_allowed(outcome: RunOutcome) -> bool:
+    """One rule for the card and the persisted snapshot; a user check never hands over."""
+
+    return (
+        outcome.status != "completed"
+        and not outcome.result.get("check_failed")
+        and (outcome.error_code in TAKEOVER_ERRORS or _row_failures(outcome))
     )
 
 
@@ -531,6 +685,30 @@ def _savable(outcome: RunOutcome) -> tuple[bool, str | None]:
     if run is not None and _incomplete_list(run):
         return False, "这次查到的列表不完整，暂不能保存，请稍后再试"
     return False, outcome.result.get("reason_label") or "试运行没有全部完成，请重试后再保存"
+
+
+def _regenerate_savable(
+    outcome: RunOutcome, definition: UserSkillDefinition
+) -> tuple[bool, str | None]:
+    """Stricter than a first save: every step and every per-item call must be proven."""
+
+    savable, reason = _savable(outcome)
+    if not savable:
+        return savable, reason
+    run = outcome.run_result
+    assert run is not None
+
+    def proven(step_id: str) -> bool:
+        step = run.steps.get(step_id)
+        items = None if step is None else step.items
+        return bool(items) and all(item.status == "ok" for item in items or ())
+
+    unproven = any(
+        step.for_each is not None and not proven(step.step_id) for step in definition.steps
+    )
+    if unproven:
+        return False, "这次没有足够的数据验证新合同，请换个填写内容再试"
+    return True, None
 
 
 def _incomplete_list(run: DefinitionRunResult) -> bool:
@@ -556,6 +734,7 @@ def _run_snapshot(
     definition: UserSkillDefinition,
     inputs: Mapping[str, Any],
     outcome: RunOutcome,
+    takeover_allowed: bool,
 ) -> dict[str, Any]:
     """Trusted facts of this run for a takeover: version, failed calls and their inputs."""
 
@@ -620,7 +799,7 @@ def _run_snapshot(
                    for name, value in inputs.items() if name in labels],
         "failed_steps": failed_steps,
         "status": outcome.status,
-        "takeover_allowed": outcome.status != "completed",
+        "takeover_allowed": takeover_allowed,
     }
 
 
@@ -633,7 +812,10 @@ __all__ = (
     "UserSkillFailure",
     "UserSkillService",
     "canonical_definition_json",
+    "check_skill_texts",
     "needs_input",
     "norm",
+    "skill_uuid",
+    "unusable_label",
     "workflow_id",
 )

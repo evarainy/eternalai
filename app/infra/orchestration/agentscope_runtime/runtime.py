@@ -124,6 +124,8 @@ from app.infra.orchestration.agentscope_runtime.user_skill_turn import (
     TAKEOVER_PROMPT,
     UserSkillTurn,
     prepare_user_skill_turn,
+    run_explicit_user_skill,
+    session_context_note,
     takeover_data,
 )
 from app.knowledge import BasicKnowledge
@@ -152,6 +154,7 @@ from app.ports.runtime import (
     chat_client_request_id,
     d_form_collection_reference,
     im_source_context,
+    user_skill_ref_reference,
 )
 from app.ports.task_store import (
     DFormCollectionError,
@@ -525,6 +528,13 @@ class AgentScopeRuntime:
                 context, bound_session_id=session_id, channel=channel,
             ), im_source=source)
             # Sources bypass confirmation, document shortcuts and browser handoffs.
+            return await self._accept(scope, context, _owner(principal, session_id), message, None)
+        if user_skill_ref_reference.get() is not None:
+            # A flow the user named explicitly: no confirmation phrase, document route,
+            # browser shell or model; busy check and turn task as for any ordinary turn.
+            scope = ReadToolScope.from_session(
+                context, bound_session_id=session_id, channel=channel
+            )
             return await self._accept(scope, context, _owner(principal, session_id), message, None)
         reference = d_form_collection_reference.get()
         browser_scope, shell = browser_request_scope.get(), self._browser_shell
@@ -1012,6 +1022,10 @@ class AgentScopeRuntime:
             # One absolute deadline covers the reply, every parked-call check,
             # every ERROR continuation and the proposal core with its marks.
             async with bounded_turn_scope(turn.deadline):
+                skills = turn.user_skill
+                if not agent.state.context and skills is not None and skills.summary is not None:
+                    # Fresh history (e.g. after a restart) but persisted records: name them.
+                    message = session_context_note(skills.summary) + message
                 final = await agent.reply(UserMsg(name="user", content=message))
                 return await proposals.drive(agent, final)
         except AgentScopeModelError as exc:
@@ -1185,6 +1199,15 @@ class AgentScopeRuntime:
         if not message.strip():
             await self._intent(turn, "failed", {"result": "invalid", "reason": "blank_input"})
             return self._intent_failure(turn, "blank_input")
+        explicit = user_skill_ref_reference.get()
+        if explicit is not None:
+            # By id and current version, inside this turn's task; never the model's choice.
+            ledger.terminal = await run_explicit_user_skill(
+                deps.user_skills, scope, explicit, turn.deadline, ledger
+            )
+            return await self._finish_intent(
+                turn, ledger, None, self._summarize(turn, ledger, None, None, None)
+            )
         visible = await visible_capabilities(
             deps.capability_registry, deps.candidate_policy,
             ai_user_id=scope.ai_user_id, tenant_id=scope.tenant_id,
@@ -1221,8 +1244,13 @@ class AgentScopeRuntime:
             assert browser is not None
             catalog, tool = expose_browser_tool(catalog, spec, self._registration())
             browser.spec = spec if tool is not None else None
+        # Restricted only where this turn continues or hands off D; an ordinary turn of a
+        # browser-capable account keeps personal flows (one tool per response decides).
         turn.user_skill = await prepare_user_skill_turn(
-            deps.user_skills, scope, message, turn.deadline, restricted=browser is not None
+            deps.user_skills, scope, message, turn.deadline,
+            restricted=browser is not None and (
+                browser.collection is not None or browser.handoff_active
+            ),
         )
         if turn.user_skill is not None:
             if turn.user_skill.takeover is not None:

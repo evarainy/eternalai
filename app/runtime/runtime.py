@@ -346,10 +346,17 @@ class RuntimeImpl:
         scope, handoff = browser_request_scope.get(), self._browser.handoff
         from app.ports.file_artifacts import ChatAttachmentError
         from app.ports.im_context import IMContextError
-        from app.ports.runtime import chat_attachment_context, im_source_context
+        from app.ports.runtime import (
+            chat_attachment_context,
+            im_source_context,
+            user_skill_ref_reference,
+        )
 
         if im_source_context.get() is not None:
             raise IMContextError("im_source_runtime_unsupported")
+        if user_skill_ref_reference.get() is not None:
+            # Never silently ignored: only the AgentScope runtime runs personal flows.
+            raise IMContextError("user_skill_ref_not_allowed", 422)
         if chat_attachment_context.get():
             # Never silently ignored: the legacy engine cannot show attachments to a model.
             raise ChatAttachmentError("chat_attachment_unsupported")

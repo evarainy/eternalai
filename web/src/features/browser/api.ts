@@ -4,6 +4,7 @@ import {
   parseBrowserRunProjection,
   type ParsedBrowserRunView,
 } from '../../contracts/browserRunProjection';
+import type { UserSkillRef } from '../../contracts/userSkill';
 
 const MAX_RESULT_BYTES = 1_048_576;
 const MAX_JSON_DEPTH = 32;
@@ -357,6 +358,7 @@ export async function submitOrdinaryBrowserCapableMessage(
   message: string, sessionId: string, clientRequestId: string, signal?: AbortSignal,
   collection?: { readonly task_id: string; readonly version: number } | null,
   attachmentIds: readonly string[] = [],
+  userSkillRef: UserSkillRef | null = null,
 ): Promise<unknown> {
   if (!isClientConversationId(sessionId) || !isClientConversationId(clientRequestId)
       || !message.trim()) throw new Error('browser_request_invalid');
@@ -364,7 +366,8 @@ export async function submitOrdinaryBrowserCapableMessage(
     url: '/api/v1/runtime/handle', method: 'POST', signal,
     data: { channel: 'web', session_id: sessionId, message, client_request_id: clientRequestId,
       client_capabilities: {}, ...(collection == null ? {} : { d_form_collection: collection }),
-      ...(attachmentIds.length === 0 ? {} : { attachment_ids: [...attachmentIds] }) },
+      ...(attachmentIds.length === 0 ? {} : { attachment_ids: [...attachmentIds] }),
+      ...(userSkillRef === null ? {} : { user_skill_ref: userSkillRef }) },
   });
 }
 

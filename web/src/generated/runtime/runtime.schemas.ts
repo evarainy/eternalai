@@ -152,6 +152,8 @@ export type HandleRequestClientRequestId = string | null;
 
 export type HandleRequestDFormCollection = DFormCollectionReference | null;
 
+export type HandleRequestUserSkillRef = UserSkillRef | null;
+
 export interface HandleRequest {
   /** @maxItems 5 */
   attachment_ids?: string[];
@@ -163,6 +165,7 @@ export interface HandleRequest {
   session_id: string;
   /** @maxItems 1 */
   source_refs?: string[];
+  user_skill_ref?: HandleRequestUserSkillRef;
 }
 
 /**
@@ -279,6 +282,13 @@ export const UserActionOutcome = {
   cancelled: 'cancelled',
   confirmation_invalidated: 'confirmation_invalidated',
 } as const;
+
+/**
+ * The user's own saved flow, explicitly named in the chat input (``$``).
+ */
+export interface UserSkillRef {
+  skill_id: string;
+}
 
 export type ValidationErrorCtx = { [key: string]: unknown };
 

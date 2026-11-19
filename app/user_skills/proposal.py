@@ -9,6 +9,7 @@ seen in the record.
 
 from __future__ import annotations
 
+import itertools
 import json
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
@@ -16,7 +17,9 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from app.ports.capability_registry import CapabilitySpec
 from app.user_skills.definition import (
@@ -26,6 +29,12 @@ from app.user_skills.definition import (
     NAME_MAX,
     PURPOSE_MAX,
     RULES_MAX,
+    FixedArg,
+    ForEachRows,
+    ListRows,
+    LoopItemRef,
+    ParamArg,
+    StepOutputRef,
     UserSkillDefinition,
     text_slots,
 )
@@ -627,6 +636,11 @@ def build_proposal(
         "bindings": bindings,
         "for_each_offers": offers,
         "column_options": columns_view,
+        "check_offers": [
+            {"offer_id": t["table_id"], "table_title": t["title"], "step_index": t["step"],
+             "step_label": steps[t["step"]].label}
+            for t in tables_internal if _checkable(t)
+        ],
         "draft": {"name": model.name, "purpose": model.purpose, "rules": model.rules},
         "update_targets": [],
         "rejections": [],
@@ -748,6 +762,50 @@ def _list_fields_hint(root: Mapping[str, Any]) -> str:
     return "；".join(hints) or "无"
 
 
+def _checkable(table: Mapping[str, Any]) -> bool:
+    """A plain list table (not per item) can carry the user's list checks."""
+
+    return table.get("list_path") is not None and all(
+        column["source"] == "row" for column in table["columns"]
+    )
+
+
+def _checks(
+    raw: Sequence[Any], tables: Mapping[str, Mapping[str, Any]], kept: set[str]
+) -> list[tuple[int, dict[str, Any]]]:
+    """(step index, assertion) of the user's checks; strict, else ``check_invalid``."""
+
+    invalid = ProposalRejected("check_invalid", "结果检查的设置不正确，请重新选择")
+    chosen: list[tuple[int, dict[str, Any]]] = []
+    seen: set[tuple[int, str]] = set()
+    for item in raw:
+        if not isinstance(item, Mapping) or not set(item) <= {"offer_id", "op", "value"}:
+            raise invalid
+        offer = item.get("offer_id")
+        table = tables.get(offer) if isinstance(offer, str) else None
+        op = item.get("op")
+        if table is None or not _checkable(table) or table["table_id"] not in kept:
+            raise invalid
+        if op == "non_empty":
+            if "value" in item:
+                raise invalid
+            assertion: dict[str, Any] = {"op": op}
+        elif op == "max_count":
+            value = item.get("value")
+            if type(value) is not int or not 1 <= value <= HARD_MAX_ITEMS:
+                raise invalid
+            assertion = {"op": op, "value": value}
+        else:
+            raise invalid
+        if (table["step"], op) in seen:
+            raise ProposalRejected("check_invalid", "同一项查询的同一种检查只能设一个")
+        seen.add((table["step"], op))
+        assertion["ref"] = {"source": "step_output", "step_id": f"s{table['step'] + 1}",
+                            "path": list(table["list_path"])}
+        chosen.append((table["step"], assertion))
+    return chosen
+
+
 # ----------------------------------------------------------- trial compile
 class TrialChoices(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -756,9 +814,11 @@ class TrialChoices(BaseModel):
     for_each_choices: dict[str, bool] = {}
     column_ids: list[str]
     inputs: dict[str, Any] = {}
-    name: Annotated[str, Field(min_length=1, max_length=NAME_MAX)]
+    # Length is checked by the service, as for rename (``name_invalid``).
+    name: Annotated[str, StringConstraints(strip_whitespace=True)]
     purpose: Annotated[str, Field(min_length=1, max_length=PURPOSE_MAX)]
     rules: Annotated[str, Field(min_length=1, max_length=RULES_MAX)]
+    checks: list[Any] = []
 
 
 def compile_trial(
@@ -844,6 +904,7 @@ def compile_trial(
     selected = set(choices.column_ids)
     completeness: dict[int, dict[str, Any]] = {}
     tables = []
+    kept: set[str] = set()
     for table in internal["tables"]:
         columns = [
             {"label": column["label"], "ref": {"source": column["source"],
@@ -883,11 +944,17 @@ def compile_trial(
                 }
         tables.append({"table_id": table["table_id"], "title": table["title"],
                        "rows": rows, "columns": columns})
+        if step_index not in loops:
+            kept.add(table["table_id"])
     if not tables:
         raise ProposalRejected("no_columns", "请至少选择一列要显示的内容")
-    # Leaves that report their own completeness get the ``complete`` check automatically.
+    # Leaves that report their own completeness get the ``complete`` check automatically;
+    # the user's list checks are added beside it.
     for index, assertion in completeness.items():
-        step_specs[index]["assert"] = [assertion]
+        step_specs[index].setdefault("assert", []).append(assertion)
+    by_id = {table["table_id"]: table for table in internal["tables"]}
+    for index, assertion in _checks(choices.checks, by_id, kept):
+        step_specs[index].setdefault("assert", []).append(assertion)
     try:
         definition = UserSkillDefinition.model_validate({
             "format": FORMAT, "params": params, "steps": step_specs,
@@ -900,6 +967,351 @@ def compile_trial(
     return definition, inputs
 
 
+# ------------------------------------------------------- regenerate (rebase)
+_LOWER_BOUNDS = ("minLength", "minItems", "minimum")
+_UPPER_BOUNDS = ("maxLength", "maxItems", "maximum")
+_EXACT_KEYS = ("pattern", "format", "exclusiveMinimum", "exclusiveMaximum", "multipleOf")
+_COMBINATORS = ("allOf", "not", "if", "then", "else", "dependentSchemas")
+
+
+def _strict_nodes(
+    root: Mapping[str, Any], path: Sequence[str | int]
+) -> list[Mapping[str, Any]] | None:
+    """Every schema branch ``path`` must end at, or None when a value is not guaranteed.
+
+    Each named segment must be a required property of every branch on the way;
+    an index segment can never be proven in range.
+    """
+
+    nodes = _branches(root, root)
+    for segment in path:
+        if isinstance(segment, int) or not nodes:
+            return None
+        following: list[Mapping[str, Any]] = []
+        for node in nodes:
+            properties, required = node.get("properties"), node.get("required")
+            if not (isinstance(properties, Mapping) and segment in properties
+                    and isinstance(required, list) and segment in required):
+                return None
+            branches = _branches(root, properties[segment])
+            if not branches:
+                return None
+            following += branches
+        nodes = following
+    return nodes or None
+
+
+def _strict_list_root(
+    root: Mapping[str, Any], path: Sequence[str | int]
+) -> Mapping[str, Any] | None:
+    """A root for one element of the always-present list at ``path``."""
+
+    nodes = _strict_nodes(root, path)
+    if nodes is None or any(node.get("type") != "array" for node in nodes):
+        return None
+    items = [branch for node in nodes for branch in _branches(root, node.get("items"))]
+    return {"anyOf": items, "$defs": root.get("$defs", {})} if items else None
+
+
+def _literals(node: Mapping[str, Any]) -> list[Any] | None:
+    """The finite values ``node`` allows (``enum`` and ``const`` together intersect)."""
+
+    values = list(node["enum"]) if isinstance(node.get("enum"), list) else None
+    if "const" in node:
+        values = [node["const"]] if values is None or node["const"] in values else []
+    return values
+
+
+_REFS = ("$ref", "$dynamicRef", "$recursiveRef")
+_SCHEMA_MAPS = frozenset({"properties", "patternProperties", "dependentSchemas"})
+_SUBSCHEMAS = frozenset({
+    "items", "prefixItems", "additionalProperties", "contains", "propertyNames",
+    "unevaluatedItems", "unevaluatedProperties", "not", "if", "then", "else",
+    "anyOf", "oneOf", "allOf",
+})
+
+
+def _schema_parts(node: Any) -> Iterator[Mapping[str, Any]]:
+    """``node`` and every subschema validating with it uses (definitions and data aside)."""
+
+    if not isinstance(node, Mapping):
+        return
+    yield node
+    for key, value in node.items():
+        if key in _SCHEMA_MAPS and isinstance(value, Mapping):
+            for sub in value.values():
+                yield from _schema_parts(sub)
+        elif key in _SUBSCHEMAS:
+            for sub in value if isinstance(value, list) else [value]:
+                yield from _schema_parts(sub)
+
+
+def _decidable(
+    source: Mapping[str, Any], target: Mapping[str, Any], checker: FormatChecker
+) -> bool:
+    """Neither schema needs the outer document; every format is one ``checker`` verifies."""
+
+    for part in itertools.chain(_schema_parts(source), _schema_parts(target)):
+        fmt = part.get("format")
+        if any(key in part for key in _REFS) or (
+            isinstance(fmt, str) and fmt not in checker.checkers
+        ):
+            return False
+    return True
+
+
+def _finite_fits(
+    source: Mapping[str, Any],
+    target: Mapping[str, Any],
+    values: Sequence[Any],
+    checker: FormatChecker,
+    source_checked: bool,
+) -> bool:
+    """Each value ``source`` really delivers is valid for the whole ``target``.
+
+    The target is checked with formats, as inputs are. A filled-in value was
+    format-checked by the runner; a step output is not, so all its listed values count.
+    """
+
+    try:
+        own = Draft202012Validator(
+            dict(source), format_checker=checker if source_checked else None
+        )
+        validator = Draft202012Validator(dict(target), format_checker=checker)
+        return all(validator.is_valid(value) for value in values if own.is_valid(value))
+    except SchemaError:
+        return False
+
+
+# Target keywords the open (non-finite) comparison below decides itself.
+_COMPARED = frozenset(
+    {"type", "items", "enum", "const", *_LOWER_BOUNDS, *_UPPER_BOUNDS, *_EXACT_KEYS}
+)
+
+
+def _node_fits(
+    source: Mapping[str, Any],
+    target: Mapping[str, Any],
+    checker: FormatChecker,
+    source_checked: bool,
+) -> bool:
+    """Every value ``source`` delivers is accepted by ``target`` (decidable subset only)."""
+
+    if any(key in target for key in _COMBINATORS) or any(key in source for key in _COMBINATORS):
+        return False
+    if not _decidable(source, target, checker):
+        return False
+    values = _literals(source)
+    if values is not None:
+        # A finite source is decided exactly: each of its values against the whole target.
+        return _finite_fits(source, target, values, checker, source_checked)
+    kinds, accepted = _node_kinds(source), _node_kinds(target)
+    if "number" in accepted:
+        accepted = accepted | {"integer"}
+    if "unknown" in kinds or "unknown" in accepted or not kinds <= accepted:
+        return False
+    if _literals(target) is not None:
+        return False
+    # Any other constraint is decided only when the source states the very same one.
+    if any(
+        source.get(key) != value
+        for key, value in target.items()
+        if key not in _COMPARED and key not in _ANNOTATIONS
+    ):
+        return False
+    if "items" in target:
+        items, wanted = source.get("items"), target["items"]
+        if not (
+            isinstance(items, Mapping)
+            and isinstance(wanted, Mapping)
+            and _node_fits(items, wanted, checker, source_checked)
+        ):
+            return False
+    for key in _LOWER_BOUNDS:
+        if key in target and not (key in source and source[key] >= target[key]):
+            return False
+    for key in _UPPER_BOUNDS:
+        if key in target and not (key in source and source[key] <= target[key]):
+            return False
+    return all(key not in target or source.get(key) == target[key] for key in _EXACT_KEYS)
+
+
+def _values_fit(
+    sources: Sequence[Mapping[str, Any]] | None,
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    source_checked: bool,
+) -> bool:
+    """``source_checked``: the source values were format-checked (a filled-in value)."""
+
+    checker = FormatChecker()
+    return bool(sources) and bool(targets) and all(
+        any(_node_fits(source, target, checker, source_checked) for target in targets)
+        for source in sources or ()
+    )
+
+
+def _plain(root: Mapping[str, Any], node: Any) -> Mapping[str, Any] | None:
+    """``node`` with local references followed, or None when a reference has company.
+
+    A ``$ref`` beside any keyword other than an annotation would add constraints
+    the referenced schema alone does not show; that is not decidable here.
+    """
+
+    for _ in range(10):
+        if not isinstance(node, Mapping):
+            return None
+        ref = node.get("$ref")
+        if not isinstance(ref, str):
+            return node
+        if not set(node) - {"$ref"} <= _ANNOTATIONS or not ref.startswith("#/"):
+            return None
+        target: Any = root
+        for part in ref[2:].split("/"):
+            target = target.get(part) if isinstance(target, Mapping) else None
+        node = target
+    return None
+
+
+_ANNOTATIONS = frozenset({"title", "description", "default", "examples"})
+# Input-root keywords that cannot constrain one declared property's values.
+_PLAIN_ROOT = frozenset({"type", "properties", "required", "additionalProperties", "$defs",
+                         "$schema", "$id", "title", "description"})
+_UNION_FREE = _COMBINATORS + ("oneOf", "anyOf")
+
+
+def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
+    """The new argument as plain alternatives, or None when that is not decidable.
+
+    Accepted: a plain schema (local ``$ref`` with only annotations beside it) or
+    a bare ``anyOf`` of such schemas with only annotations beside it (e.g. an
+    optional field). ``oneOf``/``allOf``/``not``, constraints next to a union or
+    a reference, and an input root that itself combines schemas are refused.
+    """
+
+    root = spec.input_schema
+    properties = root.get("properties")
+    prop = _plain(root, properties.get(arg)) if isinstance(properties, Mapping) else None
+    if prop is None or any(key in prop for key in _COMBINATORS + ("oneOf",)):
+        return None
+    variants = prop.get("anyOf")
+    if variants is None:
+        return [prop]
+    if not isinstance(variants, list) or not set(prop) - {"anyOf"} <= _ANNOTATIONS:
+        return None
+    plain: list[Mapping[str, Any]] = []
+    for variant in variants:
+        node = _plain(root, variant)
+        if node is None or any(key in node for key in _UNION_FREE):
+            return None
+        plain.append(node)
+    return plain
+
+
+def _fixed_fits(spec: CapabilitySpec, arg: str, value: Any) -> bool:
+    """The saved fixed value is valid for the whole new argument and still a fixed choice."""
+
+    properties = spec.input_schema.get("properties")
+    prop = properties.get(arg) if isinstance(properties, Mapping) else None
+    if not isinstance(prop, Mapping) or _fixed_kind(spec, arg, value) is None:
+        return False
+    schema = {**prop, "$defs": spec.input_schema.get("$defs", {})}
+    try:
+        return Draft202012Validator(schema).is_valid(value)
+    except SchemaError:
+        return False
+
+
+def rebase_definition(
+    definition: UserSkillDefinition,
+    specs: Mapping[str, CapabilitySpec],
+    fingerprints: Mapping[str, str],
+) -> UserSkillDefinition:
+    """The same saved structure, checked against and pinned to the current contracts.
+
+    Only what can be decided is accepted; anything not provably compatible is
+    refused (``regenerate_failed``) and the saved version is kept.
+    """
+
+    def refuse(reason: str) -> ProposalRejected:
+        return ProposalRejected(
+            "regenerate_failed", "查询合同变化较大，请在聊天里重新查询后保存新版本", reason
+        )
+
+    params = {param.name: param for param in definition.params}
+    steps = {step.step_id: step for step in definition.steps}
+
+    def output(step_id: str) -> Mapping[str, Any]:
+        return specs[steps[step_id].capability_id].output_schema
+
+    for step in definition.steps:
+        spec = specs.get(step.capability_id)
+        if spec is None or spec.type != "query":
+            raise refuse("leaf")
+    loop_roots: dict[str, Mapping[str, Any]] = {}
+    for step in definition.steps:
+        spec = specs[step.capability_id]
+        if not set(spec.input_schema) <= _PLAIN_ROOT:
+            raise refuse("argument")
+        required = spec.input_schema.get("required")
+        if isinstance(required, list) and not set(required) <= set(step.arguments):
+            raise refuse("required")
+        if step.for_each is not None:
+            loop_root = _strict_list_root(
+                output(step.for_each.items.step_id), step.for_each.items.path
+            )
+            if loop_root is None:
+                raise refuse("for_each")
+            loop_roots[step.step_id] = loop_root
+        for arg, source in step.arguments.items():
+            targets = _property(spec, arg)
+            if targets is None:
+                raise refuse("argument")
+            if isinstance(source, ParamArg):
+                fits = _values_fit(
+                    [params[source.name].schema_], targets, source_checked=True
+                )
+            elif isinstance(source, FixedArg):
+                fits = _fixed_fits(spec, arg, source.value)
+            elif isinstance(source, StepOutputRef):
+                fits = _values_fit(
+                    _strict_nodes(output(source.step_id), source.path),
+                    targets,
+                    source_checked=False,
+                )
+            else:
+                assert isinstance(source, LoopItemRef)
+                loop_root = loop_roots.get(step.step_id)
+                fits = loop_root is not None and _values_fit(
+                    _strict_nodes(loop_root, source.path), targets, source_checked=False
+                )
+            if not fits:
+                raise refuse("argument")
+        for assertion in step.assertions:
+            nodes = _strict_nodes(output(step.step_id), assertion.ref.path)
+            kind = "boolean" if assertion.op == "complete" else "array"
+            if nodes is None or any(node.get("type") != kind for node in nodes):
+                raise refuse("assertion")
+    for table in definition.output.tables:
+        rows = table.rows
+        roots: dict[str, Mapping[str, Any] | None]
+        if isinstance(rows, ListRows):
+            roots = {"row": _strict_list_root(output(rows.list.step_id), rows.list.path)}
+        else:
+            assert isinstance(rows, ForEachRows)
+            roots = {"loop_item": loop_roots.get(rows.for_each_step),
+                     "item_result": output(rows.for_each_step)}
+        for column in table.columns:
+            root = roots.get(column.ref.source)
+            # Cells may be empty: a displayable column only has to reach a scalar.
+            if root is None or not _displayable(root, column.ref.path):
+                raise refuse("column")
+    dumped = definition.model_dump(mode="json", by_alias=True)
+    for step in dumped["steps"]:
+        step["capability_fingerprint"] = fingerprints[step["capability_id"]]
+    return UserSkillDefinition.model_validate(dumped)
+
+
 __all__ = (
     "ProposalRejected",
     "TrialChoices",
@@ -907,5 +1319,6 @@ __all__ = (
     "check_texts",
     "compile_trial",
     "model_proposal_schema",
+    "rebase_definition",
     "summarize",
 )

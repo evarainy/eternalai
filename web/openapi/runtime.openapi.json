@@ -404,6 +404,16 @@
             "maxItems": 1,
             "title": "Source Refs",
             "type": "array"
+          },
+          "user_skill_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSkillRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -685,6 +695,22 @@
           "confirmation_invalidated"
         ],
         "type": "string"
+      },
+      "UserSkillRef": {
+        "additionalProperties": false,
+        "description": "The user's own saved flow, explicitly named in the chat input (``$``).",
+        "properties": {
+          "skill_id": {
+            "format": "uuid",
+            "title": "Skill Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill_id"
+        ],
+        "title": "UserSkillRef",
+        "type": "object"
       },
       "ValidationError": {
         "properties": {

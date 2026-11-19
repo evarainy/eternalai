@@ -28,6 +28,9 @@ import { BrowserRunCard } from '../features/browser/BrowserRunCard';
 import { ReportJobCard } from '../features/background-jobs/ReportJobCard';
 import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard';
 import { UserSkillCard } from '../features/my-skills/UserSkillCard';
+import { MySkillsPanel } from '../features/my-skills/MySkillsPanel';
+import { SkillMentionList, SkillMentionTag } from '../features/my-skills/SkillMention';
+import { useSkillMention, type SkillSelection } from '../features/my-skills/useSkillMention';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -92,6 +95,7 @@ import { AnswerText } from '../shared/ui/AnswerText';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
+const USER_SKILL_REF_NOT_ALLOWED = 'user_skill_ref_not_allowed';
 
 interface ChatPageProps {
   /** A trusted server configuration must supply the one published skill ID. */
@@ -117,6 +121,8 @@ interface ChatSubmission {
   readonly message: string;
   readonly sessionId: string;
   readonly authGeneration: number;
+  /** The saved flow the user named with `$` and its span in the message; frozen with it. */
+  readonly userSkill: SkillSelection | null;
   readonly browser: null | {
     readonly skillId: string;
     readonly requestId: string;
@@ -556,6 +562,21 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     setDraft(question);
     inputRef.current?.focus();
   }, [setDraft]);
+  // `$` 指定调用与「我的功能」面板；与浏览器只读技能二选一，选了一个就取消另一个并提示。
+  const [mentionNotice, setMentionNotice] = useState('');
+  const [skillsPanelOpen, setSkillsPanelOpen] = useState(false);
+  const mention = useSkillMention({
+    draft, setDraft, inputRef, enabled: authStatus === 'authenticated',
+    onBind: () => {
+      setBrowserOptIn((checked) => {
+        if (checked) setMentionNotice('已改用指定的功能，「使用浏览器只读技能」已取消勾选。');
+        return false;
+      });
+    },
+  });
+  // The send path runs after this render; it reads the current mention state through a ref.
+  const mentionRef = useRef(mention);
+  mentionRef.current = mention;
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
   // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
@@ -782,6 +803,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         ? await submitOrdinaryBrowserCapableMessage(
           submission.message, submission.sessionId, submission.requestId, controller.signal,
           submission.collection, submission.attachments.map((item) => item.artifact_id),
+          submission.userSkill === null ? null : { skill_id: submission.userSkill.skillId },
         )
         : await submitBrowserMessage(
           submission.message, submission.sessionId, browser.skillId, browser.requestId,
@@ -814,6 +836,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             channel: 'web', session_id: sessionId, message, client_request_id: submission.requestId,
             client_capabilities: {},
             ...(submission.collection === null ? {} : { d_form_collection: submission.collection }),
+            ...(submission.userSkill === null ? {} : {
+              user_skill_ref: { skill_id: submission.userSkill.skillId },
+            }),
             ...(submission.attachments.length === 0 ? {} : {
               attachment_ids: submission.attachments.map((item) => item.artifact_id),
             }),
@@ -924,13 +949,31 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           }
           if (!submissionIsCurrent(submission)) return null;
           const store = useAIDockStore.getState();
-          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
+          store.setDraft(restored);
+          mentionRef.current.restore(restored, submission.userSkill);
           if (submission.attachments.length > 0) {
             store.setDraftAttachments(
               [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
             );
           }
           const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
+          store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
+        if (error instanceof ApiError && error.status === 422
+            && error.code === USER_SKILL_REF_NOT_ALLOWED) {
+          // Refused before any work: the text and the chosen flow go back; nothing to retry.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          const store = useAIDockStore.getState();
+          const restored = store.draft.length > 0 ? [message, store.draft].join('\n') : message;
+          store.setDraft(restored);
+          mentionRef.current.restore(restored, submission.userSkill);
+          const notice = projectTextResponse(error.message, 'validation');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
         }
@@ -1005,6 +1048,24 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (retry === undefined && (browserOptIn || activeSkillId === 'd_form_fill_stop')
         && ((browserTarget !== null && !browserTerminal && !browserHandoff)
           || pendingSubmission !== null)) return;
+    let userSkill: SkillSelection | null = null;
+    if (retry === undefined) {
+      const named = mention.resolveForSend(message);
+      if (named.kind === 'blocked') {
+        setMentionNotice(named.reason);
+        return;
+      }
+      userSkill = named.kind === 'ref' ? named.selection : null;
+      const conflict = userSkill === null ? null
+        : browserOptIn ? '指定功能和浏览器只读技能不能同时使用，请取消其中一个。'
+          : currentCollection !== null ? '正在填写表单时不能指定功能。'
+            : useAIDockStore.getState().draftAttachments.length > 0 ? '指定功能时不能带附件，请先移除附件。'
+              : null;
+      if (conflict !== null) {
+        setMentionNotice(conflict);
+        return;
+      }
+    }
     const sessionId = retry?.sessionId ?? useAIDockStore.getState().ensureSession();
     const browser = retry?.browser ?? (currentCollection === null && browserOptIn && browserOwner !== null
       && activeSkillId !== null ? {
@@ -1012,7 +1073,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       } : null);
     const submission: ChatSubmission = retry ?? {
       attachments: useAIDockStore.getState().draftAttachments,
-      message, sessionId, authGeneration: useAuthStore.getState().generation, browser,
+      message, sessionId, authGeneration: useAuthStore.getState().generation, browser, userSkill,
       requestId: browser?.requestId ?? crypto.randomUUID(),
       owner: browserAvailable ? browserOwner : null,
       collection: currentCollection === null ? null : { ...currentCollection },
@@ -1030,6 +1091,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       });
       setDraft('');
       useAIDockStore.getState().setDraftAttachments([]);
+      mention.reset();
+      setMentionNotice('');
     }
     activeSubmission.current = submission;
     mutation.mutate(message);
@@ -1069,6 +1132,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     setRetrySubmission(null);
     setBrowserStorageError(false);
     setBrowserOptIn(false);
+    mention.reset();
+    setMentionNotice('');
     startNewSession();
   };
 
@@ -1442,6 +1507,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 text="" attachments={deliveryAttachments} /> : null}
             </div>
           ) : null}
+          <SkillMentionTag mention={mention} />
+          <SkillMentionList mention={mention} />
+          {mentionNotice ? <Text type="warning" role="status">{mentionNotice}</Text> : null}
           <textarea
             aria-label="办理请求"
             className={styles.input}
@@ -1450,11 +1518,23 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             onChange={(event) => {
               const value = event.target.value;
               setDraft(value);
+              mention.sync(value, event.target.selectionStart);
+              if (mentionNotice) setMentionNotice('');
               if (retrySubmission !== null && value.trim() !== retrySubmission.message) {
                 setRetrySubmission(null);
               }
             }}
-            onKeyDown={handleRequestKeyDown}
+            onSelect={(event) => {
+              mention.sync(event.currentTarget.value, event.currentTarget.selectionStart);
+            }}
+            onCompositionStart={mention.composition.onCompositionStart}
+            onCompositionEnd={mention.composition.onCompositionEnd}
+            onKeyDown={(event) => {
+              if (mention.onKeyDown(event)) return;
+              // While the IME composes, Enter belongs to the IME, never to sending.
+              if (mention.isComposing()) return;
+              handleRequestKeyDown(event);
+            }}
             placeholder="交代一件事，或者问个问题"
             ref={inputRef}
             rows={1}
@@ -1482,6 +1562,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               <Icon name="history" size={17} />
               历史对话
             </button>
+            <button
+              aria-expanded={skillsPanelOpen}
+              className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.barExtra}`}
+              onClick={() => setSkillsPanelOpen(true)}
+              type="button"
+            >
+              <Icon name="grid" size={17} />
+              我的功能
+            </button>
             {inConversation && !chatSheetOpen ? (
               <button
                 className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.barExtra}`}
@@ -1496,6 +1585,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               <span className={styles.barExtra}>
                 <Checkbox checked={browserOptIn} onChange={(event) => {
                   setBrowserOptIn(event.target.checked);
+                  if (event.target.checked && mention.binding !== null) {
+                    mention.clear();
+                    setMentionNotice('已改用浏览器只读技能，指定的功能已取消。');
+                  }
                 }}>
                   使用浏览器只读技能
                 </Checkbox>
@@ -1514,6 +1607,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             </button>
           </div>
         </form>
+        <MySkillsPanel open={skillsPanelOpen} onClose={() => setSkillsPanelOpen(false)}
+          onUse={(item) => mention.insert(item)} />
       </div>
     </div>
   );

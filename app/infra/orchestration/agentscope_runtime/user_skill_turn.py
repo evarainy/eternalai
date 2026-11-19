@@ -4,7 +4,9 @@ Exposure, the save proposal tool and the whole-response dispatch of a saved
 flow call. A saved-flow call is never dispatched by the SDK: the middleware
 decides the whole response before any call runs (conflict → choice card,
 not uniquely named → choice card, otherwise the runner executes it).
-Restricted turns (IM source, browser) get none of this.
+Restricted turns (IM source, an exposed browser tool, a D continuation or
+handoff) get none of this. A flow the user explicitly named (``$`` + id) runs
+without the model: ``run_explicit_user_skill``.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from app.infra.llm.agentscope_chat import halt_tool_use
 from app.infra.orchestration.agentscope_read_tools import ReadToolScope
 from app.infra.orchestration.agentscope_runtime.catalog import UserSkillTool
 from app.infra.orchestration.agentscope_runtime.ledger import TurnLedger, UserSkillSettled
-from app.ports.user_skills import UserSkillOwner
+from app.ports.user_skills import UserSkillError, UserSkillOwner
 from app.user_skills.definition import UserSkillDefinition, definition_digest, params_schema
 from app.user_skills.proposal import ProposalRejected, model_proposal_schema
 from app.user_skills.runner import RunContext
@@ -83,7 +85,7 @@ async def prepare_user_skill_turn(
         return None
     turn = UserSkillTurn(service, scope, message, deadline, [], 0, None, None)
     try:
-        turn.takeover = service.take_takeover(turn.key)
+        turn.takeover = await service.take_takeover(turn.key, turn.owner)
         if turn.takeover is not None:
             return turn
         tools: list[UserSkillTool] = []
@@ -96,7 +98,7 @@ async def prepare_user_skill_turn(
             ))
         turn.usable_count = len(tools)
         turn.tools = tools
-        if service.has_records(turn.key):
+        if await service.has_records(turn.key):
             turn.summary = await service.summary(turn.key, [message])
         _LOGGER.info(
             "user_skill.turn_prepared usable=%d records=%s",
@@ -106,6 +108,21 @@ async def prepare_user_skill_turn(
         _LOGGER.info("user_skill.turn_prepare_failed error=%s", type(exc).__name__)
         return None
     return turn
+
+
+def session_context_note(summary: dict[str, Any]) -> str:
+    """Names of this session's completed queries, for a turn without conversation history.
+
+    The AgentScope history is process memory (lost on restart) while the records
+    persist; without this note the model answers that it saw no earlier query.
+    """
+
+    names = list(dict.fromkeys(record["query"] for record in summary["records"]))
+    return (
+        "<session_context>本会话此前已完成以下查询（对话历史里看不到之前的轮次，以此为准）："
+        + "、".join(names)
+        + "。这些查询的记录见 propose_user_skill 的说明。</session_context>\n"
+    )
 
 
 def summary_text(summary: dict[str, Any]) -> str:
@@ -146,11 +163,77 @@ async def handle_user_skill_response(
             expected_digest=bytes.fromhex(skill.digest_hex),
         )
     except UserSkillFailure as failure:
-        payload = {"kind": "result", "status": "failed", "name": skill.name,
-                   "skill_id": skill.skill_id, "version": skill.version, "inputs": [],
-                   "tables": [], "error_code": failure.code, "reason_label": failure.label,
-                   "exportable": False, "takeover_allowed": False}
-        return UserSkillSettled(payload, True, "capability_candidate_stale")
+        payload = _failure_card(skill.name, skill.skill_id, skill.version, failure)
+        return UserSkillSettled(payload, True, _trace_code(failure.code))
+    return UserSkillSettled(payload, failed, code)
+
+
+def _trace_code(card_code: str) -> str:
+    """The closed Trace code of a refused saved-flow call (card codes stay on the card)."""
+
+    return "capability_not_found" if card_code == "not_found" else "capability_candidate_stale"
+
+
+def _failure_card(
+    name: str, skill_id: str | None, version: int | None, failure: UserSkillFailure
+) -> dict[str, Any]:
+    return {"kind": "result", "status": "failed", "name": name, "skill_id": skill_id,
+            "version": version, "inputs": [], "tables": [], "error_code": failure.code,
+            "reason_label": failure.label, "exportable": False, "takeover_allowed": False}
+
+
+async def run_explicit_user_skill(
+    service: UserSkillService | None,
+    scope: ReadToolScope,
+    skill_id: str,
+    deadline: float,
+    ledger: TurnLedger,
+) -> UserSkillSettled:
+    """Run the flow the user explicitly named, by id and current version; no model.
+
+    Missing inputs return the form card. Another user's, a deleted or a never
+    existing flow all return the same card (no name, no version).
+    """
+
+    owner = UserSkillOwner(tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id)
+    key = (scope.tenant_id, scope.ai_user_id, scope.session_id)
+    missing = UserSkillFailure("not_found", 404, "没有找到这个功能")
+    try:
+        if service is None:
+            raise UserSkillError("unconfigured")
+        current = await service.current(owner, skill_id)
+        if current is None:
+            raise missing
+        ctx = RunContext(
+            tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
+            session_id=scope.session_id, channel=scope.channel, entry="chat",
+            deadline=deadline - CHAT_RESERVE_SECONDS, turn_task_id=ledger.task_id,
+        )
+        try:
+            payload, failed, code = await service.run_saved(
+                key, owner, ctx, current.skill_id, current.current_version, {},
+                expected_digest=current.payload.definition_digest,
+            )
+        except UserSkillFailure as failure:
+            if failure.code == "not_found":
+                raise missing from None
+            _LOGGER.info("user_skill.explicit result=%s", failure.code)
+            return UserSkillSettled(
+                _failure_card(current.display_name, current.skill_id,
+                              current.current_version, failure),
+                True, _trace_code(failure.code),
+            )
+    except UserSkillFailure as failure:
+        _LOGGER.info("user_skill.explicit result=not_found")
+        return UserSkillSettled(_failure_card("这个功能", None, None, failure), True,
+                                _trace_code(failure.code))
+    except UserSkillError as error:
+        _LOGGER.info("user_skill.explicit result=unavailable error=%s", error.code)
+        unavailable = UserSkillFailure("unavailable", 503, "功能暂不可用，请稍后再试")
+        return UserSkillSettled(_failure_card("这个功能", None, None, unavailable), True,
+                                "internal_error")
+    _LOGGER.info("user_skill.explicit result=%s",
+                 "needs_input" if payload.get("kind") == "needs_input" else "ran")
     return UserSkillSettled(payload, failed, code)
 
 
@@ -197,7 +280,10 @@ class ProposeUserSkill(_UserSkillToolBase):
         summary = summary_text(turn.summary or {})
         self.description = (
             "用户明确要求把本次会话里刚完成的查询「保存为功能」「存成技能」「以后直接用」时调用；"
-            "其他时候不要调用，也不要和其他工具同时调用。按 records 的 seq 选出构成该流程的查询"
+            "其他时候不要调用，也不要和其他工具同时调用。本会话已完成的查询以下面的 records 为准："
+            "对话历史里看不到之前的查询（例如服务重启后）时，"
+            "用户说的「刚才的查询」就是这些 records，"
+            "照常调用，不要回答没有查询记录。按 records 的 seq 选出构成该流程的查询"
             "（去掉试错的多余查询；对列表逐条查的同一查询放进同一个 steps 项），给出名称、用途、"
             "查询口径；tables 选择要显示的列表与列。名称和说明只写一般说法，不要写本次查到的具体"
             "姓名、编号、标题或日期。"
@@ -276,5 +362,6 @@ __all__ = (
     "UserSkillTurn",
     "handle_user_skill_response",
     "prepare_user_skill_turn",
+    "run_explicit_user_skill",
     "takeover_data",
 )

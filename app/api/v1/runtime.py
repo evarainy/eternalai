@@ -29,6 +29,7 @@ from app.ports.runtime import (
     chat_client_request_id,
     d_form_collection_reference,
     im_source_context,
+    user_skill_ref_reference,
 )
 from app.ports.task_store import DFormCollectionError
 
@@ -63,6 +64,14 @@ class _PrivateHandleRoute(APIRoute):
         return handle
 
 
+class UserSkillRef(BaseModel):
+    """The user's own saved flow, explicitly named in the chat input (``$``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: UUID
+
+
 class HandleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -74,6 +83,7 @@ class HandleRequest(BaseModel):
     d_form_collection: DFormCollectionReference | None = None
     source_refs: list[str] = Field(default_factory=list, max_length=1)
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=5)
+    user_skill_ref: UserSkillRef | None = None
 
 
 class RuntimeRequestErrorDetail(BaseModel):
@@ -234,6 +244,18 @@ def make_router(
         response: Response,
         principal: Principal = Depends(require_principal),
     ) -> ResponseEnvelope:
+        if body.user_skill_ref is not None and (
+            body.channel != "web" or body.source_refs or body.attachment_ids
+            or body.d_form_collection is not None
+            or body.client_capabilities.get("browser_async_v1") is True
+        ):
+            # Before every other route: an explicit flow never mixes with these.
+            raise HTTPException(
+                422,
+                {"code": "user_skill_ref_not_allowed",
+                 "message": "指定功能时不能同时使用附件、表单续填或浏览器技能。"},
+                headers=_PRIVATE_HEADERS,
+            )
         if body.source_refs and (
             body.channel != "web" or body.d_form_collection is not None
             or body.client_capabilities
@@ -322,6 +344,9 @@ def make_router(
         request_id_token = chat_client_request_id.set(body.client_request_id)
         source_token = im_source_context.set(None)
         attachment_token = chat_attachment_context.set(attachments)
+        skill_ref_token = user_skill_ref_reference.set(
+            None if body.user_skill_ref is None else str(body.user_skill_ref.skill_id)
+        )
         try:
             if body.source_refs:
                 if im_context is None:
@@ -340,8 +365,10 @@ def make_router(
                 await im_context.revalidate(principal, session_id, tuple(body.source_refs))
             return result
         except IMContextError as error:
-            raise HTTPException(error.http_status, {"code": error.code},
-                                headers=_PRIVATE_HEADERS) from None
+            detail = {"code": error.code}
+            if error.code == "user_skill_ref_not_allowed":
+                detail["message"] = "当前运行模式不支持指定功能，请不写 $ 直接描述要办的事。"
+            raise HTTPException(error.http_status, detail, headers=_PRIVATE_HEADERS) from None
         except DFormCollectionError as error:
             raise HTTPException(
                 404 if error.code == "collection_not_found" else 409,
@@ -353,6 +380,7 @@ def make_router(
         except RuntimeSessionBusyError:
             raise _session_busy() from None
         finally:
+            user_skill_ref_reference.reset(skill_ref_token)
             chat_attachment_context.reset(attachment_token)
             im_source_context.reset(source_token)
             chat_client_request_id.reset(request_id_token)

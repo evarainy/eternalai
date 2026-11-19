@@ -134,7 +134,10 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLTaskStore,
 )
 from app.infra.persistence.user_preferences import PostgreSQLUserPreferencesStore
-from app.infra.persistence.user_skills import PostgreSQLUserSkillStore
+from app.infra.persistence.user_skills import (
+    PostgreSQLUserSkillSessionStore,
+    PostgreSQLUserSkillStore,
+)
 from app.infra.persistence.work_object.attachments import PostgreSQLWorkObjectAttachmentStore
 from app.infra.persistence.work_object.leader_roster import PostgreSQLLeaderRoster
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
@@ -212,7 +215,6 @@ from app.sheet_fill import SheetFillAdmission, sheet_fill_kind
 from app.system_entry.service import SystemEntryService
 from app.user_skills.runner import UserSkillRunner
 from app.user_skills.service import UserSkillService
-from app.user_skills.session_store import UserSkillSessionStore
 from app.work_dispatch.attachments import WorkObjectAttachmentService
 from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSeriesService
 from app.work_dispatch.service import WorkDispatchService
@@ -304,7 +306,7 @@ def build_user_skill_service(
     }
     return UserSkillService(
         store=PostgreSQLUserSkillStore(session_factory),
-        sessions=UserSkillSessionStore(),
+        sessions=PostgreSQLUserSkillSessionStore(session_factory),
         runner=UserSkillRunner(
             registry=capability_registry,
             policy=policy,

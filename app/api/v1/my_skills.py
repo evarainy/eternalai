@@ -1,4 +1,5 @@
-"""The caller's own saved read flows (功能): trial, save, list, enable, run, takeover.
+"""The caller's own saved read flows (功能): trial, save, list, enable, rename, delete,
+regenerate, run, takeover.
 
 Identity comes only from the signed session; every flow is looked up by its
 owner, so another user's flow is indistinguishable from a missing one (404).
@@ -44,10 +45,12 @@ class TrialRequest(_Strict):
     for_each_choices: dict[str, bool] = Field(default_factory=dict)
     column_ids: list[str] = Field(min_length=1, max_length=60)
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
-    name: str = Field(min_length=1, max_length=40)
+    name: str
     purpose: str = Field(min_length=1, max_length=120)
     rules: str = Field(min_length=1, max_length=300)
     target: UpdateTarget
+    # Strictly checked by the use case (closed ``check_invalid``), not here.
+    checks: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=12)
 
 
 class TrialResponse(BaseModel):
@@ -79,6 +82,7 @@ class SkillListItem(BaseModel):
     purpose: str
     state: Literal["usable", "paused", "disabled"]
     pause_reason_label: str | None = None
+    can_regenerate: bool
     current_version: int
     updated_at: str | None = None
     exportable: bool
@@ -112,6 +116,22 @@ class RunResponse(BaseModel):
 
 class TakeoverRequest(_Strict):
     session_id: str = SessionId
+
+
+class RenameRequest(_Strict):
+    # Length and characters are checked by the use case (closed ``name_invalid``).
+    name: str
+
+
+class RenameResponse(BaseModel):
+    skill_id: str
+    name: str
+
+
+class RegenerateRequest(_Strict):
+    session_id: str = SessionId
+    expected_current_version: int = Field(ge=1)
+    input: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 def _fail(status_code: int, code: str, message: str) -> NoReturn:
@@ -222,6 +242,47 @@ def make_router(
         response.headers.update(_NO_STORE)
         return StateResponse(**changed)
 
+    @router.put("/{skill_id}/name", response_model=RenameResponse, responses=errors)
+    async def rename(
+        skill_id: str,
+        body: RenameRequest,
+        response: Response,
+        principal: Principal = Depends(require_principal),
+    ) -> RenameResponse:
+        renamed = await guarded(configured().rename(_owner(principal), skill_id, body.name))
+        response.headers.update(_NO_STORE)
+        return RenameResponse(**renamed)
+
+    @router.delete(
+        "/{skill_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        response_class=Response,
+        responses=errors,
+    )
+    async def delete(
+        skill_id: str,
+        principal: Principal = Depends(require_principal),
+    ) -> Response:
+        await guarded(configured().delete(_owner(principal), skill_id))
+        return Response(status_code=status.HTTP_204_NO_CONTENT, headers=_NO_STORE)
+
+    @router.post("/{skill_id}/regenerations", response_model=TrialResponse, responses=errors)
+    async def regenerate(
+        skill_id: str,
+        body: RegenerateRequest,
+        response: Response,
+        principal: Principal = Depends(require_principal),
+    ) -> TrialResponse:
+        key = bind(principal, body.session_id)
+        outcome = await guarded(
+            configured().regenerate(
+                key, _owner(principal), _context(principal, key[2], "trial"), skill_id,
+                body.expected_current_version, body.input,
+            )
+        )
+        response.headers.update(_NO_STORE)
+        return TrialResponse(**outcome)
+
     @router.post("/{skill_id}/runs", response_model=RunResponse, responses=errors)
     async def run(
         skill_id: str,
@@ -255,7 +316,7 @@ def make_router(
         principal: Principal = Depends(require_principal),
     ) -> Response:
         key = bind(principal, body.session_id)
-        if not configured().request_takeover(key, run_id):
+        if not await guarded(configured().request_takeover(key, run_id)):
             _fail(404, "run_not_found", "这次查询已过期，请重新查询")
         return Response(status_code=status.HTTP_204_NO_CONTENT, headers=_NO_STORE)
 

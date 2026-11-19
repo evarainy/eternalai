@@ -38,6 +38,8 @@ export interface UserSkillProposal {
     offer_id: string; step_index: number; step_label: string; list_label: string; prefilled: boolean;
   }[];
   column_options: { column_id: string; table_id: string; label: string }[];
+  /** 可设「列表不能为空」「最多几条」的列表表格；旧卡没有此字段。 */
+  check_offers?: { offer_id: string; table_title: string; step_index: number; step_label: string }[];
   draft: { name: string; purpose: string; rules: string };
   update_targets: { skill_id: string; name: string; current_version: number }[];
   rejections: { code: string; label: string }[];
@@ -82,7 +84,14 @@ export interface UserSkillResult {
   queried_at?: string;
   exportable?: boolean;
   takeover_allowed?: boolean;
+  /** 未通过用户自己设的结果检查（不是系统故障）。 */
+  check_failed?: boolean;
   trial_id?: string;
+}
+
+/** 聊天里用 `$` 指定的本人功能，只带 id；服务端按本人当前版本执行。 */
+export interface UserSkillRef {
+  skill_id: string;
 }
 export type UserSkillPayload =
   | UserSkillProposal | UserSkillNeedsInput | UserSkillChoice | UserSkillResult;
@@ -128,7 +137,9 @@ function isProposal(value: Record<string, unknown>): boolean {
     && isString(value.draft.rules)
     && listOf(value.update_targets, (t) => isString(t.skill_id) && isString(t.name)
       && isNumber(t.current_version))
-    && listOf(value.rejections, (r) => isString(r.code) && isString(r.label));
+    && listOf(value.rejections, (r) => isString(r.code) && isString(r.label))
+    && optional(value.check_offers, (offers) => listOf(offers, (o) => isString(o.offer_id)
+      && isString(o.table_title) && isNumber(o.step_index) && isString(o.step_label)));
 }
 
 function isResult(value: Record<string, unknown>): boolean {
@@ -140,7 +151,8 @@ function isResult(value: Record<string, unknown>): boolean {
     && listOf(value.inputs, (item) => isString(item.label) && isString(item.value))
     && optional(value.input, isRecord) && optional(value.reason_label, isString)
     && optional(value.notice_label, isString) && optional(value.exportable, isBool)
-    && optional(value.takeover_allowed, isBool) && listOf(value.tables, isTable);
+    && optional(value.takeover_allowed, isBool) && optional(value.check_failed, isBool)
+    && listOf(value.tables, isTable);
 }
 
 /** Exact on the discriminator and on every field the cards read; anything else is rejected. */
