@@ -50,7 +50,8 @@ jobs:
 
               def is_doc(path):
                   p = PurePosixPath(path)
-                  if path in machine_read_docs:
+                  # Dependency manifests are discovered anywhere in the repository.
+                  if path in machine_read_docs or p.name == "pyproject.toml":
                       return False
                   return (
                       (len(p.parts) == 1 and p.suffix == ".md")
@@ -85,6 +86,8 @@ jobs:
           import yaml
 
           for path in [Path('.codex/config.toml'), *sorted(Path('.codex/agents').glob('*.toml'))]:
+              if not path.exists():
+                  continue
               tomllib.loads(path.read_text(encoding='utf-8'))
               print(f'Parsed {path}')
 
