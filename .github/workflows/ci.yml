@@ -45,13 +45,21 @@ jobs:
               paths = subprocess.check_output(
                   ["git", "diff", "--name-only", "--no-renames", "-z", base, head]
               ).decode().rstrip("\0").split("\0")
+              # Read by scripts/check_dependencies.py, so changes need backend checks.
+              machine_read_docs = {"docs/dev/dependency_policy.md"}
+
               def is_doc(path):
                   p = PurePosixPath(path)
+                  if path in machine_read_docs:
+                      return False
                   return (
-                      path in {"AGENTS.md", "CLAUDE.md", "README.md"}
+                      (len(p.parts) == 1 and p.suffix == ".md")
                       or (path.startswith("docs/") and p.suffix == ".md")
+                      or path.startswith("docs/phase2/archive/")
                       or (path.startswith((".agents/skills/", ".claude/skills/"))
                           and p.name == "SKILL.md")
+                      or (path.startswith(".claude/agents/") and p.suffix == ".md")
+                      or (path.startswith(".codex/") and p.suffix == ".toml")
                   )
               docs_only = bool(paths) and all(is_doc(p) for p in paths)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
@@ -63,12 +71,17 @@ jobs:
       - name: Check existing documentation contracts
         if: steps.scope.outputs.docs_only == 'true'
         run: uv run --no-project --with pytest pytest --noconftest -p no:cacheprovider tests/architecture/test_governance_document_ssot.py -q
-      - name: Parse skill metadata
+      - name: Parse skill metadata and Codex config
         if: steps.scope.outputs.docs_only == 'true'
         run: |
           uv run --no-project --with pyyaml python - <<'PY'
           from pathlib import Path
+          import tomllib
           import yaml
+
+          for path in sorted(Path('.codex').rglob('*.toml')):
+              tomllib.loads(path.read_text(encoding='utf-8'))
+              print(f'Parsed {path}')
 
           for root in (Path('.agents/skills'), Path('.claude/skills')):
               for path in root.glob('*/SKILL.md'):
