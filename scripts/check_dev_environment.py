@@ -128,6 +128,7 @@ def resolve_database_configuration(
     environment: Mapping[str, str] | None = None,
     env_path: Path | None = None,
     user_environment_has_url: bool | None = None,
+    allow_xdist_worker_databases: bool = False,
 ) -> DatabaseResolution:
     source_environment = os.environ if environment is None else environment
     resolved_env_path = _repository_env_path() if env_path is None else env_path
@@ -194,7 +195,9 @@ def resolve_database_configuration(
 
     target = _format_target(host, port)
     try:
-        validate_test_database_url(database_url)
+        validate_test_database_url(
+            database_url, allow_xdist_worker_databases=allow_xdist_worker_databases
+        )
     except ValueError:
         return DatabaseResolution(
             check=CheckResult(
