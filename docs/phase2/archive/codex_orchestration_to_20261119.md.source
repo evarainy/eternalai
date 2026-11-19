@@ -6,12 +6,7 @@
 |---|---|
 | 主控 | Astra max |
 | A/B plan → 独立计划评审 | GPT Pro max → 全新 Astra high |
-| A 施工 → 新上下文自审 → 静态审核 | Astra high → Astra medium → MiMo Pro max |
-| B 施工 → 新上下文自审 → 静态审核 | Sol max → Sol xhigh → MiMo Pro max |
-| C 施工 → 审核 | MiMo Pro max → 全新 Sol high |
-| D 施工 | MiMo Flash max，无独立审核 |
 
-A 和高风险 B 在新上下文自审后、静态审核前插入 Astra high 独立 Monitor；职责和轮次见 AGENTS。其余验证按真实改动选择。MiMo 的 max 是启用思考/high 的配置别名，不代表额外强度。
 
 ## 启动
 
@@ -22,11 +17,8 @@ A 和高风险 B 在新上下文自审后、静态审核前插入 Astra high 独
 ```powershell
 codex -m gpt-6-astra -c 'model_reasoning_effort="high"'
 codex -m gpt-6-sol -c 'model_reasoning_effort="max"'
-opencode run --pure --model mimo/mimo-v2.6-pro --variant max --title "TASK C implementation" "按已批准 Scope 施工"
-opencode run --pure --model mimo/mimo-v2.6-flash --variant max --title "TASK D implementation" "按明确的精确修改清单施工"
 ```
 
-OpenCode 使用现有个人 mimo provider 和凭证；项目只补 variants.max 与 packet-review，不改默认模型。D 档优先附必要片段和精确修改，避免反复通读长治理文档。
 
 ## 新窗口接续
 
@@ -56,13 +48,3 @@ Pro 不可用时记录阻塞，不自动换作者；输出交由全新 plan-revi
 ### Pro 额度提醒
 
 每次 Pro 调用后检查结果是完成还是报错。只有出现明确的 quota、usage-limit、reached-limit、额度耗尽等信号，才判定为额度耗尽，并立即在当前会话提醒用户：有恢复时间就写明，没有就写“未知”；保留已有产物与脱敏证据，暂停依赖 Pro 的步骤，不静默更换模型。429 单独出现可能只是临时限流，登录或网络错误不等于额度耗尽；proAvailable 不是剩余次数，Codex 用量也不等于 ChatGPT Pro 额度。没有可靠读数时不报告剩余百分比，也不承诺提前预警。
-
-## 静态审核
-
-准备完整必要规则、合同、原始 diff、验证摘要和最终 base/head 的脱敏 packet；不附 .env、凭证或原始 OA。原生 OpenCode 示例：
-
-```powershell
-Get-Content -Raw -LiteralPath '<packet.md>' | opencode run --pure --model mimo/mimo-v2.6-pro --variant max --agent packet-review --format json --title "TASK static review"
-```
-
-大材料包通过标准输入传入，记录实际输入的字节数与 SHA256；不把文件附件的展示摘要当作完整原文。packet-review 禁用工具，仅审查附入材料。保存实际会话产物；PR 按 AGENTS 记录模型请求与实际证据，不能伪造桥脚本字段。自审、Monitor、静态审核与实际验证分别如实记录；D 不额外审核。集成仍走任务分支 PR，合并需有授权。

@@ -120,6 +120,8 @@ rg '^class .+\(Protocol\)' app/ports
 
 ### 4.2 蓝图 §6 Agent Runtime 的落地实况
 
+> 2026-08-19 初版普查快照。下表记录当时的 RuntimeImpl；AgentScope 默认入口和实测边界见 [STATUS](STATUS.md)，选型与工具协议见 [2026-10-27 裁决](DECISIONS.md#2026-10-27--裁决agentscope-runtime-选型m1-工具组替代-top-k-与运行时工具协议)。
+
 蓝图 §6.2 列出 Agent Runtime 的 12 个组件。本轮逐个核对代码符号，结果如下：
 
 | 蓝图 §6.2 组件 | 代码中是否存在 | 说明 |
@@ -143,16 +145,14 @@ rg '^class .+\(Protocol\)' app/ports
 
 蓝图 §6.7 Known Read Fast Path 亦未实现。
 
-### 4.3 两个有名字、没实现的接缝
+### 4.3 两个执行内核接缝
 
-| 接缝 | 蓝图出处 | 代码现状 | 作用 |
-|---|---|---|---|
-| `AgentOrchestrationPort` | 蓝图 §6.11、L2373 / L2402 / L2403 | `app/ports/` 下不存在 | 隔离第三方 agent 编排框架；蓝图 §6.11 原文：「无论是否引入 PydanticAI，都必须通过 LLMProviderPort / StructuredOutputPort / AgentOrchestrationPort 隔离」 |
-| `WorkflowEnginePort` | 蓝图 L2373 / L2402 / L2403 | `app/ports/` 下不存在；`WorkflowEngine` 是具体类，无 Protocol 抽象 | 隔离工作流引擎实现 |
+| 接缝 | 已交付契约 | 作用 |
+|---|---|---|
+| `AgentOrchestrationPort` | [app/ports/agent_orchestration.py](../../app/ports/agent_orchestration.py) | 编排框架隔离与 Runtime 生产装配；AgentScope 类型限制在 infra |
+| `WorkflowEnginePort` | [app/ports/workflow_engine.py](../../app/ports/workflow_engine.py) | Workflow 执行与接续合同，生产引擎已接线 |
 
-**这两个接缝仍是装第三方执行内核之前的架构前置，但不是现役 P2 收口前置**：`P2-PORT-SEAM-001` 当前属于机会层；P2 必达阻塞只见 `docs/phase2/STATUS.md`，排期只见 `docs/phase2/PHASE2_PLAN.md`。2026-08-17「蓝图优化的落地顺序（四步走）」中「先留孔、再装现成组件」的依赖关系继续有效：没有接缝就引入框架，会让框架类型长进业务代码。
-
-补接缝是把蓝图欠的账补上，不是新增架构，因此不构成新的架构停点。
+两个接缝已随相应实现棒合并。可替换边界继续沿用 2026-08-17「先留孔、再装现成组件」；P2 必达链与接续只见 [PLAN](PHASE2_PLAN.md)。
 
 ---
 
@@ -212,21 +212,7 @@ task_id │ session_id │ ai_user_id │ status │ trace_id │ capability_id 
 
 `web/src/` 的非生成、非测试源文件与 Orval 客户端分组均以目录实际内容为准，不在架构投影里复制会随纵切增长而漂移的文件数和完整枚举。现役代码已包含 Work Object 页面、OA 凭证绑定、确认卡与记录列表组件，以及 Runtime 投影和 User Action outcome 合同；生成客户端只见 `web/src/generated/`。
 
-关键直接依赖如下；完整清单与版本范围只见 `web/package.json`：
-
-| 类别 | 已装 |
-|---|---|
-| 运行时 | `react` 18 · `react-dom` 18 · `antd` 6.6.1 · `@tanstack/react-query` 5 · `zustand` 5 · `react-router-dom` 6 |
-| 开发 | `vite` 6 · `vitest` 3 · `orval` 7 · `typescript` 5.6 · `eslint` 9 · `jsdom` 25 |
-
-**已定但尚未作为直接依赖写入 `web/package.json`**：lockfile 可能因传递依赖或 optional peer 出现同名包，不能据此冒充已获直接依赖授权；实际安装仍须服从依赖治理与承接任务范围。
-
-| 目标项 | 已由哪条决定要求 |
-|---|---|
-| `@ant-design/x` 2 | `DECISIONS.md` 2026-08-18「前端技术栈与多 Surface 渲染的衔接」——承载「AI 共事界面」的对话壳 |
-| `@rjsf/antd` / `@rjsf/core` / `@rjsf/utils` / `@rjsf/validator-ajv8` 6.7.x | 同上——承载结构化表单（能力入参、事项工作室字段编辑） |
-| `@ant-design/icons` 6 | 同上——列入 Web 前端基线 |
-| `msw` | 蓝图 §12.1.1 列入前端基线 |
+Web 直接依赖和版本范围见 [web/package.json](../../web/package.json)。`@ant-design/x` 已直接声明，用于对话表面；结构化表单、图标与模拟工具的实际依赖也以 manifest 为准。依赖授权按仓库治理执行。
 
 **已排除**：`@ant-design/pro-components` 已移出 manifest、lockfile 与依赖允许表，改列排除表（`P2-FE-ANTD6-001`）。
 
@@ -267,31 +253,26 @@ task_id │ session_id │ ai_user_id │ status │ trace_id │ capability_id 
 
 ### 6.5 平台约束
 
-内网终端操作系统为 **ARM 架构银河麒麟 V10**。这一事实封死桌面壳的三条路：Electron ≥23 要求 Windows 10（末班 22.3.27 / Chromium 108 已于 2023-10-10 EOL）；WebView2 对 Windows 7 的支持已于 2023-01-10 终止；Tauri 要求 WebKitGTK ≥2.40，而麒麟 V10 SP1 ARM 提供 2.22.2。
+正式离线部署需分别核对内网终端和 ARM64 服务器。2026-08-18 已确认内网终端为 ARM 架构银河麒麟 V10；2026-11-04 后，客户端仍可使用现有内网浏览器，并可按 [11-04 客户端裁决](DECISIONS.md#2026-11-04--裁决允许成熟壳客户端pc-electron手机-webviewarkweb-薄壳) 选成熟 Web 薄壳。
 
-因此**「只做浏览器 + PWA，另配无浏览器内核的本地 capability provider」不是权宜之计，是当前平台下的唯一可行解**。
-
-本地 capability provider **不是原生客户端**：不带浏览器内核、不带 UI，只是装在终端上、经 `localhost` 被 Web 应用调用的瘦服务，承接浏览器确实做不到的能力（Office COM、扫描仪、Win32 老软件、后台长驻任务），麒麟侧按 Python 3 实现。Excel 报表主流程仍以纯 Web（File System Access）为默认路径。
-
-**未实测项**：Excel 与本地文件能力依赖 secure context，其两条取得路径（HTTPS + 内部 CA、Chrome 企业策略白名单）**均未内网实测**。
-
-> 出处：`DECISIONS.md` 2026-08-18「部署目标平台确认」「本地 capability provider 的边界澄清」「前端技术栈与多 Surface 渲染的衔接」。
+- PC 允许 Electron 薄壳；Win7 用浏览器。Android 与鸿蒙 4.x 可共用 APK 薄壳，鸿蒙 NEXT 可用 ArkWeb，均装载同一 Web 业务面；相应终端兼容、正式分发与部署另行验收。
+- 本地 capability provider 继续承接浏览器缺少的本机能力，保留无内置浏览器内核、无 UI 与 localhost 接缝。内网客户端安全上下文和实际信任仍按目标环境核验。
 
 ### 6.6 通信内核的当前定性
 
-JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定选型**。当前阶段先把 Web 做出来、把流程跑通；IM 相关工作排在 Web 与工作流基本成型之后，**届时无条件重新评估**。
+按 [11-04 IM 裁决](DECISIONS.md#2026-11-04--裁决im-消息功能机会层选型更新与聊天交互边界放宽)，IM 是并行机会层。JuggleIM 已退出当前候选；Zulip 是继续验证的自建首选，生产最终采用仍待离线 ARM64、终端/手机、许可与集成核实。IM 与 EternalAI 同页，业务身份、权限、Policy/Gateway、卡片协议和正式执行链仍归 EternalAI；通信适配保持可替换。
 
-现在不为 JuggleIM 编写验证清单、不做 IM 选型调研、不将其写入任何实现棒的前置。
+聊天可做本人权限内的只读查询与草稿生成；正式业务写入仍须本人确认卡，聊天正文和引文本身不授予执行权。既有候选闸门与工作台反向推送边界仍有效。
 
-但三条 IM 相关的协议与责任边界（`WorkCandidate` 闸门、卡片只做路由不承载自由文本执行、工作台反向推送）**继续有效**——它们约束的是「AI 与聊天如何交互」，与具体通信产品无关。
-
-> 出处：`DECISIONS.md` 2026-08-18「通信内核的当前定性：初步筛查，未定选型」。该条修订了同日「当前前端与通信技术路线」中关于重开选型触发条件的表述。
+早期壳与 IM 选型理由见[原架构归档](archive/ARCHITECTURE_to_20261119.md)。
 
 ---
 
 ## 7. 与冻结蓝图的对照结论
 
 ### 7.1 本轮范围与方法
+
+> §7.1、§7.2 与 §7.4 为 2026-08-19 冻结蓝图对照历史，§7.3 单列两处已交付端口的现况校正。
 
 此前的对照只覆盖蓝图 §12（技术选型）与 §15（目标系统接入），且其中五条「边界待明确」以 DeepSeek Harness 为主语，该前提已于 2026-08-18 失效。本轮补齐七个高风险章节，并按 2026-08-18 决定的要求**同时以冻结蓝图与 `DECISIONS.md` 为输入**（上一轮只输入了蓝图，结构上不可能发现前提失效）。
 
@@ -319,6 +300,8 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 ### 7.3 端口对照：蓝图 25 个「必须保留的端口」vs `app/ports/` 现役契约
 
+> 表格源于 2026-08-19 对照，编排与工作流两行按 2026-11-19 主线源码校正。
+
 蓝图 §11.2 L2367-L2395 列出必须保留的端口。逐个对照 `app/ports/`：
 
 | 蓝图端口 | 现状 | 说明 |
@@ -333,8 +316,8 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | `SecretProviderPort` | **已有** | `app/ports/secret_provider.py` |
 | `IdentityMappingPort` | **已有** | `app/ports/identity_mapping.py` |
 | `JobQueuePort` | **已有** | `app/ports/job_queue.py` |
-| `AgentOrchestrationPort` | **缺** | 见 §4.3；四步走第四步的前置 |
-| `WorkflowEnginePort` | **缺** | 见 §4.3；`WorkflowEngine` 是具体类，无 Protocol |
+| `AgentOrchestrationPort` | **已有** | `app/ports/agent_orchestration.py`；见 §4.3 |
+| `WorkflowEnginePort` | **已有** | `app/ports/workflow_engine.py`；见 §4.3 |
 | `MemoryPort` | **缺** | `app/memory/session_memory.py::SessionMemory` 是具体类，无 Protocol |
 | `EvaluationPort` | **缺** | `app/evaluator/` 下无 Protocol；`TerminalEvaluator` 是具体类 |
 | `CredentialBindingPort` | **已有独立契约组** | `app/ports/credential_binding.py::CredentialBindingStorePort`、`CredentialBindingVerifierPort` 等按职责拆分 |
@@ -345,7 +328,7 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 现役代码还包含蓝图未逐名列出的本地契约；完整集合只见 `app/ports/` 及其中的 Protocol 声明。这些契约是实现过程中按职责形成的，不因未出现在蓝图枚举中而构成冲突。
 
-**读这张表的正确方式**：蓝图端口名与代码 Protocol class 不是一一对应，不能用两边计数相减推导待办。仍与后续阶段相关的缺口是 `AgentOrchestrationPort`、`WorkflowEnginePort`、`MemoryPort`、`EvaluationPort` 与 `LocalWorkerPort`；它们是否进入当前 DAG 只见 `docs/phase2/PHASE2_PLAN.md`。
+端口名与代码 Protocol 不是逐名映射。上述编排/Workflow 两接缝已交付；Memory、Evaluation 与 Local Worker 的本阶段范围、长期缺口与排期以 [PLAN](PHASE2_PLAN.md) 为准。
 
 ### 7.4 2026-08-19 对照时记录的七条缺口
 
@@ -368,6 +351,8 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 ---
 
 ## 8. 缺口与待裁决清单
+
+> 2026-08-19 的初查与待裁决输入见 §8.1；§8.2–8.3 保留当时分类及现役指针。当前是否仍开放以 [PLAN](PHASE2_PLAN.md) 与 [STATUS](STATUS.md) 为准。
 
 本节是第③步「重排任务」的输入。按性质分三类：**需要裁决的**、**不需裁决只等排期的**、**需要先核实的**。
 
@@ -413,7 +398,7 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 |---|---|---|
 | E-1 | G-4 / G-7 Memory 六层与 User Profile | `P2-MEMORY-001` 已在 DAG，BLOCKED 于数据边界/语料 |
 | E-2 | G-5 Skill CI/CD 完整生命周期 | P2 只做到 `SkillCandidate` 人工登记（已拍板），完整生命周期属 Phase 3/4 |
-| E-3 | 前端四类目标依赖（`@ant-design/x`、RJSF 四包、`@ant-design/icons`、`msw`）尚未作为直接依赖写入 `web/package.json` | 装哪个由承接该表面的棒决定，硬约束已就地固化（§6.4）；lockfile 的传递/optional peer 命中不构成直接依赖授权 |
+| E-3 | 前端依赖权威 | 直接依赖与用途见 §6.1；接入及改动按承接表面和依赖治理执行（§6.4） |
 | E-4 | G-1 Local Worker 信任模型 | 本地 provider 方向已定，但 Excel / 本地文件场景尚未排期 |
 | E-5 | G-2 Trace / Evidence / Raw Payload 三层 | 已列「待独立 ADR 承接」，属后期治理合同 |
 | E-6 | G-3 `evaluation_mode` 逐能力声明 | `P2-GOLDEN-001` 已完成且未实现该合同；后续是否立项只见现役 PLAN，不得再并入已完成棒 |

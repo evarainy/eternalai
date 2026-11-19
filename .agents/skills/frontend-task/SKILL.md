@@ -5,18 +5,9 @@ description: Implement or validate EternalAI frontend changes with the repositor
 
 # EternalAI frontend task
 
-Follow the current Goal and repository AGENTS.md for scope, review tier, full-test triggers and authorization. This skill supplies frontend commands, not another approval gate.
+Use the current Goal and repository AGENTS.md for scope, authorization and validation. Verify altered UI behavior through the actual entry point and preserve the approved design system and required CI.
 
-## Choose checks by impact
-
-- Default to no new test code. Use cross-model static review and authorized checks of the actual UI flow; select existing tests only when needed for affected behavior. Add minimal regression tests only under AGENTS.md's criteria, and honor any static-only development phase.
-- From the repository root, run a selected test with `pnpm --dir web exec vitest --run src/path/to/file.test.tsx` (or `.test.ts`). Replace the example with an existing test.
-- **Each selected `.test.tsx` file must run in its own process**, one command per file. Do not group multiple component files into one Vitest invocation. Full frontend coverage uses `pnpm --dir web test`, whose existing component runner preserves that isolation.
-- For TypeScript/TSX changes, run `pnpm --dir web lint` and `pnpm --dir web typecheck`. Run `pnpm --dir web build` when bundling, entrypoints, imports, styling/assets or build configuration are affected. Pure prose changes do not trigger this package's gates.
-- API schema, generated clients or their shared transport changes also need `pnpm --dir web test:openapi`. `pnpm --dir web generate:api` rewrites generated files: use it only when the approved change requires regeneration, then inspect that diff.
-- Shared theme/app-shell behavior requires its affected component set and visual inspection of the changed states. Preserve the approved design system and reproduce a performance problem before claiming improvement.
-- Full backend, architecture, dependency and Golden checks follow AGENTS.md triggers; a frontend edit alone does not trigger them.
-
-Fix failures caused by this change within scope and rerun the affected checks. Report unrelated/environment blockers with their evidence; full-suite failure follows the repository stop rule. Never weaken assertions, increase retries/timeouts or regenerate expected output to conceal a failure.
-
-Report actual commands, results and reasons for omitted checks. A successful build is not evidence of a completed user interaction test.
+- Choose checks by impact: `pnpm --dir web lint` for relevant lint, `pnpm --dir web typecheck` for affected TypeScript contracts, and `pnpm --dir web build` for affected bundles, entrypoints or build assets/configuration. Use visual inspection when a changed state or interaction needs it.
+- Select necessary existing tests. From repository root use `pnpm --dir web exec vitest --run src/path/to/file.test.tsx` (or `.test.ts`); replace the example with an existing test. **Run each selected .test.tsx file in its own process**, one command per file. `pnpm --dir web test` is the full frontend entry point and preserves that isolation; local full runs require explicit request. Add tests only when current acceptance explicitly requires them.
+- When an API schema, generated client or shared transport contract is affected, use `pnpm --dir web test:openapi` as needed. `pnpm --dir web generate:api` rewrites generated files; use it only for an approved output change and inspect its diff.
+- Backend, architecture, dependencies and Golden verify only the applicable contracts under AGENTS.md. Record actual commands, results, and environmental gaps. Preserve original assertions and report runtime and static evidence at their actual scope.

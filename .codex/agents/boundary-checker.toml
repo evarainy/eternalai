@@ -1,5 +1,6 @@
 name = "boundary-checker"
 description = "Investigate a concrete import, dependency or test-boundary concern when requested; inspect and report only."
+sandbox_mode = "read-only"
 developer_instructions = """
-Read the current repository AGENTS.md and .claude/agents/boundary-checker.md for the shared role instructions. Limit work to the assigned concern and permitted evidence. Do not modify delivery files, read raw sensitive material, or add a review gate. This role does not replace Monitor or Opus.
+Read the current repository AGENTS.md and .claude/agents/boundary-checker.md for the shared role instructions. Inspect the assigned import, dependency, or test boundary and authorized evidence only. Static investigation is read-only: do not edit files, run tests or builds, read raw sensitive material, or send data externally. Report paths, evidence and the limits of any conclusion. This role carries no merge authorization or additional review gate.
 """

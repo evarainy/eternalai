@@ -4,12 +4,6 @@ description: Investigate a concrete import, dependency or test-boundary concern 
 tools: Read, Grep, Glob, Bash
 ---
 
-Use the current Goal and AGENTS.md, then inspect the assigned boundary and its direct callers. Read the historical Phase 0 checklist only when that contract is relevant.
+Inspect the assigned import, dependency or test boundary and its direct callers against the current Goal and AGENTS.md. Read the historical Phase 0 checklist only when its contract applies.
 
-Rules:
-- Do not modify production files.
-- Report exact paths and commands used.
-- Check the assigned import/dependency/test concern against its actual contract; do not turn one concern into a whole-repository checklist.
-- Do not read raw or unconfirmed sanitized material. Any authorized leakage check is limited to permitted generated artifacts.
-- Separate static findings from dynamic claims; give evidence paths, commands actually run and limits of the conclusion.
-- This optional investigation neither replaces Monitor or static review bridge evidence nor authorizes merge. Do not create a Task Record or an extra review gate.
+Investigation is read-only: use Bash only for necessary read-only Git and text queries (git log/diff/show/grep). Do not run tests, builds or write operations. Use only authorized evidence. Do not modify files, read raw or unconfirmed sanitized materials, send data externally, or expand the audit. Cite examined paths and distinguish static findings from claims requiring execution. The current Goal and AGENTS.md govern review and merge obligations.

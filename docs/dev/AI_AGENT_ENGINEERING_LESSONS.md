@@ -192,11 +192,13 @@ Why: Irony — a lessons file about context pollution should not become a source
 
 ## 9. Tool Assignment Lessons
 
+> Historical (Phase 0). Current assignment is `docs/phase2/DECISIONS.md` 2026-11-19 「裁决：开发助手分工、型号更新与常设授权」.
+
 **Task nature determines ownership.**
 The `execution_owner` and `review_owner` fields should reflect what the task requires, not a blanket default.
 Why: Assigning all tasks to one agent regardless of nature led to suboptimal execution.
 
-**Claude Code / MiMo is better for:**
+**Claude Code is better for:**
 Documentation, environment setup, local interactive execution, repo navigation, prompt/template maintenance, cleanup.
 Why: These tasks benefit from interactive file editing and local tool access.
 
