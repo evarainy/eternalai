@@ -359,8 +359,8 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
     const version = editVersion.current;
     setPhase('trying');
     const update = proposal.update_targets.find((item) => item.skill_id === target);
-    // An update keeps the flow's own name (a new version); a new flow takes the typed one.
-    const trialName = update === undefined ? name.trim() : update.name;
+    // A new flow takes the typed name; an update keeps the flow's current one (unnamed here).
+    const trialName = update === undefined ? name.trim() : '';
     const loopSteps = new Set(proposal.bindings.filter((b) => chosenKind(b) === 'loop_item')
       .map((b) => b.step_index));
     try {
@@ -402,7 +402,8 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
   if (phase === 'saved') {
     return (
       <Card aria-label="保存为功能" size="small">
-        <Alert type="success" showIcon title={`已保存为「${savedName}」，以后可以直接说这个名字使用。`} />
+        <Alert type="success" showIcon title={savedName === ''
+          ? '已保存为新版本。' : `已保存为「${savedName}」，以后可以直接说这个名字使用。`} />
       </Card>
     );
   }

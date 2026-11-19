@@ -9,6 +9,7 @@ seen in the record.
 
 from __future__ import annotations
 
+import itertools
 import json
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
@@ -1045,39 +1046,65 @@ def _schema_parts(node: Any) -> Iterator[Mapping[str, Any]]:
                 yield from _schema_parts(sub)
 
 
-def _finite_fits(
-    source: Mapping[str, Any], target: Mapping[str, Any], values: Sequence[Any]
+def _decidable(
+    source: Mapping[str, Any], target: Mapping[str, Any], checker: FormatChecker
 ) -> bool:
-    """Each value ``source`` really allows is valid for the whole ``target``.
+    """Neither schema needs the outer document; every format is one ``checker`` verifies."""
 
-    Formats are checked as the runner checks inputs. A reference (it needs the
-    outer document) or a format the checker cannot verify is not decidable here.
-    """
-
-    checker = FormatChecker()
-    for part in (*_schema_parts(source), *_schema_parts(target)):
+    for part in itertools.chain(_schema_parts(source), _schema_parts(target)):
         fmt = part.get("format")
         if any(key in part for key in _REFS) or (
             isinstance(fmt, str) and fmt not in checker.checkers
         ):
             return False
+    return True
+
+
+def _finite_fits(
+    source: Mapping[str, Any],
+    target: Mapping[str, Any],
+    values: Sequence[Any],
+    checker: FormatChecker,
+    source_checked: bool,
+) -> bool:
+    """Each value ``source`` really delivers is valid for the whole ``target``.
+
+    The target is checked with formats, as inputs are. A filled-in value was
+    format-checked by the runner; a step output is not, so all its listed values count.
+    """
+
     try:
-        own = Draft202012Validator(dict(source), format_checker=checker)
+        own = Draft202012Validator(
+            dict(source), format_checker=checker if source_checked else None
+        )
         validator = Draft202012Validator(dict(target), format_checker=checker)
         return all(validator.is_valid(value) for value in values if own.is_valid(value))
     except SchemaError:
         return False
 
 
-def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
-    """Every value ``source`` allows is accepted by ``target`` (decidable subset only)."""
+# Target keywords the open (non-finite) comparison below decides itself.
+_COMPARED = frozenset(
+    {"type", "items", "enum", "const", *_LOWER_BOUNDS, *_UPPER_BOUNDS, *_EXACT_KEYS}
+)
+
+
+def _node_fits(
+    source: Mapping[str, Any],
+    target: Mapping[str, Any],
+    checker: FormatChecker,
+    source_checked: bool,
+) -> bool:
+    """Every value ``source`` delivers is accepted by ``target`` (decidable subset only)."""
 
     if any(key in target for key in _COMBINATORS) or any(key in source for key in _COMBINATORS):
+        return False
+    if not _decidable(source, target, checker):
         return False
     values = _literals(source)
     if values is not None:
         # A finite source is decided exactly: each of its values against the whole target.
-        return _finite_fits(source, target, values)
+        return _finite_fits(source, target, values, checker, source_checked)
     kinds, accepted = _node_kinds(source), _node_kinds(target)
     if "number" in accepted:
         accepted = accepted | {"integer"}
@@ -1085,6 +1112,21 @@ def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
         return False
     if _literals(target) is not None:
         return False
+    # Any other constraint is decided only when the source states the very same one.
+    if any(
+        source.get(key) != value
+        for key, value in target.items()
+        if key not in _COMPARED and key not in _ANNOTATIONS
+    ):
+        return False
+    if "items" in target:
+        items, wanted = source.get("items"), target["items"]
+        if not (
+            isinstance(items, Mapping)
+            and isinstance(wanted, Mapping)
+            and _node_fits(items, wanted, checker, source_checked)
+        ):
+            return False
     for key in _LOWER_BOUNDS:
         if key in target and not (key in source and source[key] >= target[key]):
             return False
@@ -1095,10 +1137,17 @@ def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
 
 
 def _values_fit(
-    sources: Sequence[Mapping[str, Any]] | None, targets: Sequence[Mapping[str, Any]]
+    sources: Sequence[Mapping[str, Any]] | None,
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    source_checked: bool,
 ) -> bool:
+    """``source_checked``: the source values were format-checked (a filled-in value)."""
+
+    checker = FormatChecker()
     return bool(sources) and bool(targets) and all(
-        any(_node_fits(source, target) for target in targets) for source in sources or ()
+        any(_node_fits(source, target, checker, source_checked) for target in targets)
+        for source in sources or ()
     )
 
 
@@ -1219,16 +1268,22 @@ def rebase_definition(
             if targets is None:
                 raise refuse("argument")
             if isinstance(source, ParamArg):
-                fits = _values_fit([params[source.name].schema_], targets)
+                fits = _values_fit(
+                    [params[source.name].schema_], targets, source_checked=True
+                )
             elif isinstance(source, FixedArg):
                 fits = _fixed_fits(spec, arg, source.value)
             elif isinstance(source, StepOutputRef):
-                fits = _values_fit(_strict_nodes(output(source.step_id), source.path), targets)
+                fits = _values_fit(
+                    _strict_nodes(output(source.step_id), source.path),
+                    targets,
+                    source_checked=False,
+                )
             else:
                 assert isinstance(source, LoopItemRef)
                 loop_root = loop_roots.get(step.step_id)
                 fits = loop_root is not None and _values_fit(
-                    _strict_nodes(loop_root, source.path), targets
+                    _strict_nodes(loop_root, source.path), targets, source_checked=False
                 )
             if not fits:
                 raise refuse("argument")

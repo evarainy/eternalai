@@ -1048,7 +1048,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (retry === undefined && (browserOptIn || activeSkillId === 'd_form_fill_stop')
         && ((browserTarget !== null && !browserTerminal && !browserHandoff)
           || pendingSubmission !== null)) return;
-    let userSkill = retry?.userSkill ?? null;
+    let userSkill: SkillSelection | null = null;
     if (retry === undefined) {
       const named = mention.resolveForSend(message);
       if (named.kind === 'blocked') {

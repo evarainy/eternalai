@@ -213,17 +213,28 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   };
 }
 
-/** The full usable `$name` the user typed at the start of ``value`` within [from, to]. */
+/** The edit [from, to) wrote into [start, end] (a pure deletion: inside the name or at its end). */
+function touches(from: number, to: number, start: number, end: number): boolean {
+  return to > from ? from <= end && to > start : from > start && from <= end;
+}
+
+type Typed =
+  | { kind: 'bind'; found: MentionSpan & { skillId: string; name: string } }
+  /** The leading name now needs a choice from the list (several flows share it). */
+  | { kind: 'unbind' };
+
+/** What the edit [from, to) of ``value`` makes of a `$name` typed at its start. */
 function typedAt(value: string, items: readonly SkillListItem[], from: number, to: number):
-  (MentionSpan & { skillId: string; name: string }) | null {
+  Typed | null {
   const lead = value.length - value.trimStart().length;
   const named = resolveTyped(value.slice(lead), items, 'ready');
+  if (named.kind === 'blocked') return { kind: 'unbind' };
   if (named.kind !== 'ref' || named.selection.span === null) return null;
   const { span, skillId } = named.selection;
   const start = span.start + lead;
   const end = span.end + lead;
-  // Only an edit that wrote into the name or the character right after it binds.
-  return from <= end && to >= start ? { ...span, start, end, skillId } : null;
+  return touches(from, to, start, end)
+    ? { kind: 'bind', found: { ...span, start, end, skillId } } : null;
 }
 
 export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: {
@@ -246,10 +257,12 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const composing = useRef(false);
   // The draft before the IME started: the edit is judged once the text is final.
   const composeBase = useRef<string | null>(null);
-  // A leading `$word` was typed before the list arrived: bind it once the list is read.
-  const awaiting = useRef(false);
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
+  // Edits made at a leading `$word` before the list was read: judged once it is.
+  const awaiting = useRef<{ from: number; to: number; length: number } | null>(null);
+  // Only a list read successfully now binds a typed name (never a stale copy).
+  const ready = skills.isSuccess;
+  const itemsRef = useRef(ready ? items : undefined);
+  itemsRef.current = ready ? items : undefined;
   // The draft the last edit started from (the prop lags one render behind an edit).
   const previous = useRef(draft);
   previous.current = draft;
@@ -260,35 +273,48 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   useEffect(() => {
     setBinding(null);
     setToken(null);
-    awaiting.current = false;
+    awaiting.current = null;
   }, [generation]);
   // A draft replaced from elsewhere (a quick prompt) takes the choice with it.
   useEffect(() => {
+    if (composing.current) return;
     if (binding !== null && !standaloneAt(draft, binding.start, binding.end, binding.text)) {
       setBinding(null);
       setToken(null);
     }
   }, [draft, binding]);
 
-  /** Show the tag for a full name the edit [from, to] just typed at the start. */
+  /** Show (or drop) the tag of a full name the edit [from, to) typed at the start. */
   const bindTyped = useCallback((value: string, from: number, to: number,
     current: Binding | null) => {
-    if (current !== null && !current.typed) return;
     const list = itemsRef.current;
     if (list === undefined) {
-      const word = value.trimStart();
-      awaiting.current = TRIGGERS.has(word[0] ?? '');
+      if (!TRIGGERS.has(value.trimStart()[0] ?? '')) return;
+      const last = awaiting.current;
+      awaiting.current = last === null ? { from, to, length: value.length } : {
+        from: Math.min(last.from, from),
+        to: Math.max(last.to + value.length - last.length, to),
+        length: value.length,
+      };
+      setWanted(true);
       return;
     }
-    awaiting.current = false;
-    const found = typedAt(value, list, from, to);
-    if (found === null || (current !== null && current.start !== found.start)) return;
-    setBinding({ ...found, generation, typed: true });
+    awaiting.current = null;
+    if (current !== null && !current.typed) return;
+    const typed = typedAt(value, list, from, to);
+    if (typed === null) return;
+    if (typed.kind === 'unbind') {
+      if (current !== null) setBinding(null);
+      return;
+    }
+    if (current !== null && current.start !== typed.found.start) return;
+    setBinding({ ...typed.found, generation, typed: true });
   }, [generation]);
   useEffect(() => {
-    if (items === undefined || !awaiting.current || binding !== null) return;
-    bindTyped(draft, 0, draft.length, null);
-  }, [items, draft, binding, bindTyped]);
+    const range = awaiting.current;
+    if (!ready || range === null || composing.current) return;
+    bindTyped(draft, range.from, range.to, bindingRef.current);
+  }, [ready, items, draft, bindTyped]);
 
   const candidates = useMemo(() => (token === null ? [] : rank(usable, token.text)),
     [token, usable]);
@@ -306,17 +332,22 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
 
   /** After every edit or caret move: follow or drop the binding, re-read the token. */
   const sync = useCallback((value: string, caret: number | null) => {
-    const before = previous.current;
+    // While the IME composes, nothing is judged: the choice stays as it was.
+    if (composing.current) {
+      previous.current = value;
+      return;
+    }
+    const before = composeBase.current ?? previous.current;
+    composeBase.current = null;
     previous.current = value;
     let current = bindingRef.current;
-    if (before !== value && current !== null) {
-      current = follow(before, value, current);
-      setBinding(current);
+    if (before !== value) {
+      if (current !== null) {
+        current = follow(before, value, current);
+        setBinding(current);
+      }
+      bindTyped(value, ...editedRange(before, value), current);
     }
-    if (composing.current) return;
-    const base = composeBase.current ?? before;
-    composeBase.current = null;
-    if (base !== value) bindTyped(value, ...editedRange(base, value), current);
     // Any `$word` (a digit-led name too) starts reading the list, ready for sending.
     if (caret !== null && triggerAt(value, caret) !== null) setWanted(true);
     setToken(caret === null ? null : tokenAt(value, caret));
@@ -324,7 +355,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
     const text = mentionText(item.name);
-    awaiting.current = false;
+    awaiting.current = null;
     setBinding({
       skillId: item.skill_id, name: item.name, text, start, end: start + text.length, generation,
       typed: false,
@@ -391,7 +422,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const reset = useCallback(() => {
     setBinding(null);
     setToken(null);
-    awaiting.current = false;
+    awaiting.current = null;
   }, []);
 
   /** Put back the frozen choice of a message that was refused before any work. */
@@ -450,6 +481,12 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   /** What the trimmed ``message`` (from the current draft) names. */
   const resolveForSend = (message: string): MentionResolution => {
     const lead = draft.length - draft.trimStart().length;
+    if (binding !== null && binding.typed && !skills.isSuccess) {
+      // A typed tag stands only on a list read now.
+      if (skills.isError) void skills.refetch();
+      return { kind: 'blocked', reason: skills.isError
+        ? '我的功能暂时读不到，请稍后再发送。' : '正在读取我的功能，请稍后再发送。' };
+    }
     if (binding !== null) {
       const start = binding.start - lead;
       const end = binding.end - lead;
