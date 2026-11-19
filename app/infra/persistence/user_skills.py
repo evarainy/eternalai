@@ -269,9 +269,38 @@ class PostgreSQLUserSkillStore:
                 if not content["savable"]:
                     raise UserSkillError("not_savable")
                 target = content["target"]
+
+                async def live_at() -> datetime:
+                    # Lock waits may have outlived the trial: one clock reading decides.
+                    row = (
+                        await session.execute(
+                            text(
+                                "SELECT c.at, s.expires_at > c.at AND "
+                                "CAST(:expires AS TIMESTAMPTZ) > c.at FROM "
+                                "public.user_skill_sessions s, (SELECT clock_timestamp() AS at) c "
+                                "WHERE s.tenant_id=:tenant AND s.owner_user_id=:owner AND "
+                                "s.session_id=:session"
+                            ),
+                            {**params, "expires": trial["expires_at"]},
+                        )
+                    ).one()
+                    if not row[1]:
+                        raise UserSkillError("trial_expired")
+                    at: datetime = row[0]
+                    return at
+
                 if target["mode"] == "new":
                     saved = await _create(session, owner, content["name"], payload)
+                    at = await live_at()
                 else:
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM public.user_skills WHERE tenant_id=:tenant AND "
+                            "owner_user_id=:owner AND skill_id=CAST(:skill AS UUID) FOR UPDATE"
+                        ),
+                        {**_owner(owner), "skill": target["skill_id"]},
+                    )
+                    at = await live_at()
                     saved = await _add_version(
                         session,
                         owner,
@@ -293,30 +322,13 @@ class PostgreSQLUserSkillStore:
                     ),
                     {**params, "trial": trial_id, "result": json.dumps(result)},
                 )
-                # Lock waits may have outlived the trial: decide with the clock, else roll back.
-                still = (
-                    await session.execute(
-                        text(
-                            "SELECT 1 FROM public.user_skill_sessions s JOIN "
-                            "public.user_skill_session_items i ON i.tenant_id=s.tenant_id AND "
-                            "i.owner_user_id=s.owner_user_id AND i.session_id=s.session_id "
-                            "WHERE s.tenant_id=:tenant AND s.owner_user_id=:owner AND "
-                            "s.session_id=:session AND s.expires_at > clock_timestamp() AND "
-                            "i.kind='trial' AND i.item_id=:trial AND "
-                            "CAST(:expires AS TIMESTAMPTZ) > clock_timestamp()"
-                        ),
-                        {**params, "trial": trial_id, "expires": trial["expires_at"]},
-                    )
-                ).one_or_none()
-                if still is None:
-                    raise UserSkillError("trial_expired")
                 await session.execute(
                     text(
                         "DELETE FROM public.user_skill_session_items WHERE tenant_id=:tenant "
                         "AND owner_user_id=:owner AND session_id=:session AND "
-                        "expires_at <= now()"
+                        "expires_at <= CAST(:at AS TIMESTAMPTZ)"
                     ),
-                    params,
+                    {**params, "at": at},
                 )
                 return result
         except IntegrityError as exc:
@@ -878,21 +890,31 @@ class PostgreSQLUserSkillSessionStore:
     async def take_takeover(self, key: SessionKey) -> dict[str, Any] | None:
         """Take the pending slot once, with its flow still live; never extends the head.
 
-        Consuming and the flow check share one transaction: a deleted flow consumes
-        the slot (None), a storage fault rolls back and keeps it.
+        Lock order as in ``claim_takeover``: session head, then the flow head
+        (``FOR SHARE``); a clock reading after both decides the session is live.
+        A deleted flow or an expired session consumes the slot (None); a storage
+        fault rolls back and keeps it.
         """
 
         try:
             async with self._sessions() as session, session.begin():
+                head = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM public.user_skill_sessions WHERE tenant_id=:tenant "
+                            "AND owner_user_id=:owner AND session_id=:session FOR UPDATE"
+                        ),
+                        _key(key),
+                    )
+                ).one_or_none()
+                if head is None:
+                    return None
                 row = (
                     await session.execute(
                         text(
-                            "DELETE FROM public.user_skill_session_items i USING "
-                            "public.user_skill_sessions s WHERE s.tenant_id=i.tenant_id AND "
-                            "s.owner_user_id=i.owner_user_id AND s.session_id=i.session_id AND "
-                            "i.tenant_id=:tenant AND i.owner_user_id=:owner AND "
-                            "i.session_id=:session AND i.kind='takeover' AND "
-                            "i.item_id='pending' AND s.expires_at > now() RETURNING i.payload"
+                            "DELETE FROM public.user_skill_session_items WHERE "
+                            "tenant_id=:tenant AND owner_user_id=:owner AND session_id=:session "
+                            "AND kind='takeover' AND item_id='pending' RETURNING payload"
                         ),
                         _key(key),
                     )
@@ -910,10 +932,22 @@ class PostgreSQLUserSkillSessionStore:
                         {"tenant": key[0], "owner": key[1], "skill": str(context.get("skill_id"))},
                     )
                 ).one_or_none()
+                if flow is None:
+                    return None
+                live = (
+                    await session.execute(
+                        text(
+                            "SELECT expires_at > clock_timestamp() FROM "
+                            "public.user_skill_sessions WHERE tenant_id=:tenant AND "
+                            "owner_user_id=:owner AND session_id=:session"
+                        ),
+                        _key(key),
+                    )
+                ).scalar_one()
         except SQLAlchemyError as exc:
             _LOGGER.info("user_skill.session_store op=take_takeover error=%s", type(exc).__name__)
             raise UserSkillError(type(exc).__name__) from None
-        return None if flow is None else context
+        return context if live else None
 
 
 __all__ = ("PostgreSQLUserSkillSessionStore", "PostgreSQLUserSkillStore")

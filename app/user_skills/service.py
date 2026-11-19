@@ -118,6 +118,15 @@ def skill_uuid(raw: Any) -> str | None:
         return None
 
 
+def skill_name(raw: str) -> str:
+    """The name without outer spaces, within the length limit."""
+
+    name = raw.strip()
+    if not 1 <= len(name) <= NAME_MAX:
+        raise UserSkillFailure("name_invalid", 422, f"名称要在 1 到 {NAME_MAX} 个字之间")
+    return name
+
+
 def check_skill_texts(name: str, purpose: str | None) -> None:
     """The flow's name and purpose pass the run descriptor and model tool-text rules."""
 
@@ -234,9 +243,7 @@ class UserSkillService:
         canonical = skill_uuid(skill_id)
         if canonical is None:
             raise UserSkillFailure("not_found", 404, "功能不存在")
-        name = name.strip()
-        if not 1 <= len(name) <= NAME_MAX:
-            raise UserSkillFailure("name_invalid", 422, f"名称要在 1 到 {NAME_MAX} 个字之间")
+        name = skill_name(name)
         check_skill_texts(name, None)
         try:
             head = await self._store.rename(owner, canonical, name)
@@ -363,7 +370,7 @@ class UserSkillService:
             )
         except ValidationError:
             raise UserSkillFailure("trial_invalid", 422, "卡片内容不完整") from None
-        check_skill_texts(choices.name, choices.purpose)
+        check_skill_texts(skill_name(choices.name), choices.purpose)
         try:
             definition, inputs = compile_trial(internal, choices)
         except ProposalRejected as rejected:

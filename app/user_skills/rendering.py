@@ -255,6 +255,7 @@ def render_result(
                       error_code=CHECK_TRACE_CODES[run.failed_assertion[1]])
         return result
     if mismatch:
+        result.pop("notice_label", None)
         result.update(status="failed", error_code="adapter_payload_invalid",
                       reason_label=reason_label("adapter_payload_invalid"))
     return result

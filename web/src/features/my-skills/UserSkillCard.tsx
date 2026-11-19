@@ -377,7 +377,7 @@ function ProposalView({ proposal, sessionId }: { proposal: UserSkillProposal; se
       });
       if (version === editVersion.current) {
         setTrial(response);
-        setSavedName(trialName);
+        setSavedName(trialName.trim());
       }
       setPhase('edit');
     } catch (error) {

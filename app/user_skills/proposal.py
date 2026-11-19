@@ -813,9 +813,8 @@ class TrialChoices(BaseModel):
     for_each_choices: dict[str, bool] = {}
     column_ids: list[str]
     inputs: dict[str, Any] = {}
-    name: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_MAX)
-    ]
+    # Length is checked by the service, as for rename (``name_invalid``).
+    name: Annotated[str, StringConstraints(strip_whitespace=True)]
     purpose: Annotated[str, Field(min_length=1, max_length=PURPOSE_MAX)]
     rules: Annotated[str, Field(min_length=1, max_length=RULES_MAX)]
     checks: list[Any] = []
@@ -1022,10 +1021,29 @@ def _literals(node: Mapping[str, Any]) -> list[Any] | None:
     return values
 
 
-def _accepts_all(target: Mapping[str, Any], values: Sequence[Any]) -> bool:
+def _has_ref(node: Any) -> bool:
+    if isinstance(node, Mapping):
+        return "$ref" in node or any(_has_ref(value) for value in node.values())
+    return isinstance(node, list) and any(_has_ref(value) for value in node)
+
+
+def _finite_fits(
+    source: Mapping[str, Any], target: Mapping[str, Any], values: Sequence[Any]
+) -> bool:
+    """Each value ``source`` really allows is valid for the whole ``target``.
+
+    The validator only annotates ``format``, so a target format must be the
+    source's own; a nested reference cannot be resolved on its own and is refused.
+    """
+
+    if _has_ref(source) or _has_ref(target):
+        return False
+    if "format" in target and source.get("format") != target["format"]:
+        return False
     try:
+        own = Draft202012Validator(dict(source))
         validator = Draft202012Validator(dict(target))
-        return all(validator.is_valid(value) for value in values)
+        return all(validator.is_valid(value) for value in values if own.is_valid(value))
     except SchemaError:
         return False
 
@@ -1040,13 +1058,12 @@ def _node_fits(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
         accepted = accepted | {"integer"}
     if "unknown" in kinds or "unknown" in accepted or not kinds <= accepted:
         return False
-    allowed = _literals(target)
     values = _literals(source)
-    if allowed is not None and (values is None or any(value not in allowed for value in values)):
-        return False
     if values is not None:
         # A finite source is decided exactly: each of its values against the whole target.
-        return _accepts_all(target, values)
+        return _finite_fits(source, target, values)
+    if _literals(target) is not None:
+        return False
     for key in _LOWER_BOUNDS:
         if key in target and not (key in source and source[key] >= target[key]):
             return False
@@ -1103,8 +1120,6 @@ def _property(spec: CapabilitySpec, arg: str) -> list[Mapping[str, Any]] | None:
     """
 
     root = spec.input_schema
-    if not set(root) <= _PLAIN_ROOT:
-        return None
     properties = root.get("properties")
     prop = _plain(root, properties.get(arg)) if isinstance(properties, Mapping) else None
     if prop is None or any(key in prop for key in _COMBINATORS + ("oneOf",)):

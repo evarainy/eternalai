@@ -13,13 +13,16 @@ import type { SkillListItem } from '../../api/userSkills';
 import { useAuthStore } from '../../stores/authStore';
 import { useMySkills } from './useMySkills';
 
-interface Binding {
-  skillId: string;
-  name: string;
-  /** The mention exactly as it stands in the draft at [start, end) (typed variants included). */
+/** A `$name` exactly as it stands in the draft at [start, end) (typed variants included). */
+export interface MentionSpan {
   text: string;
   start: number;
   end: number;
+}
+
+interface Binding extends MentionSpan {
+  skillId: string;
+  name: string;
   generation: number;
 }
 
@@ -35,7 +38,8 @@ export interface SkillSelection {
 }
 
 export type MentionResolution =
-  | { kind: 'none' }
+  /** ``plain``: a `$name` the user undid, sent as text (frozen with the message). */
+  | { kind: 'none'; plain?: MentionSpan }
   | { kind: 'ref'; selection: SkillSelection }
   | { kind: 'blocked'; reason: string };
 
@@ -64,11 +68,6 @@ function fold(text: string): string {
 const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(char);
 const endsWord = (char: string | undefined) => char === undefined || /[\s\p{P}]/u.test(char);
 const mentionText = (name: string) => `$${name.trim()}`;
-/** The leading `$word` of a message, if any. */
-const leadOf = (value: string) => {
-  const word = value.trimStart().split(/\s/)[0] ?? '';
-  return TRIGGERS.has(word[0] ?? '') ? word : null;
-};
 
 /** ``text`` stands alone at [start, end) of ``value``. */
 function standaloneAt(value: string, start: number, end: number, text: string): boolean {
@@ -76,9 +75,9 @@ function standaloneAt(value: string, start: number, end: number, text: string): 
     && (start === 0 || isSpace(value[start - 1])) && endsWord(value[end]);
 }
 
-/** The binding after ``prev`` became ``next`` under one alignment of the edit. */
-function followAligned(prev: string, next: string, binding: Binding, prefixFirst: boolean):
-  Binding | null {
+/** The span after ``prev`` became ``next`` under one alignment of the edit. */
+function followAligned<T extends MentionSpan>(prev: string, next: string, binding: T,
+  prefixFirst: boolean): T | null {
   const shortest = Math.min(prev.length, next.length);
   let common = 0;
   let tail = 0;
@@ -109,8 +108,8 @@ function followAligned(prev: string, next: string, binding: Binding, prefixFirst
   return standaloneAt(next, start, end, binding.text) ? { ...binding, start, end } : null;
 }
 
-/** The binding after an edit; when repeated text makes the edited place ambiguous, it is gone. */
-function follow(prev: string, next: string, binding: Binding): Binding | null {
+/** The span after an edit; when repeated text makes the edited place ambiguous, it is gone. */
+function follow<T extends MentionSpan>(prev: string, next: string, binding: T): T | null {
   const a = followAligned(prev, next, binding, true);
   const b = followAligned(prev, next, binding, false);
   return a !== null && b !== null && a.start === b.start ? a : null;
@@ -198,6 +197,25 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
   };
 }
 
+/** The leading `$name` of ``value`` left behind when the choice of ``skillId`` was undone.
+ *
+ * It stays plain text while it stands unchanged; a different flow's name is a new choice. */
+function leftover(value: string, items: readonly SkillListItem[] | undefined, skillId: string):
+  MentionSpan | null {
+  const lead = value.length - value.trimStart().length;
+  const message = value.slice(lead);
+  if (!TRIGGERS.has(message[0] ?? '')) return null;
+  if (items !== undefined) {
+    const named = resolveTyped(message, items, 'ready');
+    if (named.kind !== 'ref' || named.selection.span === null
+      || named.selection.skillId !== skillId) return null;
+    const { text, start, end } = named.selection.span;
+    return { text, start: start + lead, end: end + lead };
+  }
+  const word = (message.split(/\s/)[0] ?? '').replace(/\p{P}+$/u, '');
+  return word.length > 1 ? { text: word, start: lead, end: lead + word.length } : null;
+}
+
 export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: {
   draft: string;
   setDraft: (value: string) => void;
@@ -215,9 +233,13 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const [token, setToken] = useState<Token | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [stored, setBinding] = useState<Binding | null>(null);
-  // The leading `$word` left behind when the user undid a choice: sent as plain text.
-  const [plainLead, setPlainLead] = useState<string | null>(null);
+  // The leading `$name` left behind when the user undid a choice: sent as plain text.
+  const [dismissed, setDismissed] = useState<(MentionSpan & { generation: number }) | null>(null);
   const composing = useRef(false);
+  // A choice undone while the IME composes: what it leaves is read once the text is final.
+  const undone = useRef<string | null>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   // The draft the last edit started from (the prop lags one render behind an edit).
   const previous = useRef(draft);
   previous.current = draft;
@@ -225,19 +247,31 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const binding = stored !== null && stored.generation === generation ? stored : null;
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
+  const plain = dismissed !== null && dismissed.generation === generation ? dismissed : null;
+  const plainRef = useRef(plain);
+  plainRef.current = plain;
   useEffect(() => {
     setBinding(null);
     setToken(null);
-    setPlainLead(null);
+    setDismissed(null);
+    undone.current = null;
   }, [generation]);
   // A draft replaced from elsewhere (a quick prompt) takes the choice with it.
   useEffect(() => {
     if (binding !== null && !standaloneAt(draft, binding.start, binding.end, binding.text)) {
       setBinding(null);
       setToken(null);
-      setPlainLead(leadOf(draft));
     }
-  }, [draft, binding]);
+    if (plain !== null && !standaloneAt(draft, plain.start, plain.end, plain.text)) {
+      setDismissed(null);
+    }
+  }, [draft, binding, plain]);
+
+  /** Remember what undoing the choice of ``skillId`` left at the start of ``value``. */
+  const dismiss = useCallback((value: string, skillId: string) => {
+    const span = leftover(value, itemsRef.current, skillId);
+    setDismissed(span === null ? null : { ...span, generation });
+  }, [generation]);
 
   const candidates = useMemo(() => (token === null ? [] : rank(usable, token.text)),
     [token, usable]);
@@ -257,21 +291,30 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const sync = useCallback((value: string, caret: number | null) => {
     const before = previous.current;
     previous.current = value;
-    const current = bindingRef.current;
-    if (before !== value && current !== null) {
-      const next = follow(before, value, current);
-      setBinding(next);
-      if (next === null) setPlainLead(leadOf(value));
+    if (before !== value) {
+      const current = bindingRef.current;
+      if (current !== null) {
+        const next = follow(before, value, current);
+        setBinding(next);
+        if (next === null) undone.current = current.skillId;
+      }
+      const text = plainRef.current;
+      if (text !== null) setDismissed(follow(before, value, text));
     }
     if (composing.current) return;
+    if (undone.current !== null) {
+      dismiss(value, undone.current);
+      undone.current = null;
+    }
     // Any `$word` (a digit-led name too) starts reading the list, ready for sending.
     if (caret !== null && triggerAt(value, caret) !== null) setWanted(true);
     setToken(caret === null ? null : tokenAt(value, caret));
-  }, []);
+  }, [dismiss]);
 
   const bindAt = useCallback((item: SkillListItem, start: number) => {
     const text = mentionText(item.name);
-    setPlainLead(null);
+    setDismissed(null);
+    undone.current = null;
     setBinding({
       skillId: item.skill_id, name: item.name, text, start, end: start + text.length, generation,
     });
@@ -329,25 +372,29 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       const next = cut(draft, binding.start, binding.end);
       setDraft(next);
       previous.current = next;
-      setPlainLead(leadOf(next));
+      dismiss(next, binding.skillId);
     }
     setBinding(null);
     setToken(null);
-  }, [binding, draft, setDraft]);
+  }, [binding, draft, setDraft, dismiss]);
 
   const reset = useCallback(() => {
     setBinding(null);
     setToken(null);
-    setPlainLead(null);
+    setDismissed(null);
+    undone.current = null;
   }, []);
 
-  /** Put back the frozen choice of a message that was refused before any work. */
-  const restore = useCallback((value: string, selection: SkillSelection | null) => {
+  /** Put back the frozen choice (or plain-text `$name`) of a message refused before any work. */
+  const restore = useCallback((value: string, selection: SkillSelection | null,
+    text: MentionSpan | null) => {
     const span = selection?.span;
-    if (selection == null || span == null) return;
-    if (standaloneAt(value, span.start, span.end, span.text)) {
+    if (selection != null && span != null && standaloneAt(value, span.start, span.end, span.text)) {
       setBinding({ skillId: selection.skillId, name: span.name, text: span.text,
         start: span.start, end: span.end, generation });
+    }
+    if (text !== null && standaloneAt(value, text.start, text.end, text.text)) {
+      setDismissed({ ...text, generation });
     }
   }, [generation]);
 
@@ -404,7 +451,13 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
           span: { name: binding.name, text: binding.text, start, end } } };
       }
     }
-    if (plainLead !== null && leadOf(message) === plainLead) return { kind: 'none' };
+    if (plain !== null) {
+      const start = plain.start - lead;
+      const end = plain.end - lead;
+      if (start === 0 && standaloneAt(message, start, end, plain.text)) {
+        return { kind: 'none', plain: { text: plain.text, start, end } };
+      }
+    }
     if (TRIGGERS.has(message[0] ?? '')) {
       setWanted(true);
       if (skills.isError) void skills.refetch();
