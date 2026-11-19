@@ -73,7 +73,7 @@
 Review 绑定准确候选与 scope，取证分工依据**具体事实能否静态判定**。Goal 明确要求额外自审、plan 评审或 Monitor 时，按该 Goal 的职责和顺序执行。
 
 - 仅在 Goal 明确要求 Monitor 时，按授权风险路径选择取证；操作与输出参考 `docs/phase2/MONITOR_PROMPT_TEMPLATE.md`，模板不恢复默认五类套餐。不私改 Golden fixture / `FROZEN_GT_IDS`，不自动新增临时测试；必需证据取不到即报告缺项，书面推演不冒充实测。
-- 静态审核（含桥与 OpenCode）只读代码、历史与合同，不运行测试、构建或写操作，越界即 BLOCKED。负责合同完整性、类型可达性、scope/diff、显式授权判断、文件落点、直接 import、声明与跨文件一致性；Monitor 不重复这些静态项，静态方不承担动态越权、门禁接线或动态 import/registry 取证。
+- 静态审核（含评审桥）只读代码、历史与合同，不运行测试、构建或写操作，越界即 BLOCKED。负责合同完整性、类型可达性、scope/diff、显式授权判断、文件落点、直接 import、声明与跨文件一致性；Monitor 不重复这些静态项，静态方不承担动态越权、门禁接线或动态 import/registry 取证。
 - 生产改动由不同于作者的模型交叉静态评审，组合见 DECISIONS 现役路由；Monitor 与静态方可同模型，须独立会话。Review 聚焦可触发的缺陷、合同与接线，不因假想扩展或缺少非必需测试要求返工；静态 PASS 不声称运行通过。
 - 同一 task_id 至多三轮监理（中止、无结论或改写重发均计轮次），第三轮仍非 PASS 即停手交雨爷裁决，不开第四轮。
 - 合并前核对静态审核及适用的 Monitor PASS 均绑定最终 base/head；任一变化须重评。评审桥模型/effort 由主窗口维护，PR 如实记录 `observed_model`。
@@ -84,7 +84,7 @@ Review 绑定准确候选与 scope，取证分工依据**具体事实能否静�
 - A 档棒将纯格式化改动与功能改动分开提交；本条不增加 CI 检查。
 - 集成：任务分支普通 push → PR → required checks 全绿 → 获准合并；不得本地合完直推主分支。验证、Review、候选 freshness 和分支保护均须满足，绿灯不是授权。合并后检查对应 merge SHA 的 GitHub Actions。
 - 不建 per-task Task Record。合并前 PR body 写齐 `## Scope`、`## 验证结果`、`## 本棒新增欠债`；验证列实际命令、最小充分原始结果、未执行原因、候选 commit 与 CI run。欠债含 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
-- PR 合并前记录实际要求的静态 Review 结论、候选和产物位置；实际跑桥、获准使用 OpenCode 或替代评审方时，按需读取 `docs/phase2/REVIEW_EVIDENCE.md`，不据记录格式新增评审门禁。**不伪造桥字段，不把模型自述当服务端证明，不合并后补证。**
+- PR 合并前记录实际要求的静态 Review 结论、候选和产物位置；实际跑桥或获准使用替代评审方时，按需读取 `docs/phase2/REVIEW_EVIDENCE.md`，不据记录格式新增评审门禁。**不伪造桥字段，不把模型自述当服务端证明，不合并后补证。**
 
 ## 状态同步
 

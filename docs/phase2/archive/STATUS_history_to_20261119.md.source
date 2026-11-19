@@ -85,7 +85,6 @@
 
 - 组织身份 S1 已合并实现：`P2-TENANT-IDENTITY-001`（PR #212，2026-09-23 合并，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。S1 合并不核销总欠债；S2/S3 未施工、开棒标识待 GOV-SYNC 分配；全链验收前维持单租户运行，第二租户禁止启用。
 
-- 最近已合并实现 task_id：`P2-ADMIN-EVENTS-UNIFORM-001`（B 档、高风险、串行，承担 A 类机械同步；PR #216）。2026-09-08 已批准的方向 A 已实现；新上下文自审、独立 Monitor、MiMo 静态审核、required checks 与对应 merge Actions 均通过，集成证据留 PR #216。本棒不裁定新后继。
 - 当前治理同步 task_id：`P2-GOV-SYNC-071`；现役开发助手路由及本次修正见 `DECISIONS.md` 2026-09-29 与 2026-09-30 裁决。Admin events 已按 GOV-SYNC-070 分配并由 PR #216 合并；本状态同步不分配新后继。
 - 当前已合并实现：`P2-AUDIT-LOGOUT-002`（PR #207）与 `P2-WO-COMPLETED-MERGE-001`（PR #206）；前者已完成最后一轮独立监理与静态评审桥，后者已完成已办结查询版本合并修复。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。

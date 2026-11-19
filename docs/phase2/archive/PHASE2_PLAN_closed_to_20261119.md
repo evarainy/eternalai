@@ -15,7 +15,6 @@
 
 | 已结项事项 | 仍生效的规则 / 测试 / 守卫指针 |
 |---|---|
-| `MiMo 评审桥通道验收` | 雨爷 2026-09-24 裁定 MiMo 改为可选试跑、不作合并依据（DECISIONS 2026-09-24「P2-GOV-SYNC-069：静态评审按作者交叉评审」第 4 条）；两轮验收未通过的证据留本棒 PR。 |
 | 前端首屏 JS 体积随 `@ant-design/x` 增长并触发 Vite chunk 警告 | `P2-FE-BUNDLE-SPLIT-001` 按第一条 expiry path 关闭：路由级 `React.lazy` 将壳层、所有叶页与未打开 Dock 移出入口静态闭包；认证后才加载 `AntApp`，Dock 只在首次显式打开后常驻。带 manifest 的构建入口静态集合为 337,124 B JS + 9,657 B CSS，`index.html` 无未访问页 modulepreload，壳层、所有叶页与 Dock 均为 dynamic entry，且 Vite 无默认 500 kB chunk 警告；`/chat` 自动加载集合另行去重报告，不冒充入口下载量。`web/src/__tests__/App.test.tsx`、`web/src/app/__tests__/AppShell.test.tsx` 与 `blurBudget.test.tsx` 锁住加载/失败、401 迟到模块、首开常驻和原 6 层预算。未新增依赖、未改 Vite 阈值；目标 ARM 终端性能仍未实测。 |
 | 没有服务端注销端点，退出登录只清前端状态 | `P2-AUDIT-LOGOUT-002` 已按 expiry_condition 关闭：真实 HMAC+PG 当前票据提交后吊销、同票据/签名编码等价别名重放为 401、其他会话保留；前端服务端确认、失败反馈、三时点旧数据/旧键清理均已实证。`tests/api/test_auth.py`、`tests/runtime/test_runtime_composition.py`、`web/src/__tests__/App.test.tsx`、`web/src/pages/__tests__/ChatPage.test.tsx` 及生产反证锁定合同；独立审查与集成状态见 `STATUS.md`，不宣称生产部署。 |
 | 生命周期已吊销票据与注销后原 key 重放验证 | `P2-AUDIT-LOGOUT-002` 已取得真实注销链实证：三个生命周期端点拒绝旧票据，原已提交 key 重放与事件读取均为 401、业务 SQL 零增量、事件数不变；同主体未注销票据仍可读和合法重放。依据 `tests/api/test_work_object_lifecycle.py::test_logout_replay_of_original_key_cannot_read_event`、生产装配全路由用例及断开认证读库后的反证。按既定 expiry_condition 关闭该验证义务，独立审查与集成状态见 `STATUS.md`。 |
@@ -188,7 +187,6 @@
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| `/tasks/{id}/events` 跨租户存在性差异（已关闭） | 原不存在与跨租户不可归属响应不同，可能泄露任务是否存在 | `P2-ADMIN-EVENTS-UNIFORM-001` | `P2-ADMIN-EVENTS-UNIFORM-001` | 已满足：PR #216 按 2026-09-08 方向 A 完成服务层、OpenAPI、界面空态与逐字节负向回归；新上下文自审、独立 Monitor、MiMo 静态审核、Backend/Frontend required checks 及精确 merge-SHA Actions 均 success。仅关闭本条 events 存在性差异；内部审计差异、TaskNotFound 组件/全局映射、其他租户欠债与第二租户验收均保留 | PR #216（实现、审查、CI、合并证据）；`docs/phase2/DECISIONS.md` 2026-09-08 方向 A 裁决 |
 
 
 ### 现役 DAG · `P2-AUDIT-LOGOUT-002`
