@@ -128,7 +128,11 @@ export function useIdentityUnconfirmed(): boolean {
 }
 
 /** 只给本人看、按代次分键的查询；进入待确认时立即取消，已安排的重试不得以别人的 cookie 落地。 */
-const PRIVATE_QUERY_PREFIXES = [['memories'], ['conversations']] as const;
+const PRIVATE_QUERY_PREFIXES = [['memories'], ['conversations'], ['my-skills']] as const;
+/** 锁内的身份读取最多等这么久：悬挂的请求不能一直占着锁，挡住别的标签页登录或退出。 */
+const LOCKED_READ_TIMEOUT_MS = 8_000;
+/** 启动期等锁超时后隔这么久再排队，不在锁外读取。 */
+const STARTUP_LOCK_RETRY_MS = 1_000;
 
 function holdPrivateQueries(queryClient: QueryClient, value: IdentityPending): void {
   if (identityPending !== 'switching') setIdentityPending(value);
@@ -157,6 +161,16 @@ export function currentIdentityPending(): IdentityPending | null { return identi
 export function seedConfirmedIdentity(queryClient: QueryClient, identity: MeResponse): void {
   queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
   setIdentityPending(null);
+}
+
+function withDeadline<T>(request: Promise<T>, ms: number): Promise<T> {
+  let timer = 0;
+  return Promise.race([
+    request,
+    new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error('identity_read_timeout')), ms);
+    }),
+  ]).finally(() => window.clearTimeout(timer));
 }
 
 let recheckNow: (() => void) | null = null;
@@ -188,7 +202,8 @@ export function useIdentityRevalidation(): boolean {
       let generation = start.generation;
       try {
         // Shared lock: a login or logout holding the cookie lock finishes before this read.
-        // Bypass cache. The generated client cannot abort this HTTP request.
+        // Bypass cache. The generated client cannot abort this HTTP request; the deadline only
+        // releases the lock and leaves the hold in place (a late reply is ignored by sequence).
         const identity = await withAuthCookieLock(async () => {
           const current = useAuthStore.getState();
           if (!live || requestSequence !== sequence || imLogoutInProgress()) return null;
@@ -198,7 +213,7 @@ export function useIdentityRevalidation(): boolean {
           }
           if (current.status !== 'authenticated') return null;
           generation = current.generation;
-          return readMeApiV1MeGet();
+          return withDeadline(readMeApiV1MeGet(), LOCKED_READ_TIMEOUT_MS);
         }, 'shared');
         if (identity === null || !isCurrent(generation)) return;
         const known = queryClient.getQueryData<MeResponse>(identityQueryKey(generation));
@@ -214,8 +229,10 @@ export function useIdentityRevalidation(): boolean {
         setFailed(false);
       } catch {
         if (!isCurrent(generation)) return;
-        if (useAuthStore.getState().status === 'unknown') restartStartupCheck();
-        else setFailed(true);
+        // Startup: never read outside the lock while a switch may be under way; queue again.
+        if (useAuthStore.getState().status === 'unknown') {
+          window.setTimeout(() => { if (live) void recheck('switching'); }, STARTUP_LOCK_RETRY_MS);
+        } else setFailed(true);
       }
     };
     let wasHidden = document.visibilityState === 'hidden';

@@ -3,15 +3,18 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { listSkills } from '../../api/userSkills';
+import { useIdentityPending } from '../../app/identity';
 import { useAuthStore } from '../../stores/authStore';
 
 export function useMySkills(enabled = true) {
   const generation = useAuthStore((state) => state.generation);
+  // Paused while the login is being confirmed (revalidation cancels what is in flight).
+  const pending = useIdentityPending();
   return useQuery({
     queryKey: ['my-skills', generation],
     queryFn: listSkills,
     retry: false,
-    enabled,
+    enabled: enabled && pending === null,
   });
 }
 

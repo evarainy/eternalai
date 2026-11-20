@@ -17,6 +17,7 @@ import {
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
 import { BootGate } from './app/BootGate';
+import { IdentitySwitchOverlay } from './app/IdentitySwitchOverlay';
 import { requestIdentityRecheck, useIdentityBootstrap, useIdentityRevalidation } from './app/identity';
 import {
   lazyRouteComponents,
@@ -35,6 +36,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {
       retry: false,
+      // Never park a send while offline: resumed later, it could leave under another login.
+      networkMode: 'always',
     },
     queries: {
       retry: (failureCount, error) =>
@@ -67,14 +70,17 @@ export function AuthenticationEffects() {
     });
   }, [activeQueryClient]);
 
-  return status === 'authenticated' && revalidationFailed
-    ? (
-      <div role="alert">
-        <span>暂时无法确认登录状态</span>
-        <button onClick={requestIdentityRecheck} type="button">重试</button>
-      </div>
-    )
-    : null;
+  return (
+    <>
+      <IdentitySwitchOverlay />
+      {status === 'authenticated' && revalidationFailed ? (
+        <div role="alert">
+          <span>暂时无法确认登录状态</span>
+          <button onClick={requestIdentityRecheck} type="button">重试</button>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export function SessionKeepaliveBanner() {

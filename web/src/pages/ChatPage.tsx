@@ -96,8 +96,7 @@ import {
 } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import {
-  currentIdentityPending, IDENTITY_SWITCHING_NOTICE, requestIdentityRecheck, useIdentityPending,
-  useIdentityQuery,
+  currentIdentityPending, requestIdentityRecheck, useIdentityPending, useIdentityQuery,
 } from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
 import { ChatAttachmentBar } from '../features/chat-upload/ChatAttachmentBar';
@@ -573,11 +572,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     return outcome === undefined ? null : userActionOutcomeMessages[outcome];
   };
   const identityQuery = useIdentityQuery();
-  // refetchMe only fills an empty key; a confirmed one is refreshed by revalidation.
-  const { data: me, refetch: refetchMe } = identityQuery;
+  const { data: me } = identityQuery;
   const authStatus = useAuthStore((state) => state.status);
   const authGeneration = useAuthStore((state) => state.generation);
-  // Another tab is logging in or out: this account's conversation stays hidden and unsent.
+  // Another tab is logging in or out: the overlay covers the page and sending waits.
   const identityPending = useIdentityPending();
   const identitySwitching = identityPending === 'switching';
   const browserOwner = useMemo(() => parseBrowserOwnerScope(me), [me]);
@@ -1279,8 +1277,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     || (!browserIdentityReady && browserTarget !== null);
   const sheetShown = inConversation && chatSheetOpen;
   const composerOpen = draft.trim() !== '' || attachmentsOpen || historyOpen;
-  const topic = identitySwitching ? null
-    : transcript.find((entry) => entry.role === 'user')?.text ?? null;
+  const topic = transcript.find((entry) => entry.role === 'user')?.text ?? null;
   const askedCount = transcript.filter((entry) => entry.role === 'user').length;
 
   // Esc 收起对话层。焦点在别的浮层（设置、搜索）里时不管，那些浮层自己处理 Esc。
@@ -1372,7 +1369,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               aria-live="polite"
               className={styles.thread}
             >
-              {identitySwitching ? <p role="status">{IDENTITY_SWITCHING_NOTICE}</p> : <>
               {transcript.length === 0 ? null : (
                 <ol className={styles.messageList}>
                   {transcript.map((entry, index) => (
@@ -1546,7 +1542,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                   上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
                 </p>
               ) : null}
-              </>}
             </section>
             </div>
           </div>
@@ -1561,9 +1556,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         <div className={styles.composerNotices}>
           {authStatus === 'authenticated' && !requestMetadataReady ? (
             <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
-              action={<Button onClick={() => {
-                if (me === undefined) void refetchMe(); else requestIdentityRecheck();
-              }}>重新核对</Button>} />
+              action={<Button onClick={requestIdentityRecheck}>重新核对</Button>} />
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
           {viewOnly ? <Alert type="info" showIcon title={VIEW_ONLY_NOTICE} /> : null}
@@ -1611,7 +1604,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           onSubmit={handleSubmit}
         >
           <span aria-hidden="true" className="wb-ringfx"><i /></span>
-          {attachmentsOpen && !identitySwitching ? (
+          {attachmentsOpen ? (
             <div className={styles.attachments}>
               <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
               {deliveryAttachments.length > 0 ? <DeliveryComposerButton
@@ -1619,15 +1612,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 text="" attachments={deliveryAttachments} /> : null}
             </div>
           ) : null}
-          {identitySwitching ? null : <>
-            <SkillMentionTag mention={mention} />
-            <SkillMentionList mention={mention} />
-          </>}
+          <SkillMentionTag mention={mention} />
+          <SkillMentionList mention={mention} />
           {mentionNotice ? <Text type="warning" role="status">{mentionNotice}</Text> : null}
           <textarea
             aria-label="办理请求"
             className={styles.input}
-            disabled={requestPending || identitySwitching}
+            disabled={requestPending}
             id="chat-request"
             onChange={(event) => {
               const value = event.target.value;
@@ -1652,15 +1643,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             placeholder="交代一件事，或者问个问题"
             ref={inputRef}
             rows={1}
-            // The draft stays in the store; it is only kept off screen until the login is confirmed.
-            value={identitySwitching ? '' : draft}
+            value={draft}
           />
           <div className={styles.composerBar}>
             <button
               aria-label="添加表格"
               aria-pressed={attachmentsOpen}
               className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.clip}`}
-              disabled={!attachmentsAllowed || requestPending || identitySwitching}
+              disabled={!attachmentsAllowed || requestPending}
               onClick={() => { setAttachmentsToggled((open) => !open); }}
               title="添加表格"
               type="button"

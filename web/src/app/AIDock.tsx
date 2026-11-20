@@ -17,7 +17,7 @@ import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
 import { isViewOnlyConversation, useAIDockStore, VIEW_ONLY_NOTICE } from '../stores/aiDockStore';
-import { currentIdentityPending, IDENTITY_SWITCHING_NOTICE, useIdentityPending } from './identity';
+import { currentIdentityPending, useIdentityPending } from './identity';
 import { useAuthStore } from '../stores/authStore';
 import { returnUnsentMessage } from './reauthRestore';
 import type { UnsentIdentity } from './reauthRestore';
@@ -94,7 +94,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const viewOnly = useAIDockStore(isViewOnlyConversation);
-  // Another tab is logging in or out: this account's conversation stays hidden and unsent.
+  // Another tab is logging in or out: the overlay covers the page and sending waits.
   const identitySwitching = useIdentityPending() === 'switching';
   const requestInFlight = useRef(false);
   // 是否有请求在途：用本组件自己的状态，不读 useMutation 的 isPending。开发期 StrictMode 会在懒加载的
@@ -393,7 +393,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
           <p className={styles.context} role="status">
             正在协助：{contextLabel}
           </p>
-          {imSource !== null && !identitySwitching && <IMSourcePreview source={imSource.source}
+          {imSource !== null && <IMSourcePreview source={imSource.source}
             onReturn={() => returnToIMSource(imSource.source.deep_link)}
             onClear={() => useAIDockStore.getState().setIMSource(null)} />}
           {viewOnly ? <p className={styles.notice} role="status">{VIEW_ONLY_NOTICE}</p> : null}
@@ -409,9 +409,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
               </button>
             </div>
           )}
-          {identitySwitching ? (
-            <p className={styles.emptyState} role="status">{IDENTITY_SWITCHING_NOTICE}</p>
-          ) : transcript.length === 0 ? (
+          {transcript.length === 0 ? (
             <p className={styles.emptyState}>还没有对话。</p>
           ) : (
             <ol className={styles.messageList}>
@@ -441,10 +439,8 @@ export function AIDock({ suppressed = false }: AIDockProps) {
               aria-label="要 AI 帮什么"
               autoSize={{ maxRows: 5, minRows: 1 }}
               id="ai-dock-request"
-              disabled={identitySwitching}
               placeholder="接着问……"
-              // The draft stays in the store; it is only kept off screen until the login is confirmed.
-              value={identitySwitching ? '' : draft}
+              value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleKeyDown}
             />
