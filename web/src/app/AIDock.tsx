@@ -114,9 +114,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             session_id: identity.sessionId,
             message,
             client_capabilities: {},
-            ...(sourceRef === undefined
-              ? { client_request_id: identity.requestId }
-              : { source_refs: [sourceRef] }),
+            ...(sourceRef === undefined ? {} : { source_refs: [sourceRef] }),
           }),
         );
       } catch (error) {
@@ -136,9 +134,12 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       }
     },
     onSuccess: (response, { identity, sourceRef }) => {
-      if (sourceRef !== undefined && (useAuthStore.getState().generation !== identity.generation
-          || useAIDockStore.getState().sessionId !== identity.sessionId
-          || useAIDockStore.getState().imSource?.source.ref_id !== sourceRef)) return;
+      // A reply lands only on the login and conversation it was sent from (and its IM source).
+      const auth = useAuthStore.getState();
+      const dock = useAIDockStore.getState();
+      if (auth.status !== 'authenticated' || auth.generation !== identity.generation
+          || dock.sessionId !== identity.sessionId
+          || (sourceRef !== undefined && dock.imSource?.source.ref_id !== sourceRef)) return;
       appendTranscript(response);
     },
     // Authentication runs before the handler, so a 401 means the message was never processed.

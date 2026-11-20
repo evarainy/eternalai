@@ -1652,15 +1652,21 @@ describe('ChatPage assistant surfaces', () => {
     const other = `sid_v1.${'c'.repeat(43)}.${'d'.repeat(43)}`;
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
       items: [
-        { session_id: current, title: '先问一句', updated_at: '2026-11-20T09:00:00+09:00' },
-        { session_id: other, title: '昨天的待办', updated_at: '2026-11-19T09:00:00+09:00' },
+        {
+          session_id: current, client_session_id: SESSION_A, title: '先问一句',
+          updated_at: '2026-11-20T09:00:00+09:00',
+        },
+        {
+          session_id: other, client_session_id: null, title: '昨天的待办',
+          updated_at: '2026-11-19T09:00:00+09:00',
+        },
       ],
       next_cursor: null,
     })));
     renderChat();
 
     act(() => {
-      useAIDockStore.setState({ sessionId: current });
+      useAIDockStore.setState({ sessionId: SESSION_A });
       useAIDockStore.getState().appendTranscript({ role: 'user', text: '先问一句' });
       useAIDockStore.getState().appendTranscript({ role: 'user', text: '再问一句' });
     });

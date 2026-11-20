@@ -814,22 +814,23 @@ const HISTORY_KINDS: Record<HistoryEnvelope['status'], PresentationKind> = {
   failed: 'failed',
   no_capability_found: 'unavailable',
 };
-const HISTORY_CARD_KINDS: Record<string, PresentationKind> = {
-  confirm_card: 'confirmation',
-  binding_required_card: 'binding',
-  operator_handback_card: 'clarification',
-};
+// Cards only describe a reply that was still waiting on the user; a final status wins.
 const HISTORY_CARD_SUMMARIES: Record<string, string> = {
   confirm_card: '当时这一步需要你确认，这里只能查看。',
   binding_required_card: '当时需要先绑定账号。',
-  operator_handback_card: '当时需要补充范围。',
+  operator_handback_card: '当时这一步交给你处理，这里只能查看。',
 };
-const HISTORY_DATA_SUMMARIES: Record<string, string> = {
-  user_skill: '当时展示了「我的功能」卡片，这里只能查看。',
-  sheet_fill_plan: '当时给出了表格填写方案，这里只能查看。',
-  report_job: '当时生成了导出文件。',
-  d_form_collection: '当时在追问报修信息，这里不能继续填写。',
-};
+
+function historyDataSummary(data: Record<string, unknown>): string | undefined {
+  if ('report_job' in data) {
+    return isRecord(data.report_job) && typeof data.report_job.job_id === 'string'
+      ? '当时已受理导出任务。' : '当时导出任务是否受理尚未确认。';
+  }
+  if ('user_skill' in data) return '当时展示了「我的功能」卡片，这里只能查看。';
+  if ('sheet_fill_plan' in data) return '当时给出了表格填写方案，这里只能查看。';
+  if (data.kind === 'd_form_collection') return '当时在追问报修信息，这里不能继续填写。';
+  return undefined;
+}
 
 /**
  * A reply restored from conversation history. Only text, records and a card summary are
@@ -842,16 +843,22 @@ export function projectHistoryReply(
 ): ProjectedResponse {
   if (reply === null) return { ...projectTextResponse(text, 'completed'), readOnly: true };
   const data = structuredData(reply.data, navigationConfig);
-  const saved = reply.data;
-  const dataKind = saved === null ? undefined
-    : Object.keys(HISTORY_DATA_SUMMARIES).find((key) => key in saved || saved.kind === key);
-  const cardSummary = reply.ui.title?.trim() || HISTORY_CARD_SUMMARIES[reply.ui.component_type]
-    || (dataKind === undefined ? undefined : HISTORY_DATA_SUMMARIES[dataKind]);
+  const card = reply.ui.component_type;
+  const waiting = reply.status === 'waiting_user' || reply.status === 'blocked';
+  const cardSummary = reply.ui.title?.trim()
+    || (reply.data === null ? undefined : historyDataSummary(reply.data))
+    || (waiting ? HISTORY_CARD_SUMMARIES[card] : undefined);
+  const presentationKind: PresentationKind =
+    reply.status === 'waiting_user' && card === 'confirm_card' ? 'confirmation'
+      : reply.status === 'blocked' && card === 'binding_required_card' ? 'binding'
+        // As live: a refused-or-unknown export is "not confirmed", not "failed".
+        : reply.status === 'failed' && reply.data !== null && 'report_job' in reply.data
+          ? 'unconfirmed' : HISTORY_KINDS[reply.status];
   return {
     role: 'assistant',
     text,
     status: reply.status,
-    presentationKind: HISTORY_CARD_KINDS[reply.ui.component_type] ?? HISTORY_KINDS[reply.status],
+    presentationKind,
     responseId: null,
     confirm: null,
     records: data.records,

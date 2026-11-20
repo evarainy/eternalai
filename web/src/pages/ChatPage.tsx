@@ -80,7 +80,10 @@ import {
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
 import type { UserAction } from '../generated/runtime/runtime.schemas';
-import type { ConversationMessages } from '../generated/conversations/conversations.schemas';
+import type {
+  ConversationMessages,
+  ConversationSummary,
+} from '../generated/conversations/conversations.schemas';
 import { ConversationHistory } from '../features/chat-history/ConversationHistory';
 import { useRefreshConversations } from '../features/chat-history/useConversations';
 import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
@@ -101,7 +104,8 @@ import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
 const USER_SKILL_REF_NOT_ALLOWED = 'user_skill_ref_not_allowed';
-const BOUND_SESSION_ID = /^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/;
+const SESSION_NOT_FOUND_NOTICE = '这段对话已删除或不可用，已为你新建对话。';
+const HISTORY_UNAVAILABLE_NOTICE = '对话记录服务暂时不可用，请稍后再试。';
 
 interface ChatPageProps {
   /** A trusted server configuration must supply the one published skill ID. */
@@ -127,6 +131,8 @@ interface ChatSubmission {
   readonly message: string;
   readonly sessionId: string;
   readonly authGeneration: number;
+  /** The dock store's conversation generation when it was sent (see aiDockStore). */
+  readonly conversationGeneration: number;
   /** The saved flow the user named with `$` and its span in the message; frozen with it. */
   readonly userSkill: SkillSelection | null;
   readonly browser: null | {
@@ -543,6 +549,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     ...draftAttachments,
   ].map((attachment) => [attachment.artifact_id, attachment])).values()], [transcript, draftAttachments]);
   const currentSessionId = useAIDockStore((state) => state.sessionId);
+  const conversationGeneration = useAIDockStore((state) => state.conversationGeneration);
+  const savedConversation = useAIDockStore((state) => state.savedConversation);
+  // A saved conversation opened from history: account-wide recovery cards belong elsewhere.
+  const viewingSaved = savedConversation !== null && savedConversation.sessionId === currentSessionId;
+  const viewOnly = viewingSaved && !savedConversation.continuable;
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
@@ -657,8 +668,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const skillIdRef = useRef<string | null>(meSkillId);
   skillIdRef.current = meSkillId;
   const identityCheck = useRef(0);
-  const requestInFlight = useRef(false);
-  const activeSubmission = useRef<ChatSubmission | null>(null);
+  // The submission in flight; one of a replaced conversation no longer blocks sending.
+  const inFlight = useRef<ChatSubmission | null>(null);
   // Only a first send may be withdrawn on 401; a retry follows an unconfirmed outcome.
   const freshSubmissions = useRef(new WeakSet<ChatSubmission>());
   const browserSubmitContext = useRef<{
@@ -667,7 +678,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
 
   useEffect(() => () => {
     browserSubmitContext.current?.controller.abort();
-    activeSubmission.current = null;
+    inFlight.current = null;
   }, []);
   useEffect(() => { setBrowserIdentityReady(true); }, [authGeneration]);
   useEffect(() => {
@@ -783,6 +794,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const stillCurrent = (submission: ChatSubmission): boolean =>
       authStatus === 'authenticated' && submission.authGeneration === authGeneration
       && submission.sessionId === currentSessionId
+      && submission.conversationGeneration === conversationGeneration
       && (submission.owner === null || ownerKey ===
         `${submission.owner.tenant_id}/${submission.owner.user_id}`);
     if (pendingSubmission !== null && !stillCurrent(pendingSubmission)) {
@@ -792,13 +804,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       setRetrySubmission(null);
     }
     if (!browserAvailable && browserOptIn) setBrowserOptIn(false);
-  }, [currentSessionId, authStatus, authGeneration, ownerKey, browserAvailable,
-    browserOptIn, pendingSubmission, retrySubmission]);
+  }, [currentSessionId, conversationGeneration, authStatus, authGeneration, ownerKey,
+    browserAvailable, browserOptIn, pendingSubmission, retrySubmission]);
 
   const submissionIsCurrent = (submission: ChatSubmission): boolean => {
     const auth = useAuthStore.getState();
     return auth.status === 'authenticated' && auth.generation === submission.authGeneration
       && useAIDockStore.getState().sessionId === submission.sessionId
+      && useAIDockStore.getState().conversationGeneration === submission.conversationGeneration
       && (submission.owner === null || ownerKeyRef.current ===
         `${submission.owner.tenant_id}/${submission.owner.user_id}`);
   };
@@ -812,7 +825,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       controller, ownerKey: `${owner.tenant_id}/${owner.user_id}`,
     };
     const stopOnSessionChange = useAIDockStore.subscribe((state) => {
-      if (state.sessionId !== submission.sessionId) controller.abort();
+      if (state.sessionId !== submission.sessionId
+          || state.conversationGeneration !== submission.conversationGeneration) controller.abort();
     });
     const stopOnAuthChange = useAuthStore.subscribe((state) => {
       if (state.status !== 'authenticated' || state.generation !== submission.authGeneration) {
@@ -842,23 +856,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   };
 
   const refreshConversations = useRefreshConversations();
-  /**
-   * The reply carries the backend-bound id of this conversation: later sends, the saved
-   * history entry and a browser run of this conversation all continue under it.
-   */
-  const adoptBoundSession = (localSessionId: string, boundSessionId: string) => {
-    if (localSessionId === boundSessionId || !BOUND_SESSION_ID.test(boundSessionId)) return;
-    const target = browserTargetRef.current;
-    if (target !== null && target.conversationId === localSessionId) {
-      setBrowserTarget({ ...target, conversationId: boundSessionId });
-      setBrowserStorageError(!saveBrowserAccepted(target.owner, boundSessionId, target.accepted));
-    }
-    useAIDockStore.getState().adoptBoundSession(localSessionId, boundSessionId);
-  };
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
-      const submission = activeSubmission.current;
+      const submission = inFlight.current;
       if (submission === null || submission.message !== message) {
         throw new Error('chat_submission_invalid');
       }
@@ -940,7 +941,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         const uncertain = isBrowserUnconfirmed(response, submission.requestId);
         const result = uncertain ? unconfirmedSubmission() : projectResponse(response);
         if (result.dFormCollection !== undefined
-            && !BOUND_SESSION_ID.test(boundSessionId)) {
+            && !/^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(boundSessionId)) {
           throw new Error('collection_session_mismatch');
         }
         if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -963,12 +964,33 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           rememberReportJob(scope, result.reportJobId);
           if (scope !== null) setReportJobIds(loadReportJobs(scope));
         }
-        if (!uncertain && result.presentationKind !== 'unconfirmed') {
-          adoptBoundSession(sessionId, boundSessionId);
-          refreshConversations();
-        }
+        refreshConversations();
         return result;
       } catch (error) {
+        if (error instanceof ApiError && ((error.status === 404 && error.code === 'session_not_found')
+            || (error.status === 503 && error.code === 'chat_history_unavailable'))) {
+          // Refused before any work: the text goes back to the box.
+          if (submission.owner !== null && submissionIsCurrent(submission)) {
+            setPendingSubmission(null);
+            setRetrySubmission(null);
+          }
+          if (!submissionIsCurrent(submission)) return null;
+          if (error.status === 404) {
+            // The conversation was deleted (here or in another tab): continue in a new one.
+            refreshConversations();
+            startFreshSession();
+            const notice = projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session');
+            const store = useAIDockStore.getState();
+            store.setDraft(message);
+            store.appendTranscript(notice);
+            return notice;
+          }
+          const store = useAIDockStore.getState();
+          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
+          const notice = projectTextResponse(HISTORY_UNAVAILABLE_NOTICE, 'service');
+          store.applyConfirmationResult(sessionId, reference, notice);
+          return notice;
+        }
         if (isChatAttachmentRejection(error)) {
           // Refused before any work: the text goes back; the attachments are what was refused.
           if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -1055,25 +1077,30 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         if (!submissionIsCurrent(submission)) return null;
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         return result;
+      } finally {
+        if (inFlight.current === submission) inFlight.current = null;
       }
     },
-    onSettled: () => {
-      activeSubmission.current = null;
-      requestInFlight.current = false;
-    },
   });
+  // Pending only for the conversation on screen; a replaced one's request does not block it.
+  const pendingFlight = inFlight.current;
+  const requestPending = mutation.isPending && pendingFlight !== null
+    && pendingFlight.sessionId === currentSessionId
+    && pendingFlight.conversationGeneration === conversationGeneration
+    && pendingFlight.authGeneration === authGeneration;
 
   // 新内容到达、或对话层重新摊开时滚到对话底部；用户已向上翻看（离底部超过阈值）则不拉回。
   useEffect(() => {
     const element = transcriptRef.current;
-    const hasThread = transcript.length > 0 || mutation.isPending || browserTarget !== null
+    const hasThread = transcript.length > 0 || requestPending || browserTarget !== null
       || pendingSubmission !== null || retrySubmission !== null;
     if (element !== null && hasThread && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
+  }, [transcript, requestPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
 
   const submit = (retry?: ChatSubmission) => {
     const message = retry?.message ?? draft.trim();
-    if (!message || requestInFlight.current) {
+    const flight = inFlight.current;
+    if (!message || viewOnly || (flight !== null && submissionIsCurrent(flight))) {
       return;
     }
     const currentAuth = useAuthStore.getState();
@@ -1115,13 +1142,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const submission: ChatSubmission = retry ?? {
       attachments: useAIDockStore.getState().draftAttachments,
       message, sessionId, authGeneration: useAuthStore.getState().generation, browser, userSkill,
+      conversationGeneration: useAIDockStore.getState().conversationGeneration,
       requestId: browser?.requestId ?? crypto.randomUUID(),
       owner: browserAvailable ? browserOwner : null,
       collection: currentCollection === null ? null : { ...currentCollection },
       boundSessionId: currentCollection !== null && collection !== null
         ? collection.serverSessionId : null,
     };
-    requestInFlight.current = true;
+    inFlight.current = submission;
     stickToBottom.current = true;
     if (retry === undefined) {
       setRetrySubmission(null);
@@ -1135,13 +1163,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       mention.reset();
       setMentionNotice('');
     }
-    activeSubmission.current = submission;
     mutation.mutate(message);
   };
 
   const submitConfirmation = async (action: UserAction) => {
     const store = useAIDockStore.getState();
     const sessionId = store.ensureSession();
+    const generation = store.conversationGeneration;
     if (store.confirmationResults[action.response_id] !== undefined) return;
     try {
       const projectedResponse = projectResponse(
@@ -1149,10 +1177,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           channel: 'web', session_id: sessionId, action,
         }),
       );
+      if (useAIDockStore.getState().conversationGeneration !== generation) return;
       useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedResponse);
     } catch (error) {
       const projectedError = projectRequestError(error);
-      if (projectedError !== null) {
+      if (projectedError !== null && useAIDockStore.getState().conversationGeneration === generation) {
         useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedError);
       }
     }
@@ -1165,7 +1194,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
 
   /** Page-local state of the conversation being left (the dock store resets its own part). */
   const leaveConversation = () => {
-    setCollection(null);
     clearBrowserAccepted();
     setBrowserTarget(null);
     setBrowserTerminal(false);
@@ -1183,11 +1211,14 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     startNewSession();
   };
 
-  /** A saved conversation replaces the current one at once; its entries are read-only. */
-  const openSavedConversation = (sessionId: string, conversation: ConversationMessages) => {
+  /**
+   * A saved conversation replaces the current one at once; its entries are read-only. It
+   * continues under the local id it was started with, which binds to the same saved session.
+   */
+  const openSavedConversation = (item: ConversationSummary, conversation: ConversationMessages) => {
     leaveConversation();
     stickToBottom.current = true;
-    useAIDockStore.getState().openConversation(sessionId, conversation.messages.map((message) =>
+    useAIDockStore.getState().openConversation(item.client_session_id, conversation.messages.map((message) =>
       message.role === 'user'
         ? { role: 'user' as const, text: message.text }
         : projectHistoryReply(message.text, message.envelope)));
@@ -1205,10 +1236,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       || pendingSubmission !== null);
 
   // Browser-skill sends and collection replies cannot carry attachments (the backend answers 422).
-  const attachmentsAllowed = !browserOptIn && currentCollection === null;
+  const attachmentsAllowed = !browserOptIn && currentCollection === null && !viewOnly;
   const attachmentsOpen = (attachmentsToggled && attachmentsAllowed)
     || chatAttachments.attachments.length > 0 || chatAttachments.uploads.length > 0;
-  const canSend = Boolean(draft.trim()) && !mutation.isPending
+  const canSend = Boolean(draft.trim()) && !requestPending && !viewOnly
     && !browserSubmissionBlocked && requestMetadataReady && !chatAttachments.busy
     && (attachmentsAllowed || chatAttachments.attachments.length === 0);
 
@@ -1221,6 +1252,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (canSend) submit();
   };
 
+  const recoveredReportJobIds = viewingSaved ? [] : reportJobIds;
+  const recoveredSheetFills = viewingSaved ? [] : pendingSheetFills;
+
   const lastEntry = transcript.at(-1);
   const lastEntryFailed =
     lastEntry !== undefined &&
@@ -1228,9 +1262,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     UNSUCCESSFUL_KINDS.has(lastEntry.presentationKind);
 
   // 只要有任何要给用户看的东西（消息、进行中的任务、待恢复的作业），就有一张对话纸。
-  const inConversation = transcript.length > 0 || mutation.isPending
+  const inConversation = transcript.length > 0 || requestPending
     || visibleBrowserTarget !== null || pendingSubmission !== null || retrySubmission !== null
-    || reportJobIds.length > 0 || pendingSheetFills.length > 0
+    || recoveredReportJobIds.length > 0 || recoveredSheetFills.length > 0
     || (!browserIdentityReady && browserTarget !== null);
   const sheetShown = inConversation && chatSheetOpen;
   const composerOpen = draft.trim() !== '' || attachmentsOpen || historyOpen;
@@ -1321,7 +1355,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               }}
             >
             <section
-              aria-busy={mutation.isPending}
+              aria-busy={requestPending}
               aria-label="办理会话"
               aria-live="polite"
               className={styles.thread}
@@ -1429,13 +1463,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 </ol>
               )}
 
-              {reportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
+              {recoveredReportJobIds.filter((jobId) => !transcriptReportJobs.has(jobId)).map((jobId) => (
                 <ReportJobCard key={jobId} jobId={jobId} onDismiss={() => {
                   forgetReportJob(recoveryScope, jobId);
                   setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
                 }} />
               ))}
-              {pendingSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
+              {recoveredSheetFills.filter((item) => !transcriptSheetFills.has(item.responseId))
                 .map((item) => (
                   <SheetFillPlanCard
                     key={`${authGeneration}/${item.responseId}`}
@@ -1462,7 +1496,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                     const original = visibleBrowserTarget.originalSubmission;
                     if (original !== null) submit(original);
                   }}
-                  recovering={mutation.isPending}
+                  recovering={requestPending}
                   recoveryRevision={browserRecoveryRevision}
                 />
               )}
@@ -1475,24 +1509,24 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               ) : null}
               {pendingSubmission !== null && submissionIsCurrent(pendingSubmission) ? (
                 <Alert type="info" showIcon title="浏览器任务正在准备，尚未生成运行记录"
-                  action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  action={<Button disabled={requestPending || !browserIdentityReady}
                     onClick={() => submit(pendingSubmission)}>继续检查</Button>} />
               ) : null}
               {retrySubmission !== null && submissionIsCurrent(retrySubmission) ? (
                 <Alert type="warning" showIcon title={browserTarget?.originalSubmission === retrySubmission
                   ? '原任务恢复结果尚未确认，可重试原请求' : '提交结果尚未确认，可使用原请求继续检查'}
-                  action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  action={<Button disabled={requestPending || !browserIdentityReady}
                     onClick={() => submit(retrySubmission)}>检查原请求</Button>} />
               ) : null}
 
-              {mutation.isPending ? (
+              {requestPending ? (
                 <div className={styles.pendingNotice} role="status">
                   <span className={styles.pendingDot} aria-hidden="true" />
                   正在办理，请稍候…
                 </div>
               ) : null}
 
-              {lastEntryFailed && !mutation.isPending
+              {lastEntryFailed && !requestPending
                 && visibleBrowserTarget === null && pendingSubmission === null ? (
                 <p className={styles.failureNotice}>
                   上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
@@ -1515,14 +1549,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
+          {viewOnly ? <Alert type="info" showIcon title="这段对话只能查看，请新建对话继续。" /> : null}
         </div>
         {customizing ? <HomeCustomizeBar /> : null}
         {inConversation && !chatSheetOpen && !customizing ? (
           <button className={styles.resume} onClick={() => setChatSheetOpen(true)} type="button">
-            <span aria-hidden="true" className={styles.resumeDot} data-busy={mutation.isPending ? 'true' : 'false'} />
+            <span aria-hidden="true" className={styles.resumeDot} data-busy={requestPending ? 'true' : 'false'} />
             <b>回到对话</b>
             <span className={styles.resumeTopic}>
-              {mutation.isPending ? '正在办理…' : topic ?? '有一件事在等你处理'}
+              {requestPending ? '正在办理…' : topic ?? '有一件事在等你处理'}
             </span>
             {askedCount > 1 ? <small className="wb-num">{`${askedCount} 问`}</small> : null}
             <Icon name="up" size={15} strokeWidth={2} />
@@ -1542,8 +1577,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           <ConversationHistory
             currentSessionId={currentSessionId}
             onOpen={openSavedConversation}
-            onDeleted={(sessionId) => {
-              if (useAIDockStore.getState().sessionId === sessionId) startFreshSession();
+            onDeleted={(item) => {
+              if (item.client_session_id !== null
+                  && useAIDockStore.getState().sessionId === item.client_session_id) startFreshSession();
             }}
           />
         ) : null}
@@ -1572,7 +1608,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           <textarea
             aria-label="办理请求"
             className={styles.input}
-            disabled={mutation.isPending}
+            disabled={requestPending}
             id="chat-request"
             onChange={(event) => {
               const value = event.target.value;
@@ -1604,7 +1640,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               aria-label="添加表格"
               aria-pressed={attachmentsOpen}
               className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.clip}`}
-              disabled={!attachmentsAllowed || mutation.isPending}
+              disabled={!attachmentsAllowed || requestPending}
               onClick={() => { setAttachmentsToggled((open) => !open); }}
               title="添加表格"
               type="button"
@@ -1657,12 +1693,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             <button
               aria-label="发送"
               className={`wb-btn wb-btn-primary ${styles.send}`}
-              data-loading={mutation.isPending ? 'true' : 'false'}
+              data-loading={requestPending ? 'true' : 'false'}
               disabled={!canSend}
               title="发送"
               type="submit"
             >
-              <Icon name={mutation.isPending ? 'retry' : 'up'} size={18} strokeWidth={2} />
+              <Icon name={requestPending ? 'retry' : 'up'} size={18} strokeWidth={2} />
             </button>
           </div>
         </form>

@@ -96,12 +96,20 @@ interface AIDockState {
   applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
   appendTranscript: (entry: TranscriptEntry) => void;
   /**
-   * The first reply bound the local conversation id to the backend session id: the current
-   * conversation (and its pending collection and IM source) continues under the bound id.
+   * Bumped whenever the transcript is replaced by a new or a saved conversation; a reply or
+   * confirmation started under an older generation is dropped even on the same session id.
    */
-  adoptBoundSession: (localSessionId: string, boundSessionId: string) => void;
-  /** Opens a saved conversation in place of the current one; nothing of the old one is kept. */
-  openConversation: (sessionId: string, transcript: TranscriptEntry[]) => void;
+  conversationGeneration: number;
+  /**
+   * The saved conversation opened from history, while it is the current one. Without its
+   * client session id it can only be viewed; account-wide recovery cards stay hidden for it.
+   */
+  savedConversation: { sessionId: string; continuable: boolean } | null;
+  /**
+   * Opens a saved conversation in place of the current one; nothing of the old one is kept.
+   * ``clientSessionId`` is the local id it was started with; null opens it view-only.
+   */
+  openConversation: (clientSessionId: string | null, transcript: TranscriptEntry[]) => void;
   /** Settles a sheet fill plan card of the current transcript: accepted job or cancelled. */
   settleSheetFill: (responseId: string, outcome: { readonly jobId: string } | 'cancelled') => void;
   clearSession: () => void;
@@ -190,32 +198,31 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       transcript: [...state.transcript, entry],
       chatSheetOpen: entry.role === 'user' ? true : state.chatSheetOpen,
     })),
-  adoptBoundSession: (localSessionId, boundSessionId) =>
-    set((state) => state.sessionId !== localSessionId ? state : {
-      sessionId: boundSessionId,
-      collection: state.collection?.sessionId === localSessionId
-        ? { ...state.collection, sessionId: boundSessionId } : state.collection,
-      imSource: state.imSource?.sessionId === localSessionId
-        ? { ...state.imSource, sessionId: boundSessionId } : state.imSource,
+  conversationGeneration: 0,
+  savedConversation: null,
+  openConversation: (clientSessionId, transcript) =>
+    set((state) => {
+      const sessionId = clientSessionId ?? newSessionId();
+      return {
+        conversationGeneration: state.conversationGeneration + 1,
+        savedConversation: { sessionId, continuable: clientSessionId !== null },
+        imSource: null,
+        contextNotice: null,
+        draft: '',
+        draftAttachments: [],
+        pageContextDeclaration:
+          state.pageContextDeclaration === null
+            ? null
+            : createGeneralPageContext(state.pageContextDeclaration),
+        restoredPageContext: null,
+        sessionContextMode: 'general',
+        sessionId,
+        transcript,
+        chatSheetOpen: true,
+        confirmationResults: {},
+        collection: null,
+      };
     }),
-  openConversation: (sessionId, transcript) =>
-    set((state) => ({
-      imSource: null,
-      contextNotice: null,
-      draft: '',
-      draftAttachments: [],
-      pageContextDeclaration:
-        state.pageContextDeclaration === null
-          ? null
-          : createGeneralPageContext(state.pageContextDeclaration),
-      restoredPageContext: null,
-      sessionContextMode: 'general',
-      sessionId,
-      transcript,
-      chatSheetOpen: true,
-      confirmationResults: {},
-      collection: null,
-    })),
   settleSheetFill: (responseId, outcome) =>
     set((state) => ({
       transcript: state.transcript.map((entry) =>
@@ -388,6 +395,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     })),
   startNewSession: () =>
     set((state) => ({
+      conversationGeneration: state.conversationGeneration + 1,
       imSource: null,
       contextNotice: '已新建通用会话；当前上下文不带工作事项引用。',
       draft: '',

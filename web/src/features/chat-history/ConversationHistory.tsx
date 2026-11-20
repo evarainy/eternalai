@@ -1,6 +1,6 @@
 /** 「我问过的」：本人保存的对话，按最近更新排在前；可以打开续聊、改名、删除。 */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Button, Dropdown, Input } from 'antd';
 import { ApiError } from '../../api/mutator';
@@ -29,11 +29,15 @@ function updatedLabel(value: string): string {
   });
 }
 
+/**
+ * ``currentSessionId`` is the local conversation id; a saved conversation is matched by the
+ * client session id it was started with (older rows have none and never match).
+ */
 export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
   currentSessionId: string | null;
   /** Called only while the login and the conversation the user left are still current. */
-  onOpen: (sessionId: string, conversation: ConversationMessages) => void;
-  onDeleted: (sessionId: string) => void;
+  onOpen: (item: ConversationSummary, conversation: ConversationMessages) => void;
+  onDeleted: (item: ConversationSummary) => void;
 }) {
   const authStatus = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
@@ -54,6 +58,11 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const openSequence = useRef(0);
+  // Closing the panel abandons a conversation it is still reading.
+  useEffect(() => {
+    const sequence = openSequence;
+    return () => { sequence.current += 1; };
+  }, []);
 
   const open = async (item: ConversationSummary) => {
     const sequence = ++openSequence.current;
@@ -66,7 +75,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       // A later click, another login or a conversation started meanwhile wins over this reply.
       if (sequence !== openSequence.current || auth.status !== 'authenticated'
           || auth.generation !== generation || useAIDockStore.getState().sessionId !== left) return;
-      onOpen(item.session_id, conversation);
+      onOpen(item, conversation);
     } catch (error) {
       if (sequence !== openSequence.current) return;
       if (error instanceof ApiError && error.status === 404) {
@@ -94,13 +103,13 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
     }
   };
 
-  const remove = async (sessionId: string) => {
+  const remove = async (item: ConversationSummary) => {
     setNotice('');
-    setBusy(sessionId);
+    setBusy(item.session_id);
     try {
-      await deleteConversation(sessionId);
+      await deleteConversation(item.session_id);
       setConfirming(null);
-      onDeleted(sessionId);
+      onDeleted(item);
     } catch {
       setNotice('删除没有成功，请稍后再试。');
     } finally {
@@ -118,7 +127,8 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       {items.length === 0 ? null : (
         <ul aria-label="历史对话">
           {items.map((item) => {
-            const current = item.session_id === currentSessionId;
+            const current = item.client_session_id !== null
+              && item.client_session_id === currentSessionId;
             const itemBusy = busy === item.session_id;
             return (
               <li key={item.session_id} data-current={current ? 'true' : 'false'}>
@@ -171,7 +181,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
                   <div className={styles.confirm} role="alert">
                     <span>删除后无法恢复这段对话。</span>
                     <Button danger size="small" loading={itemBusy}
-                      onClick={() => void remove(item.session_id)}>删除</Button>
+                      onClick={() => void remove(item)}>删除</Button>
                     <Button size="small" disabled={itemBusy} onClick={() => setConfirming(null)}>取消</Button>
                   </div>
                 ) : null}
