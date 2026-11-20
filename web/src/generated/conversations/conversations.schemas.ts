@@ -35,7 +35,10 @@ export interface ConversationMessages {
   title: string;
 }
 
+export type ConversationSummaryClientSessionId = string | null;
+
 export interface ConversationSummary {
+  client_session_id: ConversationSummaryClientSessionId;
   session_id: string;
   title: string;
   updated_at: string;

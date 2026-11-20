@@ -21,6 +21,7 @@ class ConversationHistoryError(Exception):
 @dataclass(frozen=True, slots=True)
 class ConversationSummary:
     session_id: str
+    client_session_id: str | None
     title: str
     updated_at: datetime
 
@@ -70,6 +71,8 @@ class ConversationHistoryPort(Protocol):
         request_id: str | None,
         user_text: str,
         envelope: ResponseEnvelope,
+        *,
+        client_session_id: str | None,
     ) -> None: ...
 
     async def recent_turns(

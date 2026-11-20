@@ -31,8 +31,10 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.user_skills import UserSkillOwner
 
 _LOG = logging.getLogger("uvicorn.error.chat_history")
+_HORIZONTAL_SPACE = r"[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]*"
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"""((?:密码|口令|验证码|(?<![A-Za-z0-9_])PIN)[ \t]*(?:是|为|[:：])[ \t]*)"""
+    rf"((?:密码|口令|验证码|(?<![A-Za-z0-9_])PIN){_HORIZONTAL_SPACE}"
+    rf"(?>[是为]{_HORIZONTAL_SPACE}(?:[:：]{_HORIZONTAL_SPACE})?|[:：]{_HORIZONTAL_SPACE}))"
     r"""(?:"[^"\r\n]*"|'[^'\r\n]*'|“[^”\r\n]*”|‘[^’\r\n]*’|[^\s，。；、！？]+)""",
     re.IGNORECASE,
 )
@@ -49,7 +51,12 @@ def _session_params(owner: UserSkillOwner, session_id: str) -> dict[str, str]:
 
 
 def _summary(row: RowMapping) -> ConversationSummary:
-    return ConversationSummary(row["session_id"], row["title"], row["updated_at"])
+    return ConversationSummary(
+        session_id=row["session_id"],
+        client_session_id=row["client_session_id"],
+        title=row["title"],
+        updated_at=row["updated_at"],
+    )
 
 
 def _sanitize_history_text(value: str) -> str:
@@ -118,9 +125,14 @@ class PostgreSQLConversationHistory:
         request_id: str | None,
         user_text: str,
         envelope: ResponseEnvelope,
+        *,
+        client_session_id: str | None,
     ) -> None:
         async with self._transaction() as session:
-            result = await self._append(session, owner, session_id, request_id, user_text, envelope)
+            result = await self._append(
+                session, owner, session_id, request_id, user_text, envelope,
+                client_session_id=client_session_id,
+            )
         _LOG.info("chat_history.append result=%s", result)
 
     async def _append(
@@ -131,6 +143,8 @@ class PostgreSQLConversationHistory:
         request_id: str | None,
         user_text: str,
         envelope: ResponseEnvelope,
+        *,
+        client_session_id: str | None,
     ) -> str:
         params = _session_params(owner, session_id)
         clean_text = _sanitize_history_text(user_text)
@@ -186,8 +200,12 @@ class PostgreSQLConversationHistory:
             },
         )
         await session.execute(
-            text("UPDATE chat_conversations SET updated_at=clock_timestamp() WHERE id=:id"),
-            {"id": conversation_id},
+            text(
+                "UPDATE chat_conversations SET updated_at = clock_timestamp(), "
+                "client_session_id = COALESCE(client_session_id, :client_session_id) "
+                "WHERE id = :id"
+            ),
+            {"id": conversation_id, "client_session_id": client_session_id},
         )
         return "ok"
 
@@ -218,7 +236,7 @@ class PostgreSQLConversationHistory:
         async with self._transaction() as session:
             rows = await session.execute(
                 text(
-                    "SELECT c.id, c.session_id, c.title, c.updated_at "
+                    "SELECT c.id, c.session_id, c.client_session_id, c.title, c.updated_at "
                     "FROM chat_conversations c WHERE " + _OWNER + " AND " + _LIVE +
                     where_cursor + " ORDER BY c.updated_at DESC, c.id DESC LIMIT :limit"
                 ),
@@ -255,7 +273,7 @@ class PostgreSQLConversationHistory:
                 text(
                     "UPDATE chat_conversations c SET title = :title, "
                     "updated_at = clock_timestamp() WHERE " + _SESSION + " AND " + _LIVE +
-                    " RETURNING session_id, title, updated_at"
+                    " RETURNING session_id, client_session_id, title, updated_at"
                 ),
                 {**_session_params(owner, session_id), "title": _sanitize_history_text(title)},
             )

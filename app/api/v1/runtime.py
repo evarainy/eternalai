@@ -390,7 +390,14 @@ def make_router(
             elif body.channel == "web" and result.status != "running":
                 try:
                     await history.append_turn(
-                        owner, session_id, body.client_request_id, body.message, result
+                        owner,
+                        session_id,
+                        body.client_request_id,
+                        body.message,
+                        result,
+                        client_session_id=(
+                            None if body.session_id.startswith("sid_v1.") else body.session_id
+                        ),
                     )
                 except ConversationHistoryError as error:
                     _HISTORY_LOG.warning("chat_history.append result=error code=%s", error)

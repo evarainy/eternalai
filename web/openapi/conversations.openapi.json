@@ -96,6 +96,17 @@
       },
       "ConversationSummary": {
         "properties": {
+          "client_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Session Id"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -112,6 +123,7 @@
         },
         "required": [
           "session_id",
+          "client_session_id",
           "title",
           "updated_at"
         ],
