@@ -62,7 +62,6 @@ const MAX_CANDIDATES = 8;
 const TRIGGERS = new Set(['$', '＄']);
 const DIGIT = /^[\d.,]/;
 const STANDALONE_AMOUNT = /^[\d.,]+(?=[\s\p{P}]|$)/u;
-const ONLY_AMOUNT = /^[\d.,]+$/;
 
 function norm(text: string): string {
   return text.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
@@ -169,19 +168,12 @@ function cut(value: string, start: number, end: number): string {
 const UNREADABLE = '我的功能暂时读不到，请稍后再发送。';
 const CHANGED = '按最新的功能名单，开头的名称对应的功能有变化，请确认后再发送。';
 
-/** A typed `$name` at the start of the message: the longest complete usable name wins
- * (``items`` is null when the list could not be read). */
-function resolveTyped(message: string, items: readonly SkillListItem[] | null):
-  MentionResolution {
+/** A typed `$name` at the start of the message: the longest complete usable name wins. */
+function resolveTyped(message: string, items: readonly SkillListItem[]): MentionResolution {
   if (!TRIGGERS.has(message[0] ?? '')) return { kind: 'none' };
   const rest = message.slice(1);
   if (!rest.trim()) return { kind: 'none' };
   const amount = STANDALONE_AMOUNT.test(rest.normalize('NFKC'));
-  if (items === null) {
-    // Only a message that is nothing but an amount may go without the list.
-    if (ONLY_AMOUNT.test(rest.normalize('NFKC').trim())) return { kind: 'none' };
-    return { kind: 'blocked', reason: UNREADABLE };
-  }
   const folded = fold(rest);
   const usable = items.filter((item) => item.state === 'usable');
   const matches = usable.filter((item) => {
@@ -274,6 +266,9 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const binding = stored !== null && stored.generation === generation ? stored : null;
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
+  // The send check under way; any edit, change of choice, account or unmount voids it.
+  const sendCheck = useRef(0);
+  useEffect(() => () => { sendCheck.current += 1; }, [draft, stored, generation]);
   useEffect(() => {
     setBinding(null);
     setToken(null);
@@ -470,6 +465,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const composition = {
     onCompositionStart: () => {
       composing.current = true;
+      sendCheck.current += 1;
       composeBase.current ??= previous.current;
       setToken(null);
     },
@@ -487,34 +483,33 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const needsCheck = (message: string) => binding !== null || TRIGGERS.has(message[0] ?? '');
 
   /** What such a ``message`` names, judged on the list read now: a tag that no longer matches it
-   * is changed or dropped and the send waits for a look. Null when the draft or the account
-   * changed during the read (the send is dropped). */
+   * is changed or dropped and the send waits for a look. Null when the check was voided during
+   * the read (an edit, a change of choice, the IME, another account or leaving the page): the
+   * send is dropped. */
   const resolveForSend = async (message: string): Promise<MentionResolution | null> => {
     setWanted(true);
-    const base = draft;
-    const queryKey = ['my-skills', generation];
-    // A read already under way may predate the click: only one started now counts.
-    await queryClient.cancelQueries({ queryKey, exact: true });
-    const list = await queryClient.fetchQuery({ queryKey, queryFn: listSkills, staleTime: 0 })
-      .then((data) => data.items, () => null);
-    if (previous.current !== base || useAuthStore.getState().generation !== generation) return null;
+    const check = ++sendCheck.current;
+    // Read directly (not through the query, whose cancel or offline pause would hand back the
+    // cached copy or hold the send); the result refreshes the shared cache.
+    const list = await listSkills().then((data) => {
+      queryClient.setQueryData(['my-skills', generation], data);
+      return data.items;
+    }, () => null);
+    if (sendCheck.current !== check) return null;
+    if (list === null) return { kind: 'blocked', reason: UNREADABLE };
+    const pending = awaiting.current;
+    awaiting.current = null;
     if (binding === null) {
       // Edits made before any list was read are judged on this one (as the list arriving would).
-      const pending = awaiting.current;
-      if (list !== null && pending !== null) {
-        awaiting.current = null;
-        const typed = typedAt(draft, list, pending.from, pending.to);
-        if (typed?.kind === 'bind') {
-          setBinding({ ...typed.found, generation, typed: true });
-          return { kind: 'blocked', reason: CHANGED };
-        }
+      const typed = pending === null ? null : typedAt(draft, list, pending.from, pending.to);
+      if (typed?.kind === 'bind') {
+        setBinding({ ...typed.found, generation, typed: true });
+        return { kind: 'blocked', reason: CHANGED };
       }
       const named = resolveTyped(message, list);
       // Only the shown tag is sent: a full name without one (undone, or never bound) is text.
       return named.kind === 'ref' ? { kind: 'none' } : named;
     }
-    if (list === null) return { kind: 'blocked', reason: UNREADABLE };
-    awaiting.current = null;
     const item = list.find((entry) => entry.skill_id === binding.skillId);
     if (item === undefined || item.state !== 'usable' || item.name !== binding.name) {
       setBinding(null);

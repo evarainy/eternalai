@@ -1033,7 +1033,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
 
   /** A new message goes on only after its `$` choice was checked on a list read now, and only if
-   * the draft, the login and the conversation stayed the same meanwhile. */
+   * nothing voided the check meanwhile (see resolveForSend) and the conversation stayed. */
   const checkMention = async (message: string) => {
     const sessionId = useAIDockStore.getState().sessionId;
     requestInFlight.current = true;
@@ -1049,6 +1049,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (!message || requestInFlight.current) {
       return;
     }
+    // Going on after the check: the send must still be allowed now (e.g. no upload under way).
+    if (checked !== undefined && !canSend) return;
     const currentAuth = useAuthStore.getState();
     if (!requestMetadataReady || currentAuth.status !== 'authenticated'
         || currentAuth.generation !== authGeneration || browserAvailable && !browserIdentityReady) return;
