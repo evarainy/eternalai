@@ -86,7 +86,12 @@ import type {
 } from '../generated/conversations/conversations.schemas';
 import { ConversationHistory } from '../features/chat-history/ConversationHistory';
 import { useRefreshConversations } from '../features/chat-history/useConversations';
-import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
+import {
+  COLLECTION_LOST_NOTICE,
+  isViewOnlyConversation,
+  useAIDockStore,
+  VIEW_ONLY_NOTICE,
+} from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useIdentityQuery } from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
@@ -550,10 +555,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   ].map((attachment) => [attachment.artifact_id, attachment])).values()], [transcript, draftAttachments]);
   const currentSessionId = useAIDockStore((state) => state.sessionId);
   const conversationGeneration = useAIDockStore((state) => state.conversationGeneration);
-  const savedConversation = useAIDockStore((state) => state.savedConversation);
   // A saved conversation opened from history: account-wide recovery cards belong elsewhere.
-  const viewingSaved = savedConversation !== null && savedConversation.sessionId === currentSessionId;
-  const viewOnly = viewingSaved && !savedConversation.continuable;
+  const viewingSaved = useAIDockStore((state) => state.savedConversation !== null
+    && state.savedConversation.sessionId === state.sessionId);
+  const viewOnly = useAIDockStore(isViewOnlyConversation);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
@@ -645,6 +650,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     entry.role === 'assistant' && entry.reportJobId !== undefined ? [entry.reportJobId] : [])),
   [transcript]);
   const settleSheetFill = useAIDockStore((state) => state.settleSheetFill);
+  const attachReportJob = useAIDockStore((state) => state.attachReportJob);
   const acceptSheetFill = (responseId: string, jobId: string) => {
     settleSheetFill(responseId, { jobId });
     const scope = recoveryScopeRef.current;
@@ -967,30 +973,24 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         refreshConversations();
         return result;
       } catch (error) {
-        if (error instanceof ApiError && ((error.status === 404 && error.code === 'session_not_found')
-            || (error.status === 503 && error.code === 'chat_history_unavailable'))) {
-          // Refused before any work: the text goes back to the box.
+        if (error instanceof ApiError && error.status === 404 && error.code === 'session_not_found') {
+          // Refused before any work: the conversation was deleted (here or in another tab),
+          // so the text goes back to the box of a new one.
           if (submission.owner !== null && submissionIsCurrent(submission)) {
             setPendingSubmission(null);
             setRetrySubmission(null);
           }
           if (!submissionIsCurrent(submission)) return null;
-          if (error.status === 404) {
-            // The conversation was deleted (here or in another tab): continue in a new one.
-            refreshConversations();
-            startFreshSession();
-            const notice = projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session');
-            const store = useAIDockStore.getState();
-            store.setDraft(message);
-            store.appendTranscript(notice);
-            return notice;
-          }
+          refreshConversations();
+          startFreshSession();
+          const notice = projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session');
           const store = useAIDockStore.getState();
-          store.setDraft(store.draft.length > 0 ? [message, store.draft].join('\n') : message);
-          const notice = projectTextResponse(HISTORY_UNAVAILABLE_NOTICE, 'service');
-          store.applyConfirmationResult(sessionId, reference, notice);
+          store.setDraft(message);
+          store.appendTranscript(notice);
           return notice;
         }
+        const historyUnavailable = error instanceof ApiError && error.status === 503
+          && error.code === 'chat_history_unavailable';
         if (isChatAttachmentRejection(error)) {
           // Refused before any work: the text goes back; the attachments are what was refused.
           if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -1004,7 +1004,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
         }
-        if (isRuntimeSessionBusy(error)) {
+        if (isRuntimeSessionBusy(error) || historyUnavailable) {
           // Refused before any work: nothing was sent, so the input goes back to the box.
           if (submission.owner !== null && submissionIsCurrent(submission)) {
             setPendingSubmission(null);
@@ -1020,7 +1020,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               [...submission.attachments, ...store.draftAttachments].slice(0, CHAT_ATTACHMENT_LIMIT),
             );
           }
-          const notice = projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
+          const notice = historyUnavailable
+            ? projectTextResponse(HISTORY_UNAVAILABLE_NOTICE, 'service')
+            : projectTextResponse(SESSION_BUSY_NOTICE, 'request_error');
           store.applyConfirmationResult(sessionId, reference, notice);
           return notice;
         }
@@ -1426,6 +1428,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                             sessionId={currentSessionId}
                             onAsk={askFromDesk}
                             onExportAccepted={(jobId) => {
+                              attachReportJob(entry, jobId);
                               rememberReportJob(recoveryScope, jobId);
                               setReportJobIds(recoveryScope === null ? [] : loadReportJobs(recoveryScope));
                             }}
@@ -1549,7 +1552,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
-          {viewOnly ? <Alert type="info" showIcon title="这段对话只能查看，请新建对话继续。" /> : null}
+          {viewOnly ? <Alert type="info" showIcon title={VIEW_ONLY_NOTICE} /> : null}
         </div>
         {customizing ? <HomeCustomizeBar /> : null}
         {inConversation && !chatSheetOpen && !customizing ? (

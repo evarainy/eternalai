@@ -42,6 +42,23 @@ export interface ChatAttachment {
   readonly sheetNames: readonly string[];
 }
 
+/** Where a conversation opened from history came from, and whether it can continue. */
+export interface SavedConversation {
+  sessionId: string;
+  continuable: boolean;
+}
+
+/** Composer notice of a saved conversation that can only be viewed. */
+export const VIEW_ONLY_NOTICE = '这段对话只能查看，请新建对话继续。';
+
+/** The one rule both send entries (assistant page and floating dock) apply. */
+export function isViewOnlyConversation(
+  state: { savedConversation: SavedConversation | null; sessionId: string | null },
+): boolean {
+  return state.savedConversation !== null && state.savedConversation.sessionId === state.sessionId
+    && !state.savedConversation.continuable;
+}
+
 /** A conversation brought back by a same-account re-login (see app/reauthRestore.ts). */
 export interface RestoredDockSession {
   draft: string;
@@ -57,6 +74,8 @@ export interface RestoredDockSession {
   collectionLost: boolean;
   /** Finished uploads waiting to be sent; they belong to the restored conversation only. */
   draftAttachments?: ChatAttachment[];
+  /** Kept with the conversation it was opened as; absent in older copies. */
+  savedConversation?: SavedConversation | null;
 }
 
 export type TranscriptEntry =
@@ -104,12 +123,14 @@ interface AIDockState {
    * The saved conversation opened from history, while it is the current one. Without its
    * client session id it can only be viewed; account-wide recovery cards stay hidden for it.
    */
-  savedConversation: { sessionId: string; continuable: boolean } | null;
+  savedConversation: SavedConversation | null;
   /**
    * Opens a saved conversation in place of the current one; nothing of the old one is kept.
    * ``clientSessionId`` is the local id it was started with; null opens it view-only.
    */
   openConversation: (clientSessionId: string | null, transcript: TranscriptEntry[]) => void;
+  /** An export accepted from this live entry: its progress card shows on the entry. */
+  attachReportJob: (entry: TranscriptEntry, jobId: string) => void;
   /** Settles a sheet fill plan card of the current transcript: accepted job or cancelled. */
   settleSheetFill: (responseId: string, outcome: { readonly jobId: string } | 'cancelled') => void;
   clearSession: () => void;
@@ -223,6 +244,11 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         collection: null,
       };
     }),
+  attachReportJob: (entry, jobId) =>
+    set((state) => ({
+      transcript: state.transcript.map((item) =>
+        item === entry && item.role === 'assistant' ? { ...item, reportJobId: jobId } : item),
+    })),
   settleSheetFill: (responseId, outcome) =>
     set((state) => ({
       transcript: state.transcript.map((entry) =>
@@ -383,6 +409,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         restoredPageContext: current === null ? restored.pageContext : null,
         collection,
         draftAttachments: restored.draftAttachments ?? [],
+        savedConversation: restored.savedConversation ?? null,
       };
     }),
   setCollection: (collection) => set({ collection }),
