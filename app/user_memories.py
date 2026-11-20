@@ -32,8 +32,9 @@ _SENSITIVE = (
     (
         "credential",
         re.compile(
-            r"密码|口令|验证码|密钥|令牌|\b(?:password|passcode|otp|pin|token|cookie|"
-            r"sessionid|(?:api|secret)[ _-]?key|(?:access|refresh)[ _-]?token)\b",
+            # ASCII boundaries: Chinese written right next to "PIN" still counts as a boundary.
+            r"密码|口令|验证码|密钥|令牌|(?<![A-Za-z0-9_])(?:password|passcode|otp|pin|token|cookie|"
+            r"sessionid|(?:api|secret)[ _-]?key|(?:access|refresh)[ _-]?token)(?![A-Za-z0-9_])",
             re.IGNORECASE,
         ),
     ),

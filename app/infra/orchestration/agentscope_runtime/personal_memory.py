@@ -16,7 +16,7 @@ from agentscope.agent import Agent
 from agentscope.message import Msg, SystemMsg, TextBlock, UserMsg
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatModelBase, ChatResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.infra.auth.crypto import require_hmac_key
 from app.infra.llm.agentscope_chat import AgentScopeModelError
@@ -57,6 +57,14 @@ class _ExtractedMemory(BaseModel):
 
     category: MemoryCategory
     content: str = Field(min_length=1, max_length=MEMORY_CONTENT_LIMIT)
+
+    @field_validator("content")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # A whitespace-only candidate is invalid model output, not a rejected memory.
+        if not value.strip():
+            raise ValueError("blank")
+        return value
 
 
 class _Extraction(BaseModel):
