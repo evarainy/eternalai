@@ -30,11 +30,15 @@ export function IdentitySwitchOverlay() {
       });
     });
     observer.observe(document.body, { childList: true });
-    // Window-level shortcuts (Esc closing a dialog, Ctrl+K) must not act on the page behind.
+    // No key reaches the page behind (Esc closing a dialog, Ctrl+K opening search). Tab always
+    // returns to the retry button; only a plain Enter/Space on that button acts.
     const swallow = (event: KeyboardEvent) => {
-      if (host.current?.contains(event.target as Node) && event.key !== 'Escape') return;
+      const retry = host.current?.querySelector('button');
+      const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+      if (plain && event.target === retry && (event.key === 'Enter' || event.key === ' ')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (event.key === 'Tab') retry?.focus();
     };
     window.addEventListener('keydown', swallow, true);
     host.current?.querySelector('button')?.focus();
