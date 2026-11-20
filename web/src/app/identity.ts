@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
@@ -92,13 +92,38 @@ function notifyIdentityChange(message: string): void {
 export function notifyIdentityRecheck(): void { notifyIdentityChange(RECHECK_MESSAGE); }
 export function notifyIdentitySwitch(): void { notifyIdentityChange(SWITCH_MESSAGE); }
 
+/**
+ * 身份复核（切回标签页、获得焦点、别的标签页换号）发出后、当前身份确认之前为 true，复核失败也保持 true。
+ * 只给本人看的页面据此暂停显示和查询；换了人会递增代次，页面按新代次重新挂载。
+ */
+let identityUnconfirmed = false;
+const unconfirmedListeners = new Set<() => void>();
+
+function setIdentityUnconfirmed(value: boolean): void {
+  if (identityUnconfirmed === value) return;
+  identityUnconfirmed = value;
+  unconfirmedListeners.forEach((listener) => listener());
+}
+
+function subscribeIdentityUnconfirmed(listener: () => void): () => void {
+  unconfirmedListeners.add(listener);
+  return () => { unconfirmedListeners.delete(listener); };
+}
+
+export function useIdentityUnconfirmed(): boolean {
+  return useSyncExternalStore(subscribeIdentityUnconfirmed, () => identityUnconfirmed);
+}
+
 export function useIdentityRevalidation(): boolean {
   const queryClient = useQueryClient();
   const generation = useAuthStore((state) => state.generation);
   const status = useAuthStore((state) => state.status);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => { setFailed(false); }, [generation]);
+  useEffect(() => {
+    setFailed(false);
+    setIdentityUnconfirmed(false);
+  }, [generation]);
 
   useEffect(() => {
     let live = true;
@@ -108,6 +133,7 @@ export function useIdentityRevalidation(): boolean {
       const current = useAuthStore.getState();
       if (imLogoutInProgress() || current.status !== 'authenticated') return;
       const requestSequence = ++sequence;
+      setIdentityUnconfirmed(true);
       const previous = queryClient.getQueryData<MeResponse>(identityQueryKey(current.generation));
       const isCurrent = () => live && !imLogoutInProgress() && requestSequence === sequence &&
         useAuthStore.getState().generation === current.generation;
@@ -124,6 +150,7 @@ export function useIdentityRevalidation(): boolean {
           queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
         }
         setFailed(false);
+        setIdentityUnconfirmed(false);
       } catch {
         if (isCurrent()) setFailed(true);
       }

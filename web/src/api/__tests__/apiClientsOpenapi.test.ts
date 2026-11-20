@@ -97,6 +97,16 @@ const PROJECTS = [
     ],
   },
   {
+    project: 'memories',
+    input: './openapi/memories.openapi.json',
+    target: './src/generated/memories/memories.ts',
+    operations: [
+      { path: '/api/v1/memories', method: 'get', operationId: 'list_memories_api_v1_memories_get' },
+      { path: '/api/v1/memories/{id}', method: 'patch', operationId: 'edit_memory_api_v1_memories__id__patch' },
+      { path: '/api/v1/memories/{id}', method: 'delete', operationId: 'delete_memory_api_v1_memories__id__delete' },
+    ],
+  },
+  {
     project: 'conversations',
     input: './openapi/conversations.openapi.json',
     target: './src/generated/conversations/conversations.ts',
@@ -257,6 +267,7 @@ from app.api.v1.health import make_router as health_router
 from app.api.v1.im_deliveries import make_router as im_deliveries_router
 from app.api.v1.mcp import make_router as mcp_router
 from app.api.v1.me import make_router as me_router
+from app.api.v1.memories import make_router as memories_router
 from app.api.v1.runtime import make_router as runtime_router
 from app.api.v1.im_context import make_router as im_context_router
 from app.api.v1.work_objects import make_router as work_router
@@ -278,6 +289,7 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
         session_cookie_secure=False), prefix="/api/v1/auth")
     app.include_router(runtime_router(None, protected, session_binder), prefix="/api/v1/runtime")
     app.include_router(conversations_router(None, protected, session_binder), prefix="/api/v1/conversations")
+    app.include_router(memories_router(None, protected), prefix="/api/v1/memories")
     app.include_router(im_context_router(None, protected, session_binder), prefix="/api/v1/im-context")
     app.include_router(admin_router(None, protected), prefix="/api/v1/admin")
     app.include_router(work_router(work_object_service, protected), prefix="/api/v1/work-objects")
@@ -586,8 +598,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(14);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(14);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(15);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(15);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

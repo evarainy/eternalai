@@ -9,17 +9,31 @@ interface AdminErrorEnvelope {
 
 /** The runtime's session-busy 409 carries only a code in `detail`, never a message. */
 export const RUNTIME_SESSION_BUSY_CODE = 'runtime_session_busy';
+export const MEMORY_INPUT_INVALID_CODE = 'memory_input_invalid';
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** 后端在 `detail.reason` 里给出的闭集原因（如个人记忆修改被拒的原因）；没有就不带。 */
+  readonly reason?: string;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, reason?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.reason = reason;
   }
+}
+
+/** 个人记忆修改被拒的 422：`detail` 只有 `code` 与闭集 `reason`，没有 message。 */
+function memoryInputReason(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || !('detail' in value)) return null;
+  const detail = value.detail;
+  return typeof detail === 'object' && detail !== null && 'code' in detail
+    && detail.code === MEMORY_INPUT_INVALID_CODE && 'reason' in detail && typeof detail.reason === 'string'
+    ? detail.reason
+    : null;
 }
 
 function isSessionBusyBody(value: unknown): boolean {
@@ -102,6 +116,8 @@ export const requestWithResponse = async <T>(
     if (response.status === 409 && isSessionBusyBody(errorBody)) {
       throw new ApiError(409, RUNTIME_SESSION_BUSY_CODE, 'The previous message is still being handled.');
     }
+    const reason = response.status === 422 ? memoryInputReason(errorBody) : null;
+    if (reason !== null) throw new ApiError(422, MEMORY_INPUT_INVALID_CODE, 'Memory input was rejected.', reason);
     throw new ApiError(response.status, `http_${response.status}`, `HTTP ${response.status}: ${response.statusText}`);
   }
   const binary = responseType === 'blob';

@@ -39,6 +39,7 @@ from app.api.v1.im_inbound import make_router as make_im_inbound_router
 from app.api.v1.mcp import McpApiService
 from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
+from app.api.v1.memories import make_router as make_memories_router
 from app.api.v1.my_skills import make_router as make_my_skills_router
 from app.api.v1.personal_agents import make_router as make_personal_agents_router
 from app.api.v1.runtime import make_router as make_runtime_router
@@ -89,6 +90,7 @@ from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.browser_screen import BrowserScreenPort
 from app.ports.conversation_history import ConversationHistoryPort
 from app.ports.runtime import RuntimePort
+from app.ports.user_memories import UserMemoryStore
 from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
 from app.system_entry.service import SystemEntryService
@@ -110,6 +112,7 @@ def create_app(
     user_preferences: UserPreferencesPort | None = None,
     user_skills: UserSkillService | None = None,
     chat_history: ConversationHistoryPort | None = None,
+    user_memories: UserMemoryStore | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
     session_revocations: SessionRevocationStorePort | None = None,
@@ -380,6 +383,10 @@ def create_app(
         prefix="/api/v1/conversations",
     )
     application.include_router(
+        make_memories_router(user_memories, csrf_protected_principal),
+        prefix="/api/v1/memories",
+    )
+    application.include_router(
         make_credential_binding_router(
             credential_binding_service,
             csrf_protected_principal,
@@ -590,6 +597,7 @@ def create_production_app(
         user_preferences=components.user_preferences,
         user_skills=components.user_skills,
         chat_history=components.chat_history,
+        user_memories=components.user_memories,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_revocations=components.session_revocations,

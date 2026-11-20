@@ -325,11 +325,12 @@ def d_browser_binding(
 class BrowserTurnOwnership:
     """Who closes the chat intent of one browser request, and when the session is free."""
 
-    __slots__ = ("_release", "browser_owned", "turn_close")
+    __slots__ = ("_release", "after_route_success", "browser_owned", "turn_close")
 
     def __init__(self) -> None:
         # Set synchronously before the first browser persistent write is awaited.
         self.browser_owned = False
+        self.after_route_success: Callable[[], None] | None = None
         # The close the turn already started (a settled browser result, an
         # admission diagnostic or a failed handoff); the shell then never closes.
         self.turn_close: asyncio.Future[Any] | None = None
@@ -385,6 +386,8 @@ class BrowserRequestShell:
                         return helpers.browser_unconfirmed_response(scope, timeout=False)
                     result = await inner(ownership)
             settled = True
+            if ownership.after_route_success is not None:
+                ownership.after_route_success()
             return result
         except TimeoutError:
             recovered = await helpers.recover_browser_request(scope)

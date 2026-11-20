@@ -96,6 +96,7 @@ if TYPE_CHECKING:
     from agentscope.model import ChatModelBase
 
     from app.background_jobs import BackgroundJobService
+    from app.infra.orchestration.agentscope_runtime.personal_memory import PersonalMemory
     from app.sheet_fill import SheetFillAdmission
     from app.user_skills.service import UserSkillService
 
@@ -151,6 +152,7 @@ class AgentScopeRuntimeDependencies:
     # Personal saved flows; None hides recording, the save tool and saved-flow tools.
     user_skills: UserSkillService | None = None
     chat_history: ConversationHistoryPort | None = None
+    personal_memory: PersonalMemory | None = None
 
 
 @dataclass(frozen=True, slots=True)

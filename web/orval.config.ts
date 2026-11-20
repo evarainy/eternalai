@@ -90,6 +90,17 @@ export default defineConfig({
       },
     },
   },
+  memories: {
+    input: './openapi/memories.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/memories/memories.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   conversations: {
     input: './openapi/conversations.openapi.json',
     output: {

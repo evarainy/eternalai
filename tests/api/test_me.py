@@ -423,7 +423,8 @@ def test_neither_route_accepts_a_path_or_query_parameter() -> None:
     routes = {
         route.path: route  # type: ignore[attr-defined]
         for route in application.routes
-        if getattr(route, "path", "").startswith(ME_PATH)
+        if getattr(route, "path", "") == ME_PATH
+        or getattr(route, "path", "").startswith(f"{ME_PATH}/")
     }
 
     assert set(routes) == {ME_PATH, AVATAR_PATH}

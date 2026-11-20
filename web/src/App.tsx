@@ -140,6 +140,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
     LazyHealthPage,
     LazyLeaderRosterPage,
     LazyLoginPage,
+    LazyMemoriesPage,
     LazyMessagesPage,
     LazyRegistryPage,
     LazyTasksPage,
@@ -245,6 +246,14 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
                   element={(
                     <RouteLoadBoundary label="正在打开页面">
                       <LazyAccountBindingsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/settings/memories"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyMemoriesPage />
                     </RouteLoadBoundary>
                   )}
                 />

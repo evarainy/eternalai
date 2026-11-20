@@ -45,6 +45,8 @@ const MESSAGES_PATH = '/messages';
 const ADMIN_BINDINGS_PATH = '/admin/bindings';
 /** 设置 › 账号绑定：每个人管自己的账号。 */
 const BINDINGS_PATH = '/settings/bindings';
+/** 设置 › 个人记忆：AI 记住的本人偏好，只有本人能看、改、删。 */
+const MEMORIES_PATH = '/settings/memories';
 const WORK_OBJECTS_PATH = '/work-objects';
 
 const LazyAIDock = lazy(() =>
@@ -508,7 +510,7 @@ export function AppShell() {
             data-active={location.pathname.startsWith('/settings/') ? 'true' : 'false'}
             data-testid="rail-settings"
             onClick={() => togglePanel('user')}
-            title="设置：自定义首页、账号绑定、皮肤、字号、时钟、动效"
+            title="设置：自定义首页、账号绑定、个人记忆、皮肤、字号、时钟、动效"
             type="button"
           >
             <Icon name="gear" size={22} strokeWidth={1.75} />
@@ -658,6 +660,17 @@ export function AppShell() {
                 <Icon name="link" size={18} />
                 <span>账号绑定</span>
                 <em>OA、业务服务</em>
+              </Link>
+              <Link
+                aria-current={location.pathname === MEMORIES_PATH ? 'page' : undefined}
+                className={styles.menuRow}
+                data-testid="user-menu-memories"
+                onClick={() => setOpenPanel(null)}
+                to={MEMORIES_PATH}
+              >
+                <Icon name="sparkle" size={18} />
+                <span>个人记忆</span>
+                <em>AI 记住的偏好</em>
               </Link>
               <button
                 className={styles.menuRow}
