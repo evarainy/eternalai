@@ -16,7 +16,7 @@ import { projectResponse, projectTextResponse } from '../contracts/runtimeProjec
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
-import { useAIDockStore } from '../stores/aiDockStore';
+import { isViewOnlyConversation, useAIDockStore, VIEW_ONLY_NOTICE } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { returnUnsentMessage } from './reauthRestore';
 import type { UnsentIdentity } from './reauthRestore';
@@ -92,6 +92,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const setDraft = useAIDockStore((state) => state.setDraft);
   const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
+  const viewOnly = useAIDockStore(isViewOnlyConversation);
   const requestInFlight = useRef(false);
   // 是否有请求在途：用本组件自己的状态，不读 useMutation 的 isPending。开发期 StrictMode 会在懒加载的
   // Dock 首次挂载时卸载再挂载，React Query 的观察者随之脱离在途请求，之后 isPending 永远停在 true，
@@ -106,6 +107,8 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const mutation = useMutation({
     mutationFn: async ({ message, identity, sourceRef }: {
       message: string; identity: UnsentIdentity; sourceRef?: string;
+      /** The transcript generation it was sent under; a reopened conversation drops it. */
+      conversationGeneration: number;
     }) => {
       try {
         return projectResponse(
@@ -133,10 +136,14 @@ export function AIDock({ suppressed = false }: AIDockProps) {
         return projectedError;
       }
     },
-    onSuccess: (response, { identity, sourceRef }) => {
-      if (sourceRef !== undefined && (useAuthStore.getState().generation !== identity.generation
-          || useAIDockStore.getState().sessionId !== identity.sessionId
-          || useAIDockStore.getState().imSource?.source.ref_id !== sourceRef)) return;
+    onSuccess: (response, { identity, sourceRef, conversationGeneration }) => {
+      // A reply lands only on the login and conversation it was sent from (and its IM source).
+      const auth = useAuthStore.getState();
+      const dock = useAIDockStore.getState();
+      if (auth.status !== 'authenticated' || auth.generation !== identity.generation
+          || dock.sessionId !== identity.sessionId
+          || dock.conversationGeneration !== conversationGeneration
+          || (sourceRef !== undefined && dock.imSource?.source.ref_id !== sourceRef)) return;
       appendTranscript(response);
     },
     // Authentication runs before the handler, so a 401 means the message was never processed.
@@ -164,7 +171,10 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     };
     const message = '请分析我选中的消息及其上下文，概括主要内容和需要处理的事项。只做只读分析，不保存或提交任何业务。';
     appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
-    mutate({ message, identity, sourceRef: imSource.source.ref_id });
+    mutate({
+      message, identity, sourceRef: imSource.source.ref_id,
+      conversationGeneration: useAIDockStore.getState().conversationGeneration,
+    });
   }, [imSource, busy, mutate, appendTranscript]);
 
   useEffect(() => {
@@ -199,7 +209,8 @@ export function AIDock({ suppressed = false }: AIDockProps) {
 
   const submit = () => {
     const message = draft.trim();
-    if (message.length === 0 || requestInFlight.current) {
+    if (message.length === 0 || requestInFlight.current
+        || isViewOnlyConversation(useAIDockStore.getState())) {
       return;
     }
     requestInFlight.current = true;
@@ -218,7 +229,10 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     appendTranscript({ role: 'user', text: message, requestId: identity.requestId });
     setDraft('');
     setBusy(true);
-    mutation.mutate({ message, identity, sourceRef: selected?.source.ref_id });
+    mutation.mutate({
+      message, identity, sourceRef: selected?.source.ref_id,
+      conversationGeneration: useAIDockStore.getState().conversationGeneration,
+    });
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -379,6 +393,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
           {imSource !== null && <IMSourcePreview source={imSource.source}
             onReturn={() => returnToIMSource(imSource.source.deep_link)}
             onClear={() => useAIDockStore.getState().setIMSource(null)} />}
+          {viewOnly ? <p className={styles.notice} role="status">{VIEW_ONLY_NOTICE}</p> : null}
           {contextNotice === null ? null : (
             <div className={styles.notice} role="status">
               <span>{contextNotice}</span>
@@ -430,7 +445,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
               <span className={styles.hint}>可拖动 · 可收起</span>
               <Button
                 className={styles.sendButton}
-                disabled={draft.trim().length === 0 || busy}
+                disabled={draft.trim().length === 0 || busy || viewOnly}
                 htmlType="submit"
                 loading={busy}
                 type="primary"

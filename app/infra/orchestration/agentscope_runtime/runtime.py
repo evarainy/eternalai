@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from uuid import uuid4
 
 from agentscope.event import ReplyFinishedReason
-from agentscope.message import Msg, TextBlock, UserMsg
+from agentscope.message import AssistantMsg, Msg, TextBlock, UserMsg
 from agentscope.state import AgentState
 
 from app.contracts.sdui.models import UserAction
@@ -143,6 +143,7 @@ from app.ports.browser_gateway import (
 )
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.conversation_history import ConversationHistoryError
 from app.ports.error_codes import ErrorCode
 from app.ports.file_artifacts import ChatAttachmentDescriptor
 from app.ports.request_context import RequestOrgContext
@@ -163,6 +164,7 @@ from app.ports.task_store import (
     TaskRecord,
 )
 from app.ports.trace import TraceEventStatus
+from app.ports.user_skills import UserSkillOwner
 from app.runtime.browser_request import BrowserRequestHelpers
 from app.runtime.d_form_collection import CAPABILITY_ID as D_FORM_ID
 from app.runtime.d_form_collection import CategoryEvidence
@@ -234,6 +236,7 @@ M1_REPAIR_PROMPT = (
     "报修请求不要调用查询待办、消息等查询工具，也不要调用 report_unsupported。"
 )
 AGENT_NAME = "eternalai_m1"
+_HISTORY_LOG = logging.getLogger("uvicorn.error.chat_history")
 
 # Copied verbatim from app/runtime/runtime.py::_CANDIDATE_FAILURE_MESSAGES@6ca76bd
 _CANDIDATE_FAILURE_MESSAGES: dict[ErrorCode, tuple[str, str]] = {
@@ -421,6 +424,7 @@ class _Progress:
     snapshot: TurnSnapshot | None = None
     agent: Agent | None = None
     agent_ran: bool = False
+    cold: bool = False
 
 
 @dataclass(slots=True)
@@ -1023,8 +1027,9 @@ class AgentScopeRuntime:
             # every ERROR continuation and the proposal core with its marks.
             async with bounded_turn_scope(turn.deadline):
                 skills = turn.user_skill
-                if not agent.state.context and skills is not None and skills.summary is not None:
-                    # Fresh history (e.g. after a restart) but persisted records: name them.
+                if (progress.cold or not agent.state.context) and (
+                    skills is not None and skills.summary is not None
+                ):
                     message = session_context_note(skills.summary) + message
                 final = await agent.reply(UserMsg(name="user", content=message))
                 return await proposals.drive(agent, final)
@@ -1356,6 +1361,23 @@ class AgentScopeRuntime:
         if interrupt is not None:
             ledger.interrupt = interrupt
             await asyncio.shield(interrupt)
+        progress.cold = not state.context
+        if (
+            progress.cold and scope.channel == "web" and scope.im_source is None
+            and deps.chat_history is not None
+        ):
+            owner = UserSkillOwner(tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id)
+            try:
+                messages = await deps.chat_history.recent_turns(owner, scope.session_id, 20)
+            except ConversationHistoryError as error:
+                _HISTORY_LOG.warning("chat_history.restore result=error code=%s", error)
+            else:
+                state.context.extend(
+                    UserMsg(name="user", content=text) if role == "user"
+                    else AssistantMsg(name=AGENT_NAME, content=text)
+                    for role, text in messages
+                )
+                _HISTORY_LOG.info("chat_history.restore turns=%d", len(messages) // 2)
         # Groups are kind-homogeneous; only read groups carry over a turn.
         progress.snapshot = await prepare_turn_state(
             state,

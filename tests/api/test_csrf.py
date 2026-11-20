@@ -34,6 +34,7 @@ from tests.auth_fakes import (
     TEST_ORIGIN,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
     make_session_binder,
 )
@@ -170,6 +171,7 @@ def _client(
     client = TestClient(
         create_app(
             runtime=runtime,
+            chat_history=active_chat_history(),
             admin_registry_service=admin_service,
             authentication=authentication,
             session_revocations=MemorySessionRevocations(),

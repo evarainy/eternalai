@@ -2,6 +2,7 @@ import type {
   ConfirmCardPayloadTargetSystem,
   ResponseEnvelopeStatus,
 } from '../generated/runtime/runtime.schemas';
+import type { HistoryEnvelope } from '../generated/conversations/conversations.schemas';
 import {
   isUserActionOutcome,
   type UserActionOutcome,
@@ -135,6 +136,10 @@ export interface ProjectedResponse {
   /** The user cancelled this plan card (kept with the transcript; never submitted). An
    * accepted plan instead keeps its job in `reportJobId`. */
   sheetFillCancelled?: true;
+  /** Restored from saved conversation history: text, records and a card summary only. */
+  readOnly?: true;
+  /** Business summary of the card the saved reply carried (restored replies only). */
+  cardSummary?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -797,6 +802,70 @@ export function projectResponse(
     return { ...base, presentationKind: 'failed' };
   }
   return incompatibleResponse();
+}
+
+const HISTORY_KINDS: Record<HistoryEnvelope['status'], PresentationKind> = {
+  running: 'unconfirmed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
+  blocked: 'denied',
+  waiting_user: 'clarification',
+  failed: 'failed',
+  no_capability_found: 'unavailable',
+};
+// Cards only describe a reply that was still waiting on the user; a final status wins.
+const HISTORY_CARD_SUMMARIES: Record<string, string> = {
+  confirm_card: '当时这一步需要你确认，这里只能查看。',
+  binding_required_card: '当时需要先绑定账号。',
+  operator_handback_card: '当时这一步交给你处理，这里只能查看。',
+};
+
+function historyDataSummary(data: Record<string, unknown>): string | undefined {
+  if ('report_job' in data) {
+    return isRecord(data.report_job) && typeof data.report_job.job_id === 'string'
+      ? '当时已受理导出任务。' : '当时导出任务是否受理尚未确认。';
+  }
+  if ('user_skill' in data) return '当时展示了「我的功能」卡片，这里只能查看。';
+  if ('sheet_fill_plan' in data) return '当时给出了表格填写方案，这里只能查看。';
+  if (data.kind === 'd_form_collection') return '当时在追问报修信息，这里不能继续填写。';
+  return undefined;
+}
+
+/**
+ * A reply restored from conversation history. Only text, records and a card summary are
+ * shown; nothing on it can be confirmed, submitted or sent again.
+ */
+export function projectHistoryReply(
+  text: string,
+  reply: HistoryEnvelope | null,
+  navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
+): ProjectedResponse {
+  if (reply === null) return { ...projectTextResponse(text, 'completed'), readOnly: true };
+  const data = structuredData(reply.data, navigationConfig);
+  const card = reply.ui.component_type;
+  const waiting = reply.status === 'waiting_user' || reply.status === 'blocked';
+  const cardSummary = reply.ui.title?.trim()
+    || (reply.data === null ? undefined : historyDataSummary(reply.data))
+    || (waiting ? HISTORY_CARD_SUMMARIES[card] : undefined);
+  const presentationKind: PresentationKind =
+    reply.status === 'waiting_user' && card === 'confirm_card' ? 'confirmation'
+      : reply.status === 'blocked' && card === 'binding_required_card' ? 'binding'
+        // As live: a refused-or-unknown export is "not confirmed", not "failed".
+        : reply.status === 'failed' && reply.data !== null && 'report_job' in reply.data
+          ? 'unconfirmed' : HISTORY_KINDS[reply.status];
+  return {
+    role: 'assistant',
+    text,
+    status: reply.status,
+    presentationKind,
+    responseId: null,
+    confirm: null,
+    records: data.records,
+    actionOutcome: data.actionOutcome,
+    readOnly: true,
+    ...(cardSummary === undefined ? {} : { cardSummary }),
+  };
 }
 
 function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {

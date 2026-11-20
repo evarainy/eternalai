@@ -33,6 +33,7 @@ from tests.auth_fakes import (
     TEST_CSRF_HEADERS,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
     make_session_binder,
 )
@@ -346,6 +347,7 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     client = TestClient(
         create_app(
             runtime=runtime,
+            chat_history=active_chat_history(),
             session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),

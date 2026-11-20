@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { getReturnPath } from '../pages/loginNavigation';
 import { useAIDockStore } from '../stores/aiDockStore';
 import type {
-  AIDockMode, ChatAttachment, PendingCollection, TranscriptEntry,
+  AIDockMode, ChatAttachment, PendingCollection, SavedConversation, TranscriptEntry,
 } from '../stores/aiDockStore';
 import { parsePageContext } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
@@ -45,6 +45,8 @@ interface DockSnapshot {
   collection?: StoredCollection | null;
   /** Finished uploads waiting to be sent; absent in copies written before they were kept. */
   draftAttachments?: ChatAttachment[];
+  /** History origin of the conversation and whether it can continue; absent in older copies. */
+  savedConversation?: SavedConversation | null;
 }
 
 /** A pending collection without its generation: generations restart on a full reload. */
@@ -166,6 +168,7 @@ function captureForReauth(
           ownerKey: dock.collection.ownerKey,
         },
       draftAttachments: dock.draftAttachments,
+      savedConversation: dock.savedConversation,
     },
     forms,
     returned: [],
@@ -296,6 +299,12 @@ function storedCollection(value: unknown): StoredCollection | null {
   };
 }
 
+function storedSavedConversation(value: unknown): SavedConversation | null {
+  if (!isRecord(value) || typeof value.sessionId !== 'string'
+      || typeof value.continuable !== 'boolean') return null;
+  return { sessionId: value.sessionId, continuable: value.continuable };
+}
+
 /** The transcript ends on a D collection card (nothing answered after it). */
 function endsOnCollectionCard(transcript: TranscriptEntry[]): boolean {
   const last = transcript[transcript.length - 1];
@@ -322,6 +331,7 @@ function consumeSnapshot(scope: string | null, generation: number): void {
     // Never searched in the history: a card without its kept reference only says it expired.
     collectionLost: collection === null && endsOnCollectionCard(snapshot.dock.transcript),
     draftAttachments: storedAttachments(snapshot.dock.draftAttachments),
+    savedConversation: storedSavedConversation(snapshot.dock.savedConversation),
   });
   useAIDockStore.setState({
     ...(current.mode === 'closed' && snapshot.dock.mode !== 'closed' ? {

@@ -45,7 +45,7 @@ from app.ports.mcp_store import AuthorizationTransaction, Connection
 from app.ports.task_store import TaskRecord
 from app.runtime.models import IntentOutput, MatchedIntent
 from app.version_binding import capability_version_bindings
-from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
+from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS, active_chat_history
 from tests.infra.mcp.test_transport import serving
 from tests.infra.persistence.test_mcp_store import bind, database
 from tests.mcp.test_contracts import VALID
@@ -145,6 +145,7 @@ def test_http_runtime_confirmation_failure_and_apps_recovery_are_wired(
 
                 application = create_app(
                     runtime=components.runtime,
+                    chat_history=active_chat_history(),
                     mcp_service=components.mcp_service,
                     session_tokens=Tokens(),
                     session_revocations=revocations,

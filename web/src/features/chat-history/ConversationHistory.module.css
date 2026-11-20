@@ -1,0 +1,102 @@
+/* 历史对话：从输入框底栏打开的小面板（定位相对于输入框所在的浮层）。 */
+.history {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 10px);
+  left: 0;
+  display: flex;
+  width: 320px;
+  max-height: min(60vh, 520px);
+  padding: 0.8rem 1rem;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--paper);
+  border-radius: var(--r-card);
+  box-shadow: var(--float), 0 0 0 1px rgb(16 26 46 / 12%);
+}
+
+.history h2 {
+  margin: 0 0 0.4rem;
+  color: var(--text-2);
+  font-size: 0.867rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.history ul {
+  display: flex;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+}
+
+.history li {
+  border-radius: 8px;
+}
+
+.history li[data-current='true'] {
+  background: var(--primary-soft);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.history p {
+  margin: 0 0 0.4rem;
+  color: var(--text-3);
+  font-size: 0.867rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.open {
+  display: flex;
+  min-width: 0;
+  padding: 0.35rem 0.6rem;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+
+.open:hover:not(:disabled) {
+  background: var(--paper-2);
+}
+
+.open small {
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+.title {
+  overflow: hidden;
+  max-width: 100%;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edit,
+.confirm {
+  display: flex;
+  padding: 0.35rem 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.confirm span {
+  width: 100%;
+  color: var(--text-2);
+  font-size: 0.867rem;
+}

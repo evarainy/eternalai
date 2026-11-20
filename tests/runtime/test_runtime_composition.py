@@ -75,6 +75,7 @@ from tests.auth_fakes import (
     TEST_CSRF_HEADERS,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
     make_session_binder,
 )
@@ -634,6 +635,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     client = TestClient(
         create_app(
             runtime,
+            chat_history=active_chat_history(),
             session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
@@ -936,6 +938,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         user_profile=None,
         user_preferences=None,
         user_skills=None,
+        chat_history=None,
         background_jobs=None,
         file_artifacts=None,
         im_deliveries=None,

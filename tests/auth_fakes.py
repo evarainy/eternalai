@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from unittest.mock import MagicMock
 
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.ports.auth import (
@@ -14,6 +15,7 @@ from app.ports.auth import (
     SessionTokenError,
     VerifiedSessionToken,
 )
+from app.ports.conversation_history import ConversationHistoryPort
 
 AUTH_COOKIE_NAME = "eternalai_session"
 AUTH_TOKEN = "synthetic-auth-token"
@@ -77,6 +79,13 @@ def make_session_binder() -> Callable[[Principal, str], str]:
     return binder.bind
 
 
+def active_chat_history() -> ConversationHistoryPort:
+    history = MagicMock(spec=ConversationHistoryPort)
+    history.is_deleted.return_value = False
+    history.append_turn.return_value = None
+    return history
+
+
 def auth_cookies() -> dict[str, str]:
     return {AUTH_COOKIE_NAME: AUTH_TOKEN}
 
@@ -87,6 +96,7 @@ __all__ = (
     "TEST_CSRF_ALLOWED_ORIGINS",
     "TEST_CSRF_HEADERS",
     "TEST_ORIGIN",
+    "active_chat_history",
     "auth_cookies",
     "make_session_binder",
 )

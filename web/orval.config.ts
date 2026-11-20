@@ -90,6 +90,17 @@ export default defineConfig({
       },
     },
   },
+  conversations: {
+    input: './openapi/conversations.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/conversations/conversations.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   adminTrace: {
     input: './openapi/admin-trace.openapi.json',
     output: {

@@ -569,8 +569,10 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
                         referred_schema_fn=lambda *_args: schema_name,
                     )
                 assert target.tables
+                # Identity creates a new sequence when the cloned table is created.
                 assert all(
                     column.server_default is None
+                    or column.identity is not None
                     or "nextval" not in str(column.server_default.arg)
                     for table in target.tables.values() for column in table.columns
                 ), "Sandbox must not share public sequences"
@@ -734,6 +736,7 @@ def test_http_overview_executes_two_reads_with_real_stores(pg_workflow_factory) 
             components = h.components
             app = create_app(
                 runtime=h.runtime,
+                chat_history=components.chat_history,
                 session_revocations=MemorySessionRevocations(),
                 session_tokens=components.session_tokens,
                 session_binder=components.session_binder.bind,

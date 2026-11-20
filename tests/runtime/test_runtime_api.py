@@ -42,6 +42,7 @@ from tests.auth_fakes import (
     TEST_CSRF_HEADERS,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
     make_session_binder,
 )
@@ -125,6 +126,7 @@ def _client(runtime: FakeRuntime | None = None) -> TestClient:
             runtime or FakeRuntime(),
             make_require_principal(session_tokens, MemorySessionRevocations()),
             make_session_binder(),
+            chat_history=active_chat_history(),
         ),
         prefix="/api/v1/runtime",
     )
@@ -349,6 +351,7 @@ def test_formal_app_runtime_route_fails_closed_without_provider() -> None:
             session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
+            chat_history=active_chat_history(),
             session_cookie_ttl_seconds=3600,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
@@ -422,6 +425,7 @@ def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> No
     client = TestClient(
         create_app(
             runtime=harness.runtime,
+            chat_history=active_chat_history(),
             session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             session_binder=binder.bind,
@@ -635,6 +639,7 @@ def _topk_client(
             session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
+            chat_history=active_chat_history(),
             session_cookie_ttl_seconds=3600,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
@@ -998,6 +1003,7 @@ def test_same_bound_session_uses_verified_tenant(pg_workflow_factory, mode):
                 session_tokens=tokens,
                 session_revocations=MemorySessionRevocations(),
                 session_binder=h.components.session_binder.bind,
+                chat_history=h.components.chat_history,
                 csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
             )
             before_calls = len(h.adapter.calls)
@@ -1137,6 +1143,7 @@ def _chat_api_client(fixture):
         session_revocations=MemorySessionRevocations(), session_binder=make_session_binder(),
         session_cookie_ttl_seconds=3600, csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         browser_chat=SimpleNamespace(skill_id="chat_read_fixture", start=forbidden_start),
+        chat_history=active_chat_history(),
     )
     client = TestClient(app, base_url="https://testserver",
                         backend_options={"loop_factory": make_event_loop})

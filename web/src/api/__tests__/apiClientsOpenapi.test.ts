@@ -97,6 +97,17 @@ const PROJECTS = [
     ],
   },
   {
+    project: 'conversations',
+    input: './openapi/conversations.openapi.json',
+    target: './src/generated/conversations/conversations.ts',
+    operations: [
+      { path: '/api/v1/conversations', method: 'get', operationId: 'list_conversations_api_v1_conversations_get' },
+      { path: '/api/v1/conversations/{session_id}', method: 'patch', operationId: 'rename_conversation_api_v1_conversations__session_id__patch' },
+      { path: '/api/v1/conversations/{session_id}', method: 'delete', operationId: 'delete_conversation_api_v1_conversations__session_id__delete' },
+      { path: '/api/v1/conversations/{session_id}/messages', method: 'get', operationId: 'conversation_messages_api_v1_conversations__session_id__messages_get' },
+    ],
+  },
+  {
     project: 'adminTrace',
     input: './openapi/admin-trace.openapi.json',
     target: './src/generated/admin-trace/admin-trace.ts',
@@ -239,6 +250,7 @@ from fastapi import FastAPI
 from app.api.v1.admin import make_router as admin_router
 from app.api.v1.auth import make_router as auth_router, make_require_principal
 from app.api.v1.background_jobs import make_router as background_jobs_router
+from app.api.v1.conversations import make_router as conversations_router
 from app.api.v1.csrf import make_require_csrf, make_csrf_protected_principal
 from app.api.v1.credential_bindings import make_router as bindings_router
 from app.api.v1.health import make_router as health_router
@@ -265,6 +277,7 @@ def create_app(*, work_object_service=None, session_tokens=None, session_revocat
         session_revocations=session_revocations, session_cookie_ttl_seconds=session_cookie_ttl_seconds,
         session_cookie_secure=False), prefix="/api/v1/auth")
     app.include_router(runtime_router(None, protected, session_binder), prefix="/api/v1/runtime")
+    app.include_router(conversations_router(None, protected, session_binder), prefix="/api/v1/conversations")
     app.include_router(im_context_router(None, protected, session_binder), prefix="/api/v1/im-context")
     app.include_router(admin_router(None, protected), prefix="/api/v1/admin")
     app.include_router(work_router(work_object_service, protected), prefix="/api/v1/work-objects")
@@ -573,8 +586,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(13);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(13);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(14);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(14);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -17,6 +19,7 @@ from app.file_artifacts import FileArtifactService
 from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
+from app.ports.conversation_history import ConversationHistoryError, ConversationHistoryPort
 from app.ports.file_artifacts import ChatAttachmentDescriptor, ChatAttachmentError
 from app.ports.im_context import IMContextError, IMContextPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
@@ -33,8 +36,13 @@ from app.ports.runtime import (
     user_skill_ref_reference,
 )
 from app.ports.task_store import DFormCollectionError
+from app.ports.user_skills import UserSkillOwner
 from app.user_skills.definition import NAME_MAX
 
+_HISTORY_LOG = logging.getLogger("uvicorn.error.chat_history")
+_UUID_SESSION = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _ATTACHMENT_MESSAGES = {
     "chat_attachment_invalid": "附件已失效或不属于当前会话，请移除后重新上传。",
@@ -163,6 +171,25 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
     return ActionResponseEnvelope.model_validate(fields)
 
 
+def _session_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "session_not_found", "message": "Session was not found."},
+        headers=_PRIVATE_HEADERS,
+    )
+
+
+def _history_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "chat_history_unavailable",
+            "message": "Conversation history is unavailable.",
+        },
+        headers=_PRIVATE_HEADERS,
+    )
+
+
 def _bind_session(
     *,
     principal: Principal,
@@ -181,28 +208,11 @@ def _bind_session(
     try:
         session_id = session_binder(principal, requested_session_id)
     except SessionBindingError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "session_not_found",
-                "message": "Session was not found.",
-            },
-        ) from None
+        raise _session_not_found() from None
     return session_id
 
 
-def _bind_runtime_request(
-    *,
-    runtime: RuntimePort | None,
-    principal: Principal,
-    requested_session_id: str,
-    session_binder: Callable[[Principal, str], str] | None,
-) -> tuple[RuntimePort, str]:
-    session_id = _bind_session(
-        principal=principal,
-        requested_session_id=requested_session_id,
-        session_binder=session_binder,
-    )
+def _require_runtime(runtime: RuntimePort | None) -> RuntimePort:
     if runtime is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -211,7 +221,7 @@ def _bind_runtime_request(
                 "message": "Runtime provider is not configured.",
             },
         )
-    return runtime, session_id
+    return runtime
 
 
 def _attachment_error(code: str) -> HTTPException:
@@ -234,14 +244,32 @@ def make_router(
     browser_chat: BrowserChatPort | None = None,
     im_context: IMContextPort | None = None,
     chat_attachments: FileArtifactService | None = None,
+    chat_history: ConversationHistoryPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
     handle_router = APIRouter(route_class=_PrivateHandleRoute)
 
+    async def require_active_history(
+        owner: UserSkillOwner, session_id: str
+    ) -> ConversationHistoryPort:
+        if chat_history is None:
+            raise _history_unavailable()
+        try:
+            deleted = await chat_history.is_deleted(owner, session_id)
+        except ConversationHistoryError:
+            raise _history_unavailable() from None
+        if deleted:
+            raise _session_not_found()
+        return chat_history
+
     @handle_router.post(
         "/handle",
         response_model=ResponseEnvelope,
-        responses={422: {"model": RuntimeRequestErrorResponse}},
+        responses={
+            404: {"model": RuntimeRequestErrorResponse},
+            422: {"model": RuntimeRequestErrorResponse},
+            503: {"model": RuntimeRequestErrorResponse},
+        },
     )
     async def handle(
         body: HandleRequest,
@@ -271,16 +299,21 @@ def make_router(
             or body.client_capabilities.get("browser_async_v1") is True
         ):
             raise _attachment_error("chat_attachment_unsupported")
-        if body.client_capabilities.get("browser_async_v1") is True:
-            if body.d_form_collection is not None:
-                raise HTTPException(422, {"code": "collection_not_found"})
+        browser_async = body.client_capabilities.get("browser_async_v1") is True
+        if browser_async and body.d_form_collection is not None:
+            raise HTTPException(422, {"code": "collection_not_found"})
+        session_id = _bind_session(
+            principal=principal,
+            requested_session_id=body.session_id,
+            session_binder=session_binder,
+        )
+        owner = UserSkillOwner(
+            tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
+        )
+        history = await require_active_history(owner, session_id)
+        if browser_async:
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
-            session_id = _bind_session(
-                principal=principal,
-                requested_session_id=body.session_id,
-                session_binder=session_binder,
-            )
             if browser_chat is None:
                 raise HTTPException(
                     status_code=503,
@@ -312,12 +345,7 @@ def make_router(
                 client_request_id=body.client_request_id,
                 skill_id=selected_skill,
             )
-        bound_runtime, session_id = _bind_runtime_request(
-            runtime=runtime,
-            principal=principal,
-            requested_session_id=body.session_id,
-            session_binder=session_binder,
-        )
+        bound_runtime = _require_runtime(runtime)
         attachments: tuple[ChatAttachmentDescriptor, ...] = ()
         if body.attachment_ids:
             if chat_attachments is None:
@@ -369,6 +397,22 @@ def make_router(
             if body.source_refs:
                 assert im_context is not None
                 await im_context.revalidate(principal, session_id, tuple(body.source_refs))
+            elif body.channel == "web" and result.status != "running":
+                try:
+                    await history.append_turn(
+                        owner,
+                        session_id,
+                        body.client_request_id,
+                        body.message,
+                        result,
+                        # Only the web client's UUID can resume the conversation later.
+                        client_session_id=(
+                            body.session_id
+                            if _UUID_SESSION.fullmatch(body.session_id) else None
+                        ),
+                    )
+                except ConversationHistoryError as error:
+                    _HISTORY_LOG.warning("chat_history.append result=error code=%s", error)
             return result
         except IMContextError as error:
             detail = {"code": error.code}
@@ -398,12 +442,16 @@ def make_router(
         body: ActionRequest,
         principal: Principal = Depends(require_principal),
     ) -> ActionResponseEnvelope:
-        bound_runtime, session_id = _bind_runtime_request(
-            runtime=runtime,
+        session_id = _bind_session(
             principal=principal,
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
+        owner = UserSkillOwner(
+            tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
+        )
+        await require_active_history(owner, session_id)
+        bound_runtime = _require_runtime(runtime)
         try:
             envelope = await bound_runtime.handle_user_action(
                 channel=body.channel,

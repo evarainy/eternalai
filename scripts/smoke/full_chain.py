@@ -173,7 +173,7 @@ class _ReplayLLMOpener:
         if timeout <= 0 or request.data is None:
             raise RuntimeError("replay LLM request is invalid")
         try:
-            payload = json.loads(request.data.decode("utf-8"))
+            payload = json.loads(cast(bytes, request.data).decode("utf-8"))
             messages = payload["messages"]
             user_message = next(
                 item["content"]
@@ -220,6 +220,7 @@ async def run_full_chain_check(
         )
         application = create_app(
             runtime=components.runtime,
+            chat_history=components.chat_history,
             admin_registry_service=components.admin_registry_service,
             authentication=components.authentication,
             session_tokens=components.session_tokens,

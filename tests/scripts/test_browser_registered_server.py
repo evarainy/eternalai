@@ -112,7 +112,7 @@ def test_production_api_installs_access_without_browser_supervisor(monkeypatch) 
         "leader_roster_admin_service": None,
         "work_object_series_service": None, "work_object_series_scheduler": None,
         "credential_binding_service": None, "user_profile": None,
-        "user_preferences": None, "user_skills": None, "authentication": None,
+        "user_preferences": None, "user_skills": None, "chat_history": None, "authentication": None,
         "system_entry_service": None, "close_system_entry": None,
         "session_tokens": None, "session_revocations": None,
         "session_binder": SimpleNamespace(

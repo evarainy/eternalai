@@ -126,6 +126,7 @@ from app.infra.organization_directory.validation import InvalidDirectorySnapshot
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
+from app.infra.persistence.chat_history import PostgreSQLConversationHistory
 from app.infra.persistence.file_artifacts import build_file_artifact_service
 from app.infra.persistence.im_context import PostgreSQLIMAccountBindingStore
 from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
@@ -188,6 +189,7 @@ from app.ports.browser_chat import BrowserOrdinarySubmissionPort
 from app.ports.browser_gateway import BrowserGatewayRegistration, BrowserIntentHandoffPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.conversation_history import ConversationHistoryPort
 from app.ports.credential_binding import CredentialBindingVerifierPort, OASessionRenewalPort
 from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
@@ -261,6 +263,7 @@ class ProductionComponents:
     # Installs the browser handoff on the Runtime that serves chat for the
     # selected engine: (handoff, submission, *, registration, configured_d_form_model).
     install_browser_handoff: Callable[..., None]
+    chat_history: ConversationHistoryPort
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
     # M1 AgentScope runtime; built only when RUNTIME_ENGINE == "agentscope",
@@ -742,6 +745,7 @@ def _build_agentscope_runtime(
     report_jobs: BackgroundJobService | None = None,
     sheet_fill: SheetFillAdmission | None = None,
     user_skills: UserSkillService | None = None,
+    chat_history: ConversationHistoryPort | None = None,
 ) -> tuple[RuntimePort, Callable[..., None]]:
     """The single wiring of the AgentScope path; AgentScope is imported only here.
 
@@ -806,6 +810,7 @@ def _build_agentscope_runtime(
             report_jobs=report_jobs,
             sheet_fill=sheet_fill,
             user_skills=user_skills,
+            chat_history=chat_history,
         )
     )
     return runtime, runtime.install_browser
@@ -858,6 +863,7 @@ def build_production_components(
         )
 
     session_factory = make_async_session_factory(database_url=settings.database_url)
+    chat_history = PostgreSQLConversationHistory(session_factory)
     task_store = PostgreSQLTaskStore(session_factory)
     session_store = PostgreSQLSessionStore(session_factory)
     capability_registry = PostgreSQLCapabilityRegistry(session_factory)
@@ -1329,6 +1335,7 @@ def build_production_components(
             report_jobs=background_jobs,
             sheet_fill=sheet_fill,
             user_skills=user_skills,
+            chat_history=chat_history,
             # Placeholders only for candidates the policy hid solely because
             # this user has not authorized the fixed MCP service.
             mcp_authorization_hint=(
@@ -1640,6 +1647,7 @@ def build_production_components(
         user_profile=user_profile,
         user_preferences=PostgreSQLUserPreferencesStore(session_factory),
         user_skills=user_skills,
+        chat_history=chat_history,
         background_jobs=background_jobs,
         file_artifacts=file_artifacts,
         im_context=im_context,

@@ -34,6 +34,7 @@ from tests.auth_fakes import (
     TEST_CSRF_HEADERS,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
 )
 from tests.infra.auth.test_crypto import encoding_alias, legacy_ticket
@@ -664,6 +665,7 @@ def test_runtime_action_fails_closed_without_runtime_provider() -> None:
             session_revocations=MemorySessionRevocations(),
             session_tokens=StaticSessionTokens(),
             session_binder=_binder().bind,
+            chat_history=active_chat_history(),
             session_cookie_ttl_seconds=3600,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
@@ -687,6 +689,7 @@ def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:
     runtime = RecordingRuntime()
     app = create_app(
         runtime=runtime,
+        chat_history=active_chat_history(),
         session_revocations=MemorySessionRevocations(),
         session_tokens=tokens,
         session_binder=binder.bind,
