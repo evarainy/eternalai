@@ -95,6 +95,13 @@ interface AIDockState {
   collection: PendingCollection | null;
   applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
   appendTranscript: (entry: TranscriptEntry) => void;
+  /**
+   * The first reply bound the local conversation id to the backend session id: the current
+   * conversation (and its pending collection and IM source) continues under the bound id.
+   */
+  adoptBoundSession: (localSessionId: string, boundSessionId: string) => void;
+  /** Opens a saved conversation in place of the current one; nothing of the old one is kept. */
+  openConversation: (sessionId: string, transcript: TranscriptEntry[]) => void;
   /** Settles a sheet fill plan card of the current transcript: accepted job or cancelled. */
   settleSheetFill: (responseId: string, outcome: { readonly jobId: string } | 'cancelled') => void;
   clearSession: () => void;
@@ -182,6 +189,32 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     set((state) => ({
       transcript: [...state.transcript, entry],
       chatSheetOpen: entry.role === 'user' ? true : state.chatSheetOpen,
+    })),
+  adoptBoundSession: (localSessionId, boundSessionId) =>
+    set((state) => state.sessionId !== localSessionId ? state : {
+      sessionId: boundSessionId,
+      collection: state.collection?.sessionId === localSessionId
+        ? { ...state.collection, sessionId: boundSessionId } : state.collection,
+      imSource: state.imSource?.sessionId === localSessionId
+        ? { ...state.imSource, sessionId: boundSessionId } : state.imSource,
+    }),
+  openConversation: (sessionId, transcript) =>
+    set((state) => ({
+      imSource: null,
+      contextNotice: null,
+      draft: '',
+      draftAttachments: [],
+      pageContextDeclaration:
+        state.pageContextDeclaration === null
+          ? null
+          : createGeneralPageContext(state.pageContextDeclaration),
+      restoredPageContext: null,
+      sessionContextMode: 'general',
+      sessionId,
+      transcript,
+      chatSheetOpen: true,
+      confirmationResults: {},
+      collection: null,
     })),
   settleSheetFill: (responseId, outcome) =>
     set((state) => ({

@@ -1569,8 +1569,8 @@ describe('ChatPage HTTP failures', () => {
 });
 
 /*
- * 2026-09-02 裁决把「我问过的」从工作事项页迁到 AI 助手页左栏；2026-08-27 §一/§六 同时裁定会话持久化
- * 整体归 P3，P2「不用一个刷新即失效的历史入口制造可恢复假象」。下面把这条边界钉死。
+ * 2026-09-02 裁决把「我问过的」从工作事项页迁到 AI 助手页左栏；2026-11-20 起对话历史由后端保存，
+ * 左栏只列本人已保存的对话，不再写「存不起来」的限制说明。
  */
 describe('ChatPage assistant surfaces', () => {
   it('offers the starter prompts instead of an empty box, and a prompt fills the request', () => {
@@ -1629,40 +1629,52 @@ describe('ChatPage assistant surfaces', () => {
     }
   });
 
-  it('lists only the current temporary conversation and says history is not stored yet', () => {
+  it('lists no conversation and no stale limitation when nothing is saved yet', async () => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    const fetchMock = vi.fn().mockResolvedValue(response({ items: [], next_cursor: null }));
+    vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
     fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
     const rail = screen.getByRole('complementary', { name: '我问过的' });
     expect(within(rail).getByRole('heading', { name: '我问过的' })).toBeInTheDocument();
-    /*
-     * 2026-09-04 返修：左栏三行说明砍成一行。留下的必须是那条**真限制**（历史存不起来），
-     * 「现在没有对话」由空列表本身表明，不再多写一句。
-     */
-    expect(within(rail).getByText('以前问过的存不起来，刷新就没了。')).toBeInTheDocument();
+    expect(await within(rail).findByText('还没有保存的对话。')).toBeInTheDocument();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/conversations?limit=20');
     expect(rail.textContent).not.toContain('现在没有正在进行的对话。');
     expect(rail.textContent).not.toContain('要留档请到「工作事项」里办。');
-    expect(
-      within(rail).queryAllByText(/存不起来|留档|没有正在进行/),
-    ).toHaveLength(1);
+    expect(within(rail).queryAllByText(/存不起来|留档|没有正在进行/)).toHaveLength(0);
     expect(within(rail).queryAllByRole('listitem')).toHaveLength(0);
   });
 
-  it('shows exactly one conversation entry once the current session has content', () => {
+  it('lists the saved conversations and marks the one currently open', async () => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    const current = `sid_v1.${'a'.repeat(43)}.${'b'.repeat(43)}`;
+    const other = `sid_v1.${'c'.repeat(43)}.${'d'.repeat(43)}`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
+      items: [
+        { session_id: current, title: '先问一句', updated_at: '2026-11-20T09:00:00+09:00' },
+        { session_id: other, title: '昨天的待办', updated_at: '2026-11-19T09:00:00+09:00' },
+      ],
+      next_cursor: null,
+    })));
     renderChat();
 
     act(() => {
+      useAIDockStore.setState({ sessionId: current });
       useAIDockStore.getState().appendTranscript({ role: 'user', text: '先问一句' });
       useAIDockStore.getState().appendTranscript({ role: 'user', text: '再问一句' });
     });
 
     fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
     const rail = screen.getByRole('complementary', { name: '我问过的' });
-    const entries = within(rail).getAllByRole('listitem');
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toHaveTextContent('本次对话');
-    expect(rail.textContent).not.toContain('先问一句');
-    expect(within(rail).getByText(/以前问过的存不起来/)).toBeInTheDocument();
+    const entries = await within(rail).findAllByRole('listitem');
+    expect(entries).toHaveLength(2);
+    expect(within(entries[0]!).getByRole('button', { name: /^先问一句/ }))
+      .toHaveAttribute('aria-current', 'true');
+    expect(within(entries[1]!).getByRole('button', { name: /^昨天的待办/ }))
+      .not.toHaveAttribute('aria-current');
+    expect(rail.textContent).not.toContain('再问一句');
+    expect(within(rail).queryAllByText(/存不起来/)).toHaveLength(0);
   });
 
   it('separates the loading, empty and failed states of the conversation', async () => {

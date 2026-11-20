@@ -114,7 +114,9 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             session_id: identity.sessionId,
             message,
             client_capabilities: {},
-            ...(sourceRef === undefined ? {} : { source_refs: [sourceRef] }),
+            ...(sourceRef === undefined
+              ? { client_request_id: identity.requestId }
+              : { source_refs: [sourceRef] }),
           }),
         );
       } catch (error) {

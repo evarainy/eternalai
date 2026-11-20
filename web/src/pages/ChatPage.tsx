@@ -14,6 +14,7 @@ import { Icon } from '../shared/ui/Icon';
 import { ApiError } from '../api/mutator';
 import {
   incompatibleResponse,
+  projectHistoryReply,
   projectResponse,
   projectTextResponse,
   isRecord,
@@ -79,6 +80,9 @@ import {
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
 import type { UserAction } from '../generated/runtime/runtime.schemas';
+import type { ConversationMessages } from '../generated/conversations/conversations.schemas';
+import { ConversationHistory } from '../features/chat-history/ConversationHistory';
+import { useRefreshConversations } from '../features/chat-history/useConversations';
 import { COLLECTION_LOST_NOTICE, useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useIdentityQuery } from '../app/identity';
@@ -97,6 +101,7 @@ import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
 const USER_SKILL_REF_NOT_ALLOWED = 'user_skill_ref_not_allowed';
+const BOUND_SESSION_ID = /^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/;
 
 interface ChatPageProps {
   /** A trusted server configuration must supply the one published skill ID. */
@@ -514,6 +519,21 @@ function AssistantDetails({
   );
 }
 
+/** A reply restored from saved history: outcome, card summary and records, nothing to operate. */
+function HistoryDetails({ entry }: { entry: ProjectedResponse }) {
+  return (
+    <>
+      {entry.actionOutcome === null ? null : (
+        <Text strong className={styles.outcomeNotice}>
+          {userActionOutcomeMessages[entry.actionOutcome]}
+        </Text>
+      )}
+      {entry.cardSummary === undefined ? null : <Text type="secondary">{entry.cardSummary}</Text>}
+      {entry.records === null ? null : <RecordsList records={entry.records} />}
+    </>
+  );
+}
+
 export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const draft = useAIDockStore((state) => state.draft);
   const transcript = useAIDockStore((state) => state.transcript);
@@ -821,6 +841,21 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     }
   };
 
+  const refreshConversations = useRefreshConversations();
+  /**
+   * The reply carries the backend-bound id of this conversation: later sends, the saved
+   * history entry and a browser run of this conversation all continue under it.
+   */
+  const adoptBoundSession = (localSessionId: string, boundSessionId: string) => {
+    if (localSessionId === boundSessionId || !BOUND_SESSION_ID.test(boundSessionId)) return;
+    const target = browserTargetRef.current;
+    if (target !== null && target.conversationId === localSessionId) {
+      setBrowserTarget({ ...target, conversationId: boundSessionId });
+      setBrowserStorageError(!saveBrowserAccepted(target.owner, boundSessionId, target.accepted));
+    }
+    useAIDockStore.getState().adoptBoundSession(localSessionId, boundSessionId);
+  };
+
   const mutation = useMutation({
     mutationFn: async (message: string) => {
       const submission = activeSubmission.current;
@@ -905,7 +940,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         const uncertain = isBrowserUnconfirmed(response, submission.requestId);
         const result = uncertain ? unconfirmedSubmission() : projectResponse(response);
         if (result.dFormCollection !== undefined
-            && !/^sid_v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(boundSessionId)) {
+            && !BOUND_SESSION_ID.test(boundSessionId)) {
           throw new Error('collection_session_mismatch');
         }
         if (submission.owner !== null && submissionIsCurrent(submission)) {
@@ -927,6 +962,10 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           const scope = recoveryScopeRef.current;
           rememberReportJob(scope, result.reportJobId);
           if (scope !== null) setReportJobIds(loadReportJobs(scope));
+        }
+        if (!uncertain && result.presentationKind !== 'unconfirmed') {
+          adoptBoundSession(sessionId, boundSessionId);
+          refreshConversations();
         }
         return result;
       } catch (error) {
@@ -1124,7 +1163,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     submit();
   };
 
-  const startFreshSession = () => {
+  /** Page-local state of the conversation being left (the dock store resets its own part). */
+  const leaveConversation = () => {
     setCollection(null);
     clearBrowserAccepted();
     setBrowserTarget(null);
@@ -1136,7 +1176,22 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     setBrowserOptIn(false);
     mention.reset();
     setMentionNotice('');
+  };
+
+  const startFreshSession = () => {
+    leaveConversation();
     startNewSession();
+  };
+
+  /** A saved conversation replaces the current one at once; its entries are read-only. */
+  const openSavedConversation = (sessionId: string, conversation: ConversationMessages) => {
+    leaveConversation();
+    stickToBottom.current = true;
+    useAIDockStore.getState().openConversation(sessionId, conversation.messages.map((message) =>
+      message.role === 'user'
+        ? { role: 'user' as const, text: message.text }
+        : projectHistoryReply(message.text, message.envelope)));
+    setHistoryOpen(false);
   };
 
   const visibleBrowserTarget = browserAvailable && browserIdentityReady
@@ -1343,6 +1398,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                           />
                         ) : null}
                         {entry.role === 'assistant' && entry.presentationKind === 'completed'
+                          && entry.readOnly === undefined
                           && entry.userSkill === undefined && entry.reportJobId === undefined
                           && entry.sheetFillPlan === undefined && index === transcript.length - 1
                           && entry.text.trim() ? (
@@ -1352,12 +1408,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                           </Button>
                         ) : null}
                         {entry.role === 'assistant' && entry.presentationKind === 'completed'
+                          && entry.readOnly === undefined
                           && entry.reportJobId === undefined && entry.sheetFillPlan === undefined
                           && entry.userSkill === undefined && entry.text.trim() ? (
                           <DeliveryComposerButton key={`${authGeneration}/${currentSessionId}/${index}`}
                             text={entry.text} attachments={deliveryAttachments} />
                         ) : null}
-                        {entry.role === 'assistant' ? (
+                        {entry.role === 'assistant' ? entry.readOnly ? (
+                          <HistoryDetails entry={entry} />
+                        ) : (
                           <AssistantDetails
                             entry={entry}
                             onAction={submitConfirmation}
@@ -1480,15 +1539,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           </div>
         )}
         {historyOpen ? (
-          /*
-            「我问过的」。会话持久化整体归后续阶段，这里只列本次临时会话，并如实写明历史存不起来，
-            不做刷新即失效却看起来像历史的列表。
-          */
-          <aside aria-label="我问过的" className={styles.history}>
-            <h2>我问过的</h2>
-            {transcript.length === 0 ? null : <ul aria-label="当前对话"><li>本次对话</li></ul>}
-            <p>以前问过的存不起来，刷新就没了。</p>
-          </aside>
+          <ConversationHistory
+            currentSessionId={currentSessionId}
+            onOpen={openSavedConversation}
+            onDeleted={(sessionId) => {
+              if (useAIDockStore.getState().sessionId === sessionId) startFreshSession();
+            }}
+          />
         ) : null}
         <form
           className={`${styles.composer} wb-ring`}

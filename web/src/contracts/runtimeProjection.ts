@@ -2,6 +2,7 @@ import type {
   ConfirmCardPayloadTargetSystem,
   ResponseEnvelopeStatus,
 } from '../generated/runtime/runtime.schemas';
+import type { HistoryEnvelope } from '../generated/conversations/conversations.schemas';
 import {
   isUserActionOutcome,
   type UserActionOutcome,
@@ -135,6 +136,10 @@ export interface ProjectedResponse {
   /** The user cancelled this plan card (kept with the transcript; never submitted). An
    * accepted plan instead keeps its job in `reportJobId`. */
   sheetFillCancelled?: true;
+  /** Restored from saved conversation history: text, records and a card summary only. */
+  readOnly?: true;
+  /** Business summary of the card the saved reply carried (restored replies only). */
+  cardSummary?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -797,6 +802,63 @@ export function projectResponse(
     return { ...base, presentationKind: 'failed' };
   }
   return incompatibleResponse();
+}
+
+const HISTORY_KINDS: Record<HistoryEnvelope['status'], PresentationKind> = {
+  running: 'unconfirmed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
+  blocked: 'denied',
+  waiting_user: 'clarification',
+  failed: 'failed',
+  no_capability_found: 'unavailable',
+};
+const HISTORY_CARD_KINDS: Record<string, PresentationKind> = {
+  confirm_card: 'confirmation',
+  binding_required_card: 'binding',
+  operator_handback_card: 'clarification',
+};
+const HISTORY_CARD_SUMMARIES: Record<string, string> = {
+  confirm_card: '当时这一步需要你确认，这里只能查看。',
+  binding_required_card: '当时需要先绑定账号。',
+  operator_handback_card: '当时需要补充范围。',
+};
+const HISTORY_DATA_SUMMARIES: Record<string, string> = {
+  user_skill: '当时展示了「我的功能」卡片，这里只能查看。',
+  sheet_fill_plan: '当时给出了表格填写方案，这里只能查看。',
+  report_job: '当时生成了导出文件。',
+  d_form_collection: '当时在追问报修信息，这里不能继续填写。',
+};
+
+/**
+ * A reply restored from conversation history. Only text, records and a card summary are
+ * shown; nothing on it can be confirmed, submitted or sent again.
+ */
+export function projectHistoryReply(
+  text: string,
+  reply: HistoryEnvelope | null,
+  navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
+): ProjectedResponse {
+  if (reply === null) return { ...projectTextResponse(text, 'completed'), readOnly: true };
+  const data = structuredData(reply.data, navigationConfig);
+  const saved = reply.data;
+  const dataKind = saved === null ? undefined
+    : Object.keys(HISTORY_DATA_SUMMARIES).find((key) => key in saved || saved.kind === key);
+  const cardSummary = reply.ui.title?.trim() || HISTORY_CARD_SUMMARIES[reply.ui.component_type]
+    || (dataKind === undefined ? undefined : HISTORY_DATA_SUMMARIES[dataKind]);
+  return {
+    role: 'assistant',
+    text,
+    status: reply.status,
+    presentationKind: HISTORY_CARD_KINDS[reply.ui.component_type] ?? HISTORY_KINDS[reply.status],
+    responseId: null,
+    confirm: null,
+    records: data.records,
+    actionOutcome: data.actionOutcome,
+    readOnly: true,
+    ...(cardSummary === undefined ? {} : { cardSummary }),
+  };
 }
 
 function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {
