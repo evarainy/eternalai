@@ -703,9 +703,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     }
   }, [ownerKey]);
 
-  const browserIdentityReady = identityPending === null && browserBaseline !== null
-    && browserBaseline.generation === authGeneration && browserBaseline.owner === ownerKey
-    && browserBaseline.skill === meSkillId;
+  // Only a same-generation change of a known owner/skill waits for the cleanup below; a new
+  // generation or the first metadata only sets the baseline, so it is ready at once.
+  const browserIdentityReady = identityPending === null && (browserBaseline === null
+    || browserBaseline.generation !== authGeneration
+    || (browserBaseline.owner === null && browserBaseline.skill === null)
+    || (browserBaseline.owner === ownerKey && browserBaseline.skill === meSkillId));
   // Same login, but the confirmed /me now names another browser owner or skill: drop browser state.
   // The first metadata of a generation only sets the baseline.
   useEffect(() => {
