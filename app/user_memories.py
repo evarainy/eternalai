@@ -53,9 +53,13 @@ def normalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFC", value).casefold().split())
 
 
+_JOB_TITLE = re.compile(r"secretar(?:y|ies)", re.IGNORECASE)
+
+
 def sensitive_kind(value: str) -> str | None:
     comparable = unicodedata.normalize("NFKC", value)
-    if has_credential_marker(comparable):
+    # "secretary" is a job title, not the "secret" credential marker.
+    if has_credential_marker(_JOB_TITLE.sub(" ", comparable)):
         return "credential"
     return next((kind for kind, pattern in _SENSITIVE if pattern.search(comparable)), None)
 
