@@ -1,5 +1,7 @@
 # Phase 2 当前状态
 
+> **P2 已于 2026-11-20 收口，本文件不再更新。** 现状见 [P3 STATUS](../phase3/STATUS.md)；P2 转入的活欠债仍在 [P2 PLAN](PHASE2_PLAN.md) 原行维护。
+
 更新于 2026-11-20。这里只写现在的结果和还差什么；细节和待办见 [PLAN](PHASE2_PLAN.md)，决定见 [DECISIONS](DECISIONS.md)，旧状态全文见[归档](archive/STATUS_history_to_20261119.md)。
 
 ## 各功能现状
