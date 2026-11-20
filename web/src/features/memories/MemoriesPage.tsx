@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ApiError } from '../../api/mutator';
+import { ApiError, MEMORY_INPUT_INVALID_CODE } from '../../api/mutator';
 import {
   deleteMemoryApiV1MemoriesIdDelete as deleteMemory,
   editMemoryApiV1MemoriesIdPatch as editMemory,
   listMemoriesApiV1MemoriesGet as listMemories,
 } from '../../generated/memories/memories';
 import { UserMemoryCategory } from '../../generated/memories/memories.schemas';
-import type { UserMemory } from '../../generated/memories/memories.schemas';
+import type {
+  MemoryInputErrorDetailReason,
+  UserMemory,
+} from '../../generated/memories/memories.schemas';
 import { PageFrame } from '../../shared/ui/PageFrame';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './MemoriesPage.module.css';
@@ -22,9 +25,12 @@ const CATEGORY_LABELS: Record<UserMemoryCategory, string> = {
   work_background: '工作背景',
 };
 
-/** 后端对修改内容只回一个统一的拒绝码，不区分是超长还是含敏感信息，这里照它的规则说清楚。 */
-const INVALID_CONTENT_TEXT =
-  '没有保存：内容不能为空、不超过 200 字，也不能含身份证号、银行卡号、电话、住址、密码或验证码。';
+/** 修改被拒（422）时后端给出的原因。 */
+const INPUT_REASON_TEXT: Record<MemoryInputErrorDetailReason, string> = {
+  empty: '内容不能为空',
+  too_long: '内容太长，请控制在 200 字以内',
+  sensitive: '这条内容像是含有证件号、电话、密码等敏感信息，不能保存',
+};
 
 type Notice = { tone: 'ok' | 'error'; text: string };
 
@@ -92,8 +98,8 @@ function MemoryList({ generation }: { generation: number }) {
   const busy = save.isPending || remove.isPending;
   const saveError = save.error === null || isGone(save.error)
     ? null
-    : save.error instanceof ApiError && save.error.status === 422
-      ? INVALID_CONTENT_TEXT
+    : save.error instanceof ApiError && save.error.code === MEMORY_INPUT_INVALID_CODE
+      ? INPUT_REASON_TEXT[save.error.reason as MemoryInputErrorDetailReason]
       : '暂时没能保存，请稍后再试。';
 
   const startEdit = (item: UserMemory) => {
