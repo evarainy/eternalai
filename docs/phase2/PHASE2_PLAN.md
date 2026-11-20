@@ -16,6 +16,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ### P2 收口标准（2026-08-19 修订：必达 / 机会 / 排除三层）
 
+> **2026-11-20：P2 已收口。** 必达第 4、5 项按 [11-20 裁决](DECISIONS.md#2026-11-20--裁决p2-收口必达第-45-项改定剩余工作转-p3) 改定；本文件其余未完成任务与欠债原样转入 P3，P3 文档建立前继续在此维护。
+
 原 IN 范围 9 项曾全部列为必做，其中两项卡在第三方手里，等于把收口时间交给项目外的人决定。现分三层，**只有「必达」层决定 P2 何时收口**。
 
 **必达**（缺一不可，全部达成即收口）：
@@ -25,8 +27,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 1 | 一个真实系统（OA）只读纵切，经 Gateway / Policy / Evaluator / Trace 全链 | ✅ 已完成 |
 | 2 | Work Object + 最小工作台：用户看得到自己的 OA 待办、状态与数据截至时间，可标记处理痕迹 | ✅ 已完成：`P2-WORK-OBJECT-001` |
 | 3 | 后台定时轮询：用户不打开页面，状态也在积累 | ✅ 已完成：`P2-OA-CREDENTIAL-POLL-001` |
-| 4 | 一个获批低风险写入（OA 待办审批同意），经确认卡授权、受版本绑定保护 | 未完成：`P2-LOW-RISK-WRITE-001`，BLOCKED 于 OA 审批提交协议结构 |
-| 5 | 覆盖以上路径的 Golden，含负向与边界（**「以上路径」限 Golden Runtime 观察边界**；工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md` 2026-08-28 口径裁决） | ◐ `P2-GOLDEN-001` 已完成；`P2-GOLDEN-002` 待低风险写入落地后执行 |
+| 4 | 浏览器办理：AI 在 OA 填写、确认卡授权、填完即停，由本人提交（2026-11-20 改定；原「OA 待办审批同意」由系统代提交转 P3） | ✅ 已完成：报修流程（M2/M3）；`P2-LOW-RISK-WRITE-001` 转 P3 |
+| 5 | 覆盖以上路径的 Golden，含负向与边界（**「以上路径」限 Golden Runtime 观察边界**；工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md` 2026-08-28 口径裁决） | ✅ `P2-GOLDEN-001` 已完成；`P2-GOLDEN-002` 随系统代提交的写入转 P3（2026-11-20） |
 
 **机会**（不到位不阻塞收口）：Memory、Skill 候选、海康只读 Adapter、Port 接缝、组织目录与内部任务派发、Renderer/Schema/弱测试收尾、前端工作台、页面上下文、审计读取与反馈闭环；具体 task_id、依赖与 BLOCKED 条件只见下方现役 DAG。
 
@@ -69,7 +71,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 阻塞项 | 必需外部输入 | 对 P2 收口的影响 | 来源 |
 |---|---|---|---|
-| `P2-LOW-RISK-WRITE-001` | OA 审批提交动作的协议结构。未到位前不得猜 endpoint、字段、错误码或回滚语义。 | **唯一必达阻塞**；该棒未落地则 `P2-GOLDEN-002` 无题可冻 | `docs/phase2/STATUS.md`；`docs/phase2/DECISIONS.md` 2026-08-19「首个低风险写入」 |
+| `P2-LOW-RISK-WRITE-001` | OA 审批提交动作的协议结构。未到位前不得猜 endpoint、字段、错误码或回滚语义。 | 2026-11-20 起转 P3，不再阻塞 P2 收口；该棒未落地则 `P2-GOLDEN-002` 无题可冻 | `docs/phase2/STATUS.md`；`docs/phase2/DECISIONS.md` 2026-08-19「首个低风险写入」 |
 | `P2-HIKVISION-ADAPTER-001` | 具体只读用例、现场版本、API/SDK、测试环境、部门级共享账号及允许设备/区域范围。 | 机会层，不阻塞 P2 收口 | 蓝图 §15 L2870-L2907 |
 
 ## 3. 活欠债登记
@@ -353,6 +355,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ### 现役 DAG（未完成任务；已完成视觉棒与本次合并关闭的原两行保留为承接说明）
 
+2026-11-20 P2 收口后，下表全部任务转入 P3，task_id 与依赖不变。
+
 | task_id | depends_on | 预判档位 | BLOCKED / 边界 |
 |---|---|---|---|
 | `P2-WORK-DISPATCH-LEADER-ROSTER-001` | P2-GOV-SYNC-074 | **B（高风险）** | 领导名单表、管理接口与页面、派发判定读名单；仅本单位系统管理员维护本单位名单，留操作历史、撤销标记不删行、仅当前目录存在人员生效、空名单无领导权限；已批准新表及迁移仅在专用测试库执行，真实库/生产库升级另行确认；真实目录与唯一负责人验收仍保留 |
@@ -369,7 +373,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-SEARCH-QUERY-EXPOSURE-001` | P2-WO-SEARCH-SERVER-001（已完成） | **A（预判）** | 是：已裁定保留 URL 查询串，当前只剩核查部署侧访问日志是否记录 query string；本棒不执行 |
 | `P2-RUNTIME-DIRECT-ANSWER-001` | P2-RUNTIME-NO-CAPABILITY-COPY-001（已完成） | **A** | 是；按雨爷 2026-09-07 拆棒决定独立设计聊天回退的终态、部门名 + 当前时间注入、脱敏与 Trace 语义；不注入姓名，前棒不预留终态 |
 
-稳定必达主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → WORK_OBJECT → GOLDEN_001 → ENVELOPE_MESSAGE_REDACTION → LOW_RISK_WRITE → GOLDEN_002`。`LOW_RISK_WRITE` 另依赖已完成的 `CONFIRM_BINDING`，并由已完成的 `CAPABILITY_AUTOMATION_LEVEL → USER_ACTION_SEAM → SDUI_RENDERER` 支链提供展示与结构化动作合同。PLAN 不声明“当前下一棒”，当前指针只见 `docs/phase2/STATUS.md`。
+原必达主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → WORK_OBJECT → GOLDEN_001 → ENVELOPE_MESSAGE_REDACTION → LOW_RISK_WRITE → GOLDEN_002`；2026-11-20 起 `LOW_RISK_WRITE → GOLDEN_002` 一段转 P3。`LOW_RISK_WRITE` 另依赖已完成的 `CONFIRM_BINDING`，并由已完成的 `CAPABILITY_AUTOMATION_LEVEL → USER_ACTION_SEAM → SDUI_RENDERER` 支链提供展示与结构化动作合同。PLAN 不声明“当前下一棒”，当前指针只见 `docs/phase2/STATUS.md`。
 
 已交付 DAG 行见[已结项及历史原文](archive/PHASE2_PLAN_closed_to_20261119.md)。任务附件端点及派发宿主接线已随 PR #225 合并；真实环境、页面验收及目录输入仍见派发活欠债。S1 保留在表中用于定位尚未完成的 S2/S3 与第二租户限制。
 
