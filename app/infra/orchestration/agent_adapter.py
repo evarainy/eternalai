@@ -565,6 +565,12 @@ def _matches_intent_constraints(
     return capability_type is None or capability.type == capability_type
 
 
+# The identity codes a leaf maps to binding_required (capability_gateway._map_adapter_status).
+_BINDING_ERRORS = frozenset(
+    {"identity_unbound", "identity_expired", "identity_revoked", "needs_binding_scope"}
+)
+
+
 def _workflow_execution_result(
     result: WorkflowRunResult,
     *,
@@ -615,11 +621,11 @@ def _workflow_execution_result(
         )
     if result.status == "failed":
         # The read workflow collapses a leaf's binding_required into failed.
-        # Restore the OA expiry handback before Runtime chooses its terminal.
+        # Restore the leaf's binding handback before Runtime chooses its terminal.
         return ExecutionResult(
             status=(
                 "binding_required"
-                if result.workflow_id == OVERVIEW_ID and result.error_code == "identity_expired"
+                if result.workflow_id == OVERVIEW_ID and result.error_code in _BINDING_ERRORS
                 else "failed"
             ),
             data=_mcp_recovery_reference(result.workflow_id, result.output),
