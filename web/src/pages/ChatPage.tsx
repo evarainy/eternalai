@@ -32,7 +32,9 @@ import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard
 import { UserSkillCard } from '../features/my-skills/UserSkillCard';
 import { MySkillsPanel } from '../features/my-skills/MySkillsPanel';
 import { SkillMentionList, SkillMentionTag } from '../features/my-skills/SkillMention';
-import { useSkillMention, type SkillSelection } from '../features/my-skills/useSkillMention';
+import {
+  useSkillMention, type MentionResolution, type SkillSelection,
+} from '../features/my-skills/useSkillMention';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -615,6 +617,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   // The send path runs after this render; it reads the current mention state through a ref.
   const mentionRef = useRef(mention);
   mentionRef.current = mention;
+  // Switching the browser-skill mode voids a `$` check under way: the click was in the other mode.
+  useEffect(() => { mentionRef.current.voidCheck(); }, [browserOptIn]);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [browserTerminal, setBrowserTerminal] = useState(false);
   // Sealed handoff (§8.4): releases ordinary chat only; reset wherever browserTerminal resets.
@@ -845,7 +849,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         ? await submitOrdinaryBrowserCapableMessage(
           submission.message, submission.sessionId, submission.requestId, controller.signal,
           submission.collection, submission.attachments.map((item) => item.artifact_id),
-          submission.userSkill === null ? null : { skill_id: submission.userSkill.skillId },
+          submission.userSkill === null ? null
+            : { skill_id: submission.userSkill.skillId, name: submission.userSkill.name },
         )
         : await submitBrowserMessage(
           submission.message, submission.sessionId, browser.skillId, browser.requestId,
@@ -881,7 +886,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             client_capabilities: {},
             ...(submission.collection === null ? {} : { d_form_collection: submission.collection }),
             ...(submission.userSkill === null ? {} : {
-              user_skill_ref: { skill_id: submission.userSkill.skillId },
+              user_skill_ref: {
+                skill_id: submission.userSkill.skillId, name: submission.userSkill.name,
+              },
             }),
             ...(submission.attachments.length === 0 ? {} : {
               attachment_ids: submission.attachments.map((item) => item.artifact_id),
@@ -965,6 +972,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           setRetrySubmission(submission);
         }
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
+        const skillResult = result.userSkill;
+        // Refused as renamed: the card carries the flow's current name, not the one on the tag.
+        if (submission.userSkill !== null && skillResult?.kind === 'result'
+            && skillResult.status === 'failed' && skillResult.skill_id === submission.userSkill.skillId
+            && skillResult.name !== submission.userSkill.name) {
+          mentionRef.current.renamed(submission.userSkill.skillId, submission.userSkill.name);
+        }
         if (result.reportJobId !== undefined) {
           const scope = recoveryScopeRef.current;
           rememberReportJob(scope, result.reportJobId);
@@ -1099,11 +1113,31 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (element !== null && hasThread && stickToBottom.current) element.scrollTop = element.scrollHeight;
   }, [transcript, requestPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
 
-  const submit = (retry?: ChatSubmission) => {
+  /** A new message goes on only after its `$` choice was checked on a list read now, and only if
+   * nothing voided the check meanwhile (see resolveForSend) and the conversation stayed. */
+  const checkMention = async (message: string) => {
+    const sessionId = useAIDockStore.getState().sessionId;
+    const named = await mention.resolveForSend(message);
+    if (named === null || useAIDockStore.getState().sessionId !== sessionId) return;
+    submitRef.current(undefined, named);
+  };
+
+  /** ``checked``: the `$` choice of a new message, checked on a list read now. */
+  const submit = (retry?: ChatSubmission, checked?: MentionResolution) => {
     const message = retry?.message ?? draft.trim();
     const flight = inFlight.current;
-    if (!message || viewOnly || (flight !== null && submissionIsCurrent(flight))) {
+    if (!message || viewOnly || (flight !== null && submissionIsCurrent(flight))
+        || mention.isChecking()) {
       return;
+    }
+    if (checked !== undefined) {
+      // Going on after the check: what it found is shown first; the send itself must still be
+      // allowed now (e.g. no upload under way).
+      if (checked.kind === 'blocked') {
+        setMentionNotice(checked.reason);
+        return;
+      }
+      if (!canSend) return;
     }
     const currentAuth = useAuthStore.getState();
     if (!requestMetadataReady || currentAuth.status !== 'authenticated'
@@ -1120,12 +1154,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           || pendingSubmission !== null)) return;
     let userSkill: SkillSelection | null = null;
     if (retry === undefined) {
-      const named = mention.resolveForSend(message);
-      if (named.kind === 'blocked') {
-        setMentionNotice(named.reason);
+      if (checked === undefined && mention.needsCheck(message)) {
+        void checkMention(message);
         return;
       }
-      userSkill = named.kind === 'ref' ? named.selection : null;
+      userSkill = checked?.kind === 'ref' ? checked.selection : null;
       const conflict = userSkill === null ? null
         : browserOptIn ? '指定功能和浏览器只读技能不能同时使用，请取消其中一个。'
           : currentCollection !== null ? '正在填写表单时不能指定功能。'
@@ -1167,6 +1200,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     }
     mutation.mutate(message);
   };
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
 
   const submitConfirmation = async (action: UserAction) => {
     const store = useAIDockStore.getState();

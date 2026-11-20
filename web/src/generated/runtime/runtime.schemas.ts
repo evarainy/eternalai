@@ -287,6 +287,11 @@ export const UserActionOutcome = {
  * The user's own saved flow, explicitly named in the chat input (``$``).
  */
 export interface UserSkillRef {
+  /**
+   * @minLength 1
+   * @maxLength 40
+   */
+  name: string;
   skill_id: string;
 }
 

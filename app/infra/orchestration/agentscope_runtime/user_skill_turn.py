@@ -182,13 +182,15 @@ async def run_explicit_user_skill(
     service: UserSkillService | None,
     scope: ReadToolScope,
     skill_id: str,
+    name: str,
     deadline: float,
     ledger: TurnLedger,
 ) -> UserSkillSettled:
     """Run the flow the user explicitly named, by id and current version; no model.
 
     Missing inputs return the form card. Another user's, a deleted or a never
-    existing flow all return the same card (no name, no version).
+    existing flow all return the same card (no name, no version). A flow whose
+    current name is not the one on the user's tag is refused unrun.
     """
 
     owner = UserSkillOwner(tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id)
@@ -208,7 +210,7 @@ async def run_explicit_user_skill(
         try:
             payload, failed, code = await service.run_saved(
                 key, owner, ctx, current.skill_id, current.current_version, {},
-                expected_digest=current.payload.definition_digest,
+                expected_digest=current.payload.definition_digest, expected_name=name,
             )
         except UserSkillFailure as failure:
             if failure.code == "not_found":

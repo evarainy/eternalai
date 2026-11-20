@@ -700,6 +700,12 @@
         "additionalProperties": false,
         "description": "The user's own saved flow, explicitly named in the chat input (``$``).",
         "properties": {
+          "name": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
           "skill_id": {
             "format": "uuid",
             "title": "Skill Id",
@@ -707,7 +713,8 @@
           }
         },
         "required": [
-          "skill_id"
+          "skill_id",
+          "name"
         ],
         "title": "UserSkillRef",
         "type": "object"

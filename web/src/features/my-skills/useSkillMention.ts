@@ -1,7 +1,8 @@
 /** `$` 指定调用：在输入框里用 `$`（或全角 `＄`）选本人可用的功能。
  *
  * 选中时记下功能 id 和它在草稿里的那一段文字的起止位置（结构化绑定）：前面的编辑只平移位置，
- * 改到这一段即解除。发送只认正在显示的标签：把 id 交给服务端，由服务端按本人当前版本直接执行；
+ * 改到这一段即解除。发送只认正在显示的标签，且先按发送时新读的名单核对（名称已变、不可用或手输
+ * 名称现指向别的功能即改标或撤标并暂不发送）：把 id 交给服务端，由服务端按本人当前版本直接执行；
  * 没有标签的 `$名称`（含用户取消的）一律按普通文字发送，不写 `$` 时照旧由模型判断。手输句首的
  * 完整 `$功能名` 时当场显示标签（最长的完整名称优先）；单独的 `$100` 这类金额按普通文字。中文
  * 输入法组字期间不弹、不选、不发送，上屏后再判断。换账号即清空。 */
@@ -10,7 +11,8 @@ import {
   useCallback, useEffect, useMemo, useRef, useState, type CompositionEvent, type KeyboardEvent,
   type RefObject,
 } from 'react';
-import type { SkillListItem } from '../../api/userSkills';
+import { useQueryClient } from '@tanstack/react-query';
+import { listSkills, type SkillListItem } from '../../api/userSkills';
 import { useAuthStore } from '../../stores/authStore';
 import { useMySkills } from './useMySkills';
 
@@ -40,6 +42,8 @@ export interface SkillBinding {
 /** The chosen flow of one sent message, with its `$name` span in that message (if known). */
 export interface SkillSelection {
   skillId: string;
+  /** The name on the tag when it was sent (the server refuses the flow if it no longer is). */
+  name: string;
   span: { name: string; text: string; start: number; end: number } | null;
 }
 
@@ -60,7 +64,6 @@ const MAX_CANDIDATES = 8;
 const TRIGGERS = new Set(['$', '＄']);
 const DIGIT = /^[\d.,]/;
 const STANDALONE_AMOUNT = /^[\d.,]+(?=[\s\p{P}]|$)/u;
-const ONLY_AMOUNT = /^[\d.,]+$/;
 
 function norm(text: string): string {
   return text.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
@@ -164,21 +167,15 @@ function cut(value: string, start: number, end: number): string {
   return value.slice(0, start) + value.slice(value[end] === ' ' ? end + 1 : end);
 }
 
-type ListState = 'ready' | 'loading' | 'failed';
+const UNREADABLE = '我的功能暂时读不到，请稍后再发送。';
+const CHANGED = '按最新的功能名单，开头的名称对应的功能有变化，请确认后再发送。';
 
 /** A typed `$name` at the start of the message: the longest complete usable name wins. */
-function resolveTyped(message: string, items: readonly SkillListItem[] | undefined,
-  state: ListState): MentionResolution {
+function resolveTyped(message: string, items: readonly SkillListItem[]): MentionResolution {
   if (!TRIGGERS.has(message[0] ?? '')) return { kind: 'none' };
   const rest = message.slice(1);
   if (!rest.trim()) return { kind: 'none' };
   const amount = STANDALONE_AMOUNT.test(rest.normalize('NFKC'));
-  if (state !== 'ready' || items === undefined) {
-    // Only a message that is nothing but an amount may go without the list.
-    if (ONLY_AMOUNT.test(rest.normalize('NFKC').trim())) return { kind: 'none' };
-    return { kind: 'blocked', reason: state === 'failed'
-      ? '我的功能暂时读不到，请稍后再发送。' : '正在读取我的功能，请稍后再发送。' };
-  }
   const folded = fold(rest);
   const usable = items.filter((item) => item.state === 'usable');
   const matches = usable.filter((item) => {
@@ -207,6 +204,7 @@ function resolveTyped(message: string, items: readonly SkillListItem[] | undefin
     kind: 'ref',
     selection: {
       skillId: item.skill_id,
+      name: item.name,
       span: length <= rest.length && standaloneAt(message, 0, end, text)
         ? { name: item.name, text, start: 0, end } : null,
     },
@@ -227,7 +225,7 @@ type Typed =
 function typedAt(value: string, items: readonly SkillListItem[], from: number, to: number):
   Typed | null {
   const lead = value.length - value.trimStart().length;
-  const named = resolveTyped(value.slice(lead), items, 'ready');
+  const named = resolveTyped(value.slice(lead), items);
   if (named.kind === 'blocked') return { kind: 'unbind' };
   if (named.kind !== 'ref' || named.selection.span === null) return null;
   const { span, skillId } = named.selection;
@@ -246,6 +244,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   onBind?: () => void;
 }) {
   const generation = useAuthStore((state) => state.generation);
+  const queryClient = useQueryClient();
   // Read the list only once the user starts a `$` mention (or the panel opened it).
   const [wanted, setWanted] = useState(false);
   const skills = useMySkills(enabled && wanted);
@@ -270,6 +269,18 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const binding = stored !== null && stored.generation === generation ? stored : null;
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
+  // The send check under way; any edit, change of choice, account or unmount voids it (and so
+  // frees the send entry at once: a voided check no longer counts as under way).
+  const sendCheck = useRef(0);
+  const checking = useRef<number | null>(null);
+  useEffect(() => () => { sendCheck.current += 1; }, [draft, stored, generation]);
+  const isChecking = () => checking.current === sendCheck.current;
+  /** Something the check does not see changed (e.g. the browser-skill mode): void it. */
+  const voidCheck = () => { sendCheck.current += 1; };
+  // A tag found out of date: read the list again for the candidates and the panel.
+  const refreshList = () => {
+    void queryClient.invalidateQueries({ queryKey: ['my-skills', generation] });
+  };
   useEffect(() => {
     setBinding(null);
     setToken(null);
@@ -466,6 +477,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const composition = {
     onCompositionStart: () => {
       composing.current = true;
+      sendCheck.current += 1;
       composeBase.current ??= previous.current;
       setToken(null);
     },
@@ -478,37 +490,78 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   /** The IME is composing: neither the list nor the page may act on keys. */
   const isComposing = () => composing.current;
 
-  /** What the trimmed ``message`` (from the current draft) names. */
-  const resolveForSend = (message: string): MentionResolution => {
-    const lead = draft.length - draft.trimStart().length;
-    if (binding !== null && binding.typed && !skills.isSuccess) {
-      // A typed tag stands only on a list read now.
-      if (skills.isError) void skills.refetch();
-      return { kind: 'blocked', reason: skills.isError
-        ? '我的功能暂时读不到，请稍后再发送。' : '正在读取我的功能，请稍后再发送。' };
+  /** The trimmed ``message`` (from the current draft) may name a flow: check it before sending.
+   * Otherwise it is plain text and goes as it is. */
+  const needsCheck = (message: string) => binding !== null || TRIGGERS.has(message[0] ?? '');
+
+  /** What such a ``message`` names, judged on the list read now: a tag that no longer matches it
+   * is changed or dropped and the send waits for a look. Null when the check was voided during
+   * the read (an edit, a change of choice, the IME, another account or leaving the page): the
+   * send is dropped. */
+  const resolveForSend = async (message: string): Promise<MentionResolution | null> => {
+    setWanted(true);
+    const check = ++sendCheck.current;
+    checking.current = check;
+    // Read directly (not through the query, whose cancel or offline pause would hand back the
+    // cached copy or hold the send). The cache is left alone: an older reply must not replace a
+    // newer list another view has read.
+    const list = await listSkills().then((data) => data.items, () => null);
+    if (sendCheck.current !== check) return null;
+    checking.current = null;
+    if (list === null) return { kind: 'blocked', reason: UNREADABLE };
+    const pending = awaiting.current;
+    awaiting.current = null;
+    if (binding === null) {
+      // Edits made before any list was read are judged on this one (as the list arriving would).
+      const typed = pending === null ? null : typedAt(draft, list, pending.from, pending.to);
+      if (typed?.kind === 'bind') {
+        setBinding({ ...typed.found, generation, typed: true });
+        return { kind: 'blocked', reason: CHANGED };
+      }
+      const named = resolveTyped(message, list);
+      // Only the shown tag is sent: a full name without one (undone, or never bound) is text.
+      return named.kind === 'ref' ? { kind: 'none' } : named;
     }
-    if (binding !== null) {
-      const start = binding.start - lead;
-      const end = binding.end - lead;
-      if (standaloneAt(message, start, end, binding.text)) {
-        return { kind: 'ref', selection: { skillId: binding.skillId,
-          span: { name: binding.name, text: binding.text, start, end } } };
+    const item = list.find((entry) => entry.skill_id === binding.skillId);
+    if (item === undefined || item.state !== 'usable' || item.name !== binding.name) {
+      setBinding(null);
+      refreshList();
+      return { kind: 'blocked', reason: `「${binding.name}」已改名或不可用，请重新选择。` };
+    }
+    const lead = draft.length - draft.trimStart().length;
+    const start = binding.start - lead;
+    const end = binding.end - lead;
+    if (binding.typed) {
+      // A typed name is matched again where it stands (a longer or shared name may now win).
+      const named = resolveTyped(message.slice(start), list);
+      const found = named.kind === 'ref' ? named.selection : null;
+      const span = found?.span ?? null;
+      if (found?.skillId !== binding.skillId || span?.end !== end - start) {
+        setBinding(found === null || span === null ? null : {
+          skillId: found.skillId, name: span.name, text: span.text, start: binding.start,
+          end: binding.start + span.end, generation, typed: true,
+        });
+        refreshList();
+        return { kind: 'blocked', reason: CHANGED };
       }
     }
-    if (!TRIGGERS.has(message[0] ?? '')) return { kind: 'none' };
-    setWanted(true);
-    if (skills.isError) void skills.refetch();
-    const state: ListState = skills.isSuccess ? 'ready' : skills.isError ? 'failed' : 'loading';
-    const typed = resolveTyped(message, items, state);
-    // Only the shown tag is sent: a full name without one (undone, or never bound) is text.
-    return typed.kind === 'ref' ? { kind: 'none' } : typed;
+    return { kind: 'ref', selection: { skillId: binding.skillId, name: binding.name,
+      span: { name: binding.name, text: binding.text, start, end } } };
+  };
+
+  /** The server refused this flow as renamed: a tag in the box with that id and old name is out
+   * of date too (one chosen since under the new name stays). */
+  const renamed = (skillId: string, name: string) => {
+    if (binding?.skillId === skillId && binding.name === name) setBinding(null);
+    refreshList();
   };
 
   const shown: SkillBinding | null = binding === null ? null
     : { skillId: binding.skillId, name: binding.name };
   return {
     open, candidates, active, select, insert, clear, reset, restore, sync, onKeyDown,
-    composition, isComposing, binding: shown, resolveForSend,
+    composition, isComposing, binding: shown, needsCheck, resolveForSend, isChecking, voidCheck,
+    renamed,
     loading: skills.isLoading, failed: skills.isError,
     setActiveId,
   };
