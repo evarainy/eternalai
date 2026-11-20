@@ -71,7 +71,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|
 | `P2-LOW-RISK-WRITE-001` | OA 审批提交动作的协议结构。未到位前不得猜 endpoint、字段、错误码或回滚语义。 | **唯一必达阻塞**；该棒未落地则 `P2-GOLDEN-002` 无题可冻 | `docs/phase2/STATUS.md`；`docs/phase2/DECISIONS.md` 2026-08-19「首个低风险写入」 |
 | `P2-HIKVISION-ADAPTER-001` | 具体只读用例、现场版本、API/SDK、测试环境、部门级共享账号及允许设备/区域范围。 | 机会层，不阻塞 P2 收口 | 蓝图 §15 L2870-L2907 |
-| `P2-MEMORY-001` | 经批准的知识语料与用户数据边界。 | 机会层，不阻塞 P2 收口 | 蓝图 §10.1-§10.2 L2148-L2205 |
 
 ## 3. 活欠债登记
 
@@ -166,7 +165,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | full-chain smoke 以 origin 字典序隐式选择 base URL | `run_full_chain_check` 使用 `sorted(csrf_allowed_origins)[0]` 选择客户端 base URL；当前共享配置两项均为 HTTP，行为正确，但当未来出现混合 scheme 或顺序变化时，Cookie transport 将隐式依赖字典序，配置意图不够显式 | 显式 smoke base-origin 合同或经批准的确定性选择规则尚未裁决；本棒明令不得修改当前选择逻辑 | 待 GOV-SYNC 分配 task_id（不得自行造号） | full-chain 使用显式且校验过的 smoke base origin，或使用获批的确定性选择规则；混合 scheme 与顺序变化均有测试，Cookie transport 与所选 scheme 一致且不削弱 CSRF | `scripts/smoke/full_chain.py::run_full_chain_check` 的 `sorted(settings.csrf_allowed_origins)[0]`；`P2-SESSION-COOKIE-TRANSPORT-001` 启动合同明确要求只登记不修改 |
 | Python 3.16 移除旧式 Windows asyncio event-loop policy 的兼容欠债 | 全量与定向测试持续产生 `WindowsSelectorEventLoopPolicy` / `set_event_loop_policy` 弃用 warning；本棒修改到相关 E2E 文件但修复属于兼容性重构，不是本棒缺陷路径 | Python 3.16 兼容方案与独立测试基础设施 Scope | 待 GOV-SYNC 排期的 Python 3.16 compatibility lane | Windows 测试改用仍受支持的事件循环构造方式，相关 DB/E2E 测试在目标 Python 版本无这些弃用 warning，且既有行为不弱化 | `uv run pytest` 收口原始 warning；`tests/runtime/test_pilot_foundation_e2e.py:50-51` 及其他 PostgreSQL 测试同类设置 |
 | `CapabilityGateway.assert_production_wiring` 当前固定要求 `adapters["oa"]` | 当前生产纵切只有 OA，固定键能忠实堵住本棒静默漏接线；未来若引入非 OA 生产组合，守卫需由 composition 提供必需 adapter 集合，而不能继续把 OA 当通用不变量 | 第二个真实生产 Adapter 的已决 composition 设计 | 对应第二 Adapter composition lane（未排期） | 守卫按已决生产组合验证明确的必需 adapter key 集合，同时继续强制 Registry / Identity / Policy / Trace 非空，并保留破坏式回归测试 | `app/infra/gateway/capability_gateway.py::CapabilityGateway.assert_production_wiring`；`tests/runtime/test_runtime_composition.py::test_production_composition_rejects_incomplete_gateway_wiring` |
-| `phase0/main` 分支保护缺 up-to-date 与禁止 bypass 两项 | 非 fresh PR 仍可能可合并，且有权限账号可绕过 required checks；外部当前状态本轮未现场读取，不宣称已开启 | 仓库 owner 权限，agent 无专项授权不得修改 | 雨爷在 GitHub 分支保护设置中开启 | **Require branches to be up to date before merging** 与 **Do not allow bypassing the above settings** 均开启，且非 fresh PR / bypass 由 GitHub 自动拦截 | `docs/phase2/STATUS.md`「必达链与阻塞」Owner 待办；`docs/phase2/DECISIONS.md` 2026-08-20「并行 lane 的测试库约束」 |
+| `phase0/main` 分支保护缺 up-to-date 一项 | 非 fresh PR 仍可能可合并；2026-11-20 现场读取 `strict=false`。禁止 bypass 一项雨爷已决定不开（DECISIONS 2026-11-20 第 4 项） | 仓库 owner 权限，agent 无专项授权不得修改 | 雨爷在 GitHub 分支保护设置中开启，或裁决不开 | **Require branches to be up to date before merging** 开启且非 fresh PR 由 GitHub 自动拦截，或雨爷裁决不开 | `docs/phase2/STATUS.md`「必达链与阻塞」Owner 待办；`docs/phase2/DECISIONS.md` 2026-08-20「并行 lane 的测试库约束」 |
 | 仓库卫生候选需逐项复核 | 分支或 worktree 可能仍有独有文件、未暂存修改或未合入 commit；数量易漂移，且删除属于红线 | 逐项只读复核与动作级专项授权 | `P2-REPO-CLEANUP-001`（仅已授权范围） | 每个候选均证明无唯一未集成内容并取得对应删除授权 | `git worktree list --porcelain`；`git branch --format`；`git branch -r --format` |
 | `.github` PR body 三段式模板缺失 | 当前没有仓库级填写兜底；模板只能兜底，`gh pr create --body` 仍可绕过 | 新的 `.github/` Scope lane | 尚未排期的 PR 治理加固 | `.github/pull_request_template.md` 提供三个固定标题并验证常规创建路径；文档明确它不是强制门禁 | `AGENTS.md`「Git 与永久任务记录」；`.github/` 当前无 `pull_request_template.md` |
 | PR body 三段式缺少 CI 强制校验 | 文档和模板都不能阻止遗漏，CI 是唯一“忘了也会被拦下”的形态 | 新的 `.github/workflows` Scope；若设 required check，还需仓库 owner 按规则授权配置 | 尚未排期的 PR body CI gate | CI 对缺失三段的 PR fail-closed、对完整三段通过，并纳入 `phase0/main` required checks | `AGENTS.md`「Git 与永久任务记录」；`.github/workflows/ci.yml` 有 PR 触发但无 PR body 三段校验 |
@@ -360,7 +359,9 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-ORGDIR-OA-SOURCE-001` | P2-GOV-SYNC-074 | **B** | OA 通讯录生产 Source 适配器，保持本地镜像 + 定时同步；首步须在真实 OA 只读验证全单位取数方式（departmentid 为空、部门树完整性、sortParams），见 [ADR 请求参数补充](../adr/phase2/ADR-P2-OA-DIRECTORY-001-readonly-directory-contract.md#请求参数取值2026-10-26-补充)；执行前说明数据流向并取得雨爷确认，只输出计数与完整性结论，不输出人员行 |
 | `P2-LOW-RISK-WRITE-001` | P2-GOLDEN-001、P2-CONFIRM-BINDING-001、P2-SDUI-RENDERER-001、P2-ENVELOPE-MESSAGE-REDACTION-001（均已完成） | **A** | **是：OA 审批提交协议结构未知；输入到位前不开棒** |
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
-| `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 是：获批知识语料与用户数据边界未到位；机会层 |
+| `P2-CHAT-HISTORY-PERSIST-001` | 无 | **B（高风险，预判）** | 否：雨爷 2026-11-20 定为下一棒，可与 `P2-MEMORY-001` 合棒；方案开棒时细谈；新表或迁移另取授权；只限本人本会话读取 |
+| `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 否：雨爷 2026-11-20 定为下一棒，先做本人个人记忆（聊天喜好等），实现开棒时细谈；边界见 DECISIONS 2026-08-19 与 2026-11-20；知识库仍属 P3 |
+| `P2-OA-OVERVIEW-BINDING-HINT-001` | 无 | **C** | 否：合同见 DECISIONS 2026-11-20 第 3 项；GT-012 保持 100% 通过 |
 | `P2-SKILL-CANDIDATE-001` | P2-READ-ADAPTER-001 | **A（预判）** | 否；只允许人工登记，机会层 |
 | `P2-HIKVISION-ADAPTER-001` | P2-READ-ADAPTER-001 | **A** | 是：现场版本、API/SDK、账号与设备/区域范围未到位；机会层 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001、P2-TASK-TENANT-COLUMN-001（均已完成） | **A** | **S1 已合并（PR #212，2026-09-23）**：显式 source tenant、sessions/角色/凭证及消费者、pending/claim 隔离；S2 Work Object、S3 目录/G2 与全链验收未完成，分段开棒标识待 GOV-SYNC 分配；S1 合并不核销总欠债，全链验收前维持单租户运行、第二租户禁止启用 |
@@ -767,7 +768,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 |---|---|---|---|---|---|
 | 待接手跨重启、会话到期、40 条剪裁与物理清理未真实实测 | 真实验收只覆盖重启后保存提案；4 小时 / 600 秒到期与限批清理需要等待或改时钟，未做 | 无 | 「我的功能」后续批次 | 下一批真实验收覆盖待接手跨重启、到期失效与清理 | `app/infra/persistence/user_skills.py::PostgreSQLUserSkillSessionStore`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` 未实测清单 |
 | 系统中文输入法组字未真实触发 | 验收环境的系统输入法未进入组字，组字期间不弹、不选、不发送只以合成事件验证 | 无 | 「我的功能」后续批次 | 在可用输入法的桌面环境人工复验一次 | 仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` V8 |
-| AgentScope 对话历史仍为进程内 | 重启后模型只看到本会话已完成查询的名称，看不到此前的对话内容 | 无 | 待雨爷裁决是否需要 | 裁定不做，或另立持久对话历史任务 | `app/infra/orchestration/agentscope_runtime/runtime.py`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r4.md` |
+| AgentScope 对话历史仍为进程内 | 重启后模型只看到本会话已完成查询的名称，看不到此前的对话内容 | 无 | `P2-CHAT-HISTORY-PERSIST-001`（雨爷 2026-11-20 定做） | 该棒真实验收：后端重启后模型能看到本会话此前的对话内容 | `app/infra/orchestration/agentscope_runtime/runtime.py`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r4.md` |
 | 评审修复后未重跑真实验收 | 真实验收候选早于 Astra 第四至第七轮修复；手输即显标签、名单读取失败提示、重新生成的格式与结构判定只有静态检查与定向既有测试 | 无 | 「我的功能」后续批次 | 下一批真实验收覆盖上述行为 | 仓库外 `readonly-skill-phase2-20261118/review/`、`acc/ACC_r4.md` |
 | Astra 第八轮聊天侧发现未修 | 另一页改名并把旧名让给另一功能、且本页名单刷新失败时，手输、候选或面板可用旧名单建立标签；组字期间名单回包可丢失较长名称的编辑；另有名称附近编辑重新显标等四项 P1。后果为执行本人另一只读功能，结果卡显示服务端现名 | 无 | 「我的功能」后续批次 | 候选与面板只用当前成功名单，名单更新时复核已有标签，或裁定不做 | 仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-01～03、P1-01～04 |
 | Astra 第八轮重新生成发现未修 | 非枚举步骤输出凭同名 `format` 放行、相同 `additionalProperties` 覆盖不同字段、自定义 format 或 `deprecated` 误拒、`items: true` 误拒；当前可保存的 OA 叶子无参数，比较不可达 | 首个带参数的只读叶子接入个人功能 | 该叶子接入棒 | 重新生成对步骤输出 `format` 与对象关联约束保守拒绝，误拒两项按需放宽 | `app/user_skills/proposal.py::rebase_definition`；仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-04、P0-05、P1-05、P1-06 |
@@ -782,7 +783,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 概览工作流遇到未绑定或已撤销绑定仍显示通用失败 | 本棒只把概览工作流的 `identity_expired` 还原为绑定提示；`identity_unbound`、`identity_revoked`、`needs_binding_scope` 仍按既有测试合同收为 failed，页面显示「操作失败」，没有绑定入口。改动须先定合同 | 无 | 用户反馈或下一次 OA 绑定体验调整时 | 定合同后概览工作流的各类身份阻断显示对应绑定提示，或裁决维持现状 | `app/infra/orchestration/agent_adapter.py::_workflow_execution_result`；`tests/runtime/test_production_workflow.py::test_overview_short_circuits_each_failure` |
+| 概览工作流遇到未绑定或已撤销绑定仍显示通用失败 | 本棒只把概览工作流的 `identity_expired` 还原为绑定提示；`identity_unbound`、`identity_revoked`、`needs_binding_scope` 仍按既有测试合同收为 failed，页面显示「操作失败」，没有绑定入口。合同已于 2026-11-20 定（DECISIONS 当日第 3 项） | 无 | `P2-OA-OVERVIEW-BINDING-HINT-001` | 未绑定、已撤销显示绑定入口，需选范围沿用多绑定澄清，GT-012 通过 | `app/infra/orchestration/agent_adapter.py::_workflow_execution_result`；`tests/runtime/test_production_workflow.py::test_overview_short_circuits_each_failure` |
 
 ### OA 会话自动恢复 `P2-AUTH-OA-ACTIVE-RECOVERY-001` 新增欠债（2026-11-17）
 
