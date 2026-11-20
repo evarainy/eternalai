@@ -936,6 +936,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         user_profile=None,
         user_preferences=None,
         user_skills=None,
+        chat_history=None,
         background_jobs=None,
         file_artifacts=None,
         im_deliveries=None,

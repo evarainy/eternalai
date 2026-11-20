@@ -62,6 +62,7 @@ from app.ports.agent_orchestration import (
 from app.ports.auth import AuthenticatedSessionContext, authenticated_session
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.conversation_history import ConversationHistoryPort
 from app.ports.error_codes import ErrorCode
 from app.ports.evaluation import BusinessVerification, EvaluationScope
 from app.ports.human_gate import (
@@ -149,6 +150,7 @@ class AgentScopeRuntimeDependencies:
     sheet_fill: SheetFillAdmission | None = None
     # Personal saved flows; None hides recording, the save tool and saved-flow tools.
     user_skills: UserSkillService | None = None
+    chat_history: ConversationHistoryPort | None = None
 
 
 @dataclass(frozen=True, slots=True)

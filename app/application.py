@@ -22,6 +22,7 @@ from app.api.v1.auth import (
 from app.api.v1.background_jobs import make_router as make_background_jobs_router
 from app.api.v1.browser_runs import make_router as make_browser_runs_router
 from app.api.v1.browser_screen import make_router as make_browser_screen_router
+from app.api.v1.conversations import make_router as make_conversations_router
 from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.credential_bindings import make_router as make_credential_binding_router
 from app.api.v1.csrf import (
@@ -86,6 +87,7 @@ from app.ports.browser_chat import (
 from app.ports.browser_fill_stop import DFormManagementPort
 from app.ports.browser_gateway import BrowserGatewayRegistration
 from app.ports.browser_screen import BrowserScreenPort
+from app.ports.conversation_history import ConversationHistoryPort
 from app.ports.runtime import RuntimePort
 from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
@@ -107,6 +109,7 @@ def create_app(
     user_profile: UserProfilePort | None = None,
     user_preferences: UserPreferencesPort | None = None,
     user_skills: UserSkillService | None = None,
+    chat_history: ConversationHistoryPort | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
     session_revocations: SessionRevocationStorePort | None = None,
@@ -305,6 +308,7 @@ def create_app(
             browser_chat=browser_chat,
             im_context=im_context,
             chat_attachments=file_artifact_service,
+            chat_history=chat_history,
         ),
         prefix="/api/v1/runtime",
     )
@@ -370,6 +374,10 @@ def create_app(
     application.include_router(
         make_my_skills_router(user_skills, csrf_protected_principal, session_binder=session_binder),
         prefix="/api/v1/my-skills",
+    )
+    application.include_router(
+        make_conversations_router(chat_history, csrf_protected_principal, session_binder),
+        prefix="/api/v1/conversations",
     )
     application.include_router(
         make_credential_binding_router(
@@ -581,6 +589,7 @@ def create_production_app(
         user_profile=components.user_profile,
         user_preferences=components.user_preferences,
         user_skills=components.user_skills,
+        chat_history=components.chat_history,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_revocations=components.session_revocations,

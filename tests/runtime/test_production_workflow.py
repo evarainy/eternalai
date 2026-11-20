@@ -560,8 +560,10 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
                         referred_schema_fn=lambda *_args: schema_name,
                     )
                 assert target.tables
+                # Identity creates a new sequence when the cloned table is created.
                 assert all(
                     column.server_default is None
+                    or column.identity is not None
                     or "nextval" not in str(column.server_default.arg)
                     for table in target.tables.values() for column in table.columns
                 ), "Sandbox must not share public sequences"
