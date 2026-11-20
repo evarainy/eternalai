@@ -30,7 +30,9 @@ import { SheetFillPlanCard } from '../features/background-jobs/SheetFillPlanCard
 import { UserSkillCard } from '../features/my-skills/UserSkillCard';
 import { MySkillsPanel } from '../features/my-skills/MySkillsPanel';
 import { SkillMentionList, SkillMentionTag } from '../features/my-skills/SkillMention';
-import { useSkillMention, type SkillSelection } from '../features/my-skills/useSkillMention';
+import {
+  useSkillMention, type MentionResolution, type SkillSelection,
+} from '../features/my-skills/useSkillMention';
 import {
   forgetPendingSheetFill,
   loadPendingSheetFills,
@@ -1030,7 +1032,19 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     if (element !== null && hasThread && stickToBottom.current) element.scrollTop = element.scrollHeight;
   }, [transcript, mutation.isPending, browserTarget, pendingSubmission, retrySubmission, chatSheetOpen]);
 
-  const submit = (retry?: ChatSubmission) => {
+  /** A new message goes on only after its `$` choice was checked on a list read now, and only if
+   * the draft, the login and the conversation stayed the same meanwhile. */
+  const checkMention = async (message: string) => {
+    const sessionId = useAIDockStore.getState().sessionId;
+    requestInFlight.current = true;
+    const named = await mention.resolveForSend(message);
+    requestInFlight.current = false;
+    if (named === null || useAIDockStore.getState().sessionId !== sessionId) return;
+    submitRef.current(undefined, named);
+  };
+
+  /** ``checked``: the `$` choice of a new message, checked on a list read now. */
+  const submit = (retry?: ChatSubmission, checked?: MentionResolution) => {
     const message = retry?.message ?? draft.trim();
     if (!message || requestInFlight.current) {
       return;
@@ -1050,7 +1064,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           || pendingSubmission !== null)) return;
     let userSkill: SkillSelection | null = null;
     if (retry === undefined) {
-      const named = mention.resolveForSend(message);
+      if (checked === undefined && mention.needsCheck(message)) {
+        void checkMention(message);
+        return;
+      }
+      const named: MentionResolution = checked ?? { kind: 'none' };
       if (named.kind === 'blocked') {
         setMentionNotice(named.reason);
         return;
@@ -1097,6 +1115,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     activeSubmission.current = submission;
     mutation.mutate(message);
   };
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
 
   const submitConfirmation = async (action: UserAction) => {
     const store = useAIDockStore.getState();
