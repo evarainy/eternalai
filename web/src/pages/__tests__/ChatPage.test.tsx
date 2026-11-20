@@ -14,7 +14,7 @@ import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../app/theme';
-import { identityQueryKey } from '../../app/identity';
+import { identityQueryKey, useIdentityRevalidation } from '../../app/identity';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { RecordsList } from '../../components/RecordsList';
 import {
@@ -246,11 +246,17 @@ function makeClient() {
  * 「发 送」），应用侧用 `WORKBENCH_BUTTON_CONFIG` 关掉了这个行为。测试里不带它，可及名称就和实机
  * 不一致，按名字找按钮的断言会对着一个真实界面里并不存在的名字通过或失败。
  */
-function renderChat(client = makeClient()) {
+function Revalidation() {
+  useIdentityRevalidation();
+  return null;
+}
+
+function renderChat(client = makeClient(), { revalidation = false } = {}) {
   const rendered = render(
     <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
       <QueryClientProvider client={client}>
         <MemoryRouter>
+          {revalidation ? <Revalidation /> : null}
           <ChatPage />
         </MemoryRouter>
       </QueryClientProvider>
@@ -408,12 +414,16 @@ describe('ChatPage request boundary', () => {
   it('hides a verified value and clears accepted IDs after a cross-tab owner switch', async () => {
     identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
       .mockResolvedValueOnce(browserMe('owner_b'));
-    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
-      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
-        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
-    )));
+    const fetchMock = vi.fn((url: string) => (url === '/api/v1/me'
+      // App-wide revalidation reads /me through the request layer; serve the same identity mock.
+      ? Promise.resolve(identityMock.readMe()).then((me: unknown) => response(me))
+      : Promise.resolve(response(
+        url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+          : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+      ))));
     vi.stubGlobal('fetch', fetchMock);
-    renderChat();
+    // Focus revalidation is app-wide; the page follows its result.
+    renderChat(makeClient(), { revalidation: true });
     fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
     await sendMessage('synthetic read');
     expect(await screen.findByRole('region', { name: '浏览器结果' }))
@@ -430,12 +440,16 @@ describe('ChatPage request boundary', () => {
   it('keeps a verified value hidden while fresh identity is unavailable', async () => {
     identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
       .mockRejectedValueOnce(new Error('synthetic_identity_unavailable'));
-    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
-      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
-        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
-    )));
+    const fetchMock = vi.fn((url: string) => (url === '/api/v1/me'
+      // App-wide revalidation reads /me through the request layer; serve the same identity mock.
+      ? Promise.resolve(identityMock.readMe()).then((me: unknown) => response(me))
+      : Promise.resolve(response(
+        url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+          : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+      ))));
     vi.stubGlobal('fetch', fetchMock);
-    renderChat();
+    // Focus revalidation is app-wide; the page follows its result.
+    renderChat(makeClient(), { revalidation: true });
     fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
     await sendMessage('synthetic read');
     expect(await screen.findByRole('region', { name: '浏览器结果' }))

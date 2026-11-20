@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Button, Dropdown, Input } from 'antd';
 import { ApiError } from '../../api/mutator';
+import { currentIdentityPending, useIdentityPending } from '../../app/identity';
 import {
   conversationMessagesApiV1ConversationsSessionIdMessagesGet as readConversation,
   deleteConversationApiV1ConversationsSessionIdDelete as deleteConversation,
@@ -41,6 +42,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
 }) {
   const authStatus = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
+  const pending = useIdentityPending();
   const refresh = useRefreshConversations();
   const list = useInfiniteQuery({
     queryKey: ['conversations', generation],
@@ -49,7 +51,10 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
     }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor,
-    enabled: authStatus === 'authenticated',
+    // Paused while the login is being confirmed (revalidation cancels what is in flight):
+    // a reply could belong to another account.
+    enabled: authStatus === 'authenticated' && pending === null,
+    refetchOnWindowFocus: false,
     retry: false,
   });
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -74,7 +79,8 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       const auth = useAuthStore.getState();
       // A later click, another login or a conversation started meanwhile wins over this reply.
       if (sequence !== openSequence.current || auth.status !== 'authenticated'
-          || auth.generation !== generation || useAIDockStore.getState().sessionId !== left) return;
+          || auth.generation !== generation || currentIdentityPending() === 'switching'
+          || useAIDockStore.getState().sessionId !== left) return;
       onOpen(item, conversation);
     } catch (error) {
       if (sequence !== openSequence.current) return;
@@ -192,7 +198,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       )}
       {list.hasNextPage ? (
         <Button block size="small" type="text" loading={list.isFetchingNextPage}
-          onClick={() => void list.fetchNextPage()}>
+          disabled={pending !== null} onClick={() => void list.fetchNextPage()}>
           更多
         </Button>
       ) : null}
