@@ -20,6 +20,7 @@ const LazyAppsPage = lazy(() => Promise.all([
   },
 })));
 const LazyLeaderRosterPage = lazy(() => import('../features/leader-roster/LeaderRosterPage'));
+const LazyMemoriesPage = lazy(() => import('../features/memories/MemoriesPage'));
 const LazyMessagesPage = lazy(() => import('../features/messages/MessagesPage'));
 const LazyWorkDispatchPage = lazy(() =>
   import('../features/work-dispatch/WorkDispatchPage'),
@@ -45,6 +46,7 @@ export interface LazyRouteComponents {
   LazyHealthPage: ComponentType;
   LazyLeaderRosterPage: ComponentType;
   LazyLoginPage: ComponentType;
+  LazyMemoriesPage: ComponentType;
   LazyMessagesPage: ComponentType;
   LazyRegistryPage: ComponentType;
   LazyTasksPage: ComponentType;
@@ -64,6 +66,7 @@ export const lazyRouteComponents: LazyRouteComponents = {
   LazyHealthPage,
   LazyLeaderRosterPage,
   LazyLoginPage,
+  LazyMemoriesPage,
   LazyMessagesPage,
   LazyRegistryPage,
   LazyTasksPage,
