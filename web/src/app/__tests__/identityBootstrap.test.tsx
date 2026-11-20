@@ -87,7 +87,7 @@ it('same_bootstrap_timing_authenticates_a_valid_identity_without_logout', async 
     { status: 'unknown', generation: 900 },
     { status: 'authenticated', generation: 901 },
   ]);
+  // The new generation is seeded with the confirmed startup result instead of refetching it.
   await waitFor(() => expect(client.getQueryData(identityQueryKey(901))).toEqual(identity));
-  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-  expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/me', expect.objectContaining({ method: 'GET' }));
+  expect(globalThis.fetch).not.toHaveBeenCalled();
 });

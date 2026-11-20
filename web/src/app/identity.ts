@@ -1,9 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { UseQueryResult } from '@tanstack/react-query';
+import type { QueryClient, UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAuthStore } from '../stores/authStore';
+import { withAuthCookieLock } from './sessionKeepalive';
 import {
   beginIMLogin, imBridgeBlocked, imLogoutInProgress, suspendIMIdentity,
 } from '../features/messages/hostBridge';
@@ -18,7 +19,6 @@ import {
  */
 export const IDENTITY_QUERY_KEY = ['me'] as const;
 export const identityQueryKey = (generation: number) => [...IDENTITY_QUERY_KEY, generation] as const;
-export const IDENTITY_STALE_TIME_MS = 5 * 60 * 1000;
 
 export interface CurrentIdentity {
   /** 来自服务端签名的会话票据；只要还登录着就一定有。 */
@@ -37,9 +37,12 @@ export function useIdentityQuery(): UseQueryResult<MeResponse> {
     queryKey: identityQueryKey(generation),
     queryFn: () => readMeApiV1MeGet(),
     enabled: status !== 'unauthenticated' && !imLogoutInProgress(),
-    staleTime: IDENTITY_STALE_TIME_MS,
-    // Focus revalidation below compares the confirmed account before changing state.
+    // Never refetched in the background. Startup, login and revalidation seed each generation with
+    // a confirmed result; a background refetch after another tab switched accounts would put that
+    // account into this generation and hide the switch. Only an empty key is fetched.
+    staleTime: Infinity,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -62,18 +65,22 @@ export function useCurrentIdentity(): CurrentIdentity {
  *   「你没登录」会在每次抖动时把人推到登录页，训练用户在异常状态下反复输密码——那是钓鱼形状的习惯。
  */
 export function useIdentityBootstrap(): void {
+  const queryClient = useQueryClient();
   const status = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
   const { data } = useIdentityQuery();
+  // A switch announced during startup: wait until revalidation restarts the check after it.
+  const switching = useIdentityPending() === 'switching';
 
   useEffect(() => {
     // 只把 `unknown` 收敛掉。若已经明确退出登录，一个还在路上的启动确认**不得**把人重新标成已登录。
-    if (!imLogoutInProgress() && data !== undefined && status === 'unknown' &&
+    if (!switching && !imLogoutInProgress() && data !== undefined && status === 'unknown' &&
         useAuthStore.getState().status === 'unknown' &&
         useAuthStore.getState().generation === generation) {
       useAuthStore.getState().markAuthenticated();
+      seedConfirmedIdentity(queryClient, data);
     }
-  }, [data, status, generation]);
+  }, [data, status, generation, queryClient, switching]);
 }
 
 const AUTH_CHANNEL = 'eternalai-auth';
@@ -93,26 +100,69 @@ export function notifyIdentityRecheck(): void { notifyIdentityChange(RECHECK_MES
 export function notifyIdentitySwitch(): void { notifyIdentityChange(SWITCH_MESSAGE); }
 
 /**
- * 身份复核（切回标签页、获得焦点、别的标签页换号）发出后、当前身份确认之前为 true，复核失败也保持 true。
- * 只给本人看的页面据此暂停显示和查询；换了人会递增代次，页面按新代次重新挂载。
+ * 身份复核发出后、当前身份确认之前不为 null，复核失败也保持。`switching` 表示别的标签页正在登录或退出，
+ * 只给本人看的内容一律收起；`rechecking` 是切回标签页等普通复核。换了人会递增代次，页面按新代次重新挂载。
  */
-let identityUnconfirmed = false;
-const unconfirmedListeners = new Set<() => void>();
+export type IdentityPending = 'rechecking' | 'switching';
+export const IDENTITY_SWITCHING_NOTICE = '另一个标签页正在切换登录账号，确认后再显示。';
+let identityPending: IdentityPending | null = null;
+const pendingListeners = new Set<() => void>();
 
-function setIdentityUnconfirmed(value: boolean): void {
-  if (identityUnconfirmed === value) return;
-  identityUnconfirmed = value;
-  unconfirmedListeners.forEach((listener) => listener());
+function setIdentityPending(value: IdentityPending | null): void {
+  if (identityPending === value) return;
+  identityPending = value;
+  pendingListeners.forEach((listener) => listener());
 }
 
-function subscribeIdentityUnconfirmed(listener: () => void): () => void {
-  unconfirmedListeners.add(listener);
-  return () => { unconfirmedListeners.delete(listener); };
+function subscribeIdentityPending(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => { pendingListeners.delete(listener); };
+}
+
+export function useIdentityPending(): IdentityPending | null {
+  return useSyncExternalStore(subscribeIdentityPending, () => identityPending);
 }
 
 export function useIdentityUnconfirmed(): boolean {
-  return useSyncExternalStore(subscribeIdentityUnconfirmed, () => identityUnconfirmed);
+  return useIdentityPending() !== null;
 }
+
+/** 只给本人看、按代次分键的查询；进入待确认时立即取消，已安排的重试不得以别人的 cookie 落地。 */
+const PRIVATE_QUERY_PREFIXES = [['memories'], ['conversations']] as const;
+
+function holdPrivateQueries(queryClient: QueryClient, value: IdentityPending): void {
+  if (identityPending !== 'switching') setIdentityPending(value);
+  for (const queryKey of PRIVATE_QUERY_PREFIXES) void queryClient.cancelQueries({ queryKey });
+}
+
+/**
+ * 启动确认期间收到换号：丢弃可能读到旧账号的那次启动结果，换号写锁释放后重新确认。
+ * 启动页面只显示 BootGate，没有个人内容，所以这里可以结束待确认。
+ */
+function restartStartupCheck(): void {
+  useAuthStore.getState().invalidateIdentity();
+  setIdentityPending(null);
+}
+
+// Logged out: nothing private is shown; a later login or startup check starts unheld.
+useAuthStore.subscribe((state, previous) => {
+  if (state.status === 'unauthenticated' && previous.status !== 'unauthenticated') {
+    setIdentityPending(null);
+  }
+});
+
+export function currentIdentityPending(): IdentityPending | null { return identityPending; }
+
+/** 在 `markAuthenticated()` 之后调用：把已确认的身份写进当前代次，并结束待确认。 */
+export function seedConfirmedIdentity(queryClient: QueryClient, identity: MeResponse): void {
+  queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
+  setIdentityPending(null);
+}
+
+let recheckNow: (() => void) | null = null;
+
+/** 「重试核对」：按普通复核再问一次后端。 */
+export function requestIdentityRecheck(): void { recheckNow?.(); }
 
 export function useIdentityRevalidation(): boolean {
   const queryClient = useQueryClient();
@@ -120,58 +170,73 @@ export function useIdentityRevalidation(): boolean {
   const status = useAuthStore((state) => state.status);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    setFailed(false);
-    setIdentityUnconfirmed(false);
-  }, [generation]);
+  useEffect(() => { setFailed(false); }, [generation]);
 
   useEffect(() => {
     let live = true;
     let sequence = 0;
     let channel: BroadcastChannel | null = null;
-    const recheck = async () => {
-      const current = useAuthStore.getState();
-      if (imLogoutInProgress() || current.status !== 'authenticated') return;
+    const recheck = async (cause: IdentityPending) => {
+      const start = useAuthStore.getState();
+      if (imLogoutInProgress() || start.status === 'unauthenticated') return;
+      // A startup check may already hold the old account; only a switch makes that matter.
+      if (start.status === 'unknown' && cause !== 'switching') return;
       const requestSequence = ++sequence;
-      setIdentityUnconfirmed(true);
-      const previous = queryClient.getQueryData<MeResponse>(identityQueryKey(current.generation));
-      const isCurrent = () => live && !imLogoutInProgress() && requestSequence === sequence &&
-        useAuthStore.getState().generation === current.generation;
+      holdPrivateQueries(queryClient, cause);
+      const isCurrent = (generation: number) => live && !imLogoutInProgress() &&
+        requestSequence === sequence && useAuthStore.getState().generation === generation;
+      let generation = start.generation;
       try {
+        // Shared lock: a login or logout holding the cookie lock finishes before this read.
         // Bypass cache. The generated client cannot abort this HTTP request.
-        const identity = await readMeApiV1MeGet();
-        if (!isCurrent()) return;
+        const identity = await withAuthCookieLock(async () => {
+          const current = useAuthStore.getState();
+          if (!live || requestSequence !== sequence || imLogoutInProgress()) return null;
+          if (current.status === 'unknown') {
+            restartStartupCheck();
+            return null;
+          }
+          if (current.status !== 'authenticated') return null;
+          generation = current.generation;
+          return readMeApiV1MeGet();
+        }, 'shared');
+        if (identity === null || !isCurrent(generation)) return;
+        const known = queryClient.getQueryData<MeResponse>(identityQueryKey(generation));
         // The server's account scope survives cookie renewal and includes tenant/user/roles.
-        if (previous?.restore_scope == null || identity.restore_scope !== previous.restore_scope) {
+        if (known?.restore_scope == null || identity.restore_scope !== known.restore_scope) {
           // Reuse the synchronous unauthenticated cleanup before accepting the new account.
           suspendIMIdentity('unauthenticated');
           beginIMLogin();
           useAuthStore.getState().markAuthenticated();
-          queryClient.setQueryData(identityQueryKey(useAuthStore.getState().generation), identity);
         }
+        // Same account: refresh what pages read (e.g. the browser skill) under this generation.
+        seedConfirmedIdentity(queryClient, identity);
         setFailed(false);
-        setIdentityUnconfirmed(false);
       } catch {
-        if (isCurrent()) setFailed(true);
+        if (!isCurrent(generation)) return;
+        if (useAuthStore.getState().status === 'unknown') restartStartupCheck();
+        else setFailed(true);
       }
     };
     let wasHidden = document.visibilityState === 'hidden';
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') wasHidden = true;
-      else if (wasHidden) { wasHidden = false; void recheck(); }
+      else if (wasHidden) { wasHidden = false; void recheck('rechecking'); }
     };
-    const onFocus = () => { wasHidden = false; void recheck(); };
+    const onFocus = () => { wasHidden = false; void recheck('rechecking'); };
+    const ownRecheck = () => { void recheck('rechecking'); };
+    recheckNow = ownRecheck;
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.onmessage = (event: MessageEvent<unknown>) => {
           if (imLogoutInProgress()) return;
-          if (event.data === SWITCH_MESSAGE) void recheck();
+          if (event.data === SWITCH_MESSAGE) void recheck('switching');
           if (event.data === RECHECK_MESSAGE) {
             if (imBridgeBlocked() && useAuthStore.getState().status === 'unauthenticated') {
               beginIMLogin();
               useAuthStore.getState().invalidateIdentity();
-            } else { void recheck(); }
+            } else { void recheck('rechecking'); }
           }
         };
       }
@@ -180,6 +245,9 @@ export function useIdentityRevalidation(): boolean {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       live = false;
+      // Nothing can confirm a hold once its only revalidator is gone.
+      setIdentityPending(null);
+      if (recheckNow === ownRecheck) recheckNow = null;
       channel?.close();
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);

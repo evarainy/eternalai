@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from 'react';
-import type { ComponentType } from 'react';
+import { Fragment, useEffect, useMemo } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import ConfigProvider from 'antd/es/config-provider';
 import zhCN from 'antd/locale/zh_CN';
 import {
@@ -17,7 +17,7 @@ import {
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
 import { BootGate } from './app/BootGate';
-import { useIdentityBootstrap, useIdentityRevalidation } from './app/identity';
+import { requestIdentityRecheck, useIdentityBootstrap, useIdentityRevalidation } from './app/identity';
 import {
   lazyRouteComponents,
 } from './app/lazyRoutes';
@@ -68,7 +68,12 @@ export function AuthenticationEffects() {
   }, [activeQueryClient]);
 
   return status === 'authenticated' && revalidationFailed
-    ? <div role="alert">暂时无法确认登录状态</div>
+    ? (
+      <div role="alert">
+        <span>暂时无法确认登录状态</span>
+        <button onClick={requestIdentityRecheck} type="button">重试</button>
+      </div>
+    )
     : null;
 }
 
@@ -80,6 +85,12 @@ export function SessionKeepaliveBanner() {
 export function AppSessionRenewal() {
   useAppSessionRenewal();
   return null;
+}
+
+/** Page-local state of the previous login never renders under a new one: remount per generation. */
+function GenerationKeyed({ children }: { children: ReactNode }) {
+  const generation = useAuthStore((state) => state.generation);
+  return <Fragment key={generation}>{children}</Fragment>;
 }
 
 export function ProtectedRoute() {
@@ -202,7 +213,7 @@ export default function App({ routes = lazyRouteComponents }: AppProps) {
                   path="/chat"
                   element={(
                     <RouteLoadBoundary label="正在打开页面">
-                      <LazyChatPage />
+                      <GenerationKeyed><LazyChatPage /></GenerationKeyed>
                     </RouteLoadBoundary>
                   )}
                 />

@@ -825,7 +825,7 @@ export function AppShell() {
 
       {hasOpenedDock ? (
         <RouteLoadBoundary label="正在打开 AI 助手" surface="dock">
-          <LazyAIDock suppressed={isAIAssistantPage} />
+          <LazyAIDock key={authGeneration} suppressed={isAIAssistantPage} />
         </RouteLoadBoundary>
       ) : null}
     </div>

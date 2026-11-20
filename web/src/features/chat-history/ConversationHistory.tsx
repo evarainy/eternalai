@@ -5,6 +5,9 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Button, Dropdown, Input } from 'antd';
 import { ApiError } from '../../api/mutator';
 import {
+  currentIdentityPending, IDENTITY_SWITCHING_NOTICE, useIdentityPending,
+} from '../../app/identity';
+import {
   conversationMessagesApiV1ConversationsSessionIdMessagesGet as readConversation,
   deleteConversationApiV1ConversationsSessionIdDelete as deleteConversation,
   listConversationsApiV1ConversationsGet as listConversations,
@@ -41,6 +44,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
 }) {
   const authStatus = useAuthStore((state) => state.status);
   const generation = useAuthStore((state) => state.generation);
+  const pending = useIdentityPending();
   const refresh = useRefreshConversations();
   const list = useInfiniteQuery({
     queryKey: ['conversations', generation],
@@ -49,7 +53,10 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
     }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor,
-    enabled: authStatus === 'authenticated',
+    // Paused while the login is being confirmed (revalidation cancels what is in flight):
+    // a reply could belong to another account.
+    enabled: authStatus === 'authenticated' && pending === null,
+    refetchOnWindowFocus: false,
     retry: false,
   });
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -74,7 +81,8 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       const auth = useAuthStore.getState();
       // A later click, another login or a conversation started meanwhile wins over this reply.
       if (sequence !== openSequence.current || auth.status !== 'authenticated'
-          || auth.generation !== generation || useAIDockStore.getState().sessionId !== left) return;
+          || auth.generation !== generation || currentIdentityPending() === 'switching'
+          || useAIDockStore.getState().sessionId !== left) return;
       onOpen(item, conversation);
     } catch (error) {
       if (sequence !== openSequence.current) return;
@@ -121,6 +129,7 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
   return (
     <aside aria-label="我问过的" className={styles.history}>
       <h2>我问过的</h2>
+      {pending === 'switching' ? <p role="status">{IDENTITY_SWITCHING_NOTICE}</p> : <>
       {list.isPending && authStatus === 'authenticated' ? <p role="status">正在读取…</p> : null}
       {list.isError ? <p role="alert">历史对话暂时无法读取，请稍后再试。</p> : null}
       {list.isSuccess && items.length === 0 ? <p>还没有保存的对话。</p> : null}
@@ -192,11 +201,12 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       )}
       {list.hasNextPage ? (
         <Button block size="small" type="text" loading={list.isFetchingNextPage}
-          onClick={() => void list.fetchNextPage()}>
+          disabled={pending !== null} onClick={() => void list.fetchNextPage()}>
           更多
         </Button>
       ) : null}
       {notice ? <p role="alert">{notice}</p> : null}
+      </>}
     </aside>
   );
 }

@@ -95,7 +95,10 @@ import {
   VIEW_ONLY_NOTICE,
 } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
-import { useIdentityQuery } from '../app/identity';
+import {
+  currentIdentityPending, IDENTITY_SWITCHING_NOTICE, requestIdentityRecheck, useIdentityPending,
+  useIdentityQuery,
+} from '../app/identity';
 import { returnUnsentMessage } from '../app/reauthRestore';
 import { ChatAttachmentBar } from '../features/chat-upload/ChatAttachmentBar';
 import {
@@ -570,9 +573,13 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     return outcome === undefined ? null : userActionOutcomeMessages[outcome];
   };
   const identityQuery = useIdentityQuery();
+  // refetchMe only fills an empty key; a confirmed one is refreshed by revalidation.
   const { data: me, refetch: refetchMe } = identityQuery;
   const authStatus = useAuthStore((state) => state.status);
   const authGeneration = useAuthStore((state) => state.generation);
+  // Another tab is logging in or out: this account's conversation stays hidden and unsent.
+  const identityPending = useIdentityPending();
+  const identitySwitching = identityPending === 'switching';
   const browserOwner = useMemo(() => parseBrowserOwnerScope(me), [me]);
   const meSkillId = useMemo(() => parseBrowserSkillId(me), [me]);
   const activeSkillId = meSkillId !== null
@@ -629,7 +636,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   browserTargetRef.current = browserTarget;
   const [browserRecoveryRevision, setBrowserRecoveryRevision] = useState(0);
   const [browserStorageError, setBrowserStorageError] = useState(false);
-  const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
+  // Browser results follow the app-wide identity recheck (one /me reader, under the cookie lock)
+  // and stay hidden until the confirmed owner/skill has been compared with the previous one.
+  const [browserBaseline, setBrowserBaseline] = useState<{
+    generation: number; owner: string | null; skill: string | null;
+  } | null>(null);
   const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
   const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
   // Same-tab refresh recovery (report job ids, unconfirmed sheet fill submissions) is read only
@@ -675,9 +686,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const currentCollection = collection !== null && collection.sessionId === currentSessionId
     && collection.authGeneration === authGeneration && collection.ownerKey === ownerKey
     && authStatus === 'authenticated' ? collection.reference : null;
-  const skillIdRef = useRef<string | null>(meSkillId);
-  skillIdRef.current = meSkillId;
-  const identityCheck = useRef(0);
   // The submission in flight; one of a replaced conversation no longer blocks sending.
   const inFlight = useRef<ChatSubmission | null>(null);
   // Only a first send may be withdrawn on 401; a retry follows an unconfirmed outcome.
@@ -690,7 +698,6 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     browserSubmitContext.current?.controller.abort();
     inFlight.current = null;
   }, []);
-  useEffect(() => { setBrowserIdentityReady(true); }, [authGeneration]);
   useEffect(() => {
     if (browserSubmitContext.current !== null
         && browserSubmitContext.current.ownerKey !== ownerKey) {
@@ -698,61 +705,28 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     }
   }, [ownerKey]);
 
-  const recheckBrowserIdentity = useCallback(() => {
-    const auth = useAuthStore.getState();
-    if (auth.status !== 'authenticated') return;
-    const sequence = ++identityCheck.current;
-    const previousOwner = ownerKeyRef.current;
-    const previousSkill = skillIdRef.current;
-    setBrowserIdentityReady(false);
-    void refetchMe().then((result) => {
-      if (identityCheck.current !== sequence
-          || useAuthStore.getState().generation !== auth.generation) return;
-      if (!result.isSuccess) return;
-      const nextOwner = parseBrowserOwnerScope(result.data);
-      const nextSkill = parseBrowserSkillId(result.data);
-      const nextKey = nextOwner === null ? null
-        : `${nextOwner.tenant_id}/${nextOwner.user_id}`;
-      if (nextKey !== previousOwner || nextSkill !== previousSkill) {
-        clearBrowserAccepted();
-        browserSubmitContext.current?.controller.abort();
-        setBrowserTarget(null);
-        setBrowserTerminal(false);
-        setBrowserHandoff(false);
-        setPendingSubmission(null);
-        setRetrySubmission(null);
-        setCollection(null);
-        setBrowserOptIn(false);
-      }
-      setBrowserIdentityReady(true);
-    }).catch(() => { /* Keep the previous browser result hidden until retry. */ });
-  }, [refetchMe, setCollection]);
-
+  const browserIdentityReady = identityPending === null && browserBaseline !== null
+    && browserBaseline.generation === authGeneration && browserBaseline.owner === ownerKey
+    && browserBaseline.skill === meSkillId;
+  // Same login, but the confirmed /me now names another browser owner or skill: drop browser state.
+  // The first metadata of a generation only sets the baseline.
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
-    let channel: BroadcastChannel | null = null;
-    const checkSequence = identityCheck;
-    const onFocus = () => recheckBrowserIdentity();
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') recheckBrowserIdentity();
-    };
-    try {
-      if (typeof BroadcastChannel !== 'undefined') {
-        channel = new BroadcastChannel('eternalai-auth');
-        channel.onmessage = (event: MessageEvent<unknown>) => {
-          if (event.data === 'recheck-identity') recheckBrowserIdentity();
-        };
-      }
-    } catch { /* Focus still checks current server identity. */ }
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      ++checkSequence.current;
-      channel?.close();
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [authStatus, authGeneration, recheckBrowserIdentity]);
+    if (browserBaseline !== null && browserBaseline.generation === authGeneration
+        && browserBaseline.owner === ownerKey && browserBaseline.skill === meSkillId) return;
+    if (browserBaseline !== null && browserBaseline.generation === authGeneration
+        && (browserBaseline.owner !== null || browserBaseline.skill !== null)) {
+      clearBrowserAccepted();
+      browserSubmitContext.current?.controller.abort();
+      setBrowserTarget(null);
+      setBrowserTerminal(false);
+      setBrowserHandoff(false);
+      setPendingSubmission(null);
+      setRetrySubmission(null);
+      setCollection(null);
+      setBrowserOptIn(false);
+    }
+    setBrowserBaseline({ generation: authGeneration, owner: ownerKey, skill: meSkillId });
+  }, [browserBaseline, authGeneration, ownerKey, meSkillId, setCollection]);
 
   useEffect(() => {
     if (!browserAvailable || browserOwner === null) return;
@@ -1127,7 +1101,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const message = retry?.message ?? draft.trim();
     const flight = inFlight.current;
     if (!message || viewOnly || (flight !== null && submissionIsCurrent(flight))
-        || mention.isChecking()) {
+        || mention.isChecking() || currentIdentityPending() === 'switching') {
       return;
     }
     if (checked !== undefined) {
@@ -1276,7 +1250,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const attachmentsAllowed = !browserOptIn && currentCollection === null && !viewOnly;
   const attachmentsOpen = (attachmentsToggled && attachmentsAllowed)
     || chatAttachments.attachments.length > 0 || chatAttachments.uploads.length > 0;
-  const canSend = Boolean(draft.trim()) && !requestPending && !viewOnly
+  const canSend = Boolean(draft.trim()) && !requestPending && !viewOnly && !identitySwitching
     && !browserSubmissionBlocked && requestMetadataReady && !chatAttachments.busy
     && (attachmentsAllowed || chatAttachments.attachments.length === 0);
 
@@ -1305,7 +1279,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     || (!browserIdentityReady && browserTarget !== null);
   const sheetShown = inConversation && chatSheetOpen;
   const composerOpen = draft.trim() !== '' || attachmentsOpen || historyOpen;
-  const topic = transcript.find((entry) => entry.role === 'user')?.text ?? null;
+  const topic = identitySwitching ? null
+    : transcript.find((entry) => entry.role === 'user')?.text ?? null;
   const askedCount = transcript.filter((entry) => entry.role === 'user').length;
 
   // Esc 收起对话层。焦点在别的浮层（设置、搜索）里时不管，那些浮层自己处理 Esc。
@@ -1397,6 +1372,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               aria-live="polite"
               className={styles.thread}
             >
+              {identitySwitching ? <p role="status">{IDENTITY_SWITCHING_NOTICE}</p> : <>
               {transcript.length === 0 ? null : (
                 <ol className={styles.messageList}>
                   {transcript.map((entry, index) => (
@@ -1540,7 +1516,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
               )}
               {!browserIdentityReady && browserTarget !== null ? (
                 <Alert type="warning" showIcon title="正在核对浏览器任务身份"
-                  action={<Button onClick={recheckBrowserIdentity}>重试核对</Button>} />
+                  action={<Button onClick={requestIdentityRecheck}>重试核对</Button>} />
               ) : null}
               {browserStorageError && visibleBrowserTarget !== null ? (
                 <Alert type="warning" showIcon title="刷新后可能无法恢复此浏览器任务" />
@@ -1570,6 +1546,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                   上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
                 </p>
               ) : null}
+              </>}
             </section>
             </div>
           </div>
@@ -1584,7 +1561,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         <div className={styles.composerNotices}>
           {authStatus === 'authenticated' && !requestMetadataReady ? (
             <Alert type="info" showIcon title="正在核对当前会话信息，核对完成后可发送"
-              action={<Button onClick={() => { void refetchMe(); }}>重新核对</Button>} />
+              action={<Button onClick={() => {
+                if (me === undefined) void refetchMe(); else requestIdentityRecheck();
+              }}>重新核对</Button>} />
           ) : null}
           {browserHandoff && visibleBrowserTarget !== null ? <BrowserHandoffComposerNotice /> : null}
           {viewOnly ? <Alert type="info" showIcon title={VIEW_ONLY_NOTICE} /> : null}
@@ -1632,7 +1611,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           onSubmit={handleSubmit}
         >
           <span aria-hidden="true" className="wb-ringfx"><i /></span>
-          {attachmentsOpen ? (
+          {attachmentsOpen && !identitySwitching ? (
             <div className={styles.attachments}>
               <ChatAttachmentBar controller={chatAttachments} allowed={attachmentsAllowed} />
               {deliveryAttachments.length > 0 ? <DeliveryComposerButton
@@ -1640,13 +1619,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
                 text="" attachments={deliveryAttachments} /> : null}
             </div>
           ) : null}
-          <SkillMentionTag mention={mention} />
-          <SkillMentionList mention={mention} />
+          {identitySwitching ? null : <>
+            <SkillMentionTag mention={mention} />
+            <SkillMentionList mention={mention} />
+          </>}
           {mentionNotice ? <Text type="warning" role="status">{mentionNotice}</Text> : null}
           <textarea
             aria-label="办理请求"
             className={styles.input}
-            disabled={requestPending}
+            disabled={requestPending || identitySwitching}
             id="chat-request"
             onChange={(event) => {
               const value = event.target.value;
@@ -1671,14 +1652,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
             placeholder="交代一件事，或者问个问题"
             ref={inputRef}
             rows={1}
-            value={draft}
+            // The draft stays in the store; it is only kept off screen until the login is confirmed.
+            value={identitySwitching ? '' : draft}
           />
           <div className={styles.composerBar}>
             <button
               aria-label="添加表格"
               aria-pressed={attachmentsOpen}
               className={`wb-btn wb-btn-quiet wb-btn-sm ${styles.clip}`}
-              disabled={!attachmentsAllowed || requestPending}
+              disabled={!attachmentsAllowed || requestPending || identitySwitching}
               onClick={() => { setAttachmentsToggled((open) => !open); }}
               title="添加表格"
               type="button"

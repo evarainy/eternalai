@@ -46,14 +46,17 @@ function watchInput(listener?: () => void): () => void {
 /**
  * Serialize host and IM cookie writes across tabs. Failure to acquire the lock must never
  * start an unlocked request: its late cookie could replace a newer identity.
+ * `shared` is for reads that must observe a finished switch: it waits for any exclusive holder.
  */
-export async function withAuthCookieLock<T>(operation: () => Promise<T>): Promise<T> {
+export async function withAuthCookieLock<T>(
+  operation: () => Promise<T>, mode: LockMode = 'exclusive',
+): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
   if (locks === undefined || typeof locks.request !== 'function') throw new Error('auth_cookie_lock_unavailable');
   const waiting = new AbortController();
   const timer = window.setTimeout(() => { waiting.abort(); }, AUTH_LOCK_WAIT_MS);
   try {
-    return await locks.request(AUTH_COOKIE_LOCK, { mode: 'exclusive', signal: waiting.signal }, () => {
+    return await locks.request(AUTH_COOKIE_LOCK, { mode, signal: waiting.signal }, () => {
       window.clearTimeout(timer);
       return operation();
     });
