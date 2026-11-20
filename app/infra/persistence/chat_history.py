@@ -83,6 +83,8 @@ def _display_envelope(envelope: ResponseEnvelope) -> dict[str, Any]:
         )
     )
     fields["data"] = _display_data(fields["data"])
+    # A reply may repeat a credential the user gave in Chinese; keep it out of history.
+    fields["message"] = _sanitize_history_text(fields["message"])
     return fields
 
 
