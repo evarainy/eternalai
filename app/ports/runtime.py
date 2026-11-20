@@ -35,9 +35,17 @@ d_form_collection_reference: ContextVar[DFormCollectionReference | None] = Conte
 chat_client_request_id: ContextVar[str | None] = ContextVar(
     "chat_client_request_id", default=None,
 )
-# The saved personal flow the user explicitly named (``$``), by canonical id; set by the
-# runtime router after its combination checks, read only by the AgentScope runtime.
-user_skill_ref_reference: ContextVar[str | None] = ContextVar(
+@dataclass(frozen=True, slots=True)
+class ExplicitUserSkill:
+    """The saved flow the user named: canonical id and the name the user saw."""
+
+    skill_id: str
+    name: str
+
+
+# The saved personal flow the user explicitly named (``$``); set by the runtime router
+# after its combination checks, read only by the AgentScope runtime.
+user_skill_ref_reference: ContextVar[ExplicitUserSkill | None] = ContextVar(
     "user_skill_ref_reference", default=None,
 )
 im_source_context: ContextVar[AuthorizedIMContext | None] = ContextVar(
@@ -149,6 +157,7 @@ __all__ = (
     "ConfirmationCoordinatorPort",
     "ConfirmationOwner",
     "DFormCollectionReference",
+    "ExplicitUserSkill",
     "RuntimePort",
     "RuntimeSessionBusyError",
     "StagedWaiting",

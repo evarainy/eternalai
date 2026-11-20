@@ -1203,7 +1203,7 @@ class AgentScopeRuntime:
         if explicit is not None:
             # By id and current version, inside this turn's task; never the model's choice.
             ledger.terminal = await run_explicit_user_skill(
-                deps.user_skills, scope, explicit, turn.deadline, ledger
+                deps.user_skills, scope, explicit.skill_id, explicit.name, turn.deadline, ledger
             )
             return await self._finish_intent(
                 turn, ledger, None, self._summarize(turn, ledger, None, None, None)

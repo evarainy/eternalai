@@ -186,13 +186,15 @@ async def run_explicit_user_skill(
     service: UserSkillService | None,
     scope: ReadToolScope,
     skill_id: str,
+    name: str,
     deadline: float,
     ledger: TurnLedger,
 ) -> UserSkillSettled:
     """Run the flow the user explicitly named, by id and current version; no model.
 
     Missing inputs return the form card. Another user's, a deleted or a never
-    existing flow all return the same card (no name, no version).
+    existing flow all return the same card (no name, no version). A flow whose
+    current name is not the one on the user's tag is refused unrun.
     """
 
     owner = UserSkillOwner(tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id)
@@ -204,6 +206,14 @@ async def run_explicit_user_skill(
         current = await service.current(owner, skill_id)
         if current is None:
             raise missing
+        if current.display_name != name:
+            _LOGGER.info("user_skill.explicit result=renamed")
+            renamed = UserSkillFailure("renamed", 409, "功能名称已变化，请重新选择后再发送")
+            return UserSkillSettled(
+                _failure_card(current.display_name, current.skill_id,
+                              current.current_version, renamed),
+                True, _trace_code(renamed.code),
+            )
         ctx = RunContext(
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             session_id=scope.session_id, channel=scope.channel, entry="chat",
