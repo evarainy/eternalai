@@ -22,7 +22,6 @@ from app.infra.auth.crypto import require_hmac_key
 from app.infra.llm.agentscope_chat import AgentScopeModelError
 from app.ports.user_memories import (
     MEMORY_CONTENT_LIMIT,
-    MEMORY_LIMIT,
     MemoryCandidate,
     MemoryCategory,
     MemoryOwner,
@@ -57,22 +56,18 @@ class _ExtractedMemory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     category: MemoryCategory
-    content: str
+    content: str = Field(min_length=1, max_length=MEMORY_CONTENT_LIMIT)
 
 
 class _Extraction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    memories: list[_ExtractedMemory] = Field(max_length=MEMORY_LIMIT)
+    memories: list[_ExtractedMemory]
 
 
-_SCHEMA = _Extraction.model_json_schema()
-_SCHEMA["$defs"]["_ExtractedMemory"]["properties"]["content"].update(
-    minLength=1, maxLength=MEMORY_CONTENT_LIMIT
-)
 _SCHEMA_FORMAT = {
     "type": "json_schema",
-    "json_schema": {"name": "personal_memories", "schema": _SCHEMA},
+    "json_schema": {"name": "personal_memories", "schema": _Extraction.model_json_schema()},
 }
 _UNSUPPORTED_SCHEMA = re.compile(
     r"json[_ -]schema[\"']? (?:response.format )?(?:is )?(?:not (?:yet )?supported|unsupported)"
@@ -145,7 +140,7 @@ class MemoryPrompt(MiddlewareBase):
         ]
         # The guard receives the decorated copy and counts its tokens. AgentState
         # keeps the original message, including through parked calls and rollback.
-        return await next_handler(**{**input_kwargs, "messages": messages})
+        return await next_handler(messages=messages)
 
 
 class PersonalMemory:
@@ -178,7 +173,7 @@ class PersonalMemory:
             _LOG.info("memory.extract rejected=%s", rejected)
             return
         source = json.dumps(
-            [owner.tenant_id, owner.department_id, owner.ai_user_id, normalize(message)],
+            [owner.tenant_id, owner.ai_user_id, normalize(message)],
             separators=(",", ":"),
         )
         digest = hmac.digest(self._source_key, source.encode(), "sha256").hex()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,13 +15,33 @@ from app.api.v1.csrf import PrincipalDependency
 from app.ports.auth import Principal
 from app.ports.user_memories import (
     MEMORY_CONTENT_LIMIT,
+    MemoryOwner,
     UserMemory,
     UserMemoryStore,
     UserMemoryStoreError,
 )
-from app.user_memories import memory_owner, validated_content
+from app.user_memories import MemoryContentError, MemoryInputReason, validated_content
 
 _NO_STORE = {"Cache-Control": "no-store"}
+
+
+class MemoryInputErrorDetail(BaseModel):
+    code: Literal["memory_input_invalid"]
+    reason: MemoryInputReason
+
+
+class MemoryInputErrorResponse(BaseModel):
+    detail: MemoryInputErrorDetail
+
+
+def _input_reason(error: RequestValidationError) -> MemoryInputReason:
+    for issue in error.errors():
+        if issue["type"] == "string_too_long":
+            return "too_long"
+        rejection = issue.get("ctx", {}).get("error")
+        if isinstance(rejection, MemoryContentError):
+            return rejection.reason
+    return "empty"
 
 
 class _PrivateMemoryRoute(APIRoute):
@@ -31,10 +51,11 @@ class _PrivateMemoryRoute(APIRoute):
         async def handle(request: Request) -> Response:
             try:
                 response = await original(request)
-            except RequestValidationError:
-                raise HTTPException(
-                    422, {"code": "memory_input_invalid"}, headers=_NO_STORE
-                ) from None
+            except RequestValidationError as error:
+                detail = {"code": "memory_input_invalid"}
+                if request.method == "PATCH":
+                    detail["reason"] = _input_reason(error)
+                raise HTTPException(422, detail, headers=_NO_STORE) from None
             except UserMemoryStoreError:
                 raise _unavailable() from None
             except HTTPException as error:
@@ -89,19 +110,24 @@ def make_router(
     async def list_memories(
         principal: Principal = Depends(require_principal),
     ) -> MemoryListResponse:
-        owner = memory_owner(principal)
-        items = [] if owner is None else await configured().list_active(owner)
+        owner = MemoryOwner(principal.org_ctx.tenant_id, principal.ai_user_id)
+        items = await configured().list_active(owner)
         return MemoryListResponse(items=items)
 
-    @router.patch("/{id}", response_model=UserMemory, responses=mutation_errors)
+    @router.patch(
+        "/{id}",
+        response_model=UserMemory,
+        responses={
+            **mutation_errors,
+            422: {"description": "Invalid memory input", "model": MemoryInputErrorResponse},
+        },
+    )
     async def edit_memory(
         id: UUID,
         body: EditMemoryRequest,
         principal: Principal = Depends(require_principal),
     ) -> UserMemory:
-        owner = memory_owner(principal)
-        if owner is None:
-            raise _not_found()
+        owner = MemoryOwner(principal.org_ctx.tenant_id, principal.ai_user_id)
         row = await configured().update(owner, id, body.content)
         if row is None:
             raise _not_found()
@@ -112,8 +138,8 @@ def make_router(
         id: UUID,
         principal: Principal = Depends(require_principal),
     ) -> Response:
-        owner = memory_owner(principal)
-        if owner is None or not await configured().delete(owner, id):
+        owner = MemoryOwner(principal.org_ctx.tenant_id, principal.ai_user_id)
+        if not await configured().delete(owner, id):
             raise _not_found()
         return Response(status_code=204)
 

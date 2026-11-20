@@ -20,19 +20,26 @@ from app.ports.user_memories import (
     UserMemoryStoreError,
 )
 
-_OWNER = "tenant_id = :tenant_id AND department_id = :department_id AND ai_user_id = :ai_user_id"
+_OWNER = "tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
 _LIVE = _OWNER + " AND deleted_at IS NULL"
 _LIVE_ID = _LIVE + " AND id = :id"
 _FIELDS = "id, category, content, user_edited, created_at, updated_at"
+_SOURCE_ARRAY = "ARRAY[CAST(:source_digest AS text)]"
 _SOURCE_EXISTS = text(
-    "SELECT EXISTS (SELECT 1 FROM user_memories WHERE " + _OWNER
-    + " AND source_digest = :source_digest)"
+    f"SELECT EXISTS (SELECT 1 FROM user_memories WHERE {_OWNER} "
+    f"AND source_digests @> {_SOURCE_ARRAY})"
 )
-_INSERT = text(
-    "INSERT INTO user_memories (id, tenant_id, department_id, ai_user_id, category, content, "
-    "normalized, source_session_id, source_digest) VALUES "
-    "(:id, :tenant_id, :department_id, :ai_user_id, :category, :content, "
-    ":normalized, :session_id, :source_digest) "
+# Attach the source to duplicates even when all live slots are taken.
+_ATTACH_OR_INSERT = text(
+    "WITH duplicate AS ("
+    f"UPDATE user_memories SET source_digests = source_digests || {_SOURCE_ARRAY} "
+    f"WHERE {_OWNER} AND category = :category AND normalized = :normalized "
+    f"AND NOT (source_digests @> {_SOURCE_ARRAY}) RETURNING id) "
+    "INSERT INTO user_memories (id, tenant_id, ai_user_id, category, content, "
+    "normalized, source_session_id, source_digests) "
+    "SELECT :id, :tenant_id, :ai_user_id, :category, :content, "
+    f":normalized, :session_id, {_SOURCE_ARRAY} "
+    "WHERE :has_slot AND NOT EXISTS (SELECT 1 FROM duplicate) "
     "ON CONFLICT ON CONSTRAINT uq_user_memories_owner_category_normalized DO NOTHING "
     "RETURNING id"
 )
@@ -105,7 +112,7 @@ class PostgreSQLUserMemoryStore:
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": json.dumps(
-                    ["user_memories", owner.tenant_id, owner.department_id, owner.ai_user_id]
+                    ["user_memories", owner.tenant_id, owner.ai_user_id]
                 )},
             )
             if (await session.execute(_SOURCE_EXISTS, params)).scalar_one():
@@ -116,10 +123,9 @@ class PostgreSQLUserMemoryStore:
             slots = MEMORY_LIMIT - live.scalar_one()
             added = 0
             for candidate in candidates:
-                if added >= slots:
-                    break
                 inserted = await session.execute(
-                    _INSERT, {**params, **asdict(candidate), "id": uuid4()}
+                    _ATTACH_OR_INSERT,
+                    {**params, **asdict(candidate), "id": uuid4(), "has_slot": added < slots},
                 )
                 added += inserted.scalar_one_or_none() is not None
             return added

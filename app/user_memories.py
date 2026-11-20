@@ -1,12 +1,15 @@
-"""Ownership and input rules shared by personal memory extraction and editing."""
+"""Input rules shared by personal memory extraction and editing."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Literal
 
-from app.ports.auth import Principal
-from app.ports.user_memories import MEMORY_CONTENT_LIMIT, MemoryOwner
+from app.credential_markers import has_credential_marker
+from app.ports.user_memories import MEMORY_CONTENT_LIMIT
+
+MemoryInputReason = Literal["empty", "too_long", "sensitive"]
 
 _SENSITIVE = (
     ("identity", re.compile(r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)")),
@@ -31,12 +34,9 @@ _SENSITIVE = (
 class MemoryContentError(ValueError):
     """A safe rejection code for a memory candidate or manual edit."""
 
-
-def memory_owner(principal: Principal) -> MemoryOwner | None:
-    org = principal.org_ctx
-    if not org.department_id:
-        return None
-    return MemoryOwner(org.tenant_id, org.department_id, principal.ai_user_id)
+    def __init__(self, reason: MemoryInputReason, kind: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(kind or reason)
 
 
 def normalize(value: str) -> str:
@@ -45,14 +45,20 @@ def normalize(value: str) -> str:
 
 def sensitive_kind(value: str) -> str | None:
     comparable = unicodedata.normalize("NFKC", value)
+    if has_credential_marker(comparable):
+        return "credential"
     return next((kind for kind, pattern in _SENSITIVE if pattern.search(comparable)), None)
 
 
 def validated_content(value: str) -> str:
     content = value.strip()
-    if not 1 <= len(content) <= MEMORY_CONTENT_LIMIT or re.search(r"[\x00\ud800-\udfff]", content):
-        raise MemoryContentError("invalid_content")
+    if not content:
+        raise MemoryContentError("empty")
+    if len(content) > MEMORY_CONTENT_LIMIT:
+        raise MemoryContentError("too_long")
+    if re.search(r"[\x00\ud800-\udfff]", content):
+        raise MemoryContentError("empty", "invalid_content")
     kind = sensitive_kind(content)
     if kind is not None:
-        raise MemoryContentError(kind)
+        raise MemoryContentError("sensitive", kind)
     return content

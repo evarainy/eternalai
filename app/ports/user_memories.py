@@ -1,4 +1,4 @@
-"""Persistence contract for a user's memories in their current department."""
+"""Persistence contract for a user's personal memories within a tenant."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ MEMORY_CONTENT_LIMIT = 200
 @dataclass(frozen=True, slots=True)
 class MemoryOwner:
     tenant_id: str
-    department_id: str
     ai_user_id: str
 
 

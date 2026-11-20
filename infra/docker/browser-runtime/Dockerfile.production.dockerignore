@@ -121,6 +121,8 @@ services/*
 !services/decision/
 services/decision/*
 !app/__init__.py
+!app/credential_markers.py
+!app/user_memories.py
 !app/admin/__init__.py
 !app/admin/actions.py
 !app/admin/d_form.py
@@ -289,6 +291,7 @@ services/decision/*
 !app/infra/orchestration/agentscope_runtime/catalog.py
 !app/infra/orchestration/agentscope_runtime/document_route.py
 !app/infra/orchestration/agentscope_runtime/ledger.py
+!app/infra/orchestration/agentscope_runtime/personal_memory.py
 !app/infra/orchestration/agentscope_runtime/proposal.py
 !app/infra/orchestration/agentscope_runtime/runtime.py
 !app/infra/orchestration/agentscope_runtime/session.py
@@ -487,7 +490,13 @@ app/infra/system_entry/*
 # Personal saved read flows (我的功能): exact source files only.
 !app/api/v1/my_skills.py
 !app/ports/user_skills.py
+!app/ports/conversation_history.py
+!app/ports/user_memories.py
 !app/infra/persistence/user_skills.py
+!app/infra/persistence/chat_history.py
+!app/infra/persistence/user_memories.py
+!app/api/v1/conversations.py
+!app/api/v1/memories.py
 !app/infra/jobs/user_skill_report.py
 !app/infra/spreadsheets/user_skill_report.py
 !app/infra/orchestration/agentscope_runtime/user_skill_turn.py

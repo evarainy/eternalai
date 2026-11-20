@@ -12,6 +12,25 @@ export interface EditMemoryRequest {
   content: string;
 }
 
+export type MemoryInputErrorDetailReason = typeof MemoryInputErrorDetailReason[keyof typeof MemoryInputErrorDetailReason];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const MemoryInputErrorDetailReason = {
+  empty: 'empty',
+  too_long: 'too_long',
+  sensitive: 'sensitive',
+} as const;
+
+export interface MemoryInputErrorDetail {
+  code: 'memory_input_invalid';
+  reason: MemoryInputErrorDetailReason;
+}
+
+export interface MemoryInputErrorResponse {
+  detail: MemoryInputErrorDetail;
+}
+
 export interface MemoryListResponse {
   items: UserMemory[];
 }

@@ -17,6 +17,42 @@
         "title": "EditMemoryRequest",
         "type": "object"
       },
+      "MemoryInputErrorDetail": {
+        "properties": {
+          "code": {
+            "const": "memory_input_invalid",
+            "title": "Code",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "empty",
+              "too_long",
+              "sensitive"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "reason"
+        ],
+        "title": "MemoryInputErrorDetail",
+        "type": "object"
+      },
+      "MemoryInputErrorResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/MemoryInputErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "MemoryInputErrorResponse",
+        "type": "object"
+      },
       "MemoryListResponse": {
         "properties": {
           "items": {
@@ -178,6 +214,13 @@
             "description": "Memory not found"
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryInputErrorResponse"
+                }
+              }
+            },
             "description": "Invalid memory input"
           },
           "503": {

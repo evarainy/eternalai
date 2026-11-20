@@ -170,7 +170,6 @@ from app.ports.user_skills import UserSkillOwner
 from app.runtime.browser_request import BrowserRequestHelpers
 from app.runtime.d_form_collection import CAPABILITY_ID as D_FORM_ID
 from app.runtime.d_form_collection import CategoryEvidence
-from app.user_memories import memory_owner
 
 if TYPE_CHECKING:
     from agentscope.agent import Agent
@@ -240,7 +239,6 @@ M1_REPAIR_PROMPT = (
 )
 AGENT_NAME = "eternalai_m1"
 _HISTORY_LOG = logging.getLogger("uvicorn.error.chat_history")
-_MEMORY_LOG = logging.getLogger("uvicorn.error.personal_memory")
 
 # Copied verbatim from app/runtime/runtime.py::_CANDIDATE_FAILURE_MESSAGES@6ca76bd
 _CANDIDATE_FAILURE_MESSAGES: dict[ErrorCode, tuple[str, str]] = {
@@ -722,9 +720,7 @@ class AgentScopeRuntime:
                 and user_skill_ref_reference.get() is None
                 and (browser is None or not browser.handoff_active)
             ):
-                captured_owner = memory_owner(context.principal)
-                if captured_owner is None:
-                    _MEMORY_LOG.info("memory.skip reason=no_department")
+                captured_owner = MemoryOwner(scope.tenant_id, scope.ai_user_id)
             turn = _Turn(
                 scope=scope,
                 owner=owner,
