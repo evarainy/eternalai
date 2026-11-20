@@ -83,18 +83,31 @@ def _display_envelope(envelope: ResponseEnvelope) -> dict[str, Any]:
         )
     )
     fields["data"] = _display_data(fields["data"])
-    # A reply may repeat a credential the user gave in Chinese; keep it out of history.
-    fields["message"] = _sanitize_history_text(fields["message"])
-    return fields
+    # A reply, a query input or a result cell may repeat a credential written in Chinese.
+    return cast(dict[str, Any], _mask_assignments(fields))
+
+
+def _mask_assignments(value: Any) -> Any:
+    if isinstance(value, str):
+        return _CREDENTIAL_ASSIGNMENT.sub(r"\g<1>***", value)
+    if isinstance(value, dict):
+        return {key: _mask_assignments(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask_assignments(item) for item in value]
+    return value
 
 
 def _message(row: RowMapping) -> ConversationMessage:
     payload = row["envelope"]
-    envelope = None if payload is None else HistoryEnvelope(
-        status=payload["status"],
-        message=payload["message"],
-        ui=HistoryCard(**payload["ui"]),
-        data=_display_data(payload["data"]),
+    envelope = (
+        None
+        if payload is None
+        else HistoryEnvelope(
+            status=payload["status"],
+            message=payload["message"],
+            ui=HistoryCard(**payload["ui"]),
+            data=_display_data(payload["data"]),
+        )
     )
     return ConversationMessage(row["role"], row["text"], envelope, row["created_at"])
 
@@ -114,8 +127,7 @@ class PostgreSQLConversationHistory:
     async def is_deleted(self, owner: UserSkillOwner, session_id: str) -> bool:
         async with self._transaction() as session:
             result = await session.execute(
-                text("SELECT deleted_at IS NOT NULL FROM chat_conversations c WHERE " +
-                     _SESSION),
+                text("SELECT deleted_at IS NOT NULL FROM chat_conversations c WHERE " + _SESSION),
                 _session_params(owner, session_id),
             )
             return result.scalar_one_or_none() is True
@@ -132,7 +144,12 @@ class PostgreSQLConversationHistory:
     ) -> None:
         async with self._transaction() as session:
             result = await self._append(
-                session, owner, session_id, request_id, user_text, envelope,
+                session,
+                owner,
+                session_id,
+                request_id,
+                user_text,
+                envelope,
                 client_session_id=client_session_id,
             )
         _LOG.info("chat_history.append result=%s", result)
@@ -220,8 +237,7 @@ class PostgreSQLConversationHistory:
                 text(
                     "SELECT role, text FROM chat_messages m "
                     "JOIN chat_conversations c ON c.id = m.conversation_id "
-                    "WHERE " + _SESSION + " AND " + _LIVE +
-                    " ORDER BY m.seq DESC LIMIT :limit"
+                    "WHERE " + _SESSION + " AND " + _LIVE + " ORDER BY m.seq DESC LIMIT :limit"
                 ),
                 {**_session_params(owner, session_id), "limit": limit * 2},
             )
@@ -239,24 +255,29 @@ class PostgreSQLConversationHistory:
             rows = await session.execute(
                 text(
                     "SELECT c.id, c.session_id, c.client_session_id, c.title, c.updated_at "
-                    "FROM chat_conversations c WHERE " + _OWNER + " AND " + _LIVE +
-                    where_cursor + " ORDER BY c.updated_at DESC, c.id DESC LIMIT :limit"
+                    "FROM chat_conversations c WHERE "
+                    + _OWNER
+                    + " AND "
+                    + _LIVE
+                    + where_cursor
+                    + " ORDER BY c.updated_at DESC, c.id DESC LIMIT :limit"
                 ),
                 params,
             )
             items = [ConversationListItem(row["id"], _summary(row)) for row in rows.mappings()]
         return items
 
-    async def messages(
-        self, owner: UserSkillOwner, session_id: str
-    ) -> ConversationMessages | None:
+    async def messages(self, owner: UserSkillOwner, session_id: str) -> ConversationMessages | None:
         async with self._transaction() as session:
             result = await session.execute(
                 text(
                     "SELECT c.title, m.role, m.text, m.envelope, m.created_at "
                     "FROM chat_conversations c JOIN chat_messages m "
-                    "ON m.conversation_id = c.id WHERE " + _SESSION + " AND " + _LIVE +
-                    " ORDER BY m.seq"
+                    "ON m.conversation_id = c.id WHERE "
+                    + _SESSION
+                    + " AND "
+                    + _LIVE
+                    + " ORDER BY m.seq"
                 ),
                 _session_params(owner, session_id),
             )
@@ -274,8 +295,11 @@ class PostgreSQLConversationHistory:
             result = await session.execute(
                 text(
                     "UPDATE chat_conversations c SET title = :title, "
-                    "updated_at = clock_timestamp() WHERE " + _SESSION + " AND " + _LIVE +
-                    " RETURNING session_id, client_session_id, title, updated_at"
+                    "updated_at = clock_timestamp() WHERE "
+                    + _SESSION
+                    + " AND "
+                    + _LIVE
+                    + " RETURNING session_id, client_session_id, title, updated_at"
                 ),
                 {**_session_params(owner, session_id), "title": _sanitize_history_text(title)},
             )
@@ -291,8 +315,10 @@ class PostgreSQLConversationHistory:
             )
             if conversation_id is not None:
                 await session.execute(
-                    text("UPDATE chat_conversations SET deleted_at = clock_timestamp() "
-                         "WHERE id = :id"),
+                    text(
+                        "UPDATE chat_conversations SET deleted_at = clock_timestamp() "
+                        "WHERE id = :id"
+                    ),
                     {"id": conversation_id},
                 )
         deleted = conversation_id is not None

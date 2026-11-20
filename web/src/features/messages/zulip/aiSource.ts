@@ -1,6 +1,6 @@
 import { ApiError } from '../../../api/mutator';
 import { selectApiV1ImContextSourcesPost } from '../../../generated/im-context/im-context';
-import { useAIDockStore } from '../../../stores/aiDockStore';
+import { isViewOnlyConversation, useAIDockStore, VIEW_ONLY_NOTICE } from '../../../stores/aiDockStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { useImStore } from './imStore';
 import type { ConversationKey } from './narrow';
@@ -46,6 +46,8 @@ export type SendToAiResult = { kind: 'ok' } | { kind: 'stale' } | { kind: 'faile
 export async function sendToAi(key: ConversationKey, messageIds: number[]): Promise<SendToAiResult> {
   // 每次发起都作废上一轮（含在途的），并清掉 Dock 里的旧来源：失败时不能沿用上一组。
   const current = ++sequence;
+  // A saved conversation that can only be viewed takes no new question, from here either.
+  if (isViewOnlyConversation(useAIDockStore.getState())) return { kind: 'failed', text: VIEW_ONLY_NOTICE };
   useAIDockStore.getState().setIMSource(null);
   const state = useImStore.getState();
   const identity = state.identity;
