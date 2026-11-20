@@ -1,0 +1,191 @@
+{
+  "components": {
+    "schemas": {
+      "EditMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "EditMemoryRequest",
+        "type": "object"
+      },
+      "MemoryListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserMemory"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "MemoryListResponse",
+        "type": "object"
+      },
+      "UserMemory": {
+        "properties": {
+          "category": {
+            "enum": [
+              "answer_style",
+              "frequent_topic",
+              "work_background"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_edited": {
+            "title": "User Edited",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "content",
+          "user_edited",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UserMemory",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/memories": {
+      "get": {
+        "operationId": "list_memories_api_v1_memories_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "description": "Personal memories unavailable"
+          }
+        },
+        "summary": "List Memories"
+      }
+    },
+    "/api/v1/memories/{id}": {
+      "delete": {
+        "operationId": "delete_memory_api_v1_memories__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Memory not found"
+          },
+          "422": {
+            "description": "Invalid memory input"
+          },
+          "503": {
+            "description": "Personal memories unavailable"
+          }
+        },
+        "summary": "Delete Memory"
+      },
+      "patch": {
+        "operationId": "edit_memory_api_v1_memories__id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMemory"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Memory not found"
+          },
+          "422": {
+            "description": "Invalid memory input"
+          },
+          "503": {
+            "description": "Personal memories unavailable"
+          }
+        },
+        "summary": "Edit Memory"
+      }
+    }
+  }
+}

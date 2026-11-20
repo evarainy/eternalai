@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -135,6 +135,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLSessionStore,
     PostgreSQLTaskStore,
 )
+from app.infra.persistence.user_memories import PostgreSQLUserMemoryStore
 from app.infra.persistence.user_preferences import PostgreSQLUserPreferencesStore
 from app.infra.persistence.user_skills import (
     PostgreSQLUserSkillSessionStore,
@@ -209,6 +210,7 @@ from app.ports.runtime import RuntimePort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import DFormCollectionStorePort, SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
+from app.ports.user_memories import UserMemoryStore
 from app.ports.user_preferences import UserPreferencesPort
 from app.ports.user_profile import UserProfilePort
 from app.ports.workflow_store import McpRecoveryPolicyPort
@@ -223,6 +225,9 @@ from app.work_dispatch.recurrence import WorkObjectSeriesScheduler, WorkObjectSe
 from app.work_dispatch.service import WorkDispatchService
 from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
+
+if TYPE_CHECKING:
+    from app.infra.orchestration.agentscope_runtime.personal_memory import PersonalMemory
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +269,7 @@ class ProductionComponents:
     # selected engine: (handoff, submission, *, registration, configured_d_form_model).
     install_browser_handoff: Callable[..., None]
     chat_history: ConversationHistoryPort
+    user_memories: UserMemoryStore
     browser_credential_store: PostgreSQLCredentialStore | None = field(default=None, repr=False)
     browser_gateway: CapabilityGateway | None = None
     # M1 AgentScope runtime; built only when RUNTIME_ENGINE == "agentscope",
@@ -746,6 +752,7 @@ def _build_agentscope_runtime(
     sheet_fill: SheetFillAdmission | None = None,
     user_skills: UserSkillService | None = None,
     chat_history: ConversationHistoryPort | None = None,
+    personal_memory: PersonalMemory | None = None,
 ) -> tuple[RuntimePort, Callable[..., None]]:
     """The single wiring of the AgentScope path; AgentScope is imported only here.
 
@@ -811,6 +818,7 @@ def _build_agentscope_runtime(
             sheet_fill=sheet_fill,
             user_skills=user_skills,
             chat_history=chat_history,
+            personal_memory=personal_memory,
         )
     )
     return runtime, runtime.install_browser
@@ -864,6 +872,7 @@ def build_production_components(
 
     session_factory = make_async_session_factory(database_url=settings.database_url)
     chat_history = PostgreSQLConversationHistory(session_factory)
+    user_memories = PostgreSQLUserMemoryStore(session_factory)
     task_store = PostgreSQLTaskStore(session_factory)
     session_store = PostgreSQLSessionStore(session_factory)
     capability_registry = PostgreSQLCapabilityRegistry(session_factory)
@@ -1307,7 +1316,11 @@ def build_production_components(
     )
     if settings.runtime_engine == "agentscope":
         from app.infra.llm.agentscope_chat import build_chat_model
+        from app.infra.orchestration.agentscope_runtime.personal_memory import PersonalMemory
 
+        chat_model_factory = partial(
+            build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
+        )
         agentscope_runtime, install_browser_handoff = _build_agentscope_runtime(
             runtime,
             task_store=task_store,
@@ -1327,15 +1340,16 @@ def build_production_components(
             approved_projections=approved_projections,
             d_form_collection_store=task_store,
             document_qa=document_qa,
-            model_factory=partial(
-                build_chat_model, base_url=settings.llm_base_url, model=settings.llm_model
-            ),
+            model_factory=chat_model_factory,
             model_name=settings.llm_model,
             session_idle_ttl_seconds=settings.session_cookie_ttl_seconds,
             report_jobs=background_jobs,
             sheet_fill=sheet_fill,
             user_skills=user_skills,
             chat_history=chat_history,
+            personal_memory=PersonalMemory(
+                user_memories, chat_model_factory, settings.session_binding_key
+            ),
             # Placeholders only for candidates the policy hid solely because
             # this user has not authorized the fixed MCP service.
             mcp_authorization_hint=(
@@ -1648,6 +1662,7 @@ def build_production_components(
         user_preferences=PostgreSQLUserPreferencesStore(session_factory),
         user_skills=user_skills,
         chat_history=chat_history,
+        user_memories=user_memories,
         background_jobs=background_jobs,
         file_artifacts=file_artifacts,
         im_context=im_context,
