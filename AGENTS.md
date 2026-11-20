@@ -1,11 +1,11 @@
-# AGENTS.md — Phase 2 项目规则 v3.1.4
+# AGENTS.md — Phase 3 项目规则 v3.2.0
 
 本文件是项目级规则与约束的唯一权威；Skills、模板和历史记录不得另设权限或门禁。
 
 ## 权威、范围与执行
 
 - 权威顺序：当前 Goal 的最新明确指令及 Outcome/Constraints/Verification > 用户红线和适用的 `AGENTS.md` > 已批准的产品/架构/接口/批次/里程碑文档 > 代码、测试、CI、分支保护和运行证据 > 派生计划、skills、历史与建议。一般任务授权不代替红线动作的专项授权。
-- 当前状态见 `docs/phase2/STATUS.md`，范围、DAG 与欠债见 `docs/phase2/PHASE2_PLAN.md`，架构与治理裁决见 `docs/phase2/DECISIONS.md`；已完成棒用 `git log --grep='phase2('` 追溯。旧任务指令不自动沿用。
+- 当前状态见 `docs/phase3/STATUS.md`，范围、DAG 与 P3 新欠债见 `docs/phase3/PHASE3_PLAN.md`（P2 转入的活欠债在 `docs/phase2/PHASE2_PLAN.md` 原行维护），架构与治理裁决见 `docs/phase3/DECISIONS.md` 与仍有效的 `docs/phase2/DECISIONS.md`；已完成棒用 `git log --grep='phase[23]('` 追溯。旧任务指令不自动沿用。
 - 写入任务开棒声明 **档位、风险、串行或并行、是否承担 A 类同步**；每根 write lane 一个 Goal 和 Scope，新 scope 开新 lane。咨询与只读调查不启动施工流程。
 - 完成授权内的完整 scope、验证、修复与交付准备；部分受阻时继续独立可做部分并说明阻塞。常规可逆选择自行处理，重大未决选择、扩域或红线才提问；等合并授权不阻断准备工作。补充消息不丢失原目标和已完成工作。
 - 只读与任务相关的入口和合同，按需扩展；无关问题登记后续。报告区分实测、推断和未验证，不以启动成功代替完成。
@@ -79,7 +79,7 @@ Review 绑定准确候选与 scope，取证分工依据**具体事实能否静�
 
 ## Git 与永久任务记录
 
-- 主分支 `phase0/main`；任务分支 `phase2/<task_id>`；commit 为 `phase2(<task_id>): <简述>`，merge 为 `merge phase2(<task_id>): <简述>`。
+- 主分支 `phase0/main`；任务分支 `phase3/<task_id>`；commit 为 `phase3(<task_id>): <简述>`，merge 为 `merge phase3(<task_id>): <简述>`。新任务编号 `P3-*`，P2 转入的任务保留原编号。
 - A 档棒将纯格式化改动与功能改动分开提交；本条不增加 CI 检查。
 - 集成：任务分支普通 push → PR → required checks 全绿 → 获准合并；不得本地合完直推主分支。验证、Review、候选 freshness 和分支保护均须满足，绿灯不是授权。合并后检查对应 merge SHA 的 GitHub Actions。
 - 不建 per-task Task Record。合并前 PR body 写齐 `## Scope`、`## 验证结果`、`## 本棒新增欠债`；验证列实际命令、最小充分原始结果、未执行原因、候选 commit 与 CI run。欠债含 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
@@ -87,7 +87,7 @@ Review 绑定准确候选与 scope，取证分工依据**具体事实能否静�
 
 ## 状态同步
 
-- **A 类机械同步**只含基线数字、task_id、已决后继指针和本棒新欠债；不是 A 档风险分类。状态写 `docs/phase2/STATUS.md`，欠债写 `docs/phase2/PHASE2_PLAN.md`。
+- **A 类机械同步**只含基线数字、task_id、已决后继指针和本棒新欠债；不是 A 档风险分类。状态写 `docs/phase3/STATUS.md`，新欠债写 `docs/phase3/PHASE3_PLAN.md`；P2 转入欠债的状态变化在 `docs/phase2/PHASE2_PLAN.md` 原行更新。
 - 串行时由实现棒在同一个 payload commit 同步；不另开同步 commit、不 amend、不 force push。真正并行的多 write lane 不改共享状态/欠债文件，由独立 GOV-SYNC 批次同步。
 - **B 类治理裁决**（跨棒裁决、推翻蓝图偏差的 ADR、Golden 策略、DAG 重排、跨棒欠债合并）无论串并行都归 GOV-SYNC。实现棒只传播已决且唯一的后继；不唯一则留空并登记待裁决。
 - 治理文档不写 commit SHA / CI run id；证据留 PR，历史留 Git。状态保留当前结果、基线来源日期、阻塞与指针，不累积返修流水账，也不把旧数字标成当前实测。

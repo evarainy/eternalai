@@ -365,7 +365,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
 | `P2-CHAT-HISTORY-PERSIST-001` | 无 | **B（高风险，预判）** | 否：雨爷 2026-11-20 定为下一棒，可与 `P2-MEMORY-001` 合棒；方案开棒时细谈；新表或迁移另取授权；只限本人本会话读取 |
 | `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 否：雨爷 2026-11-20 定为下一棒，先做本人个人记忆（聊天喜好等），实现开棒时细谈；边界见 DECISIONS 2026-08-19 与 2026-11-20；知识库仍属 P3 |
-| `P2-OA-OVERVIEW-BINDING-HINT-001` | 无 | **C** | 否：合同见 DECISIONS 2026-11-20 第 3 项；GT-012 保持 100% 通过 |
+| `P2-OA-OVERVIEW-BINDING-HINT-001` | 无 | **C** | **已完成**（PR #303，2026-11-20）；真实环境未实测项见 [P3 PLAN 新增欠债](../phase3/PHASE3_PLAN.md#4-p3-新增欠债) |
 | `P2-SKILL-CANDIDATE-001` | P2-READ-ADAPTER-001 | **A（预判）** | 否；只允许人工登记，机会层 |
 | `P2-HIKVISION-ADAPTER-001` | P2-READ-ADAPTER-001 | **A** | 是：现场版本、API/SDK、账号与设备/区域范围未到位；机会层 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001、P2-TASK-TENANT-COLUMN-001（均已完成） | **A** | **S1 已合并（PR #212，2026-09-23）**：显式 source tenant、sessions/角色/凭证及消费者、pending/claim 隔离；S2 Work Object、S3 目录/G2 与全链验收未完成，分段开棒标识待 GOV-SYNC 分配；S1 合并不核销总欠债，全链验收前维持单租户运行、第二租户禁止启用 |
@@ -774,7 +774,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 | 系统中文输入法组字未真实触发 | 验收环境的系统输入法未进入组字，组字期间不弹、不选、不发送只以合成事件验证 | 无 | 「我的功能」后续批次 | 在可用输入法的桌面环境人工复验一次 | 仓库外 `readonly-skill-phase2-20261118/acc/ACC_r1.md` V8 |
 | AgentScope 对话历史仍为进程内 | 重启后模型只看到本会话已完成查询的名称，看不到此前的对话内容 | 无 | `P2-CHAT-HISTORY-PERSIST-001`（雨爷 2026-11-20 定做） | 该棒真实验收：后端重启后模型能看到本会话此前的对话内容 | `app/infra/orchestration/agentscope_runtime/runtime.py`；仓库外 `readonly-skill-phase2-20261118/acc/ACC_r4.md` |
 | 评审修复后未重跑真实验收 | 真实验收候选早于 Astra 第四至第七轮修复；手输即显标签、名单读取失败提示、重新生成的格式与结构判定只有静态检查与定向既有测试 | 无 | 「我的功能」后续批次 | 下一批真实验收覆盖上述行为 | 仓库外 `readonly-skill-phase2-20261118/review/`、`acc/ACC_r4.md` |
-| Astra 第八轮聊天侧发现未修 | 另一页改名并把旧名让给另一功能、且本页名单刷新失败时，手输、候选或面板可用旧名单建立标签；组字期间名单回包可丢失较长名称的编辑；另有名称附近编辑重新显标等四项 P1。后果为执行本人另一只读功能，结果卡显示服务端现名 | 无 | 「我的功能」后续批次 | 候选与面板只用当前成功名单，名单更新时复核已有标签，或裁定不做 | 仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-01～03、P1-01～04 |
+| Astra 第八轮聊天侧发现未修（**P0-01～03 已由 PR #305 关闭**：发送前按最新名单核对、服务端名称把关；P1-01～04 输入期显示瑕疵转 [P3 PLAN](../phase3/PHASE3_PLAN.md#4-p3-新增欠债)） | 另一页改名并把旧名让给另一功能、且本页名单刷新失败时，手输、候选或面板可用旧名单建立标签；组字期间名单回包可丢失较长名称的编辑；另有名称附近编辑重新显标等四项 P1。后果为执行本人另一只读功能，结果卡显示服务端现名 | 无 | 「我的功能」后续批次 | 候选与面板只用当前成功名单，名单更新时复核已有标签，或裁定不做 | 仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-01～03、P1-01～04 |
 | Astra 第八轮重新生成发现未修 | 非枚举步骤输出凭同名 `format` 放行、相同 `additionalProperties` 覆盖不同字段、自定义 format 或 `deprecated` 误拒、`items: true` 误拒；当前可保存的 OA 叶子无参数，比较不可达 | 首个带参数的只读叶子接入个人功能 | 该叶子接入棒 | 重新生成对步骤输出 `format` 与对象关联约束保守拒绝，误拒两项按需放宽 | `app/user_skills/proposal.py::rebase_definition`；仓库外 `readonly-skill-phase2-20261118/review/CODE_REVIEW_astra_r8.md` P0-04、P0-05、P1-05、P1-06 |
 
 ### 综合业务平台账号绑定与免密跳转 `P2-ZHYW-SYSTEM-ENTRY-001` 新增欠债（2026-11-19）
@@ -787,7 +787,7 @@ M1A、M1B 与 R-OA 已合并后的收口登记。后继 task_id：M2 正式回�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 概览工作流遇到未绑定或已撤销绑定仍显示通用失败 | 本棒只把概览工作流的 `identity_expired` 还原为绑定提示；`identity_unbound`、`identity_revoked`、`needs_binding_scope` 仍按既有测试合同收为 failed，页面显示「操作失败」，没有绑定入口。合同已于 2026-11-20 定（DECISIONS 当日第 3 项） | 无 | `P2-OA-OVERVIEW-BINDING-HINT-001` | 未绑定、已撤销显示绑定入口，需选范围沿用多绑定澄清，GT-012 通过 | `app/infra/orchestration/agent_adapter.py::_workflow_execution_result`；`tests/runtime/test_production_workflow.py::test_overview_short_circuits_each_failure` |
+| 概览工作流遇到未绑定或已撤销绑定仍显示通用失败 | 本棒只把概览工作流的 `identity_expired` 还原为绑定提示；`identity_unbound`、`identity_revoked`、`needs_binding_scope` 仍按既有测试合同收为 failed，页面显示「操作失败」，没有绑定入口。合同已于 2026-11-20 定（DECISIONS 当日第 3 项）。**已由 PR #303 修复**，真实实测缺项转 [P3 PLAN](../phase3/PHASE3_PLAN.md#4-p3-新增欠债) | 无 | `P2-OA-OVERVIEW-BINDING-HINT-001`（已完成） | 未绑定、已撤销显示绑定入口，需选范围沿用多绑定澄清，GT-012 通过 | `app/infra/orchestration/agent_adapter.py::_workflow_execution_result`；`tests/runtime/test_production_workflow.py::test_overview_short_circuits_each_failure` |
 
 ### OA 会话自动恢复 `P2-AUTH-OA-ACTIVE-RECOVERY-001` 新增欠债（2026-11-17）
 
