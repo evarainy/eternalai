@@ -34,7 +34,7 @@ export function IdentitySwitchOverlay() {
     // returns to the retry button; only a plain Enter/Space on that button acts.
     const swallow = (event: KeyboardEvent) => {
       const retry = host.current?.querySelector('button');
-      const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+      const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
       if (plain && event.target === retry && (event.key === 'Enter' || event.key === ' ')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
