@@ -499,9 +499,14 @@ class UserSkillService:
         inputs: Mapping[str, Any],
         *,
         expected_digest: bytes | None = None,
+        expected_name: str | None = None,
         max_rows: int | None = MAX_DISPLAY_ROWS,
     ) -> tuple[dict[str, Any], bool, str | None]:
-        """(``data.user_skill`` payload, failed, error code) for a saved flow."""
+        """(``data.user_skill`` payload, failed, error code) for a saved flow.
+
+        ``expected_name`` is the name the user picked: a flow renamed since is refused
+        on the very record that would run.
+        """
 
         current = await self.current(owner, skill_id)
         if current is None:
@@ -512,6 +517,8 @@ class UserSkillService:
             expected_digest is not None and current.payload.definition_digest != expected_digest
         ):
             raise UserSkillFailure("capability_candidate_stale", 409, "功能已更新，请重新打开")
+        if expected_name is not None and current.display_name != expected_name:
+            raise UserSkillFailure("renamed", 409, "功能名称已变化，请重新选择后再发送")
         definition = UserSkillDefinition.model_validate(current.payload.definition)
         clean = {name: value for name, value in inputs.items() if value not in (None, "")}
         try:

@@ -89,9 +89,10 @@ export interface UserSkillResult {
   trial_id?: string;
 }
 
-/** 聊天里用 `$` 指定的本人功能，只带 id；服务端按本人当前版本执行。 */
+/** 聊天里用 `$` 指定的本人功能：id 加标签上的名称；名称已变服务端即拒绝，否则按本人当前版本执行。 */
 export interface UserSkillRef {
   skill_id: string;
+  name: string;
 }
 export type UserSkillPayload =
   | UserSkillProposal | UserSkillNeedsInput | UserSkillChoice | UserSkillResult;

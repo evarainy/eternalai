@@ -22,6 +22,7 @@ from app.ports.im_context import IMContextError, IMContextPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import (
     DFormCollectionReference,
+    ExplicitUserSkill,
     RuntimePort,
     RuntimeSessionBusyError,
     UserActionOutcome,
@@ -32,6 +33,7 @@ from app.ports.runtime import (
     user_skill_ref_reference,
 )
 from app.ports.task_store import DFormCollectionError
+from app.user_skills.definition import NAME_MAX
 
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _ATTACHMENT_MESSAGES = {
@@ -70,6 +72,8 @@ class UserSkillRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     skill_id: UUID
+    # The name shown on the tag: a flow renamed since is refused, never run.
+    name: str = Field(min_length=1, max_length=NAME_MAX)
 
 
 class HandleRequest(BaseModel):
@@ -345,7 +349,9 @@ def make_router(
         source_token = im_source_context.set(None)
         attachment_token = chat_attachment_context.set(attachments)
         skill_ref_token = user_skill_ref_reference.set(
-            None if body.user_skill_ref is None else str(body.user_skill_ref.skill_id)
+            None if body.user_skill_ref is None else ExplicitUserSkill(
+                str(body.user_skill_ref.skill_id), body.user_skill_ref.name,
+            )
         )
         try:
             if body.source_refs:
