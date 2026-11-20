@@ -75,7 +75,9 @@ def test_source_fetch_has_no_open_transaction_and_only_one_worker_publishes(disp
             with db.sql.connect() as connection:
                 states = connection.execute(text(
                     "SELECT a.state FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid "
-                    "WHERE l.locktype='advisory' AND l.classid=73142 AND l.objid=1 AND l.granted"
+                    "WHERE l.locktype='advisory' AND l.classid=73142 AND l.objid=1 AND l.granted "
+                    # Advisory locks are per database; parallel workers share the server.
+                    "AND l.database=(SELECT oid FROM pg_database WHERE datname=current_database())"
                 )).scalars().all()
             assert states == ["idle"]
         finally:
