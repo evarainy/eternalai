@@ -736,6 +736,7 @@ def test_http_overview_executes_two_reads_with_real_stores(pg_workflow_factory) 
             components = h.components
             app = create_app(
                 runtime=h.runtime,
+                chat_history=components.chat_history,
                 session_revocations=MemorySessionRevocations(),
                 session_tokens=components.session_tokens,
                 session_binder=components.session_binder.bind,

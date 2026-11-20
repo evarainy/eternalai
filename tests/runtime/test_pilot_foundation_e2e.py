@@ -45,7 +45,12 @@ from scripts.smoke.full_chain_contract import FullChainOutcome
 from scripts.smoke.trace_contract import (
     REQUIRED_TRACE_EVENTS as _REQUIRED_TRACE_EVENTS,
 )
-from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS, MemorySessionRevocations
+from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
+    active_chat_history,
+)
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -366,6 +371,7 @@ async def _run_pilot_request() -> PilotObservation:
     )
     application = create_app(
         runtime=components.runtime,
+        chat_history=active_chat_history(),
         admin_registry_service=components.admin_registry_service,
         authentication=components.authentication,
         session_revocations=MemorySessionRevocations(),

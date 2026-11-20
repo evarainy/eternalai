@@ -204,21 +204,6 @@ def _bind_session(
     return session_id
 
 
-def _bind_runtime_request(
-    *,
-    runtime: RuntimePort | None,
-    principal: Principal,
-    requested_session_id: str,
-    session_binder: Callable[[Principal, str], str] | None,
-) -> tuple[RuntimePort, str]:
-    session_id = _bind_session(
-        principal=principal,
-        requested_session_id=requested_session_id,
-        session_binder=session_binder,
-    )
-    return _require_runtime(runtime), session_id
-
-
 def _require_runtime(runtime: RuntimePort | None) -> RuntimePort:
     if runtime is None:
         raise HTTPException(
@@ -255,6 +240,19 @@ def make_router(
 ) -> APIRouter:
     router = APIRouter()
     handle_router = APIRouter(route_class=_PrivateHandleRoute)
+
+    async def require_active_history(
+        owner: UserSkillOwner, session_id: str
+    ) -> ConversationHistoryPort:
+        if chat_history is None:
+            raise _history_unavailable()
+        try:
+            deleted = await chat_history.is_deleted(owner, session_id)
+        except ConversationHistoryError:
+            raise _history_unavailable() from None
+        if deleted:
+            raise _session_not_found()
+        return chat_history
 
     @handle_router.post(
         "/handle",
@@ -304,13 +302,7 @@ def make_router(
         owner = UserSkillOwner(
             tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
         )
-        if body.channel == "web" and chat_history is not None:
-            try:
-                deleted = await chat_history.is_deleted(owner, session_id)
-            except ConversationHistoryError:
-                raise _history_unavailable() from None
-            if deleted:
-                raise _session_not_found()
+        history = await require_active_history(owner, session_id)
         if browser_async:
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
@@ -395,9 +387,9 @@ def make_router(
             if body.source_refs:
                 assert im_context is not None
                 await im_context.revalidate(principal, session_id, tuple(body.source_refs))
-            elif body.channel == "web" and chat_history is not None and result.status != "running":
+            elif body.channel == "web" and result.status != "running":
                 try:
-                    await chat_history.append_turn(
+                    await history.append_turn(
                         owner, session_id, body.client_request_id, body.message, result
                     )
                 except ConversationHistoryError as error:
@@ -431,12 +423,16 @@ def make_router(
         body: ActionRequest,
         principal: Principal = Depends(require_principal),
     ) -> ActionResponseEnvelope:
-        bound_runtime, session_id = _bind_runtime_request(
-            runtime=runtime,
+        session_id = _bind_session(
             principal=principal,
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
+        owner = UserSkillOwner(
+            tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id
+        )
+        await require_active_history(owner, session_id)
+        bound_runtime = _require_runtime(runtime)
         try:
             envelope = await bound_runtime.handle_user_action(
                 channel=body.channel,

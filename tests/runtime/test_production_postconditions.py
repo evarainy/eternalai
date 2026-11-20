@@ -80,6 +80,7 @@ def test_production_request_rejects_valid_but_corrupted_overview(
             components = h.components
             app = create_app(
                 runtime=h.runtime,
+                chat_history=components.chat_history,
                 session_revocations=MemorySessionRevocations(),
                 session_tokens=components.session_tokens,
                 session_binder=components.session_binder.bind,

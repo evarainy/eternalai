@@ -21,6 +21,7 @@ from tests.auth_fakes import (
     TEST_CSRF_HEADERS,
     MemorySessionRevocations,
     StaticSessionTokens,
+    active_chat_history,
     auth_cookies,
 )
 
@@ -147,6 +148,7 @@ def test_runtime_handle_declares_envelope_without_changing_response_bytes(
 ) -> None:
     app = create_app(
         runtime=BaselineRuntime(),
+        chat_history=active_chat_history(),
         session_revocations=MemorySessionRevocations(),
         session_tokens=StaticSessionTokens(),
         session_binder=_bind_session,

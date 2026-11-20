@@ -1027,7 +1027,9 @@ class AgentScopeRuntime:
             # every ERROR continuation and the proposal core with its marks.
             async with bounded_turn_scope(turn.deadline):
                 skills = turn.user_skill
-                if progress.cold and skills is not None and skills.summary is not None:
+                if (progress.cold or not agent.state.context) and (
+                    skills is not None and skills.summary is not None
+                ):
                     message = session_context_note(skills.summary) + message
                 final = await agent.reply(UserMsg(name="user", content=message))
                 return await proposals.drive(agent, final)

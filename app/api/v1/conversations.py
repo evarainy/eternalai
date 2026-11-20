@@ -107,7 +107,6 @@ def make_router(
             last = rows[limit - 1]
             next_cursor = _encode_cursor(last.summary.updated_at, last.id)
         items = [row.summary for row in rows[:limit]]
-        _LOG.info("chat_history.list result=ok count=%d", len(items))
         response.headers.update(_NO_STORE)
         return ConversationListResponse(items=items, next_cursor=next_cursor)
 

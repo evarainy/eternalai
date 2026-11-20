@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from hashlib import sha256
+from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy import RowMapping, text
@@ -29,6 +31,11 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.user_skills import UserSkillOwner
 
 _LOG = logging.getLogger("uvicorn.error.chat_history")
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"""((?:密码|口令|验证码|(?<![A-Za-z0-9_])PIN)[ \t]*(?:是|为|[:：])[ \t]*)"""
+    r"""(?:"[^"\r\n]*"|'[^'\r\n]*'|“[^”\r\n]*”|‘[^’\r\n]*’|[^\s，。；、！？]+)""",
+    re.IGNORECASE,
+)
 _OWNER = "c.tenant_id = :tenant_id AND c.ai_user_id = :ai_user_id"
 _SESSION = _OWNER + " AND c.session_id = :session_id"
 _LIVE = "c.deleted_at IS NULL"
@@ -45,6 +52,17 @@ def _summary(row: RowMapping) -> ConversationSummary:
     return ConversationSummary(row["session_id"], row["title"], row["updated_at"])
 
 
+def _sanitize_history_text(value: str) -> str:
+    return cast(str, sanitize_response_data(_CREDENTIAL_ASSIGNMENT.sub(r"\g<1>***", value)))
+
+
+def _display_data(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if data is not None:
+        # The collection reference carries task_id and version for resuming the form.
+        data.pop("d_form_collection", None)
+    return data
+
+
 def _display_envelope(envelope: ResponseEnvelope) -> dict[str, Any]:
     fields: dict[str, Any] = sanitize_response_data(
         envelope.model_dump(
@@ -57,6 +75,7 @@ def _display_envelope(envelope: ResponseEnvelope) -> dict[str, Any]:
             },
         )
     )
+    fields["data"] = _display_data(fields["data"])
     return fields
 
 
@@ -66,7 +85,7 @@ def _message(row: RowMapping) -> ConversationMessage:
         status=payload["status"],
         message=payload["message"],
         ui=HistoryCard(**payload["ui"]),
-        data=payload["data"],
+        data=_display_data(payload["data"]),
     )
     return ConversationMessage(row["role"], row["text"], envelope, row["created_at"])
 
@@ -80,7 +99,7 @@ class PostgreSQLConversationHistory:
         try:
             async with self._sessions.begin() as session:
                 yield session
-        except SQLAlchemyError as error:
+        except (OSError, SQLAlchemyError) as error:
             raise ConversationHistoryError(type(error).__name__) from None
 
     async def is_deleted(self, owner: UserSkillOwner, session_id: str) -> bool:
@@ -114,7 +133,7 @@ class PostgreSQLConversationHistory:
         envelope: ResponseEnvelope,
     ) -> str:
         params = _session_params(owner, session_id)
-        clean_text = sanitize_response_data(user_text)
+        clean_text = _sanitize_history_text(user_text)
         await session.execute(
             text(
                 "INSERT INTO chat_conversations (id, tenant_id, ai_user_id, session_id, "
@@ -128,8 +147,9 @@ class PostgreSQLConversationHistory:
         if head["deleted_at"] is not None:
             return "skip_deleted"
         conversation_id = head["id"]
-        turn_params = {"conversation_id": conversation_id, "request_id": request_id}
-        if request_id is not None:
+        request_digest = sha256(request_id.encode()).hexdigest() if request_id else None
+        turn_params = {"conversation_id": conversation_id, "request_id": request_digest}
+        if request_digest is not None:
             duplicate = await session.execute(
                 text(
                     "SELECT count(*) = 2 FROM chat_messages "
@@ -237,7 +257,7 @@ class PostgreSQLConversationHistory:
                     "updated_at = clock_timestamp() WHERE " + _SESSION + " AND " + _LIVE +
                     " RETURNING session_id, title, updated_at"
                 ),
-                {**_session_params(owner, session_id), "title": sanitize_response_data(title)},
+                {**_session_params(owner, session_id), "title": _sanitize_history_text(title)},
             )
             row = result.mappings().one_or_none()
             return None if row is None else _summary(row)
@@ -246,14 +266,15 @@ class PostgreSQLConversationHistory:
         async with self._transaction() as session:
             locked = await session.execute(_LOCK_CONVERSATION, _session_params(owner, session_id))
             head = locked.mappings().one_or_none()
-            if head is not None and head["deleted_at"] is None:
+            conversation_id = (
+                head["id"] if head is not None and head["deleted_at"] is None else None
+            )
+            if conversation_id is not None:
                 await session.execute(
                     text("UPDATE chat_conversations SET deleted_at = clock_timestamp() "
                          "WHERE id = :id"),
-                    {"id": head["id"]},
+                    {"id": conversation_id},
                 )
-                deleted = True
-            else:
-                deleted = False
+        deleted = conversation_id is not None
         _LOG.info("chat_history.delete result=%s", "ok" if deleted else "not_found")
         return deleted

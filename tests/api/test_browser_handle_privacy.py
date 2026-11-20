@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.runtime import make_router
 from app.ports.auth import Principal, SessionBindingError
 from app.ports.browser_chat import BrowserChatPort
+from tests.auth_fakes import active_chat_history
 
 
 def _principal() -> Principal:
@@ -83,6 +84,7 @@ def test_existing_browser_skill_selection_uses_installed_names_only() -> None:
     app.include_router(make_router(
         None, _principal, lambda _principal, session: session,
         browser_chat=cast(BrowserChatPort, chat),
+        chat_history=active_chat_history(),
     ), prefix="/runtime")
     body = _body()
     with TestClient(app) as client:
