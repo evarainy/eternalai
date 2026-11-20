@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Alert, Button, Checkbox, Space, Typography } from 'antd';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
@@ -485,6 +486,7 @@ function AssistantDetails({
           目标系统：{targetSystemLabels[entry.targetSystem]}
         </Text>
         {entry.mcpAuthorizationPath && <a href={entry.mcpAuthorizationPath}>去授权</a>}
+        {entry.targetSystem === 'oa' && <Link to="/settings/bindings">去绑定</Link>}
       </>
     );
   }
