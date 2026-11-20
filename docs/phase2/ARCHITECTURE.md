@@ -344,7 +344,7 @@ Web 直接依赖和版本范围见 [web/package.json](../../web/package.json)。
 | G-4 | **Memory 六层**：User Profile、Episodic、Procedural、Knowledge Vault、增强 Semantic | §10 L2163-L2186 | 只有 Session Memory |
 | G-5 | **Skill CI/CD 生命周期**：`draft → candidate → tested → reviewed → published → monitored → deprecated / quarantined / rollback`，含测试、风险评级、审批、灰度、发布、监控、回滚 | §10.3 | 决定组只定了 P2 的 `SkillCandidate` **人工登记与不得自动发布**边界，完整生命周期无承载 |
 | G-6 | **Workflow / Skill / Tool / Prompt / Policy 版本锁定**：Task 启动时绑定版本，执行中不得自动切换，新版本只对新 Task 生效，用户确认时展示的预览必须与实际执行版本一致 | §10.4 | 决定组要求确认绑定卡片版本，但未覆盖 Task 启动后的**整体版本锁定**；`app/` 无统一锁定合同 |
-| G-7 | **User Profile Memory 与 Semantic Memory 增强**（蓝图明确列为 Phase 2 交付项） | §13 L2715 | 同 G-4；`P2-MEMORY-001` 已在 DAG 中且标 BLOCKED（数据边界/语料） |
+| G-7 | **User Profile Memory 与 Semantic Memory 增强**（蓝图明确列为 Phase 2 交付项） | §13 L2715 | 同 G-4；`P2-MEMORY-001` 已在 DAG；2026-11-20 起先做本人个人记忆，不再 BLOCKED，知识语料仍属 P3 |
 
 **G-6 的当时判断值得保留**：它与不变量 3「引用不传递权限」是同一个安全面的另一半。引用不传递权限防的是「卡片被转发后被别人点」，版本锁定防的是「用户按 v1 确认、系统执行 v2」。现役代码已由 `app/ports/human_gate.py` 的不可变 Task 版本绑定合同及 Runtime / Workflow 接线承载，`P2-CONFIRM-BINDING-001` 已完成；因此 G-6 不再是现役缺口。
 
@@ -396,7 +396,7 @@ Web 直接依赖和版本范围见 [web/package.json](../../web/package.json)。
 
 | # | 项 | 状态 |
 |---|---|---|
-| E-1 | G-4 / G-7 Memory 六层与 User Profile | `P2-MEMORY-001` 已在 DAG，BLOCKED 于数据边界/语料 |
+| E-1 | G-4 / G-7 Memory 六层与 User Profile | `P2-MEMORY-001` 已在 DAG；2026-11-20 起先做本人个人记忆，知识语料仍属 P3 |
 | E-2 | G-5 Skill CI/CD 完整生命周期 | P2 只做到 `SkillCandidate` 人工登记（已拍板），完整生命周期属 Phase 3/4 |
 | E-3 | 前端依赖权威 | 直接依赖与用途见 §6.1；接入及改动按承接表面和依赖治理执行（§6.4） |
 | E-4 | G-1 Local Worker 信任模型 | 本地 provider 方向已定，但 Excel / 本地文件场景尚未排期 |
