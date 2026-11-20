@@ -12,6 +12,7 @@ import type {
   MemoryInputErrorDetailReason,
   UserMemory,
 } from '../../generated/memories/memories.schemas';
+import { useIdentityUnconfirmed } from '../../app/identity';
 import { PageFrame } from '../../shared/ui/PageFrame';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './MemoriesPage.module.css';
@@ -46,21 +47,26 @@ function isGone(error: Error): boolean {
 
 /**
  * 设置 › 个人记忆：AI 从本人对话里记下的回答偏好、常问的事和工作背景，只给本人看、改、删。
- * 换了登录身份就整块重建，不留上一个人的列表、编辑内容或提示。
+ * 身份复核期间先收起列表并停止查询（编辑内容保留，同一个人确认后接着改）；换了登录身份就按新代次整块重建，
+ * 不留上一个人的列表、编辑内容或提示。切回标签页不自动重取，等身份确认后再取。
  */
 export default function MemoriesPage() {
   const generation = useAuthStore((state) => state.generation);
+  const unconfirmed = useIdentityUnconfirmed();
   return (
     <PageFrame title="个人记忆">
-      <MemoryList generation={generation} key={generation} />
+      {unconfirmed ? <p className={styles.state} role="status">确认登录身份后再显示个人记忆。</p> : null}
+      <MemoryList generation={generation} key={generation} paused={unconfirmed} />
     </PageFrame>
   );
 }
 
-function MemoryList({ generation }: { generation: number }) {
+function MemoryList({ generation, paused }: { generation: number; paused: boolean }) {
   const queryClient = useQueryClient();
   const queryKey = ['memories', generation] as const;
-  const list = useQuery({ queryKey, queryFn: listMemories });
+  const list = useQuery({
+    queryKey, queryFn: listMemories, enabled: !paused, refetchOnWindowFocus: false,
+  });
   const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -122,7 +128,8 @@ function MemoryList({ generation }: { generation: number }) {
   const renderItem = (item: UserMemory) => {
     if (editing?.id === item.id) {
       const draft = editing.draft;
-      const length = Array.from(draft.trim()).length;
+      const content = draft.trim();
+      const length = Array.from(content).length;
       return (
         <li className={styles.item} key={item.id}>
           <div className={styles.editor} data-focus-ring="host">
@@ -150,8 +157,8 @@ function MemoryList({ generation }: { generation: number }) {
             </button>
             <button
               className="wb-btn wb-btn-primary wb-btn-sm"
-              disabled={busy || length === 0 || length > CONTENT_LIMIT || draft.trim() === item.content}
-              onClick={() => save.mutate({ id: item.id, content: draft })}
+              disabled={busy || length === 0 || length > CONTENT_LIMIT || content === item.content}
+              onClick={() => save.mutate({ id: item.id, content })}
               type="button"
             >
               {save.isPending ? '正在保存…' : '保存'}
@@ -192,7 +199,7 @@ function MemoryList({ generation }: { generation: number }) {
   };
 
   return (
-    <div className={styles.page}>
+    <div className={styles.page} hidden={paused}>
       <p className={styles.intro}>
         AI 会从你的对话中自动记住回答偏好、常问的事和工作背景，只有你本人能看到。删除后，同一句话不会再被记住。
       </p>

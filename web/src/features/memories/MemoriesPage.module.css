@@ -9,6 +9,10 @@
   margin: 0 auto;
 }
 
+.page[hidden] {
+  display: none;
+}
+
 .intro,
 .state {
   margin: 0;
