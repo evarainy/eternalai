@@ -16,7 +16,7 @@ import { PageFrame } from '../../shared/ui/PageFrame';
 import { useAuthStore } from '../../stores/authStore';
 import styles from './MemoriesPage.module.css';
 
-/** 与后端 `EditMemoryRequest.content` 的 maxLength 一致。 */
+/** 与后端 `EditMemoryRequest.content` 一致：去掉首尾空白后按字符（码点）计，最多 200。 */
 const CONTENT_LIMIT = 200;
 
 const CATEGORY_LABELS: Record<UserMemoryCategory, string> = {
@@ -122,13 +122,13 @@ function MemoryList({ generation }: { generation: number }) {
   const renderItem = (item: UserMemory) => {
     if (editing?.id === item.id) {
       const draft = editing.draft;
+      const length = Array.from(draft.trim()).length;
       return (
         <li className={styles.item} key={item.id}>
           <div className={styles.editor} data-focus-ring="host">
             <textarea
               aria-label={`修改${CATEGORY_LABELS[item.category]}`}
               disabled={save.isPending}
-              maxLength={CONTENT_LIMIT}
               onChange={(event) => setEditing({ id: item.id, draft: event.target.value })}
               rows={3}
               value={draft}
@@ -138,7 +138,7 @@ function MemoryList({ generation }: { generation: number }) {
             <p className={styles.note} data-tone="error" role="alert">{saveError}</p>
           )}
           <div className={styles.itemFoot}>
-            <span className="wb-num">{`${draft.length}/${CONTENT_LIMIT}`}</span>
+            <span className="wb-num">{`${length}/${CONTENT_LIMIT}`}</span>
             <span className="wb-grow" />
             <button
               className="wb-btn wb-btn-quiet wb-btn-sm"
@@ -150,7 +150,7 @@ function MemoryList({ generation }: { generation: number }) {
             </button>
             <button
               className="wb-btn wb-btn-primary wb-btn-sm"
-              disabled={busy || draft.trim() === '' || draft.trim() === item.content}
+              disabled={busy || length === 0 || length > CONTENT_LIMIT || draft.trim() === item.content}
               onClick={() => save.mutate({ id: item.id, content: draft })}
               type="button"
             >
