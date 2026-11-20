@@ -390,7 +390,7 @@ Web 直接依赖和版本范围见 [web/package.json](../../web/package.json)。
 | D-6 | **工作台薄查询层的归属** | ProComponents 已移出基线，工作台表格需先建「antd 6 原生 `Table` + 项目自有薄查询层」，该层目前不存在，2026-08-18 决定称其为「并进后的第一项前置」。**是独立一棒还是并进工作台首棒，未定**。 |
 | D-7 | **`docs/phase2/PHASE2_PLAN.md` 的「下一棒」指针** | 当前留空待裁决。上一棒未自行挑选后继是合规的（实现棒不得自选）。**必须由 GOV-SYNC 裁定**。 |
 
-> 现役校正（不改写上述原始问题）：Work Object 已完成，当前唯一必达阻塞是 OA 低风险写入协议；`P2-PILOT-OPS-001` 的拆分与 DAG 重排已写入 `PHASE2_PLAN.md`。`HumanGatePort`、凭证绑定契约组和不可变版本绑定也已落地。现役状态与 DAG 仍只见 `STATUS.md` / `PHASE2_PLAN.md`。
+> 现役校正（不改写上述原始问题）：Work Object 已完成；P2 已于 2026-11-20 收口，OA 低风险写入转 P3（见 DECISIONS 当日收口裁决）；`P2-PILOT-OPS-001` 的拆分与 DAG 重排已写入 `PHASE2_PLAN.md`。`HumanGatePort`、凭证绑定契约组和不可变版本绑定也已落地。现役状态与 DAG 仍只见 `STATUS.md` / `PHASE2_PLAN.md`。
 
 ### 8.2 其余项的现役处置
 
