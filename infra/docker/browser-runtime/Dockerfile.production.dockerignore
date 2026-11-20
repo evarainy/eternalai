@@ -488,6 +488,9 @@ app/infra/system_entry/*
 !app/api/v1/my_skills.py
 !app/ports/user_skills.py
 !app/infra/persistence/user_skills.py
+!app/api/v1/conversations.py
+!app/ports/conversation_history.py
+!app/infra/persistence/chat_history.py
 !app/infra/jobs/user_skill_report.py
 !app/infra/spreadsheets/user_skill_report.py
 !app/infra/orchestration/agentscope_runtime/user_skill_turn.py
