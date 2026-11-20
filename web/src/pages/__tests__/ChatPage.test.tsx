@@ -414,10 +414,13 @@ describe('ChatPage request boundary', () => {
   it('hides a verified value and clears accepted IDs after a cross-tab owner switch', async () => {
     identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
       .mockResolvedValueOnce(browserMe('owner_b'));
-    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
-      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
-        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
-    )));
+    const fetchMock = vi.fn((url: string) => (url === '/api/v1/me'
+      // App-wide revalidation reads /me through the request layer; serve the same identity mock.
+      ? Promise.resolve(identityMock.readMe()).then((me: unknown) => response(me))
+      : Promise.resolve(response(
+        url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+          : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+      ))));
     vi.stubGlobal('fetch', fetchMock);
     // Focus revalidation is app-wide; the page follows its result.
     renderChat(makeClient(), { revalidation: true });
@@ -437,10 +440,13 @@ describe('ChatPage request boundary', () => {
   it('keeps a verified value hidden while fresh identity is unavailable', async () => {
     identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
       .mockRejectedValueOnce(new Error('synthetic_identity_unavailable'));
-    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
-      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
-        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
-    )));
+    const fetchMock = vi.fn((url: string) => (url === '/api/v1/me'
+      // App-wide revalidation reads /me through the request layer; serve the same identity mock.
+      ? Promise.resolve(identityMock.readMe()).then((me: unknown) => response(me))
+      : Promise.resolve(response(
+        url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+          : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+      ))));
     vi.stubGlobal('fetch', fetchMock);
     // Focus revalidation is app-wide; the page follows its result.
     renderChat(makeClient(), { revalidation: true });

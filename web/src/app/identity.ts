@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient, UseQueryResult } from '@tanstack/react-query';
+import { customInstance } from '../api/mutator';
 import { readMeApiV1MeGet } from '../generated/me/me';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAuthStore } from '../stores/authStore';
@@ -103,7 +104,7 @@ export function notifyIdentitySwitch(): void { notifyIdentityChange(SWITCH_MESSA
  * 身份复核发出后、当前身份确认之前不为 null，复核失败也保持。`switching` 表示别的标签页正在登录或退出，
  * 只给本人看的内容一律收起；`rechecking` 是切回标签页等普通复核。换了人会递增代次，页面按新代次重新挂载。
  */
-export type IdentityPending = 'rechecking' | 'switching';
+type IdentityPending = 'rechecking' | 'switching';
 export const IDENTITY_SWITCHING_NOTICE = '另一个标签页正在切换登录账号，确认后再显示。';
 let identityPending: IdentityPending | null = null;
 const pendingListeners = new Set<() => void>();
@@ -163,16 +164,6 @@ export function seedConfirmedIdentity(queryClient: QueryClient, identity: MeResp
   setIdentityPending(null);
 }
 
-function withDeadline<T>(request: Promise<T>, ms: number): Promise<T> {
-  let timer = 0;
-  return Promise.race([
-    request,
-    new Promise<never>((_, reject) => {
-      timer = window.setTimeout(() => reject(new Error('identity_read_timeout')), ms);
-    }),
-  ]).finally(() => window.clearTimeout(timer));
-}
-
 let recheckNow: (() => void) | null = null;
 
 /** 「重试核对」：按普通复核再问一次后端。 */
@@ -189,6 +180,7 @@ export function useIdentityRevalidation(): boolean {
   useEffect(() => {
     let live = true;
     let sequence = 0;
+    let startupRetry = 0;
     let channel: BroadcastChannel | null = null;
     const recheck = async (cause: IdentityPending) => {
       const start = useAuthStore.getState();
@@ -202,8 +194,8 @@ export function useIdentityRevalidation(): boolean {
       let generation = start.generation;
       try {
         // Shared lock: a login or logout holding the cookie lock finishes before this read.
-        // Bypass cache. The generated client cannot abort this HTTP request; the deadline only
-        // releases the lock and leaves the hold in place (a late reply is ignored by sequence).
+        // Bypass cache. The deadline aborts the request (no late 401 can log this page out)
+        // and releases the lock; the hold stays until a later recheck confirms.
         const identity = await withAuthCookieLock(async () => {
           const current = useAuthStore.getState();
           if (!live || requestSequence !== sequence || imLogoutInProgress()) return null;
@@ -213,7 +205,9 @@ export function useIdentityRevalidation(): boolean {
           }
           if (current.status !== 'authenticated') return null;
           generation = current.generation;
-          return withDeadline(readMeApiV1MeGet(), LOCKED_READ_TIMEOUT_MS);
+          return customInstance<MeResponse>({
+            url: '/api/v1/me', method: 'GET', signal: AbortSignal.timeout(LOCKED_READ_TIMEOUT_MS),
+          });
         }, 'shared');
         if (identity === null || !isCurrent(generation)) return;
         const known = queryClient.getQueryData<MeResponse>(identityQueryKey(generation));
@@ -231,7 +225,12 @@ export function useIdentityRevalidation(): boolean {
         if (!isCurrent(generation)) return;
         // Startup: never read outside the lock while a switch may be under way; queue again.
         if (useAuthStore.getState().status === 'unknown') {
-          window.setTimeout(() => { if (live) void recheck('switching'); }, STARTUP_LOCK_RETRY_MS);
+          window.clearTimeout(startupRetry);
+          startupRetry = window.setTimeout(() => {
+            if (live && requestSequence === sequence && useAuthStore.getState().status === 'unknown') {
+              void recheck('switching');
+            }
+          }, STARTUP_LOCK_RETRY_MS);
         } else setFailed(true);
       }
     };
@@ -262,6 +261,7 @@ export function useIdentityRevalidation(): boolean {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       live = false;
+      window.clearTimeout(startupRetry);
       // Nothing can confirm a hold once its only revalidator is gone.
       setIdentityPending(null);
       if (recheckNow === ownRecheck) recheckNow = null;
