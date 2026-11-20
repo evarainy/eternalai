@@ -933,7 +933,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         if (submission.userSkill !== null && skillResult?.kind === 'result'
             && skillResult.status === 'failed' && skillResult.skill_id === submission.userSkill.skillId
             && skillResult.name !== submission.userSkill.name) {
-          mentionRef.current.renamed(submission.userSkill.skillId);
+          mentionRef.current.renamed(submission.userSkill.skillId, submission.userSkill.name);
         }
         if (result.reportJobId !== undefined) {
           const scope = recoveryScopeRef.current;

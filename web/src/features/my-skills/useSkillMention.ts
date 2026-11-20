@@ -549,9 +549,10 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       span: { name: binding.name, text: binding.text, start, end } } };
   };
 
-  /** The server refused this flow as renamed: a tag for it in the box is out of date too. */
-  const renamed = (skillId: string) => {
-    if (binding?.skillId === skillId) setBinding(null);
+  /** The server refused this flow as renamed: a tag in the box with that id and old name is out
+   * of date too (one chosen since under the new name stays). */
+  const renamed = (skillId: string, name: string) => {
+    if (binding?.skillId === skillId && binding.name === name) setBinding(null);
     refreshList();
   };
 
