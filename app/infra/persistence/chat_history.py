@@ -83,9 +83,18 @@ def _display_envelope(envelope: ResponseEnvelope) -> dict[str, Any]:
         )
     )
     fields["data"] = _display_data(fields["data"])
-    # A reply may repeat a credential the user gave in Chinese; keep it out of history.
-    fields["message"] = _sanitize_history_text(fields["message"])
-    return fields
+    # A reply, a query input or a result cell may repeat a credential written in Chinese.
+    return cast(dict[str, Any], _mask_assignments(fields))
+
+
+def _mask_assignments(value: Any) -> Any:
+    if isinstance(value, str):
+        return _CREDENTIAL_ASSIGNMENT.sub(r"\g<1>***", value)
+    if isinstance(value, dict):
+        return {key: _mask_assignments(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mask_assignments(item) for item in value]
+    return value
 
 
 def _message(row: RowMapping) -> ConversationMessage:
