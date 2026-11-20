@@ -206,14 +206,6 @@ async def run_explicit_user_skill(
         current = await service.current(owner, skill_id)
         if current is None:
             raise missing
-        if current.display_name != name:
-            _LOGGER.info("user_skill.explicit result=renamed")
-            renamed = UserSkillFailure("renamed", 409, "功能名称已变化，请重新选择后再发送")
-            return UserSkillSettled(
-                _failure_card(current.display_name, current.skill_id,
-                              current.current_version, renamed),
-                True, _trace_code(renamed.code),
-            )
         ctx = RunContext(
             tenant_id=scope.tenant_id, ai_user_id=scope.ai_user_id,
             session_id=scope.session_id, channel=scope.channel, entry="chat",
@@ -222,7 +214,7 @@ async def run_explicit_user_skill(
         try:
             payload, failed, code = await service.run_saved(
                 key, owner, ctx, current.skill_id, current.current_version, {},
-                expected_digest=current.payload.definition_digest,
+                expected_digest=current.payload.definition_digest, expected_name=name,
             )
         except UserSkillFailure as failure:
             if failure.code == "not_found":
