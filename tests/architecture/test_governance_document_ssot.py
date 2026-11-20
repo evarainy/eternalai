@@ -6,9 +6,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENTS_PATH = REPO_ROOT / "AGENTS.md"
 CLAUDE_PATH = REPO_ROOT / "CLAUDE.md"
-STATUS_PATH = REPO_ROOT / "docs" / "phase2" / "STATUS.md"
+STATUS_PATH = REPO_ROOT / "docs" / "phase3" / "STATUS.md"
 DECISIONS_PATH = REPO_ROOT / "docs" / "phase2" / "DECISIONS.md"
-PLAN_PATH = REPO_ROOT / "docs" / "phase2" / "PHASE2_PLAN.md"
+PLAN_PATH = REPO_ROOT / "docs" / "phase3" / "PHASE3_PLAN.md"
 
 EXPECTED_CLAUDE_CONTENT = """@AGENTS.md
 
