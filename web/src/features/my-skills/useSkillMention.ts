@@ -42,6 +42,8 @@ export interface SkillBinding {
 /** The chosen flow of one sent message, with its `$name` span in that message (if known). */
 export interface SkillSelection {
   skillId: string;
+  /** The name on the tag when it was sent (the server refuses the flow if it no longer is). */
+  name: string;
   span: { name: string; text: string; start: number; end: number } | null;
 }
 
@@ -202,6 +204,7 @@ function resolveTyped(message: string, items: readonly SkillListItem[]): Mention
     kind: 'ref',
     selection: {
       skillId: item.skill_id,
+      name: item.name,
       span: length <= rest.length && standaloneAt(message, 0, end, text)
         ? { name: item.name, text, start: 0, end } : null,
     },
@@ -266,9 +269,18 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const binding = stored !== null && stored.generation === generation ? stored : null;
   const bindingRef = useRef(binding);
   bindingRef.current = binding;
-  // The send check under way; any edit, change of choice, account or unmount voids it.
+  // The send check under way; any edit, change of choice, account or unmount voids it (and so
+  // frees the send entry at once: a voided check no longer counts as under way).
   const sendCheck = useRef(0);
+  const checking = useRef<number | null>(null);
   useEffect(() => () => { sendCheck.current += 1; }, [draft, stored, generation]);
+  const isChecking = () => checking.current === sendCheck.current;
+  /** Something the check does not see changed (e.g. the browser-skill mode): void it. */
+  const voidCheck = () => { sendCheck.current += 1; };
+  // A tag found out of date: read the list again for the candidates and the panel.
+  const refreshList = () => {
+    void queryClient.invalidateQueries({ queryKey: ['my-skills', generation] });
+  };
   useEffect(() => {
     setBinding(null);
     setToken(null);
@@ -489,13 +501,13 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
   const resolveForSend = async (message: string): Promise<MentionResolution | null> => {
     setWanted(true);
     const check = ++sendCheck.current;
+    checking.current = check;
     // Read directly (not through the query, whose cancel or offline pause would hand back the
-    // cached copy or hold the send); the result refreshes the shared cache.
-    const list = await listSkills().then((data) => {
-      queryClient.setQueryData(['my-skills', generation], data);
-      return data.items;
-    }, () => null);
+    // cached copy or hold the send). The cache is left alone: an older reply must not replace a
+    // newer list another view has read.
+    const list = await listSkills().then((data) => data.items, () => null);
     if (sendCheck.current !== check) return null;
+    checking.current = null;
     if (list === null) return { kind: 'blocked', reason: UNREADABLE };
     const pending = awaiting.current;
     awaiting.current = null;
@@ -513,6 +525,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     const item = list.find((entry) => entry.skill_id === binding.skillId);
     if (item === undefined || item.state !== 'usable' || item.name !== binding.name) {
       setBinding(null);
+      refreshList();
       return { kind: 'blocked', reason: `「${binding.name}」已改名或不可用，请重新选择。` };
     }
     const lead = draft.length - draft.trimStart().length;
@@ -528,18 +541,26 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
           skillId: found.skillId, name: span.name, text: span.text, start: binding.start,
           end: binding.start + span.end, generation, typed: true,
         });
+        refreshList();
         return { kind: 'blocked', reason: CHANGED };
       }
     }
-    return { kind: 'ref', selection: { skillId: binding.skillId,
+    return { kind: 'ref', selection: { skillId: binding.skillId, name: binding.name,
       span: { name: binding.name, text: binding.text, start, end } } };
+  };
+
+  /** The server refused this flow as renamed: a tag for it in the box is out of date too. */
+  const renamed = (skillId: string) => {
+    if (binding?.skillId === skillId) setBinding(null);
+    refreshList();
   };
 
   const shown: SkillBinding | null = binding === null ? null
     : { skillId: binding.skillId, name: binding.name };
   return {
     open, candidates, active, select, insert, clear, reset, restore, sync, onKeyDown,
-    composition, isComposing, binding: shown, needsCheck, resolveForSend,
+    composition, isComposing, binding: shown, needsCheck, resolveForSend, isChecking, voidCheck,
+    renamed,
     loading: skills.isLoading, failed: skills.isError,
     setActiveId,
   };
