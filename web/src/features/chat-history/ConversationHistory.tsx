@@ -32,10 +32,12 @@ function updatedLabel(value: string): string {
 
 /**
  * ``currentSessionId`` is the local conversation id; a saved conversation is matched by the
- * client session id it was started with (older rows have none and never match).
+ * client session id it was started with, or by ``currentHistoryId`` when it was opened from
+ * this list (older rows have no client session id).
  */
-export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
+export function ConversationHistory({ currentSessionId, currentHistoryId, onOpen, onDeleted }: {
   currentSessionId: string | null;
+  currentHistoryId: string | null;
   /** Called only while the login and the conversation the user left are still current. */
   onOpen: (item: ConversationSummary, conversation: ConversationMessages) => void;
   onDeleted: (item: ConversationSummary) => void;
@@ -133,8 +135,8 @@ export function ConversationHistory({ currentSessionId, onOpen, onDeleted }: {
       {items.length === 0 ? null : (
         <ul aria-label="历史对话">
           {items.map((item) => {
-            const current = item.client_session_id !== null
-              && item.client_session_id === currentSessionId;
+            const current = item.session_id === currentHistoryId
+              || (item.client_session_id !== null && item.client_session_id === currentSessionId);
             const itemBusy = busy === item.session_id;
             return (
               <li key={item.session_id} data-current={current ? 'true' : 'false'}>

@@ -26,6 +26,7 @@ from app.ports.conversation_history import (
     HistoryCursor,
     HistoryEnvelope,
     MessageRole,
+    continuable_client_session_id,
 )
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.user_skills import UserSkillOwner
@@ -53,7 +54,7 @@ def _session_params(owner: UserSkillOwner, session_id: str) -> dict[str, str]:
 def _summary(row: RowMapping) -> ConversationSummary:
     return ConversationSummary(
         session_id=row["session_id"],
-        client_session_id=row["client_session_id"],
+        client_session_id=continuable_client_session_id(row["client_session_id"]),
         title=row["title"],
         updated_at=row["updated_at"],
     )

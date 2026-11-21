@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -19,7 +18,11 @@ from app.file_artifacts import FileArtifactService
 from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.browser_gateway import BrowserRequestScope, browser_request_scope
-from app.ports.conversation_history import ConversationHistoryError, ConversationHistoryPort
+from app.ports.conversation_history import (
+    ConversationHistoryError,
+    ConversationHistoryPort,
+    continuable_client_session_id,
+)
 from app.ports.file_artifacts import ChatAttachmentDescriptor, ChatAttachmentError
 from app.ports.im_context import IMContextError, IMContextPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
@@ -40,9 +43,6 @@ from app.ports.user_skills import UserSkillOwner
 from app.user_skills.definition import NAME_MAX
 
 _HISTORY_LOG = logging.getLogger("uvicorn.error.chat_history")
-_UUID_SESSION = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 _ATTACHMENT_MESSAGES = {
     "chat_attachment_invalid": "附件已失效或不属于当前会话，请移除后重新上传。",
@@ -406,10 +406,7 @@ def make_router(
                         body.message,
                         result,
                         # Only the web client's UUID can resume the conversation later.
-                        client_session_id=(
-                            body.session_id
-                            if _UUID_SESSION.fullmatch(body.session_id) else None
-                        ),
+                        client_session_id=continuable_client_session_id(body.session_id),
                     )
                 except ConversationHistoryError as error:
                     _HISTORY_LOG.warning("chat_history.append result=error code=%s", error)

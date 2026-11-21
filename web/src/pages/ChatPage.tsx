@@ -90,7 +90,9 @@ import { ConversationHistory } from '../features/chat-history/ConversationHistor
 import { useRefreshConversations } from '../features/chat-history/useConversations';
 import {
   COLLECTION_LOST_NOTICE,
+  HISTORY_UNAVAILABLE_NOTICE,
   isViewOnlyConversation,
+  SESSION_NOT_FOUND_NOTICE,
   useAIDockStore,
   VIEW_ONLY_NOTICE,
 } from '../stores/aiDockStore';
@@ -113,8 +115,6 @@ import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
 const USER_SKILL_REF_NOT_ALLOWED = 'user_skill_ref_not_allowed';
-const SESSION_NOT_FOUND_NOTICE = '这段对话已删除或不可用，已为你新建对话。';
-const HISTORY_UNAVAILABLE_NOTICE = '对话记录服务暂时不可用，请稍后再试。';
 
 interface ChatPageProps {
   /** A trusted server configuration must supply the one published skill ID. */
@@ -562,6 +562,9 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   // A saved conversation opened from history: account-wide recovery cards belong elsewhere.
   const viewingSaved = useAIDockStore((state) => state.savedConversation !== null
     && state.savedConversation.sessionId === state.sessionId);
+  const currentHistoryId = useAIDockStore((state) => state.savedConversation !== null
+    && state.savedConversation.sessionId === state.sessionId
+    ? state.savedConversation.historyId : null);
   const viewOnly = useAIDockStore(isViewOnlyConversation);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
@@ -1182,18 +1185,26 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
     const store = useAIDockStore.getState();
     const sessionId = store.ensureSession();
     const generation = store.conversationGeneration;
+    const authAtStart = useAuthStore.getState().generation;
     if (store.confirmationResults[action.response_id] !== undefined) return;
+    // A reply lands only on the login, conversation and session it was confirmed under.
+    const stillCurrent = () => {
+      const auth = useAuthStore.getState();
+      const dock = useAIDockStore.getState();
+      return auth.status === 'authenticated' && auth.generation === authAtStart
+        && dock.conversationGeneration === generation && dock.sessionId === sessionId;
+    };
     try {
       const projectedResponse = projectResponse(
         await handleActionApiV1RuntimeActionPost({
           channel: 'web', session_id: sessionId, action,
         }),
       );
-      if (useAIDockStore.getState().conversationGeneration !== generation) return;
+      if (!stillCurrent()) return;
       useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedResponse);
     } catch (error) {
       const projectedError = projectRequestError(error);
-      if (projectedError !== null && useAIDockStore.getState().conversationGeneration === generation) {
+      if (projectedError !== null && stillCurrent()) {
         useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedError);
       }
     }
@@ -1230,7 +1241,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const openSavedConversation = (item: ConversationSummary, conversation: ConversationMessages) => {
     leaveConversation();
     stickToBottom.current = true;
-    useAIDockStore.getState().openConversation(item.client_session_id, conversation.messages.map((message) =>
+    useAIDockStore.getState().openConversation(item.session_id, item.client_session_id,
+      conversation.messages.map((message) =>
       message.role === 'user'
         ? { role: 'user' as const, text: message.text }
         : projectHistoryReply(message.text, message.envelope)));
@@ -1589,10 +1601,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
         {historyOpen ? (
           <ConversationHistory
             currentSessionId={currentSessionId}
+            currentHistoryId={currentHistoryId}
             onOpen={openSavedConversation}
             onDeleted={(item) => {
-              if (item.client_session_id !== null
-                  && useAIDockStore.getState().sessionId === item.client_session_id) startFreshSession();
+              const state = useAIDockStore.getState();
+              const openedRow = state.savedConversation !== null
+                && state.savedConversation.sessionId === state.sessionId
+                && state.savedConversation.historyId === item.session_id;
+              if (openedRow || (item.client_session_id !== null
+                  && state.sessionId === item.client_session_id)) startFreshSession();
             }}
           />
         ) : null}

@@ -12,11 +12,15 @@ import { ApiError } from '../api/mutator';
 import { IMSourcePreview } from '../features/messages/IMSourcePreview';
 import { returnToIMSource } from '../features/messages/hostBridge';
 import type { PageContextDeclaration } from '../contracts/pageContext';
-import { projectResponse, projectTextResponse } from '../contracts/runtimeProjection';
+import { projectResponse, projectTextResponse, type ProjectedResponse } from '../contracts/runtimeProjection';
+import { useRefreshConversations } from '../features/chat-history/useConversations';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
-import { isViewOnlyConversation, useAIDockStore, VIEW_ONLY_NOTICE } from '../stores/aiDockStore';
+import {
+  HISTORY_UNAVAILABLE_NOTICE, isViewOnlyConversation, SESSION_NOT_FOUND_NOTICE, useAIDockStore,
+  VIEW_ONLY_NOTICE,
+} from '../stores/aiDockStore';
 import { currentIdentityPending, useIdentityPending } from './identity';
 import { useAuthStore } from '../stores/authStore';
 import { returnUnsentMessage } from './reauthRestore';
@@ -107,12 +111,13 @@ export function AIDock({ suppressed = false }: AIDockProps) {
   const [position, setPosition] = useState<DockPosition | null>(null);
   const [dragging, setDragging] = useState(false);
 
+  const refreshConversations = useRefreshConversations();
   const mutation = useMutation({
-    mutationFn: async ({ message, identity, sourceRef }: {
+    mutationFn: async ({ message, identity, sourceRef, conversationGeneration }: {
       message: string; identity: UnsentIdentity; sourceRef?: string;
       /** The transcript generation it was sent under; a reopened conversation drops it. */
       conversationGeneration: number;
-    }) => {
+    }): Promise<ProjectedResponse | null> => {
       try {
         return projectResponse(
           await handleApiV1RuntimeHandlePost({
@@ -132,6 +137,28 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             'request_error',
           );
         }
+        // The history store refused the message before any work: the text goes back to the box
+        // (of a new conversation when this one was deleted), as on the assistant page.
+        const deleted = error instanceof ApiError && error.status === 404
+          && error.code === 'session_not_found';
+        const historyUnavailable = error instanceof ApiError && error.status === 503
+          && error.code === 'chat_history_unavailable';
+        if (sourceRef === undefined && (deleted || historyUnavailable)) {
+          const auth = useAuthStore.getState();
+          const dock = useAIDockStore.getState();
+          if (auth.status !== 'authenticated' || auth.generation !== identity.generation
+              || dock.sessionId !== identity.sessionId
+              || dock.conversationGeneration !== conversationGeneration) return null;
+          if (deleted) {
+            refreshConversations();
+            dock.startNewSession();
+            dock.setDraft(message);
+            dock.appendTranscript(projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session'));
+            return null;
+          }
+          dock.setDraft(dock.draft.length > 0 ? [message, dock.draft].join('\n') : message);
+          return projectTextResponse(HISTORY_UNAVAILABLE_NOTICE, 'service');
+        }
         const projectedError = projectRequestError(error);
         if (projectedError === null) {
           throw error;
@@ -146,7 +173,8 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       if (auth.status !== 'authenticated' || auth.generation !== identity.generation
           || dock.sessionId !== identity.sessionId
           || dock.conversationGeneration !== conversationGeneration
-          || (sourceRef !== undefined && dock.imSource?.source.ref_id !== sourceRef)) return;
+          || (sourceRef !== undefined && dock.imSource?.source.ref_id !== sourceRef)
+          || response === null) return;
       appendTranscript(response);
     },
     // Authentication runs before the handler, so a 401 means the message was never processed.
