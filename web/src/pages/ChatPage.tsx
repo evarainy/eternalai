@@ -974,10 +974,11 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
           }
           if (!submissionIsCurrent(submission)) return null;
           refreshConversations();
+          const typedSince = useAIDockStore.getState().draft;
           startFreshSession();
           const notice = projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session');
           const store = useAIDockStore.getState();
-          store.setDraft(message);
+          store.setDraft(typedSince.length > 0 ? [message, typedSince].join('\n') : message);
           store.appendTranscript(notice);
           return notice;
         }

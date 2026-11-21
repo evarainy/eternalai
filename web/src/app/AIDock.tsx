@@ -150,9 +150,11 @@ export function AIDock({ suppressed = false }: AIDockProps) {
               || dock.sessionId !== identity.sessionId
               || dock.conversationGeneration !== conversationGeneration) return null;
           if (deleted) {
+            // What was typed while the message was in flight goes along to the new conversation.
+            const typedSince = dock.draft;
             refreshConversations();
             dock.startNewSession();
-            dock.setDraft(message);
+            dock.setDraft(typedSince.length > 0 ? [message, typedSince].join('\n') : message);
             dock.appendTranscript(projectTextResponse(SESSION_NOT_FOUND_NOTICE, 'session'));
             return null;
           }
