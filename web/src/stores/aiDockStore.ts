@@ -46,10 +46,16 @@ export interface ChatAttachment {
 export interface SavedConversation {
   sessionId: string;
   continuable: boolean;
+  /** Id of the history row it was opened from (the bound server session); null in older copies. */
+  historyId: string | null;
 }
 
 /** Composer notice of a saved conversation that can only be viewed. */
 export const VIEW_ONLY_NOTICE = '这段对话只能查看，请新建对话继续。';
+
+/** Send refusals of the history store, shared by the assistant page and the floating dock. */
+export const SESSION_NOT_FOUND_NOTICE = '这段对话已删除或不可用，已为你新建对话。';
+export const HISTORY_UNAVAILABLE_NOTICE = '对话记录服务暂时不可用，请稍后再试。';
 
 /** The one rule both send entries (assistant page and floating dock) apply. */
 export function isViewOnlyConversation(
@@ -126,9 +132,12 @@ interface AIDockState {
   savedConversation: SavedConversation | null;
   /**
    * Opens a saved conversation in place of the current one; nothing of the old one is kept.
-   * ``clientSessionId`` is the local id it was started with; null opens it view-only.
+   * ``historyId`` is the history row; ``clientSessionId`` is the local id it was started with,
+   * null opens it view-only.
    */
-  openConversation: (clientSessionId: string | null, transcript: TranscriptEntry[]) => void;
+  openConversation: (
+    historyId: string, clientSessionId: string | null, transcript: TranscriptEntry[],
+  ) => void;
   /** An export accepted from this live entry: its progress card shows on the entry. */
   attachReportJob: (entry: TranscriptEntry, jobId: string) => void;
   /** Settles a sheet fill plan card of the current transcript: accepted job or cancelled. */
@@ -221,12 +230,12 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
     })),
   conversationGeneration: 0,
   savedConversation: null,
-  openConversation: (clientSessionId, transcript) =>
+  openConversation: (historyId, clientSessionId, transcript) =>
     set((state) => {
       const sessionId = clientSessionId ?? newSessionId();
       return {
         conversationGeneration: state.conversationGeneration + 1,
-        savedConversation: { sessionId, continuable: clientSessionId !== null },
+        savedConversation: { sessionId, continuable: clientSessionId !== null, historyId },
         imSource: null,
         contextNotice: null,
         draft: '',
@@ -261,7 +270,8 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           : entry),
     })),
   clearSession: () =>
-    set({
+    set((state) => ({
+      conversationGeneration: state.conversationGeneration + 1,
       imSource: null,
       draft: '',
       draftAttachments: [],
@@ -276,7 +286,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       chatSheetOpen: true,
       confirmationResults: {},
       collection: null,
-    }),
+    })),
   clearPageContext: (expectedSurfaceId) =>
     set((state) => {
       const current = state.pageContextDeclaration;
@@ -400,6 +410,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
         && restored.collection.sessionId === restored.sessionId ? restored.collection : null;
       return {
         ...draft,
+        conversationGeneration: state.conversationGeneration + 1,
         sessionId: restored.sessionId,
         sessionContextMode: restored.sessionContextMode,
         transcript: restored.collectionLost && collection === null

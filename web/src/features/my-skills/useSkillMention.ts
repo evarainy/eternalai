@@ -45,6 +45,8 @@ export interface SkillSelection {
   /** The name on the tag when it was sent (the server refuses the flow if it no longer is). */
   name: string;
   span: { name: string; text: string; start: number; end: number } | null;
+  /** The tag was bound by typing the name rather than picked from the list. */
+  typed?: boolean;
 }
 
 export type MentionResolution =
@@ -442,7 +444,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
     if (selection == null || span == null) return;
     if (standaloneAt(value, span.start, span.end, span.text)) {
       setBinding({ skillId: selection.skillId, name: span.name, text: span.text,
-        start: span.start, end: span.end, generation, typed: false });
+        start: span.start, end: span.end, generation, typed: selection.typed === true });
     }
   }, [generation]);
 
@@ -546,7 +548,7 @@ export function useSkillMention({ draft, setDraft, inputRef, enabled, onBind }: 
       }
     }
     return { kind: 'ref', selection: { skillId: binding.skillId, name: binding.name,
-      span: { name: binding.name, text: binding.text, start, end } } };
+      span: { name: binding.name, text: binding.text, start, end }, typed: binding.typed } };
   };
 
   /** The server refused this flow as renamed: a tag in the box with that id and old name is out

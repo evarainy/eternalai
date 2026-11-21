@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -12,6 +13,18 @@ from app.ports.user_skills import UserSkillOwner
 
 MessageRole = Literal["user", "assistant"]
 HistoryCursor = tuple[datetime, UUID]
+
+
+# The web client's local session id (``crypto.randomUUID`` shape, versions 1-8, RFC variant);
+# only such an id can resume a saved conversation. Same rule as web/src/features/browser/api.ts.
+_CLIENT_SESSION_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.IGNORECASE
+)
+
+
+def continuable_client_session_id(value: str | None) -> str | None:
+    """``value`` unchanged when the web client can resume under it, else None (view-only)."""
+    return value if value is not None and _CLIENT_SESSION_ID.fullmatch(value) else None
 
 
 class ConversationHistoryError(Exception):

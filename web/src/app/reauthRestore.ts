@@ -302,7 +302,10 @@ function storedCollection(value: unknown): StoredCollection | null {
 function storedSavedConversation(value: unknown): SavedConversation | null {
   if (!isRecord(value) || typeof value.sessionId !== 'string'
       || typeof value.continuable !== 'boolean') return null;
-  return { sessionId: value.sessionId, continuable: value.continuable };
+  return {
+    sessionId: value.sessionId, continuable: value.continuable,
+    historyId: typeof value.historyId === 'string' ? value.historyId : null,
+  };
 }
 
 /** The transcript ends on a D collection card (nothing answered after it). */

@@ -60,6 +60,7 @@ export async function sendToAi(key: ConversationKey, messageIds: number[]): Prom
 
   const generation = useAuthStore.getState().generation;
   const sessionId = useAIDockStore.getState().ensureSession();
+  const conversationGeneration = useAIDockStore.getState().conversationGeneration;
   try {
     const source = await selectApiV1ImContextSourcesPost({
       provider: identity.provider,
@@ -71,7 +72,8 @@ export async function sendToAi(key: ConversationKey, messageIds: number[]): Prom
       session_id: sessionId,
     });
     if (useAuthStore.getState().generation !== generation || current !== sequence
-      || useAIDockStore.getState().sessionId !== sessionId) return { kind: 'stale' };
+      || useAIDockStore.getState().sessionId !== sessionId
+      || useAIDockStore.getState().conversationGeneration !== conversationGeneration) return { kind: 'stale' };
     useAIDockStore.getState().setIMSource({ source, authGeneration: generation, sessionId });
     useAIDockStore.getState().openDock();
     return { kind: 'ok' };

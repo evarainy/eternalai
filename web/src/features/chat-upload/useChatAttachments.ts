@@ -13,6 +13,7 @@ export interface PendingUpload {
   readonly controller: AbortController | null;
   readonly sessionId: string;
   readonly generation: number;
+  readonly conversationGeneration: number;
 }
 
 export interface ChatAttachmentsController {
@@ -34,17 +35,19 @@ export function useChatAttachments(): ChatAttachmentsController {
   const sessionId = useAIDockStore((state) => state.sessionId);
   const attachments = useAIDockStore((state) => state.draftAttachments);
   const generation = useAuthStore((state) => state.generation);
+  const conversationGeneration = useAIDockStore((state) => state.conversationGeneration);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const uploadsRef = useRef(uploads);
   uploadsRef.current = uploads;
 
   useEffect(() => {
     const stale = uploadsRef.current.filter((upload) =>
-      upload.sessionId !== sessionId || upload.generation !== generation);
+      upload.sessionId !== sessionId || upload.generation !== generation
+      || upload.conversationGeneration !== conversationGeneration);
     if (stale.length === 0) return;
     for (const upload of stale) upload.controller?.abort();
     setUploads((current) => current.filter((upload) => !stale.includes(upload)));
-  }, [sessionId, generation]);
+  }, [sessionId, generation, conversationGeneration]);
 
   useEffect(() => () => {
     for (const upload of uploadsRef.current) upload.controller?.abort();
@@ -53,10 +56,12 @@ export function useChatAttachments(): ChatAttachmentsController {
   const start = (file: File) => {
     const conversation = useAIDockStore.getState().ensureSession();
     const startedGeneration = useAuthStore.getState().generation;
+    const startedConversation = useAIDockStore.getState().conversationGeneration;
     const controller = new AbortController();
     const upload: PendingUpload = {
       uid: crypto.randomUUID(), filename: file.name, status: 'uploading', message: null,
       controller, sessionId: conversation, generation: startedGeneration,
+      conversationGeneration: startedConversation,
     };
     setUploads((current) => [...current, upload]);
     // One fixed key per entry: the server answers a repeated request with the sealed result.
@@ -65,6 +70,7 @@ export function useChatAttachments(): ChatAttachmentsController {
       setUploads((current) => current.filter((entry) => entry.uid !== upload.uid));
       const store = useAIDockStore.getState();
       if (store.sessionId !== conversation
+          || store.conversationGeneration !== startedConversation
           || useAuthStore.getState().generation !== startedGeneration
           || store.draftAttachments.some((entry) => entry.artifact_id === result.artifact_id)) return;
       store.setDraftAttachments([...store.draftAttachments, {
